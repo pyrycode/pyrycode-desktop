@@ -274,4 +274,29 @@ describe('supplied thread query coordination', () => {
     f.window(1); expect(f.snapshot()?.checkpoint).toBe(20)
     f.coordinator.dispose()
   })
+
+  it('exposes retry when reopening cannot complete a retained repair', () => {
+    const f = setup(), s = f.store.getState(); s.acceptEpoch('h', 'c', 'e')
+    s.beginBatch('h', 'c', 'e')!.commit({ fromVersion: 0, version: 20, ranges: [] })
+    s.requireRepair('h', 'c', 'e', 100)
+    f.sync(); f.complete(0, 20, 40)
+    expect(f.commands).toHaveLength(1)
+    expect(f.states.at(-1)?.state).toMatchObject({ type: 'failed', reason: 'recovery' })
+    expect(f.snapshot()?.checkpoint).toBe(20)
+    f.retry(); f.complete(1, 20, 100)
+    expect(f.snapshot()).toMatchObject({ checkpoint: 100, repair: null })
+    f.coordinator.dispose()
+  })
+
+  it('requests a fresh newest window when a repair query resets', () => {
+    const f = setup(); f.sync(); f.batch(); f.window()
+    f.live({ type: 'thread_text_append', payload: { conversation_id: 'c', epoch: 'e', version: 30,
+      item_id: 10, base_rev: 9, rev: 30, text: 'missing' } })
+    f.reply(1, { type: 'thread_reset', payload: { conversation_id: 'c', epoch: 'new', version: 500 } })
+    expect(f.commands[2].query.payload).toEqual({ conversation_id: 'c', epoch: 'new', version: 0 })
+    expect(f.snapshot()?.checkpoint).toBe(0)
+    f.window(2, 0, 51, false, 50, 'new')
+    expect(f.snapshot()).toMatchObject({ epoch: 'new', checkpoint: 50, repair: null })
+    f.coordinator.dispose()
+  })
 })

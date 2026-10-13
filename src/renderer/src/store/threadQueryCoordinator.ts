@@ -21,10 +21,10 @@ export interface ThreadQueryDeps {
   onState: (serverId: string, conversationId: string, state: ThreadQueryState) => void
   log?: { event: (fields: { event: string; code: string }) => void }
 }
-type Scope = { id: string; restorePending: boolean; catchUp: boolean; older: boolean; recovery: boolean;
+type Scope = { id: string; restorePending: boolean; catchUp: boolean; older: boolean; recovery: boolean; resetRecovery: boolean;
   ready: boolean; exhausted: boolean; state: ThreadQueryState }
 type Pending = { scope: Scope; requestId: string; query: ThreadQuery; generation: symbol | undefined;
-  recovery: boolean; cancelled: boolean; sent: boolean; captured?: { epoch: string; version: number };
+  recovery: boolean; resetRecovery: boolean; cancelled: boolean; sent: boolean; captured?: { epoch: string; version: number };
   batch?: NonNullable<ReturnType<ThreadItemStore['beginBatch']>>; timer?: ReturnType<typeof setTimeout> }
 type Host = { connected: boolean; scope?: Scope; pending?: Pending }
 
@@ -75,7 +75,8 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
       s.older = false
     }
     const p: Pending = { scope: s, requestId: deps.requestId(), query,
-      generation: generation(host, s.id), recovery: s.recovery, cancelled: false, sent: false }
+      generation: generation(host, s.id), recovery: s.recovery || Boolean(snapshot?.repair),
+      resetRecovery: s.resetRecovery, cancelled: false, sent: false }
     h.pending = p
     deadline(host, h, p)
     present(host, s, { type: 'loading', purpose: query.type === 'thread_page' ? 'older' : 'catch-up' })
@@ -111,9 +112,9 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
       store().deleteConversation(host, s.id)
       store().acceptEpoch(host, s.id, value.epoch)
       s.catchUp = true; s.ready = false; s.exhausted = false
-      if (p.recovery) {
+      if (p.resetRecovery) {
         present(host, s, { type: 'failed', purpose: 'catch-up', reason: 'recovery', retryable: true })
-      } else { s.recovery = true; present(host, s, { type: 'idle' }); pump(host, h) }
+      } else { s.recovery = true; s.resetRecovery = true; present(host, s, { type: 'idle' }); pump(host, h) }
       return
     }
     const v = reply.payload
@@ -153,7 +154,7 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
     }
     release(h, p)
     deps.log?.event({ event: 'thread-query-completed', code: p.query.type })
-    if (p.query.type === 'thread_catch_up') { s.catchUp = false; s.ready = true; s.recovery = false }
+    if (p.query.type === 'thread_catch_up') { s.catchUp = false; s.ready = true; s.recovery = false; s.resetRecovery = false }
     if ('older_exists' in v) s.exhausted = !v.older_exists
     present(host, s, { type: 'idle' }); pump(host, h)
   }
@@ -172,7 +173,7 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
         }
         h.scope = value.conversationId === null ? undefined : { id: value.conversationId,
           restorePending: value.restorePending ?? false, catchUp: value.connected, older: false,
-          recovery: false, ready: false, exhausted: false, state: { type: 'idle' } }
+          recovery: false, resetRecovery: false, ready: false, exhausted: false, state: { type: 'idle' } }
       }
       const s = h.scope
       if (s) {

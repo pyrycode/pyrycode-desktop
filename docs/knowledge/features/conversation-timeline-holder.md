@@ -20,7 +20,9 @@ the timeline's row-adding writers — the bridge fan-out and the composer's opti
 this holder as well as into the flat store, dual-write (Strangler Fig, ADR 0008). [#757](../codebase/757.md)
 gave it its first clears — the whole map dropped at the pairing boundary, one slice dropped when the
 operator's open conversation is deleted out from under them — wired at the same two edges that already
-reset the flat store. [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758) gave it its first
+reset the flat store. Confirmed deletion now also removes explicitly owned inactive slices; see
+[deletion lifecycle](#confirmed-deletion-lifecycle).
+[#758](https://github.com/pyrycode/pyrycode-desktop/issues/758) gave it its first
 reader: `ConversationScreen` now renders the open conversation's own slice from this holder, so the holder
 is no longer invisible from the operator's side. Not to be confused with the [conversation timeline
 store](conversation-timeline-store.md) (`timelineStore.ts`), the existing **flat**, single-conversation
@@ -44,7 +46,8 @@ Holds a whole `TimelineState` per conversation id: the ordered `items`, `phase`,
 history-request state, the prepend count, live/history join keys, supplying `serverId`, local-read status
 and explicit restored host/coverage evidence. Successful `coverage` lives separately
 from pending/failed `history`, so retries retain the last successful cursor. A key **absent** from the map means
-"nothing is held for this conversation" — no event has ever arrived, or it was evicted — distinct from a
+"nothing is held for this conversation" — no event has ever arrived, or it was cleared or evicted —
+distinct from a
 **present, empty** slice ("observed; nothing in the thread yet"). `selectTimelineFor` preserves that
 distinction rather than collapsing it, the same three-way reading [background-task roster
 store](background-task-roster-store.md)'s `selectRosterFor` established and [conversation activity
@@ -98,7 +101,8 @@ exactly the thread the operator stepped away from.
     "takes no conversation id at all" is a `tsc` guarantee rather than a test. Drops every retained slice;
     returns the state object unchanged when the map is already empty.
   - `clearTimelineFor(conversationId)` — [#757](../codebase/757.md)'s single-conversation clear, fired
-    when that conversation is deleted or archived out from under the operator. Drops exactly that key,
+    by owned confirmed deletion (active or inactive), active archive and explicit lifecycle cleanup.
+    Drops exactly that key,
     by `delete` rather than by overwriting with an empty slice, so the id reads absent afterwards; every
     other slice stays the same held object. Returns the state object unchanged when the key is already
     absent.
@@ -215,6 +219,34 @@ from another host, with no local read, history request or restoration provenance
 alone cannot establish that ownership; see the [creation-time loading regression and delayed-list
 coverage](paired-shell-routing.md#the-conversation-switch-remount-bug-and-the-panekey-fix).
 
+### Confirmed deletion lifecycle
+
+The shell's [confirmed-deletion decision](paired-shell-conversation-deletion.md#confirmed-deletion-and-host-authority)
+uses the confirmation's main-stamped host, requiring exact equality with the slice's explicit
+`serverId`. It never infers ownership from the active conversation. Missing/null origin, unknown
+ownership, absent slices and foreign-host collisions grant no removal or active-exit authority.
+The existing single-key clear makes duplicates harmless and preserves exact Map keys, including
+empty, `__proto__` and `constructor` ids, along with survivor references and iteration order.
+
+An owned deletion of A removes A even after switching to B or with no active chat. B's route,
+selection, flat timeline, session, configuration and pending settings/system-prompt state survive.
+This closes the inactive-deletion retention gap left by the gated active exit; the helper's mismatch
+and no-active no-ops remain correct for navigation. Inactive archive flags, missing list rows,
+requests and rejections do not authorize this permanent-deletion path.
+
+Ownership is read only after `flushTimeline()`: `subscribeTimeline` and the published store drain
+accepted frame folds at mutation boundaries before the check/removal. A cancelled scheduled frame
+callback cannot replay those drained folds. If a queued foreign-host fold changes the owner, the
+old host's confirmation must be refused rather than clearing that replacement. Removal also retires
+`beginLocalTimelineRead`'s owning slice, so late success, failure or cancellation cannot recreate it.
+These guarantees cover work queued before confirmation; fresh post-deletion traffic is separate.
+
+Clearing this view adds no persistence deletion. The [chat-history writer](chat-history.md) already
+handles confirmed saved-history and daemon-item removal in its existing order. A sidebar row's
+absence alone cannot prove this view was removed: mounted coverage must check its retained selector
+as well as the surviving open chat. See
+[deletion regressions and counted evidence](paired-shell-conversation-deletion.md#regression-coverage).
+
 ### Stopped records and history isolation
 
 Each slice holds its own [latest live stop](thread-timeline-internals.md#stopped-turn-state).
@@ -257,7 +289,9 @@ boundary and transient reading with their slice.
   another server stopped calling it at [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141)
   — it adds a server rather than ending a pairing). `clearTimelineFor(conversationId)` — drops exactly one slice, every
   other conversation's held object untouched — is wired into `exitActiveConversation`, fired when the
-  conversation on screen was deleted or archived out from under the operator. Both sit immediately after
+  conversation on screen was deleted or archived out from under the operator. Owned inactive deletion
+  calls that same single-key clear independently through `confirmConversationDeleted`; it does not reset
+  the flat store or navigate. The active-exit and pairing clears sit immediately after
   each helper's pre-existing flat `dispatchTimeline({ type: 'reset' })` call, the same dual-write position
   #756 established for the two writers. Both **delete** rather than overwrite with an empty slice, so a
   cleared id reads absent through `selectTimelineFor`, not present-and-empty; both return the state object

@@ -46,6 +46,9 @@ Existing `WireDecodeError`/`WireEncodeError`, static failure categories only. No
 ## Open Questions
 None. Asset filesystem handle containment remains daemon-owned; URL containment here creates no filesystem authority.
 
+## Revisions
+2026-10-15: Clarified query validation against §6's opaque query rule: reject raw controls/fragments and invalid escapes, retain encoded bytes without decoding (including non-UTF-8 encoded octets). Header types/allowlist/value bounds are checked before serializing the narrowed string map, so hostile nested header values cannot trigger a generic serialization exception. Invalid supplied context serialization is wrapped in a static decode category.
+
 ## Security review
 **Verdict:** PASS
 - Trust boundaries: raw bytes enter `decodeHostedEnvelope` before projection; resource output is narrowed, context revalidated, additions cannot route or authorize work.

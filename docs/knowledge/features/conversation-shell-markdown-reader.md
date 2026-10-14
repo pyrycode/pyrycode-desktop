@@ -348,6 +348,17 @@ when needed at minimum width/125% zoom. Shared focus, Escape and outside-click h
 remain in the menu component. See [layout and input verification](development-verification-layout-and-input.md#layout-and-input)
 for the focused browser proof and retained captures.
 
+The layout scenarios in `e2e/markdown-reader-menu.spec.ts` normalize focus before
+testing preservation: after Plan version 1 loads, focus Back and settle the covered
+thread before recording its position. Otherwise the baseline can retain reply metadata
+that later menu focus collapses. After pointer Back, assert the original thread position
+and draft before preparing the next click. Focus the note link to hold metadata open,
+then settle thread and link geometry before pointer delivery; hover can otherwise grow
+the row and move the link after Playwright measures it. Reopen must show Plan version 3
+with exactly one new host read and unique request IDs, then keyboard Back must close it.
+See [the geometry contract](development-verification-layout-and-input.md#layout-and-input)
+and [controlled evidence and counted runs](development-verification-layout-evidence.md#reader-reopen-input-verification).
+
 **Why this matters beyond visual continuity**: `Composer`'s pending-attachment set and its
 upload listener (`useAttachmentUpload`) are mount-local state. The first shipped cut's early
 return unmounted `Composer` whenever the reader opened, which silently dropped an attached

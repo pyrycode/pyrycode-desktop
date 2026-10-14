@@ -10,8 +10,9 @@ the screen overall.
 
 The desktop layout's own status area above the message box (Figma `111:3525`,
 780×24), replacing the loose region the working indicator used to float in. `ComposerStatusArea({
-isRunning, children })` is an in-file `ConversationScreen.tsx` function, mounted directly after
-`Timeline` (through #1009 the queued backlog sat between them as its own `<QueuedBacklog/>` view,
+isRunning, children })` is an in-file `ConversationScreen.tsx` function, mounted in the
+input chrome after the message area containing `Timeline` (through #1009 the queued backlog
+sat between them as its own `<QueuedBacklog/>` view,
 mounted straight from `ConversationScreen` rather than through the retired `QueuedBacklogControl`;
 [#1214](https://github.com/pyrycode/pyrycode-desktop/issues/1214) deleted that view and folded its rows
 into `Timeline` itself — see [Conversation shell — conversation surfaces and modals § Queued rows folded
@@ -24,13 +25,15 @@ that region is now empty above this row):
 
 ```
 .conversation
-├── Timeline                   .conversation__thread  (queued rows drawn in place since #1214)
-├── ComposerStatusArea         .composer-status
-│   ├── .composer-status__activity
-│   │   ├── PyryMark            .composer-status__icon(--spinning)  (14×16, from theme/PyryMark.tsx)
-│   │   └── {children}          → <ThinkingIndicator/>
-│   └── {trailing}              → <ComposerErrorSlotControl/>       (repair, error, recovery or notice)
-└── Composer
+├── Message area
+│   └── Timeline               .conversation__thread  (full-pane scrollport)
+└── Input chrome               .conversation__input-chrome
+    ├── ComposerStatusArea     .composer-status
+    │   ├── .composer-status__activity
+    │   │   ├── PyryMark        .composer-status__icon(--spinning)  (14×16)
+    │   │   └── {children}      → <ThinkingIndicator/>
+    │   └── {trailing}          → <ComposerErrorSlotControl/>
+    └── Composer
 ```
 
 This is the DOM order. `ComposerSlot.statusArea(sendText)` supplies the status area
@@ -38,22 +41,29 @@ through `Composer.beforeComposer`, giving recovery the composer's existing comma
 send callback. The status area remains outside the composer's `hidden` subtree,
 so covering the input with a question panel does not hide its messages.
 
-**The 12px separation from the message viewport stays outside the scrollport.**
-`.composer-status` owns it as `margin-top: var(--space-3)`; `.conversation__thread` keeps
-its 12px top padding and sets its stylesheet bottom padding to zero. A bottom inset can
-space the last message correctly while leaving no gap between the viewport and status row
-when reading older messages. The external margin preserves that gap at both scroll positions.
-Keep `.conversation` without a column `gap`: it would also add space below the status row,
-turning the [message box's existing 8px top spacing](conversation-shell-composer-message-box.md#message-box-951)
-into 20px.
+**The current upper spacing is 16px from the input-chrome top to the status row.**
+The [full-pane layout](conversation-shell-chrome.md#layout-contract) places the thread
+under the input chrome; its viewport no longer ends above the row. Input chrome owns
+the spacing through `padding: var(--space-4) var(--space-5)` and overrides the status
+row's historical 12px `margin-top` to zero. Measured thread bottom padding equals the
+complete input-chrome height, and both surfaces end at the pane bottom. The
+[message box's existing 8px top spacing](conversation-shell-composer-message-box.md#message-box-951)
+remains below the status row. These bounds hold at both bottom and scrolled positions.
 
 [`e2e/composer-status-spacing.spec.ts`](../../../e2e/composer-status-spacing.spec.ts)
-measures the viewport and status-row boxes after proving overflow and wheel scrolling.
-It checks the 12px upper gap, 8px lower gap and 24px row with an empty draft and with a
-usage warning plus five-line draft, at 1280px and the 800px minimum width. At the bottom,
-it also checks that no extra inset remains after the last row, preventing doubled spacing.
-A last-message distance alone would pass with the old scrolling inset; static renderer
-tests cannot prove these [layout measurements](development-verification-layout-and-input.md#layout-and-input).
+retains native widths 1280px and 800px, warning absent with an empty draft and warning
+present with a five-line draft, overflowing history, and bottom/scrolled positions.
+It requires 16px above, 8px below, a 24px status row, input-row heights of 52px/132px,
+measured padding equality and aligned pane bottoms. At the settled bottom it also
+requires zero clearance between the newest row and the input-chrome top.
+`expectSpacing` observes these invariants and the scroll endpoint together on two
+consecutive animation frames, requiring identical snapshots and exact expected values.
+Each poll attempt retains both snapshots, including hover/focus and scroll metrics,
+in a JSON attachment even on failure. Late newest-action focus at each width/draft
+state must retain focus and settle at zero clearance; an earlier successful bottom
+poll alone cannot exclude subsequent metadata reflow. See the
+[controlled diagnosis and counted evidence](development-verification-layout-and-input.md#composer-status-spacing-verification).
+Static renderer tests cannot prove these layout measurements.
 
 **Never returns `null` — the one deliberate departure from `ThinkingIndicator`'s own zero-footprint
 posture (AC2).** `ThinkingIndicator` still returns `null` at rest; this row's *height* is what must be

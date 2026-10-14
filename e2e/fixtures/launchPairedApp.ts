@@ -146,7 +146,7 @@ export type LaunchPairedAppOptions = Omit<FakeDaemonOptions, 'url'>
  *  one option, not two. Used only by the relaunch-persistence spec; absent = the default fresh-dir,
  *  full-drive behaviour every other consumer relies on. */
 export type LaunchControl = {
-  /** Install command observation before pairing or conversation activation. */
+  /** Install command observation after window readiness, before pairing or conversation activation. */
   onLaunched?: (app: ElectronApplication) => Promise<void>
   /** Return at Welcome so mounted pairing tests can control authentication delivery. */
   skipPairing?: boolean
@@ -368,8 +368,10 @@ export const test = base.extend<PairedAppFixtures>({
       // failure, so the drain below records it under this thunk's label exactly like any other step.
       teardown.push({ step: 'app', run: () => fate.closeWatched(app) })
 
-      await control.onLaunched?.(app)
       const page = await app.firstWindow()
+      // History-handler replacement must follow startup registration, which precedes createWindow.
+      // The hook still completes before pairing or opening the restored conversation.
+      await control.onLaunched?.(app)
 
       // Reuse (#466): the persisted pairing blob in the reused dir routes the app straight to the
       // ChannelList at mount (App.tsx → routeForStatus reads the persisted pairing record, not the Noise

@@ -10,6 +10,43 @@ Launch liveness, exit reports and unconditional diagnostic attachments. See the 
 
 Suppression on a green run did not disappear, it moved to where it was always actually enforced: Playwright's terminal reporter (`reporter: 'list'`) prints an attachment's body only from `formatFailure`, reached only for a result that carries errors, so a passing test's attachment exists in its result but is never printed — the `text/plain` content type (name not underscore-prefixed, truncated at 300 chars) is what makes it inline-readable when it is. Measured, not assumed: a green run leaves one *empty* `test-results/` directory per test that actually attaches (`TestInfo.attach` calls `outputPath()`, which `mkdirSync`s it), and Playwright wipes `test-results/` at the start of every run, so this is per-run litter with no growth. `e2e/launch-fate.spec.ts` drives the real `testInfo` throughout rather than the `recordingSink` double it used to use — that double supplied a constant `status`, substituting exactly the seam that turned out to be broken, so every one of its assertions could pass while a real red carried nothing.
 
+### Startup-registration failure before window creation
+
+An alive process at outcome, exit code 0 after teardown and no teardown failures
+do not establish that startup created a window. In both restored-identity cases
+(`history-first=false` and `history-first=true`), immediate saved-history handler
+replacement could find no original handler and install `pyry:chat-history` first.
+Production startup then rejected its duplicate registration before creating any
+window, leaving `firstWindow()` to reach its existing 30000ms timeout.
+
+The [diagnosis and verifier review](https://github.com/pyrycode/pyrycode-desktop/pull/1977#issuecomment-6180083529)
+record a natural reproduction with no injected delay or retry and controlled
+readiness reproductions for both variants: installation saw no original handler
+or native window; releasing startup produced duplicate registration and zero
+windows. The event-order choice happens after restoration, so both variants
+share this setup failure. Playwright caches discovered windows; the timeout
+alone did not demonstrate a lost window event.
+
+The [launch-hook readiness barrier](e2e-harness.md#launch-hook-readiness) orders
+replacement after startup registration while retaining installation before
+pairing and conversation activation. The repair retains sandbox and desktop
+isolation checks and the original timeout, without retries or delays. Handler
+readiness and the live/prepend receipt barriers prove separate stages.
+
+The verifier confirmed the complete configured Linux fake-transport run,
+`npm run e2e -- --reporter=list,json`, at
+`9291ae233997ef9c8cc60dbdff9082ef69a42d88`: 398 configured, **395 executed,
+395 passed, 0 failed, 3 skipped**, no retries or flaky results. Both named
+`restored tool identities survive live output and history prepends` cases were
+present and passed with their identity, expansion and child-result assertions
+intact: `history-first=false` in 5639ms and `history-first=true` in 5535ms.
+The existing skips were both `app-badge-count.spec.ts` cases (app icon count
+badges exist only on macOS) and `a window reopened after close converges on the
+live connection` (only macOS keeps the app running after its last window closes).
+The [architecture plan](../../specs/architecture/1969-restored-history-launch.md#final-validation)
+also retains the tested revision and evidence. This is fake-transport acceptance;
+no live-Claude or presentation acceptance applies to this repair.
+
 ### Welcome stall diagnostics
 
 [`welcomeDiagnostics.ts`](../../../e2e/fixtures/welcomeDiagnostics.ts) adds

@@ -21,6 +21,23 @@ allow queued events to run; they do not acknowledge a particular scroll handler.
 Held-reader checks additionally need stable offset, content height and viewport height
 after the corresponding rendered effect.
 
+For streaming message copy, settle the attached send's completed assistant reply
+before injecting an independent delta. Locate the intended source explicitly and
+assert its exact committed text and cursor; a cursor on a dynamic last row can
+belong to another turn. Transfer focus before pressing, then hover and require
+identical button bounds and thread scroll offset/content height across consecutive
+animation frames with focus and hover held. A trusted pointer-down is insufficient:
+metadata reflow during the press can move Copy so release hits Reply and click
+lands on their common container. Require a trusted click on Copy itself, followed
+by exact OS clipboard readback. First verify a different value from an earlier
+ordinary activation so a stale matching clipboard cannot satisfy the assertion.
+Keep ordinary activation, clipboard serialization and desktop isolation intact.
+See [streaming copy readiness and counted evidence](conversation-shell-message-bubble-testing.md#streaming-copy-input-readiness)
+for the controlled 28px movement and distinction from the unrecorded historical
+schedule. Retain readiness samples even when polling or activation fails; the
+current side-actions spec attaches them only after activation reaches its
+receipt/readback `try/finally`, a nonblocking diagnostic limitation noted by review.
+
 The supplied-agent regression in [`thread-items.spec.ts`](../../../e2e/thread-items.spec.ts)
 registers its target scroll listener after React's listener, so its count and offset
 acknowledge processing after `rememberTop`. Settle native Home before parking row 100;

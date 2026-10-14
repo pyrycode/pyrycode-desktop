@@ -188,10 +188,10 @@ at `f87ad003c615` records 392 executed, 392 passed, 0 failed, 3 skipped;
 the Luna test did not run in that tier. Live acceptance rests on the named result above,
 not these deterministic counts or a suite exit status.
 
-The #1809 handoff asks the dispatcher to supply the October 14 named Luna pass, daemon
-`0.39.0`, attachments and tested feature/main identities to #1658's documentation/PR #1720
-handoff. That normal workflow reconciles the picker and documentation already imported
-through `22775f09`; keep the existing causal blocker and #1809-first landing order.
+The [operator handback](https://github.com/pyrycode/pyrycode-desktop/issues/1658#issuecomment-6167170304)
+confirms that #1809 merged and accepts this October 14 named Luna pass for #1658 criterion 5,
+with daemon `0.39.0` and passing-attempt daemon/model-row evidence. The reviewed picker and
+documentation preserved through `22775f09` are on main; the missing-harness blocker is resolved.
 See [create-channel testing](create-channel-dialog.md#testing).
 
 ### Earlier recorded runs

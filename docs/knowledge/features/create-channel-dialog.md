@@ -263,14 +263,15 @@ have compatible remembered effort in their first settings reply and receive zero
 settings acknowledgements before or after the first turn. Reusing the old empty-effort opening
 assertion for both flows would reject the intended creation behaviour.
 
-The combined #1809 delivery normally merges the reviewed picker and preserved documentation
+The merged #1809 delivery preserves the reviewed picker and documentation
 history through `22775f0901d19e606e3055eb365d19d783c56335`. Its supplied 2026-10-14 live report
 (`2026-10-14T09-16-23-519Z`) tests `feature/1809` at `f87ad003c615`, integrated with
 `origin/main` at `c75bc69d46d6`: 27 executed, 26 passed, 1 failed, 1 skipped.
 The named effort-default case,
 `applied effort, confirmed preference, restart, chat recall and channel creation choice`,
 was present, executed and passed on its first attempt in 21.0s against annotated daemon
-`0.39.0`. This is named evidence for that regression, not a full-suite pass.
+`0.39.0`. This is named evidence for that regression, not a full-suite pass. The supplied
+daemon identity is its release version; no daemon source revision or binary digest was supplied.
 
 [`e2e/real-claude-codex-channel.spec.ts`](../../../e2e/real-claude-codex-channel.spec.ts)
 now automates the Luna sequence: confirm Low on seeded Claude, await a fresh target-host
@@ -285,14 +286,14 @@ the cache. The scenario attaches `daemon-revision` and `published-model-row` whe
 passed on attempt 1 in 11.6s in that same run (27 executed, 1 failed, 1 skipped), against
 daemon `0.39.0`, with `daemon-revision` and `published-model-row` attachments on the passing
 attempt. This supersedes the earlier unset-home skip and supplies #1658 criterion 5's
-real Codex reply. The full suite's history-on-open failure also fails on main and is tracked
-on #1947; the operator-delegated handoff accepts this ticket's Luna result. See the
+real Codex reply. The full suite's history-on-open failure also failed on main and was tracked
+on #1947; the [operator-delegated acceptance](https://github.com/pyrycode/pyrycode-desktop/issues/1809#issuecomment-6165241854)
+accepts the named Luna result with its passing-attempt attachments. See the
 [runbook](live-e2e-runbook.md#current-real-claude-gate-state) for counted evidence and
 [Codex prerequisites](live-e2e-runbook.md#dedicated-codex-sign-in-for-the-local-real--tier).
-After #1809 lands, the dispatcher supplies this named pass, daemon identity, attachments
-and tested feature/main identities to #1658's documentation/PR #1720 handoff so that its
-normal workflow reconciles the implementation and preserved documentation already imported
-here. The existing #1658 blocker and #1809-first landing order remain.
+The [operator handback](https://github.com/pyrycode/pyrycode-desktop/issues/1658#issuecomment-6167170304)
+confirms that #1809 merged and that this evidence satisfies #1658 criterion 5. The earlier
+missing-Codex-harness blocker is resolved.
 
 ## Edge cases and limitations
 

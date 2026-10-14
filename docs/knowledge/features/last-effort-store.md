@@ -4,8 +4,10 @@ The renderer's persisted, client-owned last successfully confirmed effort choice
 slice reused by chats and channels with no choice of their own. The [footer](composer-effort-menu.md)
 shows the daemon's applied reading independently of this preference.
 
-Introduced in [#1169](../codebase/1169.md). The **data half** only — see [Composer effort default](composer-effort-menu.md#the-default-apply-1169)
-for the decision that reads it and applies it to a newly opened chat.
+Introduced in [#1169](../codebase/1169.md). See
+[Composer effort default](composer-effort-menu.md#the-default-apply-1169) for opening-time chat
+recall and [Create channel](create-channel-dialog.md#requests-and-replies) for submission-time
+reuse in the create request.
 
 ## What it does
 

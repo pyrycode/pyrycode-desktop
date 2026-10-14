@@ -1,6 +1,7 @@
 import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { SendMessagePayload } from '../src/shared/wire/types'
+import { expectDesktopIsolated } from './fixtures/desktopIsolation'
 
 for (const historyFirst of [false, true]) {
   test(`restored tool identities survive live output and history prepends: history-first=${historyFirst}`, async ({ launchPairedApp }) => {
@@ -11,8 +12,11 @@ for (const historyFirst of [false, true]) {
       if (frame.type === 'request_history') historyRequest = frame.id
       return []
     } }, { onLaunched: async app => {
+      expect(app.windows()).toHaveLength(1)
+      await expectDesktopIsolated(app)
       await app.evaluate(({ ipcMain }) => {
         const previous = (ipcMain as any)._invokeHandlers.get('pyry:chat-history')
+        if (typeof previous !== 'function') throw new Error('Saved-history handler is not ready')
         ipcMain.removeHandler('pyry:chat-history')
         ipcMain.handle('pyry:chat-history', (event, request) => request.operation !== 'readTimeline' ? previous(event, request) : {
           status: 'stored', snapshot: { version: 1, kind: 'timeline', serverId: request.serverId,
@@ -28,6 +32,7 @@ for (const historyFirst of [false, true]) {
         })
       })
     } })
+    await expect(page.getByText('Saved answer', { exact: true })).toBeVisible()
     const run = page.getByRole('button', { name: 'Using tools: 2', exact: false })
     const parent = page.locator('.tool-row__chip--toggle', { hasText: 'Restored agent' })
     const child = page.locator('.tool-row__chip--toggle', { hasText: 'Restored file' })

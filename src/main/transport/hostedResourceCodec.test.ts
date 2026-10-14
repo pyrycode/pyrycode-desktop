@@ -123,6 +123,16 @@ describe('hosted resource boundaries', () => {
     for (const path of ['/api', '/assets/a', '/%61pi/a', '/api/../data']) reject(changed(api[0], { path }))
     roundtrip(changed(api[0], { path: '/api/a%20b' }))
   })
+  it('rejects literal and escaped service roots and descendants while permitting neighboring names', () => {
+    for (const path of ['/dist/service', '/dist/%73ervice', '/dist/service/', '/dist/%73ervice/', '/dist/service/main.js', '/dist/%73ervice/main.js']) {
+      const frame = changed(asset[0], { path })
+      expect(() => decodeHostedResource(bytes(frame), client)).toThrow(codec.WireDecodeError)
+      expect(() => encodeHostedResource(frame, client)).toThrow(codec.WireEncodeError)
+    }
+    for (const path of ['/dist/services', '/dist/service-worker.js', '/dist/serviceable/main.js', '/dist/%73ervices']) {
+      roundtrip(changed(asset[0], { path }))
+    }
+  })
   it('preserves opaque valid query bytes and omits empty query on encode', () => {
     for (const query of ['?a=1', 'a#b', 'a\n', 'é', '%', '%GG', 'a'.repeat(1025)]) reject(changed(asset[0], { query }))
     for (const query of ['a=1&a=&b=%2F%25%3F&x=+', '%00%7F%C2%80%FF', 'a'.repeat(1024)]) roundtrip(changed(asset[0], { query }))

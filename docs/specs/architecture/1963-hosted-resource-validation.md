@@ -49,11 +49,20 @@ None. Asset filesystem handle containment remains daemon-owned; URL containment 
 ## Revisions
 2026-10-15: Clarified query validation against §6's opaque query rule: reject raw controls/fragments and invalid escapes, retain encoded bytes without decoding (including non-UTF-8 encoded octets). Header types/allowlist/value bounds are checked before serializing the narrowed string map, so hostile nested header values cannot trigger a generic serialization exception. Invalid supplied context serialization is wrapped in a static decode category.
 
+2026-10-15 (verifier rework): `resourcePath` missed the exact decoded `/dist/service` root while rejecting its descendants. Reject both the root and descendants after the existing single decode, including `/dist/%73ervice`; neighboring segment names remain permitted. `rejects literal and escaped service roots and descendants while permitting neighboring names` covers encode/decode admission. Module constants now follow UPPER_SNAKE_CASE. No interface or lifecycle changes.
+
+## Documentation handoff
+Pending for the documentation stage, as requested by the verifier:
+
+- `docs/knowledge/features/wire-codec.md` § Hosted discovery and control: document `HostedResourceEnvelope`, `decodeHostedResource`/`encodeHostedResource`, original-request correspondence, HTTP/path/query/header/base64/metadata limits and final serialized-byte accounting; replace the resource-declarations-only wording.
+- In that section, record pinned example revision `964c5c4bab8e9267ee5e4c374d34a5bb1ebeb6f0` and frame-only proof, opaque query/binary preservation and separate resource/cancel correlations. Preserve downstream assembly, ownership, retirement, activation and dispatch obligations, and daemon-owned asset-handle containment; make no live SQL claim.
+
 ## Security review
 **Verdict:** PASS
 - Trust boundaries: raw bytes enter `decodeHostedEnvelope` before projection; resource output is narrowed, context revalidated, additions cannot route or authorize work.
 - Tokens/secrets: no credentials created/stored/exposed; opaque bodies and headers are never logged or echoed in errors.
 - File/storage: no file operations; URL containment rejects traversal/double encoding; actual asset handle containment stays daemon-owned.
+- Verifier finding (MUST FIX, resolved 2026-10-15): the descendant-only check in `resourcePath` admitted the reserved service root, including its escaped spelling. The guard now rejects exact decoded `/dist/service` and its descendants; encode/decode regression cases cover both forms and permitted neighbors. This repairs URL admission without granting filesystem authority. Verdict remains PASS after repair.
 - Electron surface: main-only executable code, data-only shared union; no IPC, window, navigation, renderer or capability changes. Viewer isolation belongs to #1960.
 - Cryptography: canonical encoding only; no key/nonce/authentication changes or secret comparisons; complete-body digest verification belongs to #1958.
 - Network/I/O: pre-parse 65519-byte cap, final serialized cap including additions, pre-decode base64 bounds and metadata/index limits prevent oversized allocations. No new socket/timeouts.

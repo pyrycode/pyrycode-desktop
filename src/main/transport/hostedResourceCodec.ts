@@ -5,10 +5,10 @@ import { isHostedAppId, isHostedReleaseVersion } from './hostedCodec'
 
 type Direction = 'client-to-daemon' | 'daemon-to-client'
 type Request = Extract<HostedResourceEnvelope, { type: 'app_asset_request' | 'app_api_request' }>
-const emptyDigest = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
-const controls = /[\x00-\x1f\x7f-\x9f]/
-const requestHeaders = new Set(['accept', 'content-type', 'if-none-match'])
-const responseHeaders = new Set(['content-type', 'cache-control', 'etag', 'last-modified'])
+const EMPTY_DIGEST = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+const CONTROLS = /[\x00-\x1f\x7f-\x9f]/
+const REQUEST_HEADERS = new Set(['accept', 'content-type', 'if-none-match'])
+const RESPONSE_HEADERS = new Set(['content-type', 'cache-control', 'etag', 'last-modified'])
 
 function appId(value: unknown): string {
   if (!isHostedAppId(value)) throw new WireDecodeError('invalid hosted app identity')
@@ -40,11 +40,11 @@ function resourcePath(value: unknown, api: boolean): string {
   }
   let decoded: string
   try { decoded = decodeURIComponent(path) } catch { throw new WireDecodeError('invalid hosted path escape') }
-  if (controls.test(decoded) || decoded.split('/').some(segment => segment === '.' || segment === '..')) {
+  if (CONTROLS.test(decoded) || decoded.split('/').some(segment => segment === '.' || segment === '..')) {
     throw new WireDecodeError('invalid hosted path containment')
   }
   const root = decoded.split('/')[1]
-  if (api ? !path.startsWith('/api/') : ['api', '_pyry', 'service', 'data', 'builds', 'registry', 'registry.json'].includes(root) || decoded.startsWith('/dist/service/')) {
+  if (api ? !path.startsWith('/api/') : ['api', '_pyry', 'service', 'data', 'builds', 'registry', 'registry.json'].includes(root) || decoded === '/dist/service' || decoded.startsWith('/dist/service/')) {
     throw new WireDecodeError('invalid hosted resource route')
   }
   return path
@@ -61,10 +61,10 @@ function query(obj: Record<string, unknown>): { query?: string } {
 function headers(value: unknown, response: boolean): Record<string, string> {
   const obj = hostedObject(value)
   if (Object.keys(obj).length > 8) throw new WireDecodeError('hosted headers exceed limit')
-  const allowed = response ? responseHeaders : requestHeaders
+  const allowed = response ? RESPONSE_HEADERS : REQUEST_HEADERS
   const result: Record<string, string> = {}
   for (const [name, value] of Object.entries(obj)) {
-    if (!allowed.has(name) || typeof value !== 'string' || Buffer.byteLength(value) > 1024 || controls.test(value)) {
+    if (!allowed.has(name) || typeof value !== 'string' || Buffer.byteLength(value) > 1024 || CONTROLS.test(value)) {
       throw new WireDecodeError('invalid hosted header')
     }
     result[name] = value
@@ -116,7 +116,7 @@ function resource(envelope: Envelope): HostedResourceEnvelope {
       const size_bytes = bounded(obj.size_bytes, 8388608)
       const total_chunks = bounded(obj.total_chunks, 256)
       if (status < 200 || typeof obj.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(obj.sha256) ||
-          (size_bytes === 0 ? total_chunks !== 0 || obj.sha256 !== emptyDigest : total_chunks === 0) ||
+          (size_bytes === 0 ? total_chunks !== 0 || obj.sha256 !== EMPTY_DIGEST : total_chunks === 0) ||
           ([204, 205, 304].includes(status) && size_bytes !== 0)) throw new WireDecodeError('invalid hosted response metadata')
       return { id, ts, type, in_reply_to: hostedInteger(envelope.in_reply_to), payload: {
         app_id, release_version: release(obj.release_version), status, headers: headers(obj.headers, true), size_bytes, total_chunks, sha256: obj.sha256 } }

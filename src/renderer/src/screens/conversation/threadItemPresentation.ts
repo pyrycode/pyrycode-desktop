@@ -1,6 +1,35 @@
 import type { ThreadSnapshot } from '../../store/threadItemStore'
 import type { MessageAttachment, ThreadItem } from '../../store/threadTimeline'
 import { formatTurnStats } from './turnStats'
+import { usableThreadField, type PendingThreadSend } from '../../store/threadSendStore'
+import type { LocalSendPending } from '../../store/threadTimeline'
+import type { ConnectionStatus } from '../../store/sessionStore'
+import { dequeueMessageCommand, sendQueuedNowCommand, type RendererCommand } from '@shared/ipc/commands'
+
+export interface ThreadSendInputs {
+  local?: { hostId: string; conversationId: string; pending: readonly PendingThreadSend[];
+    localSendPending: LocalSendPending | null }
+  connection?: { hostId: string; status: ConnectionStatus }
+  onAction?: (hostId: string, command: Extract<RendererCommand, { type: 'dequeueMessage' | 'sendQueuedNow' }>) => void
+  log?: (event: { event: string; code: string }) => void
+}
+export function threadQueueHandle(snapshot: ThreadSnapshot, source: Held, inputs?: ThreadSendInputs): number | null {
+  const handle = usableThreadField(source, 'content.queued_msg_id')
+  return usableThreadField(source, 'kind') === 'user_message' && usableThreadField(source, 'shown') === true &&
+    usableThreadField(source, 'active') === true && usableThreadField(source, 'status') === 'queued' &&
+    typeof handle === 'number' && Number.isSafeInteger(handle) && handle > 0 && inputs?.onAction &&
+    inputs.connection?.hostId === snapshot.hostId && inputs.connection.status.type === 'connected' ? handle : null
+}
+export function actOnThreadQueue(snapshot: ThreadSnapshot, source: Held, inputs: ThreadSendInputs | undefined,
+  action: 'drop' | 'send-now'): void {
+  const handle = threadQueueHandle(snapshot, source, inputs)
+  if (handle === null) return
+  const payload = { conversation_id: snapshot.conversationId, queued_msg_id: handle }
+  const command = action === 'drop' ? dequeueMessageCommand(payload) : sendQueuedNowCommand(payload)
+  if (command.type !== 'dequeueMessage' && command.type !== 'sendQueuedNow') return
+  try { inputs?.onAction?.(snapshot.hostId, command) }
+  catch { try { inputs?.log?.({ event: 'thread-queue-action', code: 'bridge-failed' }) } catch { /* Observe only. */ } }
+}
 
 type Held = ThreadSnapshot['items'][number]
 export interface ItemPresentation {
@@ -143,7 +172,7 @@ export function taskLinked(s: Held): boolean {
   return matches(link) || (Array.isArray(link.tasks) && link.tasks.some(matches))
 }
 /** Parent edges and placement are supplied facts, never inferred from tool results or names. */
-function nest(rows: ItemPresentation[]): ItemPresentation[] {
+function nest(rows: ItemPresentation[], arrival: ReadonlyMap<number, number>): ItemPresentation[] {
   const byId = new Map(rows.map(row => [row.source.id, row]))
   const parents = new Map<number, number>()
   for (const row of rows) {
@@ -171,7 +200,9 @@ function nest(rows: ItemPresentation[]): ItemPresentation[] {
     if (row.item !== null && (row.source.kind === 'agent' || linked)) row.outcome = outcome(row.source)
     row.background = row.source.kind === 'agent' && row.item !== null && linked
   }
-  const creation = (row: ItemPresentation) => numeric(row.source.order) ?? row.source.id
+  const unorderedUser = (row: ItemPresentation) => row.source.kind === 'user_message' &&
+    !(typeof row.source.order === 'number' && row.source.order > 0)
+  const creation = (row: ItemPresentation) => unorderedUser(row) ? Infinity : numeric(row.source.order) ?? row.source.id
   const position = (row: ItemPresentation) => {
     const ending = numeric(row.source.ended_order)
     return row.background && !row.marker && row.source.active !== true && ending !== undefined && ending > 0 ? ending : creation(row)
@@ -179,7 +210,9 @@ function nest(rows: ItemPresentation[]): ItemPresentation[] {
   const lane = (parent: number | undefined): ItemPresentation[] => (children.get(parent) ?? []).flatMap(row => row.background
     ? [{ ...row, marker: true, count: 0, hasChildren: false }, row] : [row]).sort((a, b) => {
       const active = (r: ItemPresentation) => r.background && !r.marker && r.source.active === true ? 1 : 0
-      return active(a) - active(b) || position(a) - position(b) || creation(a) - creation(b) || Number(!a.marker) - Number(!b.marker)
+      return Number(unorderedUser(a)) - Number(unorderedUser(b)) || active(a) - active(b) ||
+        position(a) - position(b) || creation(a) - creation(b) || Number(!a.marker) - Number(!b.marker) ||
+        (arrival.get(a.source.id) ?? 0) - (arrival.get(b.source.id) ?? 0)
     })
   const result: ItemPresentation[] = []
   const stack = lane(undefined).reverse().map(row => ({ row, ancestors: new Array<number>() }))
@@ -223,5 +256,6 @@ export function threadItemPresentations(snapshot: ThreadSnapshot): ItemPresentat
     if (key !== null && row.item?.kind === 'assistantText') last.set(key, row)
   }
   for (const [key, row] of last) row.stats = endings.get(key)
-  return nest(rows)
+  const arrival = new Map((snapshot.arrivalOrder ?? snapshot.items.map(item => item.id)).map((id, index) => [id, index]))
+  return nest(rows, arrival)
 }

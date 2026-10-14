@@ -5,10 +5,11 @@
 import type { MessageLifecycleDiagnostic } from '@shared/ipc/diagnostics'
 import { sendMessageCommand, type RendererCommand } from '@shared/ipc/commands'
 
-export const COMPOSER_MESSAGE_DELIVERY_COPY = { waiting: 'Waiting for connection', 'not-sent': 'Not sent' } as const
+export const COMPOSER_MESSAGE_DELIVERY_COPY = { waiting: 'Waiting for connection', 'not-sent': 'Not sent', 'not-delivered': 'Not delivered' } as const
 import type { SendMessagePayload } from '@shared/wire/types'
 import type { ConnectionStatus } from '../../store/sessionStore'
 import type { MessageAttachment, ThreadEvent } from '../../store/threadTimeline'
+import type { createThreadSendStore } from '../../store/threadSendStore'
 
 /**
  * One send's claim on the composer's pending attachments (#1055): the set it took, and the undo that
@@ -78,6 +79,7 @@ export interface PendingAttachmentTake {
  */
 export interface ComposerSendDeps {
   serverId?: string
+  threadSend?: { store: ReturnType<typeof createThreadSendStore>; deviceId: string | null }
   diagnose?: (record: MessageLifecycleDiagnostic) => void
   sendCommand: (command: RendererCommand) => void
   dispatch: (event: ThreadEvent) => void
@@ -116,6 +118,8 @@ export function submitMessage(
 ): boolean {
   const trimmed = text.trim()
   if (trimmed.length === 0 || conversationId === null) return false
+  const threadSend = deps.threadSend, host = deps.serverId
+  if (threadSend && !host) return false
   const message_id = deps.newMessageId()
   const take = deps.takeAttachments?.()
   const named = take !== undefined && take.attachments.length > 0 ? take.attachments : undefined
@@ -130,8 +134,11 @@ export function submitMessage(
   // Both identities exist before the bridge can synchronously report delivery.
   const echo: ThreadEvent = { type: 'userText', text: trimmed, messageId: message_id,
     createdAt: deps.now?.(), attachments: named }
-  deps.dispatch(echo)
-  deps.dispatchFor(conversationId, echo)
+  if (threadSend && host) threadSend.store.getState().retain(host, conversationId, threadSend.deviceId, echo)
+  else {
+    deps.dispatch(echo)
+    deps.dispatchFor(conversationId, echo)
+  }
   try {
     deps.sendCommand(sendMessageCommand(payload, deps.serverId))
     return true
@@ -139,8 +146,11 @@ export function submitMessage(
     diagnose('message-bridge-failed')
     take?.rollback()
     const failed: ThreadEvent = { type: 'messageDelivery', messageId: message_id, status: 'not-sent' }
-    deps.dispatch(failed)
-    deps.dispatchFor(conversationId, failed)
+    if (threadSend && host) threadSend.store.getState().feedback(host, conversationId, failed)
+    else {
+      deps.dispatch(failed)
+      deps.dispatchFor(conversationId, failed)
+    }
     return false
   }
 }

@@ -57,3 +57,25 @@ Keep the existing deliberately mismatched digest refresh and injected external-o
 
 - Which boundary fails: input delivery, synthetic reply setup or reader outcome handling? Resolve with a focused reproduction or controlled failing case and record the result in Revisions before handoff.
 - Does repair require production code? Resolve from the causal evidence; stop for missing Figma access if a renderer correction becomes necessary.
+
+## Revisions
+
+### 2026-10-15 — controlled input race; test-only repair
+
+Both questions are resolved. `readReply`, `buildReplyFrames` and `useMarkdownReader` behave correctly when the link receives the click. The failing boundary is test input delivered against geometry measured before hover reveals `.bubble__meta--details`. The thread's existing growth observer then pins to the new bottom and moves the link. No production or visual change is needed, so the conditional Figma read does not apply.
+
+Controlled 800px evidence: after pointer Back, record the link center, move the real pointer there, let two animation frames expose the queued layout motion, and click the recorded center. The link moved from y=372 to y=344; scrollTop grew from 1461 to 1489. `elementFromPoint` and pointer down/up/click all named the timestamp span. The host received only requests 9, 10 and 11, no final read; the reader count was zero and its heading assertion failed after the unchanged 5,000ms timeout. This directly reproduces the missing-heading failure mechanism. The unavailable original snapshot prevents claiming its exact event sequence was inspected; the original gate/rerun remain observations consistent with this mechanism.
+
+A preceding controlled attempt also exposed a baseline race: the immediate first-open scroll snapshot was 1489 but pointer Back returned 1461. The snapshot retained focus-revealed reply metadata that later reader-menu focus collapsed. Settle the intended focus state before recording the preservation baseline.
+
+New contract: focus Back after the first loaded note, then record thread position after 20 consecutive equal animation-frame samples of scroll offset/content height/viewport height and link bounds. Before the final pointer click, focus the link to hold metadata open and require the same geometry barrier. The helper rejects after 120 sampled frames; it contains no fixed sleep, click retry or timeout increase. Keep the original exact thread-position assertion before preparing the new click. Assert Plan version 3, exactly one new host read and unique request IDs, then close using keyboard Back. Attach synthetic request/reader diagnostics to the scenario's Playwright report.
+
+The identical controlled pointer sequence after this repair held y=344 before/after, hit the link button, received fresh request 12 and rendered Plan version 3: 1 executed/passed, none failed/skipped/flaky. Temporary control code was removed; patches and reports remain under `/tmp/builder-1970/` (`controlled-failure.patch`, `stale-pointer-normalized.json`, `controlled-repair.patch`, `controlled-repair.json` and their result directories). Two diagnostic repeat runs each passed 20/20; those green runs alone were not used to establish the cause.
+
+Final scope remains one spec and this plan: no new exports, production state, consumer migrations, dependencies or reject branches. The controlled failure and repair use the existing synthetic transport; no external repair or blocker is required.
+
+### Final validation after main merge
+
+Final main merge contains `0057a0afe824` (#1969's startup-hook ordering change; no dependency on this scenario). Pre-verify passed all five checks: 402 unit files, 10,178 tests passed and three existing skips. `npm run build` passed.
+
+`final-repeat.json`: both exact layout titles repeated ten times, 20 executed/passed, zero failed/skipped/flaky, retry 0 throughout, four actual workers. A retained repeat-only scratch config removes the clipboard project's one-worker cap for these two write-only layout cases; no clipboard-reading scenario is included and the repository config is unchanged. `reader-specs.json`: complete `markdown-reader-menu.spec.ts` (3/3) and `markdown-reader.spec.ts` (1/1), four executed/passed, zero failed/skipped/flaky, retry 0 throughout. Logs and result directories are retained alongside those reports under `/tmp/builder-1970/`. Dispatcher owns the pending full-suite gate.

@@ -45,6 +45,26 @@ intent from seeded delivery and Cancel focus. See
 for the controlled counts, 20 focused Linux/Xvfb passes with 3 workers and zero retries,
 and the named test's full-gate result separately from an unrelated failure.
 
+For metadata wheel checks, completed row delivery and stable geometry are necessary
+but do not establish native input/layout ordering. The retained
+[`turn-stats-hover` regression](conversation-shell-message-bubble-testing.md#metadata-wheel-ordering-verification)
+confirms all 42 rows and more than 1500px overflow before wheel navigation. It samples
+offset/content/viewport over 20 consecutive stable frames after pointer/focus changes
+and native input. Held setup uses trusted upward motion, proves positive displacement
+and distance from bottom, then checks a short downward nudge does not snap to bottom.
+Assert that the focus target is actually above the viewport and its details visibly
+reveal/collapse before comparing the same immutable reference through both effects.
+Never reset scroll or replace the reference after the action to obtain clearance.
+
+A read-only geometry listener can flush layout and change the ordering it observes.
+Here one `scrollHeight` read in a one-shot native wheel listener forces layout before
+scroll delivery, reproducing an equal-height metadata exchange that leaves the reader
+28px short. Treat such traces as controlled interventions, distinguishing them from
+passive observations of an original gate. Twenty uninstrumented passes on unchanged
+production missed this gap; the layout-read control failed 3/3 before repair and
+passed 3/3 after it. The linked evidence records counts, both widths and the repaired
+test's focused/full-gate results without claiming the original unrecorded schedule.
+
 Known-gap demand measures marker intersection before native key scrolling, so
 older-end proximity and an earlier screenshot do not prove eligibility. Pending
 tool layout can overwrite a programmatic park while following. At both fresh-input

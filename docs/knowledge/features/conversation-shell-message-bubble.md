@@ -104,6 +104,13 @@ fit on one line.
 Delivery feedback is a separate `.bubble__meta` row without the details modifier. Its
 waiting/failure copy remains visible at rest; hiding time and stats must never hide that feedback.
 Changing metadata height also requires preserving [scroll-following intent](conversation-shell-scroll-pin.md#thread-scroll-pin).
+During downward wheel delivery, collapsing an old hovered row and revealing a new one
+can exchange equal 28px heights while leaving total `scrollHeight` unchanged. Native
+anchoring can then stop the reader 28px above the bottom. Stable pre-input geometry
+does not prevent this ordering; trusted pixel input covering the remaining range must
+establish bottom intent before native movement, with the existing scroll/resize paths
+restoring clearance. See [controlled regression and counted evidence](conversation-shell-message-bubble-testing.md#metadata-wheel-ordering-verification)
+at 1280px and 800px.
 
 **The time itself is `formatMessageTime(epochMs)` in `messageTime.ts` (new, beside the bubble, the
 `copyMessageText.ts` module-plus-spec shape again — 46 + 98 lines).** Pure: `new Date(epochMs)` read with

@@ -1190,9 +1190,15 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
       onWheel: (event) => {
         if (!event.isTrusted) return
         const el = event.currentTarget
-        // Native wheel movement can reach the bottom before its scroll event is delivered.
-        if (event.deltaY > 0 && isAtBottom({ scrollOffset: el.scrollTop,
-          viewportHeight: el.clientHeight, contentHeight: el.scrollHeight })) following.current = true
+        // A pixel wheel requesting the remaining range expresses bottom intent even if a
+        // layout flush delivers input before native movement. Hover can exchange equal-height
+        // metadata rows and anchor the final offset above the end before onScroll measures it.
+        // Set intent only; native movement and the existing observer/scroll paths do the pin.
+        if (event.deltaY > 0 && (isAtBottom({ scrollOffset: el.scrollTop,
+          viewportHeight: el.clientHeight, contentHeight: el.scrollHeight }) ||
+          (event.deltaMode === 0 && event.deltaY >= el.scrollHeight - el.clientHeight - el.scrollTop))) {
+          following.current = true
+        }
         if (event.deltaY < 0) readUpward(el)
       },
       onKeyDown: (event) => {

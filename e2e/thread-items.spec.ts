@@ -22,6 +22,7 @@ type Fixture = {
   scope: (host: string, chat: string, epoch: string) => void
   batch: (items: ThreadItem[], version: number) => void
   update: (update: ThreadUpdate) => void
+  commitUpdate: (update: ThreadUpdate) => void
   taskInputs: (inputs: Omit<ThreadTaskInputs, 'onStopTask'>, callback?: boolean) => void
   turnRunning: (running: boolean) => void
   escapes: string[]
@@ -31,6 +32,7 @@ type Fixture = {
 }
 const fixtureSource = `
 import { useState } from 'react';
+import { flushSync } from 'react-dom';
 import { useStore } from 'zustand';
 import { activeConversationStore } from './store/activeConversationStore';
 import { sessionStore } from './store/sessionStore';
@@ -62,6 +64,7 @@ function ThreadFixture() {
     batch(items, version) { const s = threadStore.getState(); const b = s.beginBatch(scope.host, scope.chat, scope.epoch);
       b.applyItems(items, version); b.commit({ fromVersion: 0, version, ranges: [{ start: 0, end: version }] });
       sends.getState().settle(s.snapshot(scope.host, scope.chat)); },
+    commitUpdate(update) { flushSync(() => window.threadFixture.update(update)); },
     update(update) { threadStore.getState().applyUpdate(scope.host, update);
       sends.getState().settle(threadStore.getState().snapshot(scope.host, scope.chat)); }
   };
@@ -529,22 +532,79 @@ for (const width of [1280, 800]) test(`supplied agents repair nesting and retain
     await capturePairedApp(app, page, `/tmp/builder-1937/agents-${width}.png`)
 
     await batch(Array.from({ length: 20 }, (_, i) => item(100 + i, 'assistant_message', { text: `Reading row ${i}\n\n` + 'Paragraph. '.repeat(100) })))
+    await expect(row(119)).toContainText('Reading row 19')
+    // Registered after React's target scroll listener: this records processed motion,
+    // rather than treating a geometry read as acknowledgement of the queued event.
+    await thread.evaluate(el => {
+      const probe = { count: 0, top: el.scrollTop, remove: () => {},
+        async ready(after: number): Promise<{ stable: boolean; processed: boolean }> {
+          const sample = () => ({ top: el.scrollTop, height: el.scrollHeight, viewport: el.clientHeight,
+            width: el.clientWidth, anchor: el.querySelector('[data-read-row="100"]')!.getBoundingClientRect().top,
+            count: probe.count, processedTop: probe.top })
+          let previous = sample(), stable = true
+          for (let frame = 0; frame < 20; frame++) {
+            await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+            const next = sample()
+            if (JSON.stringify(next) !== JSON.stringify(previous)) stable = false
+            previous = next
+          }
+          return { stable, processed: previous.count > after && previous.processedTop === previous.top }
+        } }
+      const onScroll = () => { probe.count++; probe.top = el.scrollTop }
+      el.addEventListener('scroll', onScroll)
+      probe.remove = () => el.removeEventListener('scroll', onScroll)
+      ;(window as unknown as { agentScroll: typeof probe }).agentScroll = probe
+    })
+    const settled = async (after = -1) => {
+      await expect.poll(() => page.evaluate(after => (window as unknown as {
+        agentScroll: { ready: (after: number) => Promise<{ stable: boolean; processed: boolean }> }
+      }).agentScroll.ready(after), after)).toEqual({ stable: true, processed: true })
+    }
     await thread.focus(); await page.keyboard.press('End')
     await expect.poll(distance).toBeLessThanOrEqual(1)
+    await settled()
     await change(10, { active: false, status: 'finished', ended_order: 125 })
+    await expect(chip(10)).toContainText('Finished')
     await expect.poll(distance).toBeLessThanOrEqual(1)
+    await settled()
     await thread.focus(); await page.keyboard.press('Home')
     await expect.poll(() => thread.evaluate(el => el.scrollTop)).toBe(0)
-    await row(100).evaluate(el => el.scrollIntoView({ block: 'start' }))
-    await expect.poll(async () => (await row(100).boundingBox())!.y - (await thread.boundingBox())!.y).toBeCloseTo(0, 0)
-    const anchor = row(100), before = (await anchor.boundingBox())!.y
-    await change(40, { parent: 10 })
+    await settled()
+    const base_rev = revisions.get(40)!, rev = ++version; revisions.set(40, rev)
+    // Force the update to commit in this task immediately after readiness. Without
+    // the processing barrier, this schedule deterministically restores Home's anchor.
+    const held = await row(100).evaluate(async (el, update) => {
+      const thread = el.parentElement!
+      const probe = (window as unknown as { agentScroll: { count: number;
+        ready: (after: number) => Promise<{ stable: boolean; processed: boolean }> } }).agentScroll
+      const after = probe.count
+      el.scrollIntoView({ block: 'start' })
+      let ready = await probe.ready(after)
+      while (!ready.stable || !ready.processed) ready = await probe.ready(after)
+      const before = el.getBoundingClientRect().top
+      const aligned = before - thread.getBoundingClientRect().top
+      const distance = thread.scrollHeight - thread.scrollTop - thread.clientHeight
+      ;(window as unknown as { threadFixture: Fixture }).threadFixture.commitUpdate(update)
+      return { before, aligned, distance }
+    }, { type: 'thread_item_changed', payload: { conversation_id: SEEDED_ROW.id, epoch: 'agents', version,
+      item_id: 40, base_rev, rev, changes: { parent: 10 } } } satisfies ThreadUpdate)
+    expect(held.aligned).toBeCloseTo(0, 0)
+    expect(held.distance).toBeGreaterThan(100)
+    const anchor = row(100), before = held.before
+    // The child count changes only after the new parent projection commits.
+    await expect(chip(10)).toContainText('1 tool')
+    await expect(chip(30)).toContainText('0 tools')
+    await settled()
     await expect.poll(async () => (await anchor.boundingBox())!.y).toBeCloseTo(before, 0)
     await batch([item(5, 'user_message', { text: 'Older history. '.repeat(100) }, { status: 'delivered' })])
+    await expect(row(5)).toContainText('Older history.')
+    await settled()
     await expect.poll(async () => (await anchor.boundingBox())!.y).toBeCloseTo(before, 0)
     expect(await distance()).toBeGreaterThan(100)
+    expect(await row(40).evaluate(el => el === (window as unknown as { agentChild: Element }).agentChild)).toBe(true)
     await expect(chip(10)).toHaveAttribute('aria-expanded', 'true')
     await expect(row(40).locator('.tool-row__result')).toBeVisible()
+    await page.evaluate(() => (window as unknown as { agentScroll: { remove: () => void } }).agentScroll.remove())
     await thread.focus(); await page.keyboard.press('Home')
     await page.locator('.agent-start-marker').filter({ hasText: 'agent-10' }).click()
     await expect.poll(async () => {

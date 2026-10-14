@@ -1,16 +1,16 @@
 # Wire codec
 
-The **serialization layer** of the transport: pure functions that turn the shared wire types into — and back from — the daemon's on-the-wire bytes, using the same wire format as pyrycode-mobile. Desktop supplies its own client identity, feature report and capabilities. Encode is total; the two `decode*` functions are the network trust boundary and **fail closed**. Lives entirely in the Electron **background process** (`src/main/transport/codec.ts`), never the renderer.
+The **serialization layer** of the transport: pure functions that turn the shared wire types into — and back from — the daemon's on-the-wire bytes, using the same wire format as pyrycode-mobile. Desktop supplies its own client identity, feature report and capabilities. The generic codec lives in `src/main/transport/codec.ts`; hosted discovery/control validation lives beside it in `hostedBoundary.ts` and `hostedCodec.ts`. All executable validation stays in the Electron **background process**, never the renderer. Shared wire declarations remain data only.
 
 Introduced in [#5](../codebase/5.md). It sits *on top of* the [relay connection](relay-connection.md) (#21, the opaque byte pipe) and *under* the Noise session (#7, which encrypts the bytes this codec produces). The wire *types* it (de)serializes already existed ([#21 foundation](../codebase/21.md), `src/shared/wire/types.ts`); this ticket adds only the encode/decode. The daemon does not care which client speaks it, so a byte mismatch — a dropped default, an emitted `null`, the wrong base64 alphabet, or a silently-truncated decode — breaks the contract **silently** ([ADR 0002](../decisions/0002-remote-head-over-relay-shared-wire.md); CLAUDE.md).
 
 ## What it does
 
-Turns typed wire values into their exact JSON/base64 byte form and parses them back. It is a **thin serializer** ported field-for-field from the mobile Kotlin codec (`MobileWireCodec.kt`: the `MobileJson` config + `base64Std*` helpers; `MobileWireModels.kt` / `MessagePayload.kt`: field names + defaults) — deliberately **no per-payload wrapper functions**. `Envelope.payload` stays an **opaque carrier** (`unknown`): decoded but never narrowed to a concrete payload type here; consumers (#7 and later) validate it at their own edge, exactly as mobile does.
+The generic codec turns typed wire values into their exact JSON/base64 byte form and parses them back. It is a **thin serializer** ported field-for-field from the mobile Kotlin codec (`MobileWireCodec.kt`: the `MobileJson` config + `base64Std*` helpers; `MobileWireModels.kt` / `MessagePayload.kt`: field names + defaults). Its `Envelope.payload` stays an **opaque carrier** (`unknown`); consumers validate it at their own edge. The separate [hosted validator](#hosted-discovery-and-control) returns narrowed discovery/control payloads after checking the original bytes and envelope.
 
 ## How it works
 
-One file, one error class, eight functions: `src/main/transport/codec.ts`. Pure, synchronous, side-effect-free — no store, no async, no timer, no shared mutable state; reentrant by construction (mirrors mobile's immutable, thread-safe `MobileJson`).
+The generic functions below live in `src/main/transport/codec.ts`. The generic codec and hosted validators are pure, synchronous and side-effect-free, with no store, async work, timer or shared mutable state.
 
 ### Public surface
 
@@ -35,6 +35,8 @@ export function makeHelloClientPayload(input: {
 
 // Deterministic, catchable decode-failure signal at the trust boundary.
 export class WireDecodeError extends Error {}
+// Category-only failure for over-cap serialized frames/envelopes.
+export class WireEncodeError extends Error {}
 ```
 
 The **asymmetry** `encodeInnerFrame → string` vs `decodeInnerFrame ← Uint8Array` is intentional and correct: we *send* a WS text frame (a string), and `ws` *delivers* every inbound frame as bytes (`RelayEvent.frame: Uint8Array`). Same for `encodeEnvelope → Uint8Array` / `decodeEnvelope ← Uint8Array` — those bytes are the Noise plaintext #7 encrypts/decrypts.
@@ -89,6 +91,10 @@ optionals as `undefined`/omitted: `Envelope.in_reply_to`, `Envelope.event_id` an
 is an optional string. The constructor adds the hello fields only when supplied,
 matching mobile's `explicitNulls = false` without a runtime scrub.
 
+This is an absence rule for optional fields, not a blanket null-removal rule.
+Hosted discovery requires explicit nullable fields; see
+[null and omission preservation](#hosted-null-and-omission-preservation).
+
 `last_event_id` requests bounded current-conversation replay after a daemon-wide
 event position. `last_seen_ts` has no daemon consumer; connection-produced hellos
 never send it. The codec passes the numeric position through without validating
@@ -112,14 +118,150 @@ that host's cursor without automatically loading history.
  encodeInnerFrame──► WS text (string) ──► relay          plaintext ──decodeEnvelope──► Envelope{payload: unknown}
 ```
 
-`payload` stays opaque at both ends; nothing here reaches IPC, the preload, or the renderer.
+The generic `payload` stays opaque at both ends. Hosted callers use the separate
+validation boundary below; neither codec adds IPC, preload or renderer wiring.
+
+## Hosted discovery and control
+
+The declarations and validators follow the daemon's
+[hosted-app v1 contract at revision `964c5c4bab8e9267ee5e4c374d34a5bb1ebeb6f0`](https://github.com/pyrycode/pyrycode/blob/964c5c4bab8e9267ee5e4c374d34a5bb1ebeb6f0/docs/specs/architecture/3120-hosted-app-contract.md).
+`src/shared/wire/types.ts` adds `HostedAppRecord`, the directional `HostedPayloads`
+map and the discriminated `HostedControlEnvelope`, reusing `Envelope` and
+`ErrorPayload`. `EnvelopeType` includes all eleven names through
+`keyof HostedPayloads`; hosted bridge errors reuse the existing `error` name.
+
+| Direction | Names | Envelope `in_reply_to` |
+| --- | --- | --- |
+| Client → daemon | `list_apps`, `app_asset_request`, `app_api_request`, `app_response_credit`, `app_cancel` | Absent |
+| Daemon → client replies | `apps`, `app_response`, `app_response_chunk`, `app_cancelled`, hosted `error` | Required |
+| Daemon → client notifications | `app_updated`, `app_removed` | Absent |
+
+The five resource members (`app_asset_request`, `app_api_request`,
+`app_response_credit`, `app_response`, `app_response_chunk`) are declarations only.
+Required fields retain false `navigation`, zero credit/chunk/size values, empty
+header objects and empty bodies, never omitting them as falsy defaults.
+Resource semantics belong to
+[#1963](https://github.com/pyrycode/pyrycode-desktop/issues/1963);
+`decodeHostedControl` rejects all resource names.
+
+### Hosted API and strict boundary
+
+```ts
+// src/main/transport/hostedBoundary.ts: envelope structure; payload still opaque.
+decodeHostedEnvelope(bytes: Uint8Array,
+  direction: 'client-to-daemon' | 'daemon-to-client'): Envelope
+
+// src/main/transport/hostedCodec.ts: discovery/control semantics.
+decodeHostedControl(bytes: Uint8Array,
+  direction: 'client-to-daemon' | 'daemon-to-client'): HostedControlEnvelope
+encodeHostedControl(envelope: Envelope,
+  direction: 'client-to-daemon' | 'daemon-to-client'): Uint8Array
+isHostedAppId(value: unknown): value is string
+isHostedReleaseVersion(value: unknown): value is string
+```
+
+`decodeHostedEnvelope` checks the **65519-byte plaintext ceiling** before parsing,
+fatal UTF-8 decoding, exactly one JSON object with no trailing values, and duplicate
+decoded key names at every nesting depth. Its iterative token scan catches escaped
+duplicates and duplicates inside unknown additive objects and arrays without a
+recursive scanner. It then requires `id`, a recognized `type`, a calendar-valid
+RFC3339 UTC `ts` and an object `payload`. IDs and correlations are nonnegative safe
+integers. UTC timestamps retain their original text and precision; `Z`/`z` and
+`+00:00` are accepted. The caller supplies the frame direction; the table above
+determines correlation presence, including rejection of explicit null correlations.
+
+Hosted envelopes reject the presence of `conversation_id`, `session_id`, `event_id`,
+`history_entry_id`, `session_state_cleared` and `payload_encrypted`, even with null
+or false values. Validate the original bytes before using the generic decoder:
+`decodeEnvelope` projects envelope keys, so checking its output would lose evidence
+of forbidden metadata and duplicate keys. The strict boundary projects known
+envelope fields while leaving payload semantics to its caller. Host identity comes
+from the authenticated connection; additive fields grant no routing or authority.
+
+`decodeHostedControl` adds the semantics below and projects only known payload
+fields, including nested records/error summaries. `encodeHostedControl` serializes
+the supplied envelope through `encodeEnvelope`, validates those final bytes through
+`decodeHostedControl`, and returns the original serialized bytes. Outbound additive
+fields therefore count toward the ceiling and remain in the returned bytes;
+validating only a projected object could miss oversize additions or JSON escaping.
+Decode failures use category-only `WireDecodeError`; any encode failure, including
+serialization failure, becomes `WireEncodeError('invalid hosted control encoding')`.
+Neither path logs daemon content.
+
+### Discovery, cancellation and bridge errors
+
+`isHostedAppId` accepts only canonical lowercase UUIDv4 strings.
+`isHostedReleaseVersion` accepts canonical numeric `MAJOR.MINOR.PATCH`, at most
+32 ASCII bytes, with no leading zeroes except the component `0` and each component
+at most 2147483647. These predicates validate identities as data, without converting
+them to paths.
+
+App titles contain 1–128 UTF-8 bytes, no leading/trailing whitespace and no C0,
+DEL or C1 controls. `desired` is `available` or `stopped`; `state` is `starting`,
+`running`, `stopped` or `failed`. A running record requires a non-null active release.
+Record and removal revisions are positive safe integers. An `apps` snapshot revision
+is a nonnegative safe integer; its page has at most 16 records, strictly sorted by
+`app_id` without duplicates, with each record revision at most the snapshot revision.
+Request cursors and non-null response cursors contain 1–256 ASCII bytes.
+
+Cancellation requires a nonnegative safe original `request_id` and, when supplied,
+a canonical `app_id`. The cancel envelope ID must differ from the target request
+ID. `app_cancelled.in_reply_to` identifies the cancel request and must differ from
+the payload's target `request_id`; these are two separate correlations, not an
+acknowledgement keyed only by the target.
+
+Hosted `error` and discovery `last_error` summaries use a closed code table and
+nonempty messages of at most 160 UTF-8 bytes. Bridge `error.retryable` is required
+and must match the table:
+
+| `retryable` | Codes |
+| --- | --- |
+| `false` | `protocol.unsupported`, `app.invalid_request`, `app.not_found`, `app.release_changed`, `app.limit_exceeded` |
+| `true` | `app.unavailable`, `app.busy`, `app.timeout`, `app.io_failed`, `apps.changed` |
+
+Optional bridge `retry_after_s` is an integer from 1 through 30 and is permitted
+only when retryable. `min_client_version`, the other known `ErrorPayload` field,
+must be absent. A record's non-null `last_error` retains only `code` and `message`.
+The parser bounds message text; it cannot establish that its producer used static
+copy.
+
+### Hosted null and omission preservation
+
+`active_release`, `pending_release` and `last_error` must be present on every app
+record, with null preserved where allowed. `apps.next_cursor` is also required and
+nullable. A missing key cannot substitute for null. Conversely, `list_apps.cursor`,
+cancel `app_id` and bridge `retry_after_s` remain absent when omitted; supplying null
+for one fails validation. Re-encoding the validated control result retains these
+distinctions.
+
+### Consumer obligations and testing
+
+These functions retain no connection or assembly state. Consumers still own cursor
+authenticity/expiry, connection-lifetime ID uniqueness, matching replies and cancels
+to owned pending work, and host-wide discovery reconciliation, including readiness
+[#1959](https://github.com/pyrycode/pyrycode-desktop/issues/1959).
+Capability activation and production dispatch integration remain unwired:
+`parseInboundMessage` is not migrated, and these declarations do not advertise
+`hosted_apps_v1`. Resource validation and stream completion are separate obligations;
+manifest/build validation remains daemon-owned.
+
+`src/main/transport/hostedCodec.test.ts` keeps the unchanged shared JSON examples
+local with the pinned source revision. Negotiation uses the existing codec and
+hello facilities; `hosted_apps_v1` there is test data. Resource requests in cancellation
+and bridge-error sequences supply context and are explicitly rejected as validated
+control frames. Tests assert decoded values and serialized required/null/omitted
+keys separately, retain distinct cancel and target IDs, and assign all eleven names
+directly to `EnvelopeType` so typecheck can catch missing vocabulary. Adversarial
+cases cover bytes, duplicate keys, forbidden fields, direction/correlation, semantic
+bounds, additive projection and final serialized size. Repeating frames/IDs tests
+stateless validation; it does not prove lifetime uniqueness or pending ownership.
 
 ## Configuration and usage
 
 - **Main-process only, imported by relative path.** `src/main/**` cannot use the `@shared/*` alias — the codec imports the shared types via `../../shared/wire/types`. It uses Node `Buffer` (for base64) and `TextEncoder`/`TextDecoder` (for the UTF-8 leg).
 - **Consumers.** #7 (the Noise session) calls `encodeEnvelope`/`decodeEnvelope` around its encrypt/decrypt and `base64StdEncode`/`base64StdDecode` on `InnerFrameV2.data`; the relay wiring sends `encodeInnerFrame(...)` (a string → WS text frame, matching mobile's text-frame contract) and feeds inbound `RelayEvent.frame` bytes to `decodeInnerFrame`.
 - **`makeHelloClientPayload`** is the one constructor a caller building the client hello must use — do not hand-build `HelloClientPayload` (you would drop the injected defaults).
-- **Input is assumed bounded.** The codec adds no size cap of its own; [`relayConnection`'s `maxFrameBytes`](relay-connection.md) (1 MiB) bounds inbound bytes upstream, so decode never sees unbounded input.
+- **Size limits.** Generic decode relies on upstream transport admission; it has no local byte cap. Generic encode checks `MAX_FRAME_BYTES` for outer frames and `MAX_PLAINTEXT_BYTES` (65519) for envelopes. Hosted validation also checks the plaintext ceiling before decode and validates the final encode bytes.
 
 ## Edge cases and limitations
 
@@ -134,8 +276,8 @@ that host's cursor without automatically loading history.
   See [test-tier evidence](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves).
 - **Strict base64, by canonical-form check.** Node's `Buffer.from(s, 'base64')` is **lenient on four axes** — it strips non-alphabet chars, accepts url-safe `-`/`_`, tolerates wrong length, and accepts non-canonical final quanta (`'YQ==garbage'` → only `'YQ=='`, no error; `'YR=='` → the same byte as `'YQ=='`). Any of those would let a malformed frame decode to a silently-truncated or off-contract value (violating AC #4). `base64StdDecode` replicates Go's strict `base64.StdEncoding` with **one comparison**: lenient-decode, then require `base64StdEncode(decoded) === data`. Node's encoder emits only canonical output, so every garbage-bearing, url-safe, wrong-length, or non-canonical-quantum input fails the equality and throws — **no truncation**. Decode accepts a value **iff** it is the canonical encoding of its own bytes. The empty string re-encodes to itself and stays valid.
 - **Decode fails closed.** `decodeInnerFrame` / `decodeEnvelope` throw `WireDecodeError` on: malformed base64 (above), malformed UTF-8 (`TextDecoder('utf-8', { fatal: true })` rejects invalid byte sequences rather than substituting U+FFFD), malformed JSON (every `JSON.parse` throw — `SyntaxError` *and* deep-nesting `RangeError` — is caught), a non-object top level, and a missing/mistyped required primitive. They never return a partial value.
-- **Forward-compatible decode.** Unknown / server-added keys are **tolerated** (e.g. an `ErrorPayload` with `retry_after_s`, or a `payload_encrypted` field) — decode does not throw and `payload` stays opaque. `decodeInnerFrame` tolerates **any** numeric `v` (it does not hard-reject a future version) but normalizes the returned `v` to the literal `2` — the inbound version is intentionally discarded, not preserved.
-- **Encode cannot fail** on well-typed input: the tightened types forbid `null` optionals and literal types force the defaults, so the encode functions do not throw.
+- **Generic forward-compatible decode.** Unknown / server-added keys are **tolerated** (e.g. an `ErrorPayload` with `retry_after_s`, or a `payload_encrypted` field) — decode does not throw and `payload` stays opaque. Hosted validation rejects forbidden envelope metadata before projection. `decodeInnerFrame` requires `v === 2` and rejects other versions; additive fields do not enable version negotiation.
+- **Encode can fail on size.** Even well-typed values can exceed the serialized byte ceiling and throw `WireEncodeError`. Hosted encode additionally rejects invalid discovery/control semantics. Static declarations alone establish neither byte bounds nor semantic admission.
 - **`QrPayload`** round-trips as plain JSON (all string fields) — no dedicated codec function. Its `server_static_pubkey` → validated-32-raw-bytes decode is a **pairing** concern, deferred to the QR/pairing ticket.
 - **Prototype pollution is not a live sink here.** `JSON.parse` creates an *own* `__proto__` key and does not pollute `Object.prototype`; the codec does no recursive merge. No wire field is named `__proto__`/`constructor`/`prototype`, so no reviver was added (evidence-based). The documented obligation on consumers: do **not** naïve-deep-merge the opaque `payload`.
 
@@ -150,7 +292,7 @@ The ticket carries the `security-sensitive` label; the architect's review verdic
 ## Related
 
 - **`UnrecognizedMessagePayload`'s doc comment** (`src/shared/wire/types.ts`, above the interface) — the dated census of what the daemon actually forwards for the two lines this codec's `unrecognized_message` frame is *not* emitted for. `system` and `rate_limit_event` both stay unreachable from that frame, but by different routes: `system` holds it because it is the sole member of the daemon's `ignoredLineTypes` map (unreachable **by list membership**), `rate_limit_event` because it has an arm of its own that never falls through to the unrecognized case (unreachable **by matching**, the daemon's stronger guarantee) — the two phrases are not interchangeable, and a comment that applies one to both inverts the distinction. Measured 2026-09-07 against pyrycode `internal/streamsup/parser.go`; re-measure rather than citing that date once the daemon moves again (#1248).
-- [Relay connection](relay-connection.md) (#21) — the opaque byte pipe this codec sits on top of; its 1 MiB `maxFrameBytes` bounds the input decode sees.
+- [Relay connection](relay-connection.md) (#21) — the opaque byte pipe this codec sits on top of; its `maxFrameBytes` bounds relay input upstream.
 - [ADR 0002 — Remote head over relay, shared wire](../decisions/0002-remote-head-over-relay-shared-wire.md) — "do not drift the encoded form from mobile without a matching daemon change", and the types→`shared` / codec→`transport` split this ticket enforces.
 - [ADR 0001 — Stack: transport in the background process](../decisions/0001-stack-electron-react-typescript.md) — the background-process transport home.
 - [#5 codebase notes](../codebase/5.md) · Spec: `docs/specs/architecture/5-wire-codec.md`

@@ -541,15 +541,14 @@ function ModelSection({
             // The daemon's report that it cut this row's own text. `null` and `[]` say the identical
             // thing per the wire contract, so the test is on length rather than on presence.
             const isCut = (row.truncated_fields?.length ?? 0) > 0
-            // onSelect present ⇒ the row is an operable button submitting its published `value`.
-            // Absent ⇒ #188's inert row (no role/tabindex/handler). Click is the baseline affordance;
-            // keyboard activation (Enter/Space) is a deliberate non-goal here.
+            // Native activation shares the same row callback for pointer, Enter and Space.
+            // Without a callback, disabled rows retain their reading and cannot take focus.
             return (
-              <div
+              <button
                 className="run-config__model-row"
                 key={index}
-                role={onSelect ? 'button' : undefined}
-                tabIndex={onSelect ? 0 : undefined}
+                type="button"
+                disabled={!onSelect}
                 onClick={onSelect ? () => onSelect(row) : undefined}
               >
                 {isSelected ? (
@@ -563,22 +562,22 @@ function ModelSection({
                 ) : (
                   <span className="run-config__radio" aria-hidden="true" />
                 )}
-                <div className="run-config__model-text">
-                  <p className="run-config__model-name">{row.display_name}</p>
+                <span className="run-config__model-text">
+                  <span className="run-config__model-name">{row.display_name}</span>
                   {/* The concrete identifier this row's `value` resolves to right now, so the operator
                       can see what an alias means BEFORE the first turn rather than inferring it from an
                       announcement after it. Rendered unconditionally: an empty one is a present, empty
                       line, inventing no distinction the wire does not carry. It is not reliably
                       populated — a row may carry the literal `<unmeasured>`, which renders escaped and
                       verbatim, because it is what the daemon said. */}
-                  <p className="run-config__model-descriptor">{row.resolved_model}</p>
+                  <span className="run-config__model-descriptor">{row.resolved_model}</span>
                   {/* The cut marker is a SIBLING ELEMENT holding a client-owned constant, never text
                       concatenated into a daemon-authored node: `{row.display_name}{isCut && ' (cut)'}`
                       would fuse the two into one node, and a label ending in those same words would
                       then be indistinguishable from the sheet's own claim. */}
-                  {isCut ? <p className="run-config__model-cut">{RUN_CONFIG_CUT_COPY}</p> : null}
-                </div>
-              </div>
+                  {isCut ? <span className="run-config__model-cut">{RUN_CONFIG_CUT_COPY}</span> : null}
+                </span>
+              </button>
             )
           })
         )}

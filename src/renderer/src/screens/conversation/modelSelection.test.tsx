@@ -69,7 +69,7 @@ function assertSurfaces(models: ModelListEntry, input: ComposerModelLayers, expe
     effort="low" yolo={false} usedTokens={0} windowTokens={0} models={models} agent={agent}
     announced={input.announced ? { model: input.announced, truncated: false } : null} />)
   const selected = expected === null ? [] : [expected]
-  expect([...sheet.matchAll(/class="run-config__model-row"[\s\S]*?<\/div><\/div>/g)]
+  expect([...sheet.matchAll(/class="run-config__model-row"[\s\S]*?<\/button>/g)]
     .filter(match => match[0].includes('aria-label="Current model"'))
     .map(match => /class="run-config__model-name">([^<]*)</.exec(match[0])?.[1])).toEqual(selected.map(id => `${id} published`))
   expect((panel.match(/aria-current="true"/g) ?? []).length).toBe(selected.length)

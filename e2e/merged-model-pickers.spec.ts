@@ -12,6 +12,77 @@ const frame = (type: EnvelopeType, payload: unknown, in_reply_to?: number) => en
   id: 90, type, ts: '2026-10-07T12:00:00.000Z', payload, ...(in_reply_to === undefined ? {} : { in_reply_to })
 })
 
+for (const key of ['Enter', 'Space'] as const) {
+  for (const outgoing of ['claude', 'codex'] as const) {
+    test(`sheet keyboard ${key} confirms ${outgoing} switching with single-command guards`, async ({ launchPairedApp }) => {
+      const sent: Envelope[] = []
+      let agent: WireAgent = outgoing
+      const source = outgoing === 'claude' ? claude : codex
+      const target = outgoing === 'claude' ? codex : claude
+      const targetAgent = target.agent ?? 'claude'
+      let model = source.value
+      const { page, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
+        const e = decodeEnvelope(bytes); sent.push(e)
+        if (e.type === 'list_conversations') return [frame('conversations', { conversations: [{ ...SEEDED_ROW, agent }] })]
+        if (e.type === 'request_session_settings') return [frame('session_settings', {
+          session_id: 'session', model, effort: 'low', effective_effort: 'low', permission_mode: 'default',
+          yolo: false, used_tokens: 0, window_tokens: 200_000
+        }, e.id)]
+        return []
+      } })
+      daemon.pushFrame(frame('model_list', { conversation_id: SEEDED_ROW.id, models: rows, dropped_models: 0 }))
+      const trigger = page.locator('.composer__model')
+      const sourceLabel = outgoing === 'claude' ? 'Sonnet' : codex.display_name
+      const targetLabel = targetAgent === 'claude' ? 'Sonnet' : codex.display_name
+      await expect(trigger).toHaveText(sourceLabel)
+      await page.locator('.conversation__overflow-trigger').click()
+      await page.getByRole('menuitem', { name: 'Run configuration', exact: true }).click()
+      const sheet = page.locator('.status-sheet')
+      const sourceRow = sheet.locator('.run-config__model-row').filter({ hasText: source.display_name })
+      const targetRow = sheet.locator('.run-config__model-row').filter({ hasText: target.display_name })
+      const activate = async () => {
+        await targetRow.focus()
+        await expect(targetRow).toBeFocused()
+        await page.keyboard.press(key)
+      }
+      const dialog = page.getByRole('dialog', { name: `Switch to ${targetAgent === 'claude' ? 'Claude' : 'Codex'}?`, exact: true })
+      const switches = () => sent.filter(e => e.type === 'switch_agent')
+      await activate()
+      await expect(dialog).toBeVisible()
+      await expect(trigger).toHaveText(sourceLabel)
+      await expect(sourceRow.getByRole('img', { name: 'Current model' })).toBeVisible()
+      expect(switches()).toHaveLength(0)
+      await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+      await expect(dialog).toHaveCount(0)
+      await expect(trigger).toHaveText(sourceLabel)
+      await activate()
+      await dialog.getByRole('button', { name: 'Switch', exact: true }).click()
+      await expect.poll(() => switches().length).toBe(1)
+      expect(switches()[0].payload).toEqual({ conversation_id: SEEDED_ROW.id, agent: targetAgent, model: target.value, effort: 'low' })
+      await expect(trigger).toHaveText(targetLabel)
+      await expect(targetRow.getByRole('img', { name: 'Current model' })).toBeVisible()
+      await activate()
+      await expect(dialog).toHaveCount(0)
+      expect(switches()).toHaveLength(1)
+      daemon.pushFrame(frame('error', { code: 'switch_agent.refused', message: 'refused', retryable: true }, switches()[0].id))
+      await expect(trigger).toHaveText(sourceLabel)
+      await expect(sourceRow.getByRole('img', { name: 'Current model' })).toBeVisible()
+      await activate()
+      await dialog.getByRole('button', { name: 'Switch', exact: true }).click()
+      await expect.poll(() => switches().length).toBe(2)
+      expect(switches()[1].payload).toEqual(switches()[0].payload)
+      agent = targetAgent; model = target.value
+      daemon.pushFrame(frame('conversations', { conversations: [{ ...SEEDED_ROW, agent }] }))
+      await expect(page.locator('.composer-status__label')).toHaveCount(0)
+      await expect(trigger).toHaveText(targetLabel)
+      await expect(targetRow.getByRole('img', { name: 'Current model' })).toBeVisible()
+      await expect(page.locator('.run-config__effort-segment')).toHaveText(target.effort_levels)
+      expect(switches()).toHaveLength(2)
+      expect(sent.filter(e => e.type === 'set_session_settings')).toHaveLength(0)
+    })
+  }
+}
+
 for (const entry of ['footer', 'sheet'] as const) {
   for (const outgoing of ['claude', 'codex'] as const) {
     test(`${entry} switching a previously used ${outgoing} channel discards its outgoing announcement`, async ({ launchPairedApp }) => {

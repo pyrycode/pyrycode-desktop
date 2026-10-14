@@ -99,10 +99,10 @@ test('an open sheet retains values but cannot write any field offline; another h
   const model = page.locator('.run-config__model-row').filter({ hasText: 'sonnet' })
   const effort = page.locator('.run-config__effort-segment', { hasText: /^high$/ })
   const yolo = page.getByRole('switch', { name: 'Auto-accept tool calls' })
-  await expect(model).toHaveAttribute('role', 'button')
+  await expect(model).toBeEnabled()
   await yolo.focus()
   await connection(app, 'disconnected')
-  await expect(model).not.toHaveAttribute('role', 'button')
+  await expect(model).toBeDisabled()
   await expect(effort).not.toHaveAttribute('role', 'button')
   await expect(yolo).toHaveAttribute('aria-readonly', 'true')
   for (const control of [model, effort, yolo]) {

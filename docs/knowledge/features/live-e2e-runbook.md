@@ -114,7 +114,54 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 
 ## Current real-claude gate state
 
-**Latest recorded run: #1947, 2026-10-14 — 27 executed, 26 passed, 1 failed,
+**Latest recorded run: #1949, 2026-10-14 — 27 executed, 27 passed, 0 failed,
+1 skipped; the repaired effort-default test passed on its first attempt.** The
+supplied dispatcher per-test report records `2026-10-14T11-31-33-267Z`, testing
+`feature/1949` at `a1e0ae54b399` integrated with `origin/main` at `cbf60aa2a012`.
+The configured full suite exited 0 in 4m 14s, with no flaky passes. `PYRY_BIN` selected
+`/opt/pyry-test-daemon/pyry`; annotations on 9 of 28 tests identify release `0.39.0`,
+including the named effort case. No source revision or binary digest was supplied for
+this gate executable.
+
+`real-claude-effort-default.spec.ts` →
+**`applied effort, confirmed preference, restart, chat recall and channel creation choice`**
+was present, executed and passed in 17.0s, one attempt: 1 executed, 1 passed,
+0 failed, 0 skipped within the 27-executed, 0-failed, 1-skipped run. The full result
+supplies suite acceptance for the observation repair. The single skip was
+`real claude picks up a saved channel system prompt at Reset session`, with no reason
+recorded. The history-gap case also passed on its first attempt in 5.3s; the Luna case
+passed in 10.4s with daemon-revision and published-model-row annotations. See the
+[dispatcher gate record](https://github.com/pyrycode/pyrycode-desktop/issues/1949).
+
+The configured dispatcher command used install/build followed by
+`npx playwright test --config playwright.real-claude.config.ts --reporter=json`, rather
+than the criterion's literal `npm run e2e:real:gate`. Its per-test counts establish that
+the full live suite and the required named test executed and passed; this was not an
+all-skip exit or a focused rerun substituted for the suite.
+
+The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1950#issuecomment-6166742411)
+also confirms three consecutive focused passes through the provisioned launcher, retries
+disabled, on 2026-10-14. The exact named effort scenario above executed and passed on
+attempt zero in each run:
+
+| Started (UTC) | Duration | Executed | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 10:37:04.044 | 20,937ms | 1 | 1 | 0 | 0 |
+| 10:38:16.651 | 17,474ms | 1 | 1 | 0 | 0 |
+| 10:39:19.783 | 22,324ms | 1 | 1 | 0 | 0 |
+
+Those focused runs used `/usr/local/bin/pyry`, release/module v0.39.0, module sum
+`h1:G/dTdPcdztQXiz8fUTq7ubCshd0Lvld7iCpm+ulxkig=`; tag v0.39.0 resolves to source
+`518f296a82207563468cb45cfd2f26865970af32`. Each named test annotated daemon-revision
+`0.39.0`. This provenance belongs to the focused executable; it does not establish the
+source identity of the dispatcher's separate binary. Eleven deterministic effort
+regressions passed in the verifier gates. The fake tier recorded 394 executed,
+394 passed, 0 failed, 3 skipped, and excluded this live case. See
+[settings observation diagnosis](development-verification-live-test-diagnosis.md#correlating-live-settings-evidence).
+
+### Earlier October 14 history acceptance
+
+**Preceding #1947 run, 2026-10-14 — 27 executed, 26 passed, 1 failed,
 1 skipped; the repaired history-gap test passed on its first attempt.** The
 supplied dispatcher per-test report records `2026-10-14T10-10-23-470Z`, testing
 `feature/1947` at `fd6598e05c3f099bbb93148ae21af8b9a69a4565` integrated with

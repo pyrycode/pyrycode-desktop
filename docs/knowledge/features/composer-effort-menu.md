@@ -410,23 +410,49 @@ confirm lands. B also reports an inherited applied level while its saved choice 
 proves that an applied reading cannot block recall. A fourth conversation, a channel, rejects recall;
 fresh settings and capability responses must not retry it or replace the remembered choice.
 
-`e2e/real-claude-effort-default.spec.ts` observes fresh settings replies and confirmations across
+`e2e/real-claude-effort-default.spec.ts` observes settings requests, replies and confirmations across
 an inherited post-turn reading, a supported deliberate choice, an Electron restart over the same
-profile, recall before the first message in a new chat and channel, and preservation of an existing
-explicit choice after a different preference is remembered. Post-change labels are checked against
-new settings readings, including after real turns. Before each new conversation's first message,
-the test requires the confirmed choice to remain visible with no applied reading. After that message,
-it requires the reported applied effort to equal the selected level.
+profile, chat recall before the first message, effort supplied at channel creation, and preservation
+of an existing explicit choice after a different preference is remembered. Before each new
+conversation's first message, the chosen level must remain visible with no applied reading.
+After that message, the reported applied effort must equal the selected level. Chat recall requires
+one confirmed write; channel creation saves the choice immediately and requires no recall write.
 No `/effort` line is added to the user thread. The spec attaches the actual daemon revision and
-requires a daemon containing pyrycode#2517. The [executed live gate](https://github.com/pyrycode/pyrycode-desktop/issues/1549#issuecomment-5748800085)
-passed this case on `dccd1828` on 2026-09-20 (22 passed, zero failed, one unrelated skip).
+requires a daemon containing pyrycode#2517. See [current counted live evidence](live-e2e-runbook.md#current-real-claude-gate-state).
+
+Each creation, opening, sheet read, refresh and effort change starts from an event checkpoint.
+The spec-local `e2e/fixtures/effortProof.ts` selector requires a settings request and a later latest
+reading for the intended conversation. Creation binds to the ID recorded from `conversationCreated`,
+so a previous chat's request or reply cannot stand in for the new channel. Confirmed-write proofs
+also require the latest effort write for that reading's session, its matching `changeId`/session
+acknowledgement, and a subsequent reading. A newer conflicting reply or write supersedes older
+matching evidence.
+
+The observer records settings evidence synchronously in the page, with read-only CDP observation of
+outbound commands. Each poll samples that ordered evidence and `.composer__effort-label` together;
+`waitForEffortProof` re-selects within the existing 15-second round-trip deadline. The latest daemon
+reading supplies the label oracle, including saved/applied disagreement. For the final running-channel
+change, the proof additionally requires the intended applied level: an acknowledged saved `medium`
+can first arrive with applied `low`, then applied `medium`. Freezing the first reply would compare
+an obsolete low oracle against a correctly updated medium footer. Unavailable applied effort remains
+valid before a first turn. The `effort-settings-sequence` attachment records evidence and deduplicated
+footer samples with event counts before restart and at final cleanup, on success or failure;
+each relaunched page starts a new observer.
+
+`e2e/fixtures/effortProof.test.ts` shares that selector and bounded poll with the live spec. Its eleven
+regressions cover obsolete-then-current evidence, creation identity, unrelated acknowledgements and
+conversations, supersession, operation checkpoints, saved/applied separation, and deadline failures
+for obsolete-only evidence, unrelated-only evidence and a wrong footer. The obsolete/current replay
+shows the old frozen oracle staying low while current evidence and footer are medium. See
+[live-test diagnosis](development-verification-live-test-diagnosis.md#correlating-live-settings-evidence).
 
 **Keep the bootstrap effort empty when proving client recall.** The seeded row is bound to the
 daemon's bootstrap session. Its first turn supplies the model-list fallback needed by never-messaged
 conversations, but `Pool.mintSettings` also copies its saved effort into new sessions. Picking effort
 on that seed would make later targets explicit already, correctly suppressing recall. Make the
-deliberate choice in a separate named chat and assert each target's empty saved choice before
-waiting for recall. Use the [fixture's returned `relaunch()` handle](e2e-harness.md#deterministic-teardown)
+deliberate choice in a separate named chat and assert each recall target's empty saved choice before
+waiting for recall. Check channel creation separately: its first saved reading already contains the
+supplied effort. Use the [fixture's returned `relaunch()` handle](e2e-harness.md#deterministic-teardown)
 for the same-profile restart.
 
 After a turn, re-clicking the current sidebar row requests fresh settings and model vocabulary

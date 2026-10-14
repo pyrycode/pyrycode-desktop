@@ -22,6 +22,12 @@ The footer shows its effective reading when available. Before a reading is avail
 conversation's confirmed or saved selection with a tooltip identifying it as selected. With neither
 value, or an explicit null reading, it shows unselected **Effort**.
 
+A correlated acknowledgement can precede a transitional applied reading: a running session may
+report saved `medium` with applied `low`, then applied `medium`. The acknowledgement confirms the
+remembered choice; it does not establish that the applied reading has settled. Live proofs must
+re-sample the latest conversation reading and footer together rather than freeze the first response.
+See [settings evidence correlation](development-verification-live-test-diagnosis.md#correlating-live-settings-evidence).
+
 **One remembered level app-wide**, shared across chats, channels and connected hosts, surviving app
 restarts through the same desktop profile. It is renderer-local and is not synchronised with mobile.
 Recall checks the opened conversation's published levels before applying the preference; unsupported

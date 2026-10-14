@@ -17,8 +17,27 @@ Hover and focus can resize rows before a wheel, checkbox or content-anchor asser
 Settle the intended pointer/focus state before recording its baseline: move the pointer
 away where hover is irrelevant, focus the checkbox before its Space baseline, and wait
 for native motion to settle before measuring wheel displacement. Two animation frames
-flush queued events; held-reader checks additionally need stable offset, content height
-and viewport height after the corresponding rendered effect.
+allow queued events to run; they do not acknowledge a particular scroll handler.
+Held-reader checks additionally need stable offset, content height and viewport height
+after the corresponding rendered effect.
+
+The supplied-agent regression in [`thread-items.spec.ts`](../../../e2e/thread-items.spec.ts)
+registers its target scroll listener after React's listener, so its count and offset
+acknowledge processing after `rememberTop`. Settle native Home before parking row 100;
+then require a newer processed event at the parked offset and 20 unchanged frame
+samples of offset, content/viewport dimensions, row position and processing state.
+Keep the probe local to the spec and remove its listener after preservation checks.
+An aligned row by itself cannot prove that the hook remembers it.
+
+The fixture's `commitUpdate` wraps the ordinary typed update in React `flushSync`.
+Only the agent regression uses it, committing immediately after readiness in the same
+renderer task so an incidental Playwright/protocol delay cannot hide missing readiness.
+Positive agent child counts certify reparent commit; rendered older row 5 certifies
+insertion before settling and comparing with the immutable baseline. Removing only
+park readiness deterministically fails both widths at the original position assertion.
+The [controlled diagnosis and counted runs](conversation-shell-scroll-pin.md#supplied-snapshot-anchor-restoration)
+distinguish this setup race from a settled-reader defect without claiming the
+unavailable original failure trace. Production behavior remains unchanged.
 
 An earlier successful bottom/spacing poll cannot certify a later newest-row read:
 hover or action focus can reveal metadata between them. The

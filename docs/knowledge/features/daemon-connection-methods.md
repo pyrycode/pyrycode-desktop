@@ -32,6 +32,7 @@ export interface DaemonConnection {
   requestSessionSettings(conversationId?: string): void  // #491, widened #945: encrypt a request_session_settings onto the live session; the builder normalises an absent id to conversation_id: ''
   requestModelList(conversationId: string): void  // #1165: encrypt a request_model_list onto the live session; the id is REQUIRED, unlike its bare-optional sibling above
   requestContextUsage(conversationId: string): void  // ask once for context_usage; required id, no retry or pending state
+  queryThread(query: ThreadQuery, requestId: string): void  // host-addressed catch-up/page; register envelope correlation before authenticated send
   requestHistory(payload: RequestHistoryPayload): void  // #1222: encrypt a request_history onto the live session, asking for one backward step of a scroll-back walk; takes the WHOLE payload (three fields), unlike its two neighbours above; answered by history_page → historyPageReceived or error → historyRequestFailed, correlated by envelope id since the reply names no conversation
   requestSystemPrompt(conversationId: string): void  // #1230: encrypt a request_system_prompt onto the live session, asking what system prompt a conversation holds and whether the running session was started with a different one; the id is REQUIRED, requestModelList's rule; answered by ONE system_prompt → systemPromptReceived, correlated by envelope id since the reply names no conversation, and by NOTHING ELSE — this verb has no error frame at all, so nothing retries and an unroutable id must be refused before the send
   newSession(conversationId: string): void  // #1217: encrypt a new_session onto the live session — KILLS claude and spawns a fresh one under a new session id; the id is REQUIRED (unlike the wire type, which mirrors the daemon's optional field); fire-and-forget, NO reply of any kind
@@ -55,6 +56,42 @@ See [connection lifecycle](daemon-connection-lifecycle.md#disconnected-composer-
 for bounds and lifetime, and [outbound send path](outbound-send-path.md) for routing,
 envelope IDs and independent diagnostics. The hold is specific to composer messages;
 control requests below do not inherit retries.
+
+**`queryThread(query, requestId)`** carries daemon-built thread history through
+`window.pyry.sendCommand({ type: 'queryThread', serverId, requestId, query })`.
+The command explicitly names a host; `dispatchThreadQuery` uses the server router
+and registry `viewOf` delegate to reach that connection, with no conversation or
+sole-host fallback. `ThreadQuery` has two wire shapes:
+
+| Type | Payload |
+| --- | --- |
+| `thread_catch_up` | `conversation_id`, `epoch`, `version`, optional `limit` |
+| `thread_page` | `conversation_id`, exclusive `before_order`, optional `limit` |
+
+Preload and main validate the command with `isRendererCommand`. Host, caller
+request and conversation IDs are nonempty strings of at most 1024 characters.
+The epoch is a string of at most 1024 characters and may be empty: an initial
+`epoch: ''`, `version: 0` catch-up asks for the newest window. Version,
+`before_order` and any supplied limit must be nonnegative safe integers;
+negative, fractional, unsafe and nonnumeric inputs are rejected. An explicitly
+undefined limit is rejected; omit the key to leave it absent.
+
+Main rebuilds only the named wire fields, preserving omitted, zero and positive
+limits. The [daemon contract](https://github.com/pyrycode/pyrycode/blob/2ebf60562815823ef9e026f8dd07bee4edd7806c/docs/protocol-mobile.md#thread-query-messages)
+defaults omitted/zero limits to 50 ordered rows and clamps positive limits to
+256. Nonzero catch-up is not truncated by a window limit; ties, active items and
+required parents can exceed the ordered-row count. Desktop does not apply its
+own clamp or discard these extras.
+
+The connection consumes a unique app envelope ID and registers it with the
+caller `requestId` before sending. The caller ID stays off the wire; replies use
+envelope `in_reply_to` and retain both identities in the typed event. Sending
+requires a driver and authentication. Missing routes emit host-stamped
+`threadQueryFailed` with `unavailable` and `inReplyTo: 0` (no envelope allocated).
+An unavailable connection reports its allocated ID; build errors, send throws
+and observed drops report `send-failed`. Each outcome settles once, without a
+retry or composer hold. See [reply coverage](daemon-event-channel-sealed-union.md#1-the-sealed-union-srcsharedipceventsts)
+and [query lifetime](daemon-connection-lifecycle.md#thread-history-queries).
 
 **`requestDebugBundle()` was added in [#115](../codebase/115.md)** — a **structural twin of `send`** for the debug-bundle download's outbound "ask". It builds a **bare `request_debug_bundle` control envelope** (no payload struct, no `conversation_id`, no session selector — the bundle is daemon-global) via `buildRequestDebugBundle` and hands the bytes to `driver.sendMessage`. It **shares the same `nextEnvelopeId` counter** as `send` (no second counter — ids stay monotonic across interleaved calls), is an idempotent no-op when not connected, and never throws (parity #490). The renderer command that calls it is wired by the [debug-bundle orchestrator](debug-bundle-orchestrator.md) ([#169](../codebase/169.md), landed — the orchestrator half of #118's split; the IPC contract itself shipped in [#168](debug-bundle-request.md)). See the [debug-bundle request](debug-bundle-request.md) feature doc for the full contract, including why "no payload" is a present-but-empty `payload: {}` rather than an omission.
 
@@ -348,7 +385,7 @@ id only on a successful build, a content-free `catch {}`). **Unlike every method
 whole payload rather than a scalar** — three fields, `conversation_id`/`cursor`/`limit` — because the
 builder (`requestHistoryEnvelope.ts`) rebuilds a fresh three-key literal from them, so nothing
 renderer-supplied reaches the wire uninspected regardless of what the command guard let through. **It
-is also the only request method that records what it asked**: `history_page` names no conversation at
+also records which conversation it asked for**: `history_page` names no conversation at
 all, so this method is the sole place "which conversation does this reply describe" exists — recorded
 in a new `pendingHistoryRequests: Map<number, string>` after a successful send, the `pendingConfigRequests`
 shape and ordering exactly, and matched back by the reply's `Envelope.in_reply_to`. Routed by

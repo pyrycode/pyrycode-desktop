@@ -1287,7 +1287,7 @@ describe('createDaemonConnection — reconnect (connect-on-pair, #82)', () => {
     expect(emitted(ctx.sink).length).toBe(beforeEvents)
   })
 
-  it('restarts the fresh session envelope numbering at 2', async () => {
+  it('keeps app envelope IDs unique across fresh sessions', async () => {
     const ctx = await reachConnected()
     ctx.connection.send({ conversation_id: 'c1', message_id: 'm1', text: 'first' })
     expect(decodeEnvelope(ctx.drivers[0].sent[0]).id).toBe(2)
@@ -1298,7 +1298,7 @@ describe('createDaemonConnection — reconnect (connect-on-pair, #82)', () => {
 
     ctx.connection.send({ conversation_id: 'c1', message_id: 'm2', text: 'second' })
     expect(ctx.drivers[1].sent).toHaveLength(1)
-    expect(decodeEnvelope(ctx.drivers[1].sent[0]).id).toBe(2)
+    expect(decodeEnvelope(ctx.drivers[1].sent[0]).id).toBe(3)
   })
 
   it('never logs, and no event carries the token or keys, across a reconnect', async () => {

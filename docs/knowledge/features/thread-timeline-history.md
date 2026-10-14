@@ -124,7 +124,7 @@ Nothing imports this module yet.
   [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141) the only pairing-change path that
   reaches it (see below).
   [#652](../codebase/652.md) (the deleted-open-discussion exit, shipped) added the third, via
-  [`exitActiveConversation`](paired-shell.md#the-delete-exit-exitactiveconversationts-conversationdeletedbridgets-652) —
+  [`exitActiveConversation`](paired-shell-conversation-deletion.md#the-delete-exit-exitactiveconversationts-conversationdeletedbridgets-652) —
   gated on the id like #530's, but comparing against the just-deleted conversation's id rather than a
   newly-opened one's.
 - **[#538](../codebase/538.md) (shipped)** added a twelfth arm, the nullary `reconnected` — the second

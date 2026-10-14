@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import type { DaemonEvent } from '@shared/ipc/events'
+import type { DaemonEvent, StampedDaemonEvent } from '@shared/ipc/events'
 import type { ConversationCreatedPayload, ConversationUpdatedPayload } from '@shared/wire/types'
 import {
   translateConversationDeleted,
@@ -76,7 +76,7 @@ describe('subscribeConversationDeleted', () => {
 
     bridge.emit({ type: 'conversationDeleted', id: 'conv-gone' })
     expect(onDeleted).toHaveBeenCalledTimes(1)
-    expect(onDeleted).toHaveBeenCalledWith('conv-gone')
+    expect(onDeleted).toHaveBeenCalledWith('conv-gone', undefined)
   })
 
   it('ignores unrelated daemon events — no exit, no navigation (AC5)', () => {
@@ -89,6 +89,15 @@ describe('subscribeConversationDeleted', () => {
     bridge.emit({ type: 'conversationsReceived', conversations: [] })
     bridge.emit({ type: 'turnState', state: 'thinking', conversationId: 'conv-1' })
     expect(onDeleted).not.toHaveBeenCalled()
+  })
+
+  it.each(['host-h', '', null])('preserves the stamped origin %s beside an exact empty id', serverId => {
+    const bridge = fakeBridge()
+    const onDeleted = vi.fn()
+    subscribeConversationDeleted(bridge.onDaemonEvent, onDeleted)
+    const event: StampedDaemonEvent = { type: 'conversationDeleted', id: '', serverId }
+    bridge.emit(event)
+    expect(onDeleted).toHaveBeenCalledWith('', serverId)
   })
 
   it('returns the off handle from onDaemonEvent as the cleanup', () => {

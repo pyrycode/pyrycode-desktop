@@ -63,6 +63,7 @@ import { slashCommandListStore } from './store/slashCommandListStore'
 import { timelineStore } from './store/timelineStore'
 import { usageLimitStore } from './store/usageLimitStore'
 import { reportedContextStore } from './store/reportedContextStore'
+import { confirmConversationDeleted } from './confirmConversationDeleted'
 
 /** Compile-time exhaustiveness guard: a new PairedRoute member without a case is a type error. */
 function assertNever(route: never): never {
@@ -530,14 +531,21 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // #652: the delete confirmation → thread exit. Symmetric with the created-event nav above and driven
   // by the same rule — navigate on the DAEMON's confirmation, not on the click — so a delete the daemon
   // never confirms leaves the operator in the thread (AC5) rather than stranding them on a list that
-  // still shows the row. exitActiveConversation gates on the id, so a confirmation naming a different
-  // discussion (the operator opened another one while the reply was in flight) changes nothing (AC4).
+  // still shows the row. Confirmed deletion also removes an explicitly owned off-screen timeline;
+  // exitActiveConversation keeps the active-id gate, so another open thread stays intact.
   // The per-render object allocation is free: the hook holds this inline arrow in a ref and re-reads it
   // on each delivery, so nothing needs memoizing and the subscription never re-establishes.
-  useConversationDeletedExit((conversationId) =>
-    exitActiveConversation(
-      { ...exitConversationDeps, navigateToList: () => { leaveRecovery(); dispatch({ type: 'back' }) } },
-      conversationId
+  useConversationDeletedExit((conversationId, serverId) =>
+    confirmConversationDeleted(
+      { ...exitConversationDeps,
+        getTimelineServerId: id => {
+          conversationTimelineStore.flushTimeline()
+          return conversationTimelineStore.getState().timelines.get(id)?.serverId
+        },
+        log: event => window.pyry.sendDiagnostic(event),
+        navigateToList: () => { leaveRecovery(); dispatch({ type: 'back' }) } },
+      conversationId,
+      serverId
     )
   )
   // #653: the archive half of the same exit — the SAME decision, a different trigger, and no new deps

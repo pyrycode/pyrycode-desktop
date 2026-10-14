@@ -4171,6 +4171,8 @@ function parseInboundPayload(envelope: Envelope, plaintext: Uint8Array, diagnost
   // frame that fails to narrow throws first and leaves no record. Optional chaining short-circuits the
   // whole call (including hashPlaintext) when no logger is injected — absent-logger costs nothing.
   switch (envelope.type) {
+    case 'thread_items':
+    case 'thread_reset':
     case 'thread_item_added':
     case 'thread_item_changed':
     case 'thread_text_append':

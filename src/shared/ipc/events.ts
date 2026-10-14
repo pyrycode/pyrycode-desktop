@@ -1,3 +1,4 @@
+import type { ThreadReply, ThreadQueryFailure } from '../wire/thread'
 // The typed event pipe from the background process to the renderer window: one sealed
 // discriminated union plus the channel it travels on, imported by both process sides. This
 // is the event-pipe half of the background↔window bridge (#18); the command half is #17.
@@ -306,6 +307,8 @@ export type RelayLinkStatus = 'connected' | 'offline' | 'daemon-absent'
  * `DaemonEventTimestamp` for why the field is added by intersection rather than per arm.
  */
 type BaseDaemonEvent =
+  | { type: 'threadReply'; conversationId: string; requestId: string; reply: ThreadReply; correlation: Omit<Envelope, 'payload' | 'type'> }
+  | { type: 'threadQueryFailed'; conversationId: string; requestId: string; inReplyTo: number; reason: ThreadQueryFailure }
   | { type: 'sessionStateCleared'; family: SessionStateFamily; correlation: Omit<Envelope, 'payload' | 'type'> }
   | { type: 'threadUpdate'; conversationId: string; update: ThreadUpdate; correlation: Omit<Envelope, 'payload' | 'type'> }
   | { type: 'threadRepairNeeded'; conversationId: string; reason: ThreadRepairReason }

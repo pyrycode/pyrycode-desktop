@@ -219,7 +219,7 @@ Feedback belongs to `resolutions`, independent of reconnect-scoped `resolved` du
 Reconnect preserves pending/displayed notices and never manufactures one by clearing a prompt;
 pairing `reset` clears both phases. Keeping feedback only in component state would lose closed-chat
 delivery and bypass the pairing boundary. See the [model contract](modal-prompt-model.md#the-reducer)
-and [verification coverage](development-verification.md#what-each-test-tier-proves).
+and [verification coverage](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves).
 
 ## Modal-answer rejection ([#248](../codebase/248.md) transport, [#249](../codebase/249.md) render)
 

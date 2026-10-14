@@ -2,15 +2,16 @@ import {
   test as base,
   expect,
   type ElectronApplication,
-  type Page
+  type Page,
+  type TestInfo
 } from '@playwright/test'
 import { electron } from './electronLaunch'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { accessSync, constants, createWriteStream, realpathSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { accessSync, constants, createWriteStream, lstatSync, readlinkSync, realpathSync, statSync } from 'node:fs'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { connect } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
-import { delimiter, join } from 'node:path'
+import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import {
   startFakeRoutingRelay,
   type FakeRoutingRelay
@@ -120,6 +121,8 @@ export interface SpawnedDaemon {
  * real-* specs toggle the axes freely.
  */
 export type RealDaemonOptions = {
+  /** Link an operator-provisioned dedicated sign-in; existing specs never probe or provision Codex. */
+  codexCapture: boolean
   spawnClaude: boolean
   seedPromoted: boolean
   skipPermissions: boolean
@@ -200,6 +203,7 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
   claudeModel: ['haiku', { option: true }],
   requiredCapabilities: [[], { option: true }],
   seedCwdSubdir: ['', { option: true }],
+  codexCapture: [false, { option: true }],
 
   relay: async ({}, use) => {
     const relay = await startFakeRoutingRelay()
@@ -225,7 +229,8 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
       allowRemotePermissions,
       claudeModel,
       requiredCapabilities,
-      seedCwdSubdir
+      seedCwdSubdir,
+      codexCapture
     },
     use,
     testInfo
@@ -244,6 +249,9 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
         `real-daemon: seedCwdSubdir must be a single plain path segment matching [A-Za-z0-9._-]+, got ${JSON.stringify(seedCwdSubdir)}`
       )
     }
+
+    // Reject unsafe Codex homes before other gates or Claude credential reads can mask the error.
+    const codex = codexCapture ? await requireCodexCapture(testInfo) : null
 
     // --- Skip-gating: resolve binaries + creds BEFORE creating any resource, so a skip never leaks. ---
     // `pyry` is the ONLY universal gate — both modes spawn the daemon. The claude binary, the Anthropic
@@ -392,6 +400,10 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
       // device mint lands in the RUNNING daemon's own state and so must come after. Binds the seeded
       // conversation to the bootstrap pool session, so the router resolves it and the reply stream binds.
       await seedRegistry(daemonHome, seedCwd, seedPromoted)
+      if (codex !== null) {
+        // Renewal keys are single use. Link the dedicated sign-in, never copy it; rm unlinks only.
+        await symlink(codex.home, join(daemonHome, '.pyry', DAEMON_INSTANCE_NAME, 'codex-home'), 'dir')
+      }
 
       // Where the daemon's control socket lands. NOT passed as `-pyry-socket`: the daemon derives this
       // path from `-pyry-name`, and `pyry pair` derives its dial path from the same flag in the same
@@ -429,6 +441,7 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
         // #251's relay identifies the daemon leg by the PATH /v1/server (NOT /v2/server, a Go-fake
         // convention its legFor() would reject). The daemon preserves an explicit relay path verbatim.
         `-pyry-relay=${relay.url}/v1/server`,
+        ...(codex !== null ? [`-pyry-codex=${codex.bin}`] : []),
         // The post-`--` claude flags run only in claude-spawning mode. Claude-less mode omits them: no
         // claude turn ever runs, and the daemon appends `--session-id <uuid>` regardless.
         // `--dangerously-skip-permissions` is gated on `skipPermissions` (#432, default true): dropping it
@@ -651,6 +664,100 @@ function resolvePyryBin(): string | null {
     }
   }
   return resolveOnPath('pyry')
+}
+
+function inside(root: string, path: string): boolean {
+  const rel = relative(root, path)
+  return rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)
+}
+
+// Resolve existing ancestors too: a missing protected root or descendant still has a safe comparand.
+function canonicalLocation(path: string): string {
+  try { return realpathSync(path) } catch (error) {
+    if (!(error instanceof Error) || !('code' in error) ||
+        (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') || dirname(path) === path) {
+      throw new Error('real-codex: cannot resolve capture or protected location')
+    }
+    // realpath cannot resolve a dangling link; its declared target still determines protection.
+    let target: string | undefined
+    try {
+      if (lstatSync(path).isSymbolicLink()) target = readlinkSync(path)
+    } catch (missing) {
+      if (!(missing instanceof Error) || !('code' in missing) ||
+          (missing.code !== 'ENOENT' && missing.code !== 'ENOTDIR')) {
+        throw new Error('real-codex: cannot resolve capture or protected location')
+      }
+    }
+    if (target !== undefined) return canonicalLocation(resolve(dirname(path), target))
+    return join(canonicalLocation(dirname(path)), relative(dirname(path), path))
+  }
+}
+
+async function requireCodexCapture(info: Pick<TestInfo, 'skip'>): Promise<{ bin: string; home: string }> {
+  const supplied = process.env.PYRY_CODEX_CAPTURE_HOME
+  if (!supplied) {
+    info.skip(true, 'real-codex: PYRY_CODEX_CAPTURE_HOME is unset')
+    throw new Error('real-codex: unreachable capture-home skip')
+  }
+  const operatorHome = resolve(homedir())
+  const path = resolve(supplied)
+  const home = canonicalLocation(path)
+  for (const name of ['.codex', '.pyry']) {
+    const root = join(operatorHome, name)
+    if (inside(root, path) || inside(canonicalLocation(root), home)) {
+      throw new Error('real-codex: PYRY_CODEX_CAPTURE_HOME resolves to a protected operator location')
+    }
+  }
+  let directory = false
+  try { directory = statSync(home).isDirectory() } catch (error) {
+    if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') {
+      throw new Error('real-codex: cannot inspect capture directory')
+    }
+  }
+  if (!directory) {
+    info.skip(true, 'real-codex: PYRY_CODEX_CAPTURE_HOME directory is missing or not a directory')
+    throw new Error('real-codex: unreachable capture-directory skip')
+  }
+  const bin = resolveOnPath('codex')
+  if (bin === null) {
+    info.skip(true, 'real-codex: codex is absent from PATH')
+    throw new Error('real-codex: unreachable executable skip')
+  }
+  const probeHome = await mkdtemp('/tmp/pyry-codex-version-')
+  try {
+    const output = await codexVersion(bin, probeHome)
+    const match = /(?:^|\s)(\d+)\.(\d+)\.(\d+)(-[\w.-]+)?(?:\+[\w.-]+)?\s*$/.exec(output)
+    if (match === null) throw new Error('real-codex: cannot parse Codex version')
+    const core = match.slice(1, 4).map(Number)
+    if (!core.every(Number.isSafeInteger)) throw new Error('real-codex: cannot parse Codex version')
+    const [major, minor, patch] = core
+    const below = major === 0 && (minor < 156 || (minor === 156 &&
+      (patch < 1 || (patch === 1 && match[4] !== undefined))))
+    info.skip(below, 'real-codex: codex version is below required 0.156.1')
+    return { bin, home }
+  } finally {
+    await rm(probeHome, { recursive: true, force: true })
+  }
+}
+
+function codexVersion(bin: string, probeHome: string): Promise<string> {
+  return new Promise((resolveVersion, reject) => {
+    const probe = spawn(bin, ['--version'], { env: { ...process.env, CODEX_HOME: probeHome } })
+    let output = ''
+    let timedOut = false
+    probe.stdout.on('data', (chunk: Buffer) => { output = (output + chunk.toString('utf8')).slice(0, 512) })
+    probe.stderr.resume()
+    const timer = setTimeout(() => { timedOut = true; probe.kill('SIGKILL') }, 10_000)
+    probe.once('error', () => {
+      clearTimeout(timer)
+      reject(new Error('real-codex: version probe failed to launch'))
+    })
+    probe.once('close', code => {
+      clearTimeout(timer)
+      if (timedOut || code !== 0) reject(new Error('real-codex: version probe failed or timed out'))
+      else resolveVersion(output)
+    })
+  })
 }
 
 /**

@@ -263,7 +263,7 @@ See [configuration and usage](conversation-timeline-store-usage.md#configuration
   checks its mounted-conversation ref. Immediate setup cancels consumption; actual
   navigation consumes the departed notice without clearing a replacement while open.
   Client clearing preserves host/read ownership and creates no absent slice. See
-  [development-runtime proof](development-verification.md#what-each-test-tier-proves).
+  [development-runtime proof](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves).
 
 See [timeline limits](conversation-timeline-store-limits.md#edge-cases-and-limitations)
 for ordering, status reconciliation, send windows and prepend identity.

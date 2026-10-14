@@ -53,7 +53,7 @@ It checks the 12px upper gap, 8px lower gap and 24px row with an empty draft and
 usage warning plus five-line draft, at 1280px and the 800px minimum width. At the bottom,
 it also checks that no extra inset remains after the last row, preventing doubled spacing.
 A last-message distance alone would pass with the old scrolling inset; static renderer
-tests cannot prove these [layout measurements](development-verification.md#layout-and-input).
+tests cannot prove these [layout measurements](development-verification-layout-and-input.md#layout-and-input).
 
 **Never returns `null` — the one deliberate departure from `ThinkingIndicator`'s own zero-footprint
 posture (AC2).** `ThinkingIndicator` still returns `null` at rest; this row's *height* is what must be

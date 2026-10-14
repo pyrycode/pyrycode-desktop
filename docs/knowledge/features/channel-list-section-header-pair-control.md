@@ -174,4 +174,4 @@ No live-Claude behavior is needed to establish these renderer interactions.
 - [Sidebar pairing toolbar spec](../../specs/architecture/1678-sidebar-pairing-toolbar.md) —
   design source and the public-asset revision.
 - [Sidebar header menu spec](../../specs/architecture/1732-sidebar-header-menu.md) — menu geometry
-  and shared interaction contract; [verification evidence](development-verification.md#layout-and-input).
+  and shared interaction contract; [verification evidence](development-verification-layout-and-input.md#layout-and-input).

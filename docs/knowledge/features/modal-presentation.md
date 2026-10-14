@@ -96,7 +96,7 @@ and a 1200px override with tall content at 800×240. Document dimensions matched
 viewport after the grid fix. This establishes visible layout without proving that
 off-screen controls can be reached. Adoption coverage must exercise callbacks,
 keyboard operation, focus/Escape/backdrop policy and scrolling to those controls in
-the fake-transport browser tier. See [development verification](development-verification.md#what-each-test-tier-proves).
+the fake-transport browser tier. See [development verification](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves).
 
 Edit host adoption supplies the interactive evidence in its fake-transport spec:
 keyboard opening and dismissal, preserved Escape/backdrop behaviour, independent

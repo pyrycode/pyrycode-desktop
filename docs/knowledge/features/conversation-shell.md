@@ -50,13 +50,13 @@ through same-host saved-history reads; host reconnect clears them even off-scree
 without touching other hosts. Cleanup defers consumption through a microtask to
 distinguish actual departure from StrictMode replay. See
 [timeline lifetime](conversation-timeline-store.md#what-it-does) and
-[verification boundaries](development-verification.md#what-each-test-tier-proves).
+[verification boundaries](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves).
 
 The thread overflow menu's bottom-end anchor uses level 2 above the Top overlay's
 level 1; equal levels let the later pills paint over the menu. Sheets and dialogs
 also use level 2 and retain precedence through later DOM placement. See
 [chrome stacking](conversation-shell-chrome.md#structure) and
-[browser stacking proof](development-verification.md#layout-and-input) for the
+[browser stacking proof](development-verification-layout-and-input.md#layout-and-input) for the
 regression's overlap, hit-testing and click requirements.
 
 A **third, prominent** read of the connection status landed in [#279](../codebase/279.md): a disconnected-only banner across the top of the thread, between the header row and the message list — distinct from both the composer's terse inline gate and the still-separate #149 two-dot indicator. See [Connection banner](conversation-shell-chrome.md#connection-banner-279) below.
@@ -123,7 +123,7 @@ An **in-app markdown reader** landed in [#1627](https://github.com/pyrycode/pyry
 
 ## How it works
 
-The positioned `.conversation__covered` pane holds the full-pane message area and separate top/input chrome. Masked backdrop layers soften rows, leaving controls sharp and clickable. The header fades from `#09141D` to transparent with 10px → 0px blur; the input fades to `#0B0E11` at 60% with 0px → 10px blur across its top fifth. Header content and composer status use the Default shadow. Measured chrome heights reserve thread padding, position pills below the header and bound the drawer between controls. See [layout](conversation-shell-chrome.md#layout-contract), [scroll pin](conversation-shell-scroll-pin.md#thread-scroll-pin) and [verification evidence](development-verification.md#layout-and-input).
+The positioned `.conversation__covered` pane holds the full-pane message area and separate top/input chrome. Masked backdrop layers soften rows, leaving controls sharp and clickable. The header fades from `#09141D` to transparent with 10px → 0px blur; the input fades to `#0B0E11` at 60% with 0px → 10px blur across its top fifth. Header content and composer status use the Default shadow. Measured chrome heights reserve thread padding, position pills below the header and bound the drawer between controls. See [layout](conversation-shell-chrome.md#layout-contract), [scroll pin](conversation-shell-scroll-pin.md#thread-scroll-pin) and [verification evidence](development-verification-layout-and-input.md#layout-and-input).
 
 This screen is large enough that its surfaces live in their own documents. Each one keeps its original section headings, so an existing `#anchor` still resolves once you follow the link here.
 
@@ -167,7 +167,7 @@ stale work from clearing the replacement.
 `resolutions` is transient feedback, separate from reconnect-scoped `resolved` duplicate suppression.
 Reconnect preserves existing pending/displayed notices without creating any; pairing `reset` clears
 both phases. See the [model contract](modal-prompt-model.md#the-reducer) and
-[verification notes](development-verification.md#what-each-test-tier-proves) for lifecycle proofs.
+[verification notes](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves) for lifecycle proofs.
 
 ### Held reading and host availability
 
@@ -240,7 +240,7 @@ requests: absent socket frames alone can hide a renderer dispatch dropped by mai
 It exercises held reading/copy, stale controls, retained state, another host and explicit
 reconnect actions. Creation helper tests cover delayed ownership and cancellation; existing
 creation/configuration scenarios detect initialization lost before list arrival.
-See [verification boundaries](development-verification.md#what-each-test-tier-proves) and
+See [verification boundaries](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves) and
 [the design](../../specs/architecture/1382-offline-conversation-actions.md).
 
 ## Edge cases and limitations
@@ -250,7 +250,7 @@ See [verification boundaries](development-verification.md#what-each-test-tier-pr
 - The send button is **wired** ([#66](../codebase/66.md)): a click (or Enter) sends the composed message and appends an optimistic echo, now into the timeline ([#179](../codebase/179.md)). A whitespace-only input does nothing; a send-bridge failure is swallowed (no crash). See [Composer send](composer-send.md).
 - **Dark scheme only**; the desktop sidebar stays fixed while the chat pane reflows down to the 800px minimum window width.
 - **Connection banner** ([#279](../codebase/279.md)) — reads the open conversation's own host through `useOpenConnectionStatus` and renders while it is not connected. Pairing rejection selects the fixed recovery notice; other non-connected states use `CONNECTION_BANNER_COPY`, never `ConnectionError.message`. See [per-host decisions](session-store.md#one-slot-per-server-since-1133). Through [#968](../codebase/968.md) it coexisted with the composer's own terse caption (#31), both visible while disconnected by design; #968 dropped that caption, and the banner is now the only announcement of a non-connected state outside the `error` arm's status-row occupant (#797/#963).
-- Renderer unit tests use `renderToStaticMarkup`: store-bound containers read Zustand's initial server snapshot, and effects, geometry and clicks do not run. Fake-transport Electron coverage establishes interaction; see [test boundaries](development-verification.md#what-each-test-tier-proves).
+- Renderer unit tests use `renderToStaticMarkup`: store-bound containers read Zustand's initial server snapshot, and effects, geometry and clicks do not run. Fake-transport Electron coverage establishes interaction; see [test boundaries](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves).
 - **Session-boundary delimiter** ([#286](../codebase/286.md), redrawn [#690](https://github.com/pyrycode/pyrycode-desktop/issues/690)) — appears only when a `sessionBoundary` item exists; an empty thread and a thread with no boundary render exactly as before. Its `clear`/`idle_evict` copy is no longer provisional as of #690 — `Session reset` / `Session reset after idle` are the shipped labels, not a placeholder awaiting a Figma variant.
 - **Queued backlog + drop affordance** — queue snapshots fold into timeline rows. Send now sits above Cancel in a leading actions column; only the bubble dims to 50%. Send now requires `mid_turn_input: true`; Cancel is always present. Drop removes the owned optimistic echo after a successful send, while backlog removal remains daemon-owned. See [queued rows and side actions](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-the-thread-1214-was-294-drop-since-296-echo-removal-since-1213).
 - **Two-dot connection indicator** ([#330](../codebase/330.md)) — the two legs render independently and are never reconciled: a fatal session close leaves the relay dot at its last value (typically up) while the daemon dot shows down, and a retryable daemon-absent close leaves the daemon dot in-progress while the relay dot shows up/"Reachable" — both are intended, honest-per-hop renders, not bugs. The relay leg has no in-progress arm (that category is exercised only by the daemon leg's `connecting`), so the daemon dot never shows a false green.

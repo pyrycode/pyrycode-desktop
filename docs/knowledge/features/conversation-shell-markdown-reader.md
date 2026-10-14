@@ -345,7 +345,7 @@ frame establishes the shared treatment, not a new resting offset.
 The existing six-action `ComposerOptionsMenu` paints above the body. Its reader-specific
 maximum width is measured pane width minus both 20px insets; rows grow and labels wrap
 when needed at minimum width/125% zoom. Shared focus, Escape and outside-click handling
-remain in the menu component. See [layout and input verification](development-verification.md#layout-and-input)
+remain in the menu component. See [layout and input verification](development-verification-layout-and-input.md#layout-and-input)
 for the focused browser proof and retained captures.
 
 **Why this matters beyond visual continuity**: `Composer`'s pending-attachment set and its

@@ -276,7 +276,7 @@ An already-visible row cannot prove delivery of the replacement frame; another k
 a missing subscription update. The replacement regression's negative control withholds that frame
 and fails at the new-row assertion. After completing a new entry, assert the completed draft and
 closed panel before checking the outbound capture. See [PR #1400](https://github.com/pyrycode/pyrycode-desktop/pull/1400)
-and [verification evidence](development-verification.md#evidence-that-cannot-pass-too-early).
+and [verification evidence](development-verification-evidence-that-cannot-pass-too-early.md#evidence-that-cannot-pass-too-early).
 This proves the mounted client consumes a replacement [store snapshot](slash-command-list-store.md);
 fake-frame coverage does not establish a live daemon refresh producer or `commands_changed` support.
 

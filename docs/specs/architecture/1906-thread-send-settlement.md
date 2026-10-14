@@ -51,3 +51,7 @@ Test first with focused Vitest tests for the store/composer seam and static pres
 None. A separate pending store is simpler than extending the legacy reducer: its inventory and accepted-item authority are explicitly scoped and injectable.
 
 Sizing: one settlement deliverable, approximately 650 written lines including plan/tests, four production files, three new exported types/store surfaces, three existing consumers changed, five observable acceptance criteria, fewer than ten distinct failure branches.
+
+## Revisions
+2026-10-14: The existing `nest` lane comparator owns agent placement and overrides a pre-sort. Apply unordered-user tail placement and first-arrival tie breaking inside that comparator, preserving its agent branches. Queued presentation is independent of action eligibility: disconnected or handle-less accepted rows keep the existing dimming without inventing a handle or drawing actions.
+Once strict settlement establishes ownership, newest-send feedback follows that scoped item ID within its epoch, including later revisions with unavailable content identities. An epoch change must establish ownership again by both identities; a reused item ID cannot retain queue feedback. Covered by `threadSendStore.test.ts` “follows an accepted item after identity fields become unavailable and fences epoch reuse.”

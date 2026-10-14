@@ -14,6 +14,9 @@ import { capturePairedApp } from './fixtures/capturePairedApp'
 import { test, expect, seedConversationsFrame, SEEDED_ROW, FIRST_SERVER_ID, SECOND_SERVER_ID, SECOND_SEEDED_ROW } from './fixtures/launchPairedApp'
 
 type Fixture = {
+  send: (text: string, deviceId: string | null) => void
+  sendConnection: (hostId: string, connected: boolean) => void
+  actions: unknown[]
   activeChat: () => string | null
   unavailable: (host: string) => void
   scope: (host: string, chat: string, epoch: string) => void
@@ -33,24 +36,38 @@ import { activeConversationStore } from './store/activeConversationStore';
 import { sessionStore } from './store/sessionStore';
 import { createThreadItemStore } from './store/threadItemStore';
 import { ThreadItemsTimeline } from './screens/conversation/ConversationScreen';
+import { createThreadSendStore } from './store/threadSendStore';
+import { submitMessage } from './screens/conversation/composerSend';
 const threadStore = createThreadItemStore();
+const sends = createThreadSendStore(), actions = [];
 const replies = [], paths = [], stops = [], escapes = [];
 function ThreadFixture() {
   const [scope, setScope] = useState(null);
   const [taskInputs, setTaskInputs] = useState({});
   const [turnRunning, setTurnRunning] = useState(false);
+  const [connection, setConnection] = useState(undefined);
+  const local = useStore(sends, s => scope ? s.select(scope.host, scope.chat) : null);
   const snapshot = useStore(threadStore, s => scope ? s.snapshot(scope.host, scope.chat) : null);
   window.threadFixture = { replies, paths, stops, escapes, turnRunning: setTurnRunning,
+    actions,
+    sendConnection(hostId, connected) { setConnection({ hostId, status: connected ? { type: 'connected',
+      ack: { server_id: hostId, conn_id: 'fixture', protocol_version: '2', capabilities: [] } } : { type: 'disconnected' } }); },
+    send(text, deviceId) { submitMessage(text, scope.chat, { serverId: scope.host, threadSend: { store: sends, deviceId },
+      newMessageId: () => 'shared-id', sendCommand: command => actions.push([scope.host, command]),
+      dispatch() { throw new Error('legacy echo'); }, dispatchFor() { throw new Error('legacy queue'); } }); },
     taskInputs(inputs, callback = true) { setTaskInputs({ ...inputs, onStopTask: callback ? (host, chat, task) => stops.push([host, chat, task]) : undefined }); },
     activeChat() { return activeConversationStore.getState().activeConversation?.id ?? null; },
     unavailable(host) { sessionStore.setState(s => ({ statuses: new Map(s.statuses).set(host, { type: 'disconnected' }) })); },
     scope(host, chat, epoch) { threadStore.getState().acceptEpoch(host, chat, epoch); setScope({ host, chat, epoch }); },
     batch(items, version) { const s = threadStore.getState(); const b = s.beginBatch(scope.host, scope.chat, scope.epoch);
-      b.applyItems(items, version); b.commit({ fromVersion: 0, version, ranges: [{ start: 0, end: version }] }); },
-    update(update) { threadStore.getState().applyUpdate(scope.host, update); }
+      b.applyItems(items, version); b.commit({ fromVersion: 0, version, ranges: [{ start: 0, end: version }] });
+      sends.getState().settle(s.snapshot(scope.host, scope.chat)); },
+    update(update) { threadStore.getState().applyUpdate(scope.host, update);
+      sends.getState().settle(threadStore.getState().snapshot(scope.host, scope.chat)); }
   };
   return snapshot ? <div className="conversation" onKeyDown={event => { if (event.key === 'Escape') escapes.push('bubble'); }}><div className="conversation__covered">
-    <ThreadItemsTimeline snapshot={snapshot} taskInputs={taskInputs} turnRunning={turnRunning} foldTools onReply={(role, text) => replies.push(role + ':' + text)}
+    <ThreadItemsTimeline snapshot={snapshot} sendInputs={{ connection, local: { ...local, hostId: scope.host, conversationId: scope.chat },
+      onAction: (host, command) => actions.push([host, command]) }} taskInputs={taskInputs} turnRunning={turnRunning} foldTools onReply={(role, text) => replies.push(role + ':' + text)}
       onOpenMarkdownPath={path => paths.push(path)} />
     <textarea className="composer__input" aria-label="Fixture composer" onKeyDown={event => {
       if (turnRunning && event.key === 'Escape' && !event.nativeEvent.isComposing) escapes.push('interrupt');
@@ -71,6 +88,77 @@ async function rendererFixture() {
 }
 const item = (id: number, kind: string, content: unknown, fields: Partial<ThreadItem> = {}): ThreadItem => ({
   id, rev: id, kind, order: id, status: 'done', active: false, shown: true, summary: `summary ${id}`, content, ...fields
+})
+
+test('settles sends and targets genuine queue handles through authoritative terminal revisions', async ({ launchPairedApp }) => {
+  const server = await rendererFixture()
+  try {
+    const { page, app } = await launchPairedApp({}, { rendererUrl: server.resolvedUrls!.local[0] })
+    await page.locator('.channel-list__row-open').first().click()
+    await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled()
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 800))
+    const chat = 'snapshot-owning-chat'
+    const scope = (host = FIRST_SERVER_ID, conversation = chat) => page.evaluate(({ host, conversation }) =>
+      (window as unknown as { threadFixture: Fixture }).threadFixture.scope(host, conversation, 'sends'), { host, conversation })
+    const connection = (connected: boolean) => page.evaluate(({ host, connected }) =>
+      (window as unknown as { threadFixture: Fixture }).threadFixture.sendConnection(host, connected), { host: FIRST_SERVER_ID, connected })
+    let version = 1000
+    const batch = (items: ThreadItem[]) => page.evaluate(({ items, version }) =>
+      (window as unknown as { threadFixture: Fixture }).threadFixture.batch(items, version), { items, version: ++version })
+    const change = (id: number, base_rev: number, changes: Record<string, unknown>) => page.evaluate(update =>
+      (window as unknown as { threadFixture: Fixture }).threadFixture.update(update), {
+        type: 'thread_item_changed', payload: { conversation_id: chat, epoch: 'sends', version: ++version,
+          item_id: id, base_rev, rev: version, changes }
+      } satisfies ThreadUpdate)
+    const actions = () => page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.actions)
+    const row = (id: number) => page.locator(`[data-read-row="${id}"]`)
+    const queued = (id: number, handle: number, text: string, device = 'device') => item(id, 'user_message', {
+      text, device_id: device, message_id: 'shared-id', queued_msg_id: handle,
+      attachments: [{ attachment_id: 'daemon-file', filename: 'daemon.pdf' }]
+    }, { order: 0, active: true, status: 'queued', rev: version })
+    await scope(); await connection(true)
+    await page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.send('local display path', 'device'))
+    await expect(page.getByText('local display path', { exact: true })).toHaveCount(1)
+    await expect(page.getByText('Sending…', { exact: true })).toBeVisible()
+    // Equal message ids from a peer or another scope cannot acknowledge the local send.
+    await batch([queued(101, 8, 'peer truth', 'peer')])
+    await expect(page.getByText('local display path', { exact: true })).toHaveCount(1)
+    await scope(SECOND_SERVER_ID); await batch([queued(100, 7, 'other host truth')])
+    await expect(page.getByText('local display path', { exact: true })).toHaveCount(0)
+    await scope(); await expect(page.getByText('local display path', { exact: true })).toHaveCount(1)
+    // The first own observation is a catch-up full item: acknowledgement was never supplied.
+    const accepted = queued(100, 7, 'daemon normalized truth')
+    await batch([accepted]); await batch([accepted])
+    await expect(page.getByText('local display path', { exact: true })).toHaveCount(0)
+    await expect(row(100)).toContainText('daemon normalized truth')
+    await expect(row(100)).toContainText('daemon.pdf')
+    await expect(page.getByText('Waiting for Claude', { exact: true })).toBeVisible()
+    await expect(row(100).getByRole('button', { name: 'Send queued message now' })).toBeVisible()
+    await page.screenshot({ path: '/tmp/builder-1906/queued.png', animations: 'disabled' })
+    await row(100).getByRole('button', { name: 'Send queued message now' }).click()
+    await expect.poll(actions).toContainEqual([FIRST_SERVER_ID, { type: 'sendQueuedNow', payload: { conversation_id: chat, queued_msg_id: 7 } }])
+    await expect(row(100)).toContainText('daemon normalized truth')
+    await connection(false); await expect(row(100).getByRole('button', { name: 'Drop queued message' })).toHaveCount(0)
+    await connection(true)
+    await change(100, accepted.rev, { order: 50, status: 'delivered', active: false })
+    await expect(row(100)).toHaveCount(1)
+    await expect(row(100).getByRole('button', { name: 'Send queued message now' })).toHaveCount(0)
+    await expect(page.getByText('Waiting for Claude', { exact: true })).toHaveCount(0)
+    await expect(page.getByText('Sending…', { exact: true })).toHaveCount(0)
+    const dropped = queued(102, 9, 'drop truth')
+    await batch([dropped]); await row(102).getByRole('button', { name: 'Drop queued message' }).click()
+    await expect.poll(actions).toContainEqual([FIRST_SERVER_ID, { type: 'dequeueMessage', payload: { conversation_id: chat, queued_msg_id: 9 } }])
+    await expect(row(102)).toHaveCount(1)
+    await change(102, dropped.rev, { active: false, status: 'dropped', shown: false })
+    await expect(row(102)).toHaveCount(0)
+    const lost = queued(103, 7, 'restart loss')
+    await batch([lost]); await change(103, lost.rev, { status: 'lost', active: false })
+    await expect(row(103)).toContainText('Not delivered')
+    await batch([queued(104, 7, 'reused queue id')])
+    await expect(row(103).getByRole('button', { name: 'Drop queued message' })).toHaveCount(0)
+    await expect(row(100).getByRole('button', { name: 'Drop queued message' })).toHaveCount(0)
+    await expect(row(104).getByRole('button', { name: 'Drop queued message' })).toBeVisible()
+  } finally { await server.httpServer.close() }
 })
 
 for (const width of [1280, 800]) test(`authoritative items retain identity, actions and scroll at ${width}`, async ({ launchPairedApp }) => {

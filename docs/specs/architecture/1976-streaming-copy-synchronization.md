@@ -61,3 +61,35 @@ diagnosis and complete-tier receipts, linking unrelated tracked failures explici
 
 ## Open Questions
 - Which boundary causes the stale clipboard? Resolve with reproduction evidence and record the answer in Revisions before handoff.
+
+## Revisions
+2026-10-14: resolved the open diagnosis question with a controlled native-input
+schedule on unchanged production at `0057a0afe824ae00594ddfd893dac2f26ca87f70`.
+Ten unchanged-case repetitions and twenty instrumented ordinary-click repetitions
+passed, but those green runs alone establish no cause. The controlled case used
+ordinary hover, mouse down, two animation frames, then mouse up, allowing the
+attachment-focus/metadata reflow to finish during a press. It changed no CSS,
+clipboard API, permissions, transport, source text or product handler.
+
+All three control executions failed with the exact stale “Hi” symptom. In each,
+the committed source was “Streaming partial reply”; trusted pointer-down targeted
+its Copy glyph at button box `(851.015625, 933, 27, 20)`. Before release the box
+moved to `(851.015625, 905, 27, 20)`. Trusted pointer-up hit Reply's glyph, and the
+click targeted the common actions container, so Copy's handler never activated.
+This isolates an input/layout synchronization gap rather than stale source or
+clipboard interference. It reproduces a schedule consistent with the historical
+symptom, without claiming to recover the unrecorded original event schedule.
+
+The same frame-spanning press passed all three executions with the repair:
+settle the attached reply, identify the exact streaming source, transfer focus
+before pressing and require identical focused/hovered button and scroll geometry
+across consecutive animation frames. Shipping activation remains ordinary
+`Locator.click()`, with a trusted click receipt and exact OS clipboard readback.
+All original assertions remain; no production change is justified.
+
+Evidence under `/tmp/builder-1976/`: `baseline.json` (10 executed/passed),
+`probe.json` (20 executed/passed), `press.json` (3 executed/failed),
+`repaired-press.json` (3 executed/passed), `input-probe.patch`,
+`press-control.patch` and `repair.patch`. All runs used the existing serialized
+clipboard project, isolated Xvfb and zero retries, with zero skips. Control-only
+instrumentation and the frame-spanning press are absent from the shipping spec.

@@ -123,6 +123,7 @@ test('the attachment file row draws in the bubble, and a long name wraps beside 
   // and it sits BETWEEN them rather than at either end. The static tier already pins the DOM order; what
   // only a browser can show is that the margin actually resolves to 12px through .bubble's padding box
   // (a margin here neither collapses through it nor escapes it — the reason .bubble__meta uses one too). ---
+  await firstBubble.hover()
   const bubbleBox = (await firstBubble.boundingBox())!
   const rowBox = (await firstRow.boundingBox())!
   const metaBox = (await firstBubble.locator('.bubble__meta').boundingBox())!
@@ -217,6 +218,7 @@ test('the attachment file row draws in the bubble, and a long name wraps beside 
 
   // The row still keeps its rhythm with the meta row below it now that it is two lines tall — the margin is
   // on the sibling, so a taller row must not have eaten the gap.
+  await secondBubble.hover()
   const longRowBox = (await secondRow.boundingBox())!
   const secondMetaBox = (await secondBubble.locator('.bubble__meta').boundingBox())!
   expect(secondMetaBox.y - (longRowBox.y + longRowBox.height)).toBeCloseTo(RHYTHM_PX, 0)
@@ -347,6 +349,7 @@ test('activating the file row asks the host for that attachment, by click and by
   // --- The button reset put the drawn box back. These are the same constants the first test holds, re-read
   // on a row that is now a form control: a UA padding, border, font or text-align that survived would move
   // one of them, and #815's own record is that this row's layout defies prediction. ---
+  await first.hover()
   const rowBox = (await first.boundingBox())!
   const iconBox = (await first.locator('.bubble__file-icon').boundingBox())!
   const nameBox = (await first.locator('.bubble__file-name').boundingBox())!

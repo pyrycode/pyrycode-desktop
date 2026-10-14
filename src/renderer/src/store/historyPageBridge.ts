@@ -1,8 +1,10 @@
-// User-demand history pages: typed events prepend rows and retain successful coverage.
-// Requests are driven by thread input; failures settle without starting a retry.
+import { historyGapId } from '@shared/chatHistory'
+// Typed history pages retain rows, contribution evidence and successful paging coverage.
+// Opening/reconnect and explicit reader input create demand; failures never retry automatically.
 import { useEffect } from 'react'
 import { backgroundTaskRosterStore, type HistoryAgentPlacement } from './backgroundTaskRosterStore'
 import { connectedConversationHostNow } from '../screens/conversation/conversationActionAvailability'
+import { activeConversationStore } from './activeConversationStore'
 import type { RendererCommand } from '@shared/ipc/commands'
 import type { DaemonEvent, HistoryRequestFailure, HistoryTimelineEntry } from '@shared/ipc/events'
 import { joinKeyFor, translateTimelineEvent } from './timelineBridge'
@@ -240,7 +242,8 @@ export function subscribeHistoryPage(
     cursor: string,
     atStart: boolean,
     placements?: readonly HistoryAgentPlacement[],
-    servedIds?: readonly number[]
+    servedIds?: readonly number[],
+    entries?: readonly HistoryTimelineEntry[]
   ) => void,
   settleFailure: (
     conversationId: string,
@@ -248,7 +251,8 @@ export function subscribeHistoryPage(
     retryable: boolean
   ) => void,
   getLiveKeys?: (conversationId: string) => ReadonlySet<string>,
-  getServedIds?: (conversationId: string) => ReadonlySet<number>
+  getServedIds?: (conversationId: string) => ReadonlySet<number>,
+  retainContributions = false
 ): () => void {
   return onDaemonEvent((event) => {
     if (event.type === 'historyPageReceived') {
@@ -257,7 +261,16 @@ export function subscribeHistoryPage(
       const repeated = event.servedIds !== undefined && event.servedIds.length > 0 &&
         covered !== undefined && event.servedIds.every(id => covered.has(id))
       const items = reduceHistoryPage(event.entries, getLiveKeys?.(event.conversationId), placement => placements.push(placement), repeated)
-      if (event.servedIds !== undefined) applyPage(event.conversationId, items, event.cursor, event.atStart, placements, event.servedIds)
+      if (retainContributions) {
+        const chronological = [...event.entries].sort((a, b) => a.id - b.id)
+        const originalPlacements: HistoryAgentPlacement[] = []
+        chronological.forEach((entry, before) => {
+          if (entry.event.type === 'backgroundTaskStarted' || entry.event.type === 'backgroundTaskUpdated') {
+            originalPlacements.push({ event: entry.event, before })
+          }
+        })
+        applyPage(event.conversationId, items, event.cursor, event.atStart, originalPlacements, event.servedIds, event.entries)
+      } else if (event.servedIds !== undefined) applyPage(event.conversationId, items, event.cursor, event.atStart, placements, event.servedIds)
       else if (placements.length === 0) applyPage(event.conversationId, items, event.cursor, event.atStart)
       else applyPage(event.conversationId, items, event.cursor, event.atStart, placements)
       return
@@ -271,8 +284,9 @@ export function subscribeHistoryPage(
 /** Read current coverage only when a user asks; pending demand is discarded. */
 export interface HistoryAskDeps {
   sendCommand: (command: RendererCommand) => void
-  getHeld: (conversationId: string) => Pick<ConversationSlice, 'history' | 'coverage' | 'localRead'> | null
-  markRequested: (conversationId: string) => void
+  getHeld: (conversationId: string) => Pick<ConversationSlice, 'history' | 'coverage' | 'localRead' | 'gaps' | 'served' | 'newestCursor'> | null
+  markRequested: (conversationId: string, cursor?: string, purpose?: 'older' | 'newest' | 'gap' | 'gap-newest', gapId?: number | string) => void
+  canRequest?: (conversationId: string) => boolean
 }
 
 /**
@@ -281,6 +295,17 @@ export interface HistoryAskDeps {
  * so this is a request, not a promise; a page can still come back shorter.
  */
 export const HISTORY_PAGE_LIMIT = 200
+
+export function requestHistoryPage(deps: HistoryAskDeps, conversationId: string, cursor: string,
+  purpose: 'older' | 'newest' | 'gap' | 'gap-newest', gapId?: number | string): void {
+  if (deps.canRequest?.(conversationId) === false) return
+  const held = deps.getHeld(conversationId)
+  if (held?.localRead === 'loading' || held?.history?.status === 'requested') return
+  deps.markRequested(conversationId, cursor, purpose, gapId)
+  deps.sendCommand({ type: 'requestHistory', payload: {
+    conversation_id: conversationId, cursor, limit: HISTORY_PAGE_LIMIT
+  } })
+}
 
 export function requestOlderHistory(
   deps: HistoryAskDeps,
@@ -292,24 +317,37 @@ export function requestOlderHistory(
   if (held?.localRead === 'loading' || held?.history?.status === 'requested') return
   const coverage = held?.coverage
   if (coverage?.status === 'received' && coverage.atStart) return
-  deps.markRequested(conversationId)
-  deps.sendCommand({
-    type: 'requestHistory',
-    payload: { conversation_id: conversationId,
-      cursor: coverage?.status === 'received' ? coverage.cursor : '', limit: HISTORY_PAGE_LIMIT }
-  })
+  requestHistoryPage(deps, conversationId, coverage?.status === 'received' ? coverage.cursor : '', 'older')
+}
+
+/** A visible marker chooses one backwards step, independent of oldest-end completion. */
+export function requestGapHistory(deps: HistoryAskDeps, conversationId: string, gapId: number | string): void {
+  const held = deps.getHeld(conversationId)
+  const gap = held?.gaps?.find(g => historyGapId(g) === gapId)
+  if (gap === undefined) return
+  const failure = held?.history
+  if (failure?.status === 'failed' && failure.gapId === gapId &&
+      failure.reason !== 'history-invalid-cursor') return
+  const usable = (cursor: string | undefined) => cursor !== undefined && !gap.refusedCursors?.includes(cursor)
+  const receipt = held?.served?.receipts.filter(r => r.ids[0] !== undefined && r.ids[0] >= gap.newerId)
+    .sort((a, b) => a.ids[0] - b.ids[0])[0]
+  const origin = gap.refusedCursors?.length ? held?.newestCursor : receipt?.cursor ?? held?.newestCursor
+  const cursor = usable(gap.cursor) ? gap.cursor : usable(origin) ? origin : undefined
+  requestHistoryPage(deps, conversationId, cursor ?? '', cursor === undefined ? 'gap-newest' : 'gap', gapId)
 }
 
 export const historyAskDeps: HistoryAskDeps = {
   sendCommand: (command) => window.pyry.sendCommand(command),
+  canRequest: conversationId => activeConversationStore.getState().activeConversation?.id === conversationId &&
+    connectedConversationHostNow(conversationId) !== null,
   getHeld: (conversationId) => {
     const host = connectedConversationHostNow(conversationId)
     const held = conversationTimelineStore.getState().timelines.get(conversationId)
     return held?.serverId !== undefined && held.serverId !== host ? null : held ?? null
   },
-  markRequested: (conversationId) => {
+  markRequested: (conversationId, cursor, purpose, gapId) => {
     const host = connectedConversationHostNow(conversationId)
-    if (host !== null) conversationTimelineStore.getState().markHistoryRequested(conversationId, host)
+    if (host !== null) conversationTimelineStore.getState().markHistoryRequested(conversationId, host, cursor, purpose, gapId)
   }
 }
 
@@ -324,7 +362,7 @@ export const historyAskDeps: HistoryAskDeps = {
  * per-conversation key, so a page — which always names one — has nowhere correct to land in it, and no
  * screen reads that store's `items` anyway.
  *
- * Pages are requested only by explicit upward input in the thread.
+ * Pages come from opening/reconnect demand, explicit upward input, or Retry.
  *
  * DRAW FIRST, THEN SETTLE, and the order is load-bearing rather than stylistic. `prependHistoryFor`'s
  * absent-key branch CREATES the slice, and all three of the store's request-state paths are absent-key
@@ -342,8 +380,8 @@ export function useHistoryPageBridge(): void {
     () =>
       subscribeHistoryPage(
         window.pyry.onDaemonEvent,
-        (conversationId, items, cursor, atStart, placements = [], servedIds) => {
-          const keys = conversationTimelineStore.getState().prependHistoryFor(conversationId, items, placements.length > 0)
+        (conversationId, items, cursor, atStart, placements = [], servedIds, entries) => {
+          const keys = conversationTimelineStore.getState().prependHistoryFor(conversationId, items, placements.length > 0, entries)
           backgroundTaskRosterStore.getState().recordHistoryPlacements(conversationId, placements.flatMap(placement => {
             const before = keys[placement.before]
             return before === undefined ? [] : [{ ...placement, before }]
@@ -365,7 +403,8 @@ export function useHistoryPageBridge(): void {
           const host = window.pyry.chatHistoryReceipt()?.serverId
           const held = conversationTimelineStore.getState().timelines.get(conversationId)
           return new Set(typeof host === 'string' && held?.serverId === host ? held.served?.ids : [])
-        }
+        },
+        true
       ),
     []
   )

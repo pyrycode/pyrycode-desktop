@@ -26,6 +26,12 @@ and precedes Re-pair, using the existing Error treatment with no dismiss control
 the keyed timeline. `TopOverlay` compares its code to client literals; daemon codes
 and message text never enter displayed text, attributes or classes.
 
+Re-pair and pills with a dismiss X show an 8% On Surface hover layer over their
+existing fill, within 6px corners. Inert notices keep their resting paint; geometry
+and native keyboard outlines stay unchanged. See
+[Top overlay hover](conversation-shell-chrome.md#top-overlay-hover) for selectors
+and counted browser/visual evidence.
+
 | Session-error code | Fixed pill copy |
 | --- | --- |
 | `session.blocked` | Claude did not pick up your last message. It was not delivered. |
@@ -44,13 +50,13 @@ through same-host saved-history reads; host reconnect clears them even off-scree
 without touching other hosts. Cleanup defers consumption through a microtask to
 distinguish actual departure from StrictMode replay. See
 [timeline lifetime](conversation-timeline-store.md#what-it-does) and
-[verification boundaries](development-verification.md#what-each-test-tier-proves).
+[verification boundaries](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves).
 
 The thread overflow menu's bottom-end anchor uses level 2 above the Top overlay's
 level 1; equal levels let the later pills paint over the menu. Sheets and dialogs
 also use level 2 and retain precedence through later DOM placement. See
 [chrome stacking](conversation-shell-chrome.md#structure) and
-[browser stacking proof](development-verification.md#layout-and-input) for the
+[browser stacking proof](development-verification-layout-and-input.md#layout-and-input) for the
 regression's overlap, hit-testing and click requirements.
 
 A **third, prominent** read of the connection status landed in [#279](../codebase/279.md): a disconnected-only banner across the top of the thread, between the header row and the message list — distinct from both the composer's terse inline gate and the still-separate #149 two-dot indicator. See [Connection banner](conversation-shell-chrome.md#connection-banner-279) below.
@@ -117,7 +123,7 @@ An **in-app markdown reader** landed in [#1627](https://github.com/pyrycode/pyry
 
 ## How it works
 
-The positioned `.conversation__covered` pane holds the full-pane message area and separate top/input chrome. Masked backdrop layers soften rows, leaving controls sharp and clickable. The header fades from `#09141D` to transparent with 10px → 0px blur; the input fades to `#0B0E11` at 60% with 0px → 10px blur across its top fifth. Header content and composer status use the Default shadow. Measured chrome heights reserve thread padding, position pills below the header and bound the drawer between controls. See [layout](conversation-shell-chrome.md#layout-contract), [scroll pin](conversation-shell-scroll-pin.md#thread-scroll-pin) and [verification evidence](development-verification.md#layout-and-input).
+The positioned `.conversation__covered` pane holds the full-pane message area and separate top/input chrome. Masked backdrop layers soften rows, leaving controls sharp and clickable. The header fades from `#09141D` to transparent with 10px → 0px blur; the input fades to `#0B0E11` at 60% with 0px → 10px blur across its top fifth. Header content and composer status use the Default shadow. Measured chrome heights reserve thread padding, position pills below the header and bound the drawer between controls. See [layout](conversation-shell-chrome.md#layout-contract), [scroll pin](conversation-shell-scroll-pin.md#thread-scroll-pin) and [verification evidence](development-verification-layout-and-input.md#layout-and-input).
 
 This screen is large enough that its surfaces live in their own documents. Each one keeps its original section headings, so an existing `#anchor` still resolves once you follow the link here.
 
@@ -134,7 +140,7 @@ This screen is large enough that its surfaces live in their own documents. Each 
 - [Markdown reader](conversation-shell-markdown-reader.md) — The in-app reader a markdown-path link in an assistant reply opens: its state machine, and the covered-not-unmounted pane layering that keeps the composer's attachments alive underneath it.
 - [Modals](conversation-shell-modals.md) — The permission/trust panel (with its rejection surface) and the inline questionnaire at the end of history.
 - [Session boundaries and channel info](conversation-shell-session-and-channel-info.md) — The session-boundary delimiter row and the Channel Info sheet, with its Rename/Archive/Delete actions.
-- [Message bubble](conversation-shell-message-bubble.md) — Desktop bubble shape and body-medium type, sibling copy actions, centred 900px text rows with 40px far-side insets, and reserved timestamps revealed on row hover/focus.
+- [Message bubble](conversation-shell-message-bubble.md) — Desktop bubble shape and body-medium type, sibling copy actions, centred 900px text rows with 40px far-side insets, and collapsed time/stats revealed together on row hover/focus.
 - [Thread scroll pin](conversation-shell-scroll-pin.md) — Whether the thread stays pinned to the bottom as new content arrives, and the user-input demand band and preservation of reading position across prepends.
 
 The seams this screen exposes are in [Seams](conversation-shell-seams.md).
@@ -161,7 +167,7 @@ stale work from clearing the replacement.
 `resolutions` is transient feedback, separate from reconnect-scoped `resolved` duplicate suppression.
 Reconnect preserves existing pending/displayed notices without creating any; pairing `reset` clears
 both phases. See the [model contract](modal-prompt-model.md#the-reducer) and
-[verification notes](development-verification.md#what-each-test-tier-proves) for lifecycle proofs.
+[verification notes](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves) for lifecycle proofs.
 
 ### Held reading and host availability
 
@@ -234,7 +240,7 @@ requests: absent socket frames alone can hide a renderer dispatch dropped by mai
 It exercises held reading/copy, stale controls, retained state, another host and explicit
 reconnect actions. Creation helper tests cover delayed ownership and cancellation; existing
 creation/configuration scenarios detect initialization lost before list arrival.
-See [verification boundaries](development-verification.md#what-each-test-tier-proves) and
+See [verification boundaries](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves) and
 [the design](../../specs/architecture/1382-offline-conversation-actions.md).
 
 ## Edge cases and limitations
@@ -244,9 +250,9 @@ See [verification boundaries](development-verification.md#what-each-test-tier-pr
 - The send button is **wired** ([#66](../codebase/66.md)): a click (or Enter) sends the composed message and appends an optimistic echo, now into the timeline ([#179](../codebase/179.md)). A whitespace-only input does nothing; a send-bridge failure is swallowed (no crash). See [Composer send](composer-send.md).
 - **Dark scheme only**; the desktop sidebar stays fixed while the chat pane reflows down to the 800px minimum window width.
 - **Connection banner** ([#279](../codebase/279.md)) — reads the open conversation's own host through `useOpenConnectionStatus` and renders while it is not connected. Pairing rejection selects the fixed recovery notice; other non-connected states use `CONNECTION_BANNER_COPY`, never `ConnectionError.message`. See [per-host decisions](session-store.md#one-slot-per-server-since-1133). Through [#968](../codebase/968.md) it coexisted with the composer's own terse caption (#31), both visible while disconnected by design; #968 dropped that caption, and the banner is now the only announcement of a non-connected state outside the `error` arm's status-row occupant (#797/#963).
-- Renderer unit tests use `renderToStaticMarkup`: store-bound containers read Zustand's initial server snapshot, and effects, geometry and clicks do not run. Fake-transport Electron coverage establishes interaction; see [test boundaries](development-verification.md#what-each-test-tier-proves).
+- Renderer unit tests use `renderToStaticMarkup`: store-bound containers read Zustand's initial server snapshot, and effects, geometry and clicks do not run. Fake-transport Electron coverage establishes interaction; see [test boundaries](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves).
 - **Session-boundary delimiter** ([#286](../codebase/286.md), redrawn [#690](https://github.com/pyrycode/pyrycode-desktop/issues/690)) — appears only when a `sessionBoundary` item exists; an empty thread and a thread with no boundary render exactly as before. Its `clear`/`idle_evict` copy is no longer provisional as of #690 — `Session reset` / `Session reset after idle` are the shipped labels, not a placeholder awaiting a Figma variant.
-- **Queued backlog + drop affordance** ([#294](../codebase/294.md)/[#296](../codebase/296.md)) — the region and its drop buttons render only when the milestone conversation's backlog is non-empty; dropping a row is fire-and-forget with no client-side validation of `queued_msg_id` and no error surface on a bridge failure (swallowed, `console.error` only) — the row simply remains, since the daemon never received the drop. The drop button inherits the region's 50% dimming; it cannot be rendered at full opacity without restructuring the region-level dim (a child opacity cannot escape a parent's opacity compositing group).
+- **Queued backlog + drop affordance** — queue snapshots fold into timeline rows. Send now sits above Cancel in a leading actions column; only the bubble dims to 50%. Send now requires `mid_turn_input: true`; Cancel is always present. Drop removes the owned optimistic echo after a successful send, while backlog removal remains daemon-owned. See [queued rows and side actions](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-the-thread-1214-was-294-drop-since-296-echo-removal-since-1213).
 - **Two-dot connection indicator** ([#330](../codebase/330.md)) — the two legs render independently and are never reconciled: a fatal session close leaves the relay dot at its last value (typically up) while the daemon dot shows down, and a retryable daemon-absent close leaves the daemon dot in-progress while the relay dot shows up/"Reachable" — both are intended, honest-per-hop renders, not bugs. The relay leg has no in-progress arm (that category is exercised only by the daemon leg's `connecting`), so the daemon dot never shows a false green.
 - **Channel Info sheet** ([#365](../codebase/365.md)) — a list-opened thread (never populates `activeConversationStore`) opens the sheet gracefully: chrome + a placeholder About line, no Channel ID footer, no crash. `sheetOpen` (run-config) and `channelInfoOpen` are independent booleans, so both overlays could in principle stack — not reachable through normal use (separate triggers) and no AC requires mutual exclusion, left as-is. Created / Total sessions / Total messages / Memory (Figma 20-48) have no desktop wire field and are deferred, not invented. Escape-dismiss and the overflow-select → open wiring are reviewed glue, not unit-tested (the `renderToStaticMarkup`-only suite constraint, same as #276/#177).
 - **Workspace Picker sheet** ([#383](../codebase/383.md)) — same `activeConversationStore`-null
@@ -303,6 +309,6 @@ See [verification boundaries](development-verification.md#what-each-test-tier-pr
 - [Conversation workspace change](conversation-workspace-change.md) — the `changeWorkspace` command `requestChangeWorkspace` dispatches on a row choice, its first real caller (#379, consumed in #383)
 - [Background-task roster store](background-task-roster-store.md) — the store `BackgroundTaskPanel` reads via `selectRosterFor(conversationId)`, its first real consumer since the store shipped dormant at #573 (#581, extended to read `droppedTasks`/`truncatedFields` in #582 and `latestUpdate` in #583, see [Background-task panel](conversation-shell-background-tasks.md#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583) above)
 - [Assistant markdown renderer](assistant-markdown-renderer.md) — `AssistantMarkdown`, shipped dormant at #608, wired into this screen's `assistantText` settled branch by [#609](../codebase/609.md); the `.bubble__markdown` container and its block-rhythm/code-wrap CSS live in `conversation.css`, not in that module. Gained the `onOpenMarkdownPath` opt-in and `markdownLinkPath` by [#1627](https://github.com/pyrycode/pyrycode-desktop/issues/1627), threaded down from this screen through `Timeline`/`TimelineRow` — see [Markdown reader](conversation-shell-markdown-reader.md).
-- [Message bubble](conversation-shell-message-bubble.md) — `.bubble` and the live `TimelineRow` text arms: desktop shape/type, sibling copy actions, row sizing and timestamp reveal (#1778), plus independent meta-row turn stats. Queued rows share text sizing without actions/meta; unmounted `MessageBubble` retains the base width cap.
+- [Message bubble](conversation-shell-message-bubble.md) — `.bubble` and the live `TimelineRow` text arms: desktop shape/type, sibling copy actions, row sizing and collapsed time/stats revealed together on row hover/focus (#1898). Queued rows share text sizing with Send now/Cancel but no meta; unmounted `MessageBubble` retains the base width cap.
 - [ADR 0001 — Stack](../decisions/0001-stack-electron-react-typescript.md), [ADR 0002 — Remote head over relay](../decisions/0002-remote-head-over-relay-shared-wire.md)
 - [#1 codebase notes](../codebase/1.md) · [#69 codebase notes](../codebase/69.md) · [#166 codebase notes](../codebase/166.md) · [#177 codebase notes](../codebase/177.md) · [#72 codebase notes](../codebase/72.md) · [#167 codebase notes](../codebase/167.md) · [#187 codebase notes](../codebase/187.md) · [#188 codebase notes](../codebase/188.md) · [#191 codebase notes](../codebase/191.md) · [#192 codebase notes](../codebase/192.md) · [#203 codebase notes](../codebase/203.md) · [#140 codebase notes](../codebase/140.md) · [#214 codebase notes](../codebase/214.md) · [#215 codebase notes](../codebase/215.md) · [#217 codebase notes](../codebase/217.md) · [#218 codebase notes](../codebase/218.md) · [#229 codebase notes](../codebase/229.md) · [#230 codebase notes](../codebase/230.md) · [#245 codebase notes](../codebase/245.md) · [#179 codebase notes](../codebase/179.md) · [#237 codebase notes](../codebase/237.md) · [#226 codebase notes](../codebase/226.md) · [#279 codebase notes](../codebase/279.md) · [#285 codebase notes](../codebase/285.md) · [#286 codebase notes](../codebase/286.md) · [#278 codebase notes](../codebase/278.md) · [#323 codebase notes](../codebase/323.md) · [#324 codebase notes](../codebase/324.md) · [#328 codebase notes](../codebase/328.md) · [#329 codebase notes](../codebase/329.md) · [#330 codebase notes](../codebase/330.md) · [#492 codebase notes](../codebase/492.md) · [#493 codebase notes](../codebase/493.md) · [#495 codebase notes](../codebase/495.md) · [#496 codebase notes](../codebase/496.md) · [#365 codebase notes](../codebase/365.md) · [#366 codebase notes](../codebase/366.md) · [#368 codebase notes](../codebase/368.md) · [#377 codebase notes](../codebase/377.md) · [#383 codebase notes](../codebase/383.md) · [#529 codebase notes](../codebase/529.md) · [#530 codebase notes](../codebase/530.md) · [#581 codebase notes](../codebase/581.md) · [#582 codebase notes](../codebase/582.md) · [#583 codebase notes](../codebase/583.md) · [#600 codebase notes](../codebase/600.md) · [#601 codebase notes](../codebase/601.md) · [#618 codebase notes](../codebase/618.md) · Spec: `docs/specs/architecture/1-app-shell-and-theme-tokens.md`

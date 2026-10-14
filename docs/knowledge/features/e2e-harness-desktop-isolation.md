@@ -58,7 +58,7 @@ control opacity sets in one synchronous renderer snapshot. Pointer-away observat
 also deliver input before checking that no row is hovered. Polling style alone could
 time out while hover stays lost. Geometry, keyboard focus and activation retain
 their existing checks; timeout, retry and parallelism settings are unchanged. See
-[the verification method](development-verification.md#layout-and-input) and
+[the verification method](development-verification-layout-and-input.md#layout-and-input) and
 [row regression evidence](channel-list-row-hover-control.md#testing-pointer-observations).
 This local observation fix remains distinct from the shared native-pointer
 isolation in [PR #1836](https://github.com/pyrycode/pyrycode-desktop/pull/1836).
@@ -173,6 +173,34 @@ Scratch JSON paths record retained evidence, not committed artifacts or a new
 documentation-stage run. Acceptance is fake transport and needs no live Claude.
 Required app typechecks passed; auxiliary strict e2e typechecking remained red
 on the unchanged shared launch environment type mismatch, and is not claimed green.
+
+The [attachment-pill comparison](https://github.com/pyrycode/pyrycode-desktop/issues/1833#issuecomment-6127206600)
+extends this boundary to box disappearance between successful visibility/treatment checks
+and geometry reads. On historical `188fd6b7`, the independent input-enabled cover over the
+native pointer produces one new `pointerout`, slot hover true → false, display block → none
+and pill box present → null. Protected main `f2e0d6104c9593e83bfc0241d506b118def8bc52`
+retains hover and the identical box with zero new exits. Serial deletion of only the
+initial-window protection reproduces the historical result, isolating that variable.
+
+Actual over-pointer cover bounds `(860,440,200,200)` contain cursor `(960,540)`;
+the same cover at `(0,0,200,200)` excludes it. App bounds are `(410,140,1100,800)`.
+All corner controls retain hover/display/box despite the cover taking native focus.
+Slot focus-within stays false in both arms. Renderer `document.hasFocus()` stays true
+even when native app focus becomes false; record these separately rather than treating
+renderer focus as native focus. Historical exit coordinates `(550,373)` differ from
+the injected tile hover `(482.5,619)`. Every observation includes timestamped pointer
+events and all six nullable layout boxes; strip/input resting geometry stays unchanged.
+
+Each historical/protected/deletion comparison executed/passed two scenarios, with one
+actual worker, zero failed/skipped/flaky results and zero retries, on Linux x86_64,
+Electron 33.4.11 and dedicated 1920×1080 Xvfb with shown 1100×800 windows. The
+[verifier audit](https://github.com/pyrycode/pyrycode-desktop/pull/1943#issuecomment-6127503162)
+checked all six observations and matching report attachments. Exact patches, JSON and
+observations remain under `/tmp/builder-1833/`, bundled in `retained-proof.tar.gz`.
+These controls confirm the reproduced mechanism's protection, not its contemporaneous
+historical trigger; the overwritten original #1818 occurrence remains unconfirmed.
+The [attachment testing contract and counted acceptance](composer-attach-name-pill.md#controlled-hover-and-geometry-verification)
+record the unchanged spec and separate background/offset sensitivity controls.
 
 ### Recorded host-pill acceptance
 

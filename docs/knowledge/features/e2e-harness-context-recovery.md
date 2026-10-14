@@ -33,6 +33,23 @@ retains the successful attempt ID for the foreign/stale-result assertions, avoid
 a second unguarded read. A one-shot injected context-loss error must recover through
 a real Electron read; listener installation, clicks and pushed events are never replayed.
 
+`real-daemon-history-on-open.spec.ts` keeps recovery in its local
+`asks(): Promise<string[]>` reader. A five-second poll returns only when
+`readMainProcess` yields an actual cursor array, retaining that successful value
+for its caller. The unavailable sentinel never becomes an empty array, a count,
+or a successful assertion. Opening-cursor, per-key and settlement checks all use
+this reader; listener installation, 205 posts, protected relaunch and native input
+remain single actions. Polling availability does not wait for a desired count or
+replace the caller's original count assertion.
+
+The [history diagnosis and validation](development-verification-history.md#known-gap-recovery-verification)
+distinguishes a failed post-ArrowUp inspection from a rejected history request.
+Controlled one-shot loss after reading two requests failed the original observer
+while Electron was running; the repaired observer recovered and passed every
+original assertion. That proves read recovery without replay, but neither the
+upstream Electron/Playwright trigger nor the absent original gate report's
+assertion. Changing focus or scroll readiness would address an unproven cause.
+
 **Confirmed control resends.** Recovery needs evidence about the mutation's actual effect;
 an inconclusive read cannot authorize a resend. For renderer event delivery, watch the
 renderer long enough to confirm that the effect has not arrived.
@@ -88,7 +105,7 @@ installation, inspection and context-loss counts as `local-list-failure-setup`. 
 `readList` is overridden; other operations delegate to the captured handler and pairing
 data stays intact. The scenario retains one saved host, its single adjacent notice reading
 “Could not read saved chats on this device.”, no conversation rows or open thread, and
-the 800-pixel capture. See [local-list failure behavior](chat-history.md#results-and-failure-preservation).
+the 800-pixel capture. See [local-list failure behavior](chat-history-results.md#results-and-failure-preservation).
 
 [`localListFailure.test.ts`](../../../e2e/fixtures/localListFailure.test.ts) executes the
 actual callbacks against an IPC registration fake to distinguish loss before and after
@@ -119,7 +136,7 @@ mismatch cannot authorize resend if the final inspection is unavailable. An ackn
 control with persistent mismatch fails without resend. Permanent inspection loss,
 exhaustion and missing windows fail; unrelated errors and non-`Error` throws propagate
 unchanged. Confirm native state before waiting for
-[renderer geometry to settle](development-verification.md#layout-and-input).
+[renderer geometry to settle](development-verification-layout-and-input.md#layout-and-input).
 
 The [composer diagnosis](https://github.com/pyrycode/pyrycode-desktop/issues/1822#issuecomment-6030141371)
 records the initial resize evaluation failing after 1268ms at `e0b178ce89`, before menu
@@ -137,8 +154,7 @@ execution, final-inconclusive rejection, finite exhaustion and fatal failures. T
 confirms all 17 fault tests present and passed (17 executed, 0 failed, 0 skipped) in
 the unit gate (9,208 executed/passed, 0 failed, 3 skipped). Fault injection proves
 recovery semantics, not reproduction of the upstream trigger. Counted browser
-[repetition and full-suite evidence](development-verification.md#composer-native-setup-verification)
+[repetition and full-suite evidence](development-verification-layout-and-input.md#composer-native-setup-verification)
 preserve the menu proof separately.
 
 `readAuthentication` keeps its own private copy of the same tolerance.
-

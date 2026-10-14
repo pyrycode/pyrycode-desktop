@@ -10,6 +10,7 @@ rules live in [payload contracts](inbound-message-decode-payloads.md);
 // Which modeled app-message the envelope carried. NOT a wire type and NOT a DaemonEvent —
 // an internal transport result the daemon-connection consumer maps onto the IPC channel.
 export type InboundDaemonMessage =
+  | { kind: 'thread-frame'; envelope: Envelope } // main-only; receiver validates/assembles before IPC
   | ({ kind: 'message'; message: MessagePayload } & FrameTimestamp)
   | { kind: 'chunk'; messages: MessagePayload[] }
   | { kind: 'bundle-chunk'; seq: number; data: Uint8Array }   // #116, additive
@@ -54,7 +55,8 @@ export type InboundDaemonMessage =
 //                            `session_settings_updated`/`background_task_started`/
 //                            `background_task_updated`/`background_task_roster`/`question_shown`/
 //                            `question_dismissed`/`slash_command_list`/`model_list`
-//                            envelope, fully narrowed (`screen_snapshot` was modeled here #180-#622;
+//                            envelope, fully narrowed except `thread-frame` (see below);
+//                            (`screen_snapshot` was modeled here #180-#622;
 //                            removed, now falls to the unmodeled `default` arm)
 //  • null                  — a well-formed envelope of any OTHER type (ignored)
 //  • throws WireDecodeError — oversized / malformed / unparseable / mistyped payload (fail-closed)
@@ -64,3 +66,17 @@ export function parseInboundMessage(
 ): InboundDaemonMessage | null
 ```
 
+## Complete live thread updates
+
+`thread_item_added`, `thread_item_changed` and `thread_text_append` return a
+`thread-frame` carrying the decoded envelope after the existing replay `event_id`
+observation. This internal arm can contain continuation data and is never an IPC
+event. The connection-owned `createThreadUpdateReceiver` detects a supplied
+`continuation` before ordinary DTO validation, then delivers only complete
+`ThreadUpdate` values. See [wire shapes and bounded assembly](inbound-message-decode-limits.md#complete-live-thread-validation)
+and [connection lifetime](daemon-connection.md#thread-receiver-lifetime).
+
+Replay admission remains independent of fragment progress: an incomplete or
+rejected update can advance the observed envelope replay cursor without emitting
+a completed logical version or item revision. The receiver holds no item store
+and does not deduplicate repeated logical updates.

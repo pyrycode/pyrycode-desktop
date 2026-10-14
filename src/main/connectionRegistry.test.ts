@@ -130,6 +130,7 @@ function createFactoryFake() {
     })
     const noop = (): void => {}
     return {
+      queryThread: () => {},
       requestHostSystemPrompt: () => {},
       setHostSystemPrompt: () => {},
       start: () => {

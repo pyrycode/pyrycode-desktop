@@ -609,3 +609,39 @@ describe('attachmentImageSource — the local refusals, which still answer a ter
     logged.mockRestore()
   })
 })
+
+it('captures host/thread scope across reused IDs and ignores delayed unrelated terminals', () => {
+  const r = recorder()
+  let host = 'A', chat = 'chat'
+  r.deps.getServerId = () => host
+  r.deps.getOpenConversationId = () => chat
+  const sources = createAttachmentImageSources(r.deps)
+  const first = ask(r, sources)
+  host = 'B'
+  const second = ask(r, sources)
+  r.pushRetrieval({ type: 'failed', attachmentId: ATTACHMENT_ID, conversationId: chat, serverId: 'A', reason: 'connection-lost' })
+  expect(first.outcomes).toEqual([{ type: 'failed', reason: 'connection-lost' }])
+  expect(second.outcomes).toEqual([])
+  expect(r.liveRetrievalListeners()).toBe(1)
+  r.pushRetrieval({ type: 'completed', attachmentId: ATTACHMENT_ID, conversationId: chat, serverId: 'B' })
+  r.pushBytes({ type: 'delivered', attachmentId: ATTACHMENT_ID, bytes: BYTES })
+  expect(second.outcomes).toHaveLength(1)
+  chat = 'other-chat'
+  const third = ask(r, sources)
+  expect(third.outcomes).toEqual([])
+  expect(r.fetches).toEqual([
+    { serverId: 'A', conversationId: 'chat', attachmentId: ATTACHMENT_ID },
+    { serverId: 'B', conversationId: 'chat', attachmentId: ATTACHMENT_ID },
+    { serverId: 'B', conversationId: 'other-chat', attachmentId: ATTACHMENT_ID }
+  ])
+  second.release(); third.release(); first.release()
+  expect(r.liveRetrievalListeners()).toBe(0)
+  expect(r.revoked).toHaveLength(1)
+})
+it('refuses invalid host scope before subscribing', () => {
+  const r = recorder()
+  r.deps.getServerId = () => ''
+  const result = ask(r, createAttachmentImageSources(r.deps))
+  expect(result.outcomes).toEqual([{ type: 'failed', reason: 'refused' }])
+  expect(r.calls).toEqual([])
+})

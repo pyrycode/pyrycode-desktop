@@ -51,7 +51,7 @@ const LINK_TEXT = 'the link'
 const REPLY_TEXT = `Follow [${LINK_TEXT}](${LINK_URL}) for the details.`
 const TYPED_TEXT = 'hello from the composer'
 
-const assistantDeltaFrame = (): Uint8Array =>
+const assistantDeltaFrame = (text: string): Uint8Array =>
   encodeEnvelope({
     id: 99,
     type: 'assistant_delta',
@@ -60,7 +60,7 @@ const assistantDeltaFrame = (): Uint8Array =>
       conversation_id: SEEDED_ROW.id,
       turn_id: TURN_ID,
       seq: 0,
-      text: REPLY_TEXT
+      text
     } satisfies AssistantDeltaPayload
   })
 
@@ -83,18 +83,21 @@ const turnEndFrame = (): Uint8Array =>
 // buildReplyFrames overrides the fixture's default arm. The #448 guard rides along — the send arm answers
 // only the OPENED row's conversation_id, so a client regression to a placeholder id gets no frames and the
 // positive control times out, mirroring the real daemon's rejection.
-const buildReplyFrames = (inbound: Uint8Array): Uint8Array[] => {
-  const envelope = decodeEnvelope(inbound)
-  switch (envelope.type) {
-    case 'send_message': {
-      const payload = envelope.payload as SendMessagePayload
-      if (payload.conversation_id !== SEEDED_ROW.id) return []
-      return [assistantDeltaFrame(), turnEndFrame()]
+const replyFramesFor =
+  (replyText: string) =>
+  (inbound: Uint8Array): Uint8Array[] => {
+    const envelope = decodeEnvelope(inbound)
+    switch (envelope.type) {
+      case 'send_message': {
+        const payload = envelope.payload as SendMessagePayload
+        if (payload.conversation_id !== SEEDED_ROW.id) return []
+        return [assistantDeltaFrame(replyText), turnEndFrame()]
+      }
+      default:
+        return [seedConversationsFrame()]
     }
-    default:
-      return [seedConversationsFrame()]
   }
-}
+const buildReplyFrames = replyFramesFor(REPLY_TEXT)
 
 // The main-process global the stub records into. A property on globalThis rather than a closure variable,
 // because each app.evaluate call runs its own function in that process and shares nothing else.
@@ -158,6 +161,66 @@ test('clicking a link in an assistant reply opens it in the OS browser', async (
   )
   // ...and the app window itself did not navigate. The composer still being on screen is the product-level
   // reading of the same claim: a navigated window loses the whole React app.
+  expect(page.url()).toBe(documentUrlBefore)
+  await expect(page.getByPlaceholder('Message…')).toBeVisible()
+})
+
+// Obsidian `open` links reach the operating system through the SAME window-open path, and this is the
+// half no unit test can show: that Chromium hands a `target="_blank"` click on a custom scheme to
+// setWindowOpenHandler at all, rather than routing it somewhere the handler never sees. The second link
+// in the reply is a forbidden Obsidian action and must render as text, so the bubble holds exactly one
+// anchor. Uses the same main-process stub as the test above, so nothing is launched on the host.
+const OBSIDIAN_URL = 'obsidian://open?vault=Second%20brain&file=Plan'
+const OBSIDIAN_DENIED_URL = 'obsidian://new?vault=Second%20brain&content=x'
+const OBSIDIAN_REPLY_TEXT = `Open [the note](${OBSIDIAN_URL}) but not [the writer](${OBSIDIAN_DENIED_URL}).`
+
+test('clicking an Obsidian open link hands it to the OS, and other Obsidian actions stay text', async ({
+  launchPairedApp
+}) => {
+  const { page, app } = await launchPairedApp({ buildReplyFrames: replyFramesFor(OBSIDIAN_REPLY_TEXT) })
+
+  await page.getByPlaceholder('Message…').fill(TYPED_TEXT)
+  await page.getByRole('button', { name: 'Send' }).click()
+
+  const anchor = page.locator('.bubble__markdown a')
+  await expect(anchor).toHaveAttribute('href', OBSIDIAN_URL, { timeout: STREAM_TIMEOUT_MS })
+  await expect(anchor).toHaveText('the note')
+  // The forbidden action rendered, as text, and produced no second anchor.
+  await expect(page.locator('.bubble__markdown')).toContainText('the writer')
+  await expect(anchor).toHaveCount(1)
+
+  await app.evaluate(({ shell }, key) => {
+    const recorded: string[] = []
+    ;(globalThis as unknown as Record<string, string[]>)[key] = recorded
+    Object.defineProperty(shell, 'openExternal', {
+      value: (url: string) => {
+        recorded.push(url)
+        return Promise.resolve()
+      },
+      configurable: true,
+      writable: true
+    })
+  }, RECORDER_KEY)
+
+  const windowsBefore = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)
+  const documentUrlBefore = page.url()
+
+  await anchor.click()
+
+  await expect
+    .poll(
+      () =>
+        app.evaluate(
+          (_electron, key) => (globalThis as unknown as Record<string, string[]>)[key] ?? [],
+          RECORDER_KEY
+        ),
+      { timeout: OPEN_TIMEOUT_MS }
+    )
+    .toEqual([OBSIDIAN_URL])
+
+  expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(
+    windowsBefore
+  )
   expect(page.url()).toBe(documentUrlBefore)
   await expect(page.getByPlaceholder('Message…')).toBeVisible()
 })

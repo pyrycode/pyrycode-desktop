@@ -39,7 +39,8 @@ test('finished agents reconstruct across pages, attach late children, navigate a
     id: 2, type: 'history_page', ts, in_reply_to: request,
     payload: { entries, cursor, at_start: cursor === '' }
   }))
-  await ask()
+  // The first page answers automatic opening; later pages require trusted reader input.
+  await expect.poll(() => request).toBeDefined()
   reply([user(50), user(49), {
     id: 48, ts: 'finish', type: 'background_task_updated', payload: {
       conversation_id: SEEDED_ROW.id, task_id: 'history-task', status: 'completed', patch: '', summary: '', truncated_fields: null

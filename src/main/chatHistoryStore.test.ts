@@ -204,6 +204,32 @@ describe('protected chat history storage', () => {
   })
 })
 
+it('retains orphan denial correlation across protected writes and fresh reads, rejecting mismatched references', async () => {
+  const h = await setup()
+  const save = (snapshot: unknown) => h.store.execute({ operation: 'replaceTimeline', serverId: 'a', conversationId: 'chat', snapshot })
+  const denial = { toolName: 'Read', decisionReasonType: 'rule', decisionReason: 'denied', message: 'denied',
+    truncatedFields: null, droppedFields: null }
+  const snapshot = { ...timeline(), items: [], display: [
+    { id: 3, kind: 'patch', toolUseId: 'tool', turnId: 'other', denial }
+  ], rowIdentity: { rowKeys: [], nextRowKey: 0 } }
+  expect(await save(snapshot)).toEqual({ status: 'ok' })
+  expect(await h.fresh().execute({ operation: 'readTimeline', serverId: 'a', conversationId: 'chat' }))
+    .toMatchObject({ status: 'stored', snapshot: { items: [], display: [
+      { id: 3, kind: 'patch', toolUseId: 'tool', turnId: 'other', denial }
+    ] } })
+  const referenced = { ...snapshot, items: [{ kind: 'toolCall', turnId: 'other', toolUseId: 'tool',
+    name: 'Read', inputSummary: '', result: null, denial }], rowIdentity: { rowKeys: [0], nextRowKey: 1 },
+    display: [{ ...snapshot.display[0], rowKey: 0 }] }
+  expect(await save(referenced)).toEqual({ status: 'ok' })
+  for (const turnId of ['', 'wrong', undefined]) {
+    expect(await save({ ...referenced, display: [{ ...referenced.display[0], turnId }] }))
+      .toEqual({ status: 'error', code: 'invalid-request' })
+  }
+  expect(await h.fresh().execute({ operation: 'readTimeline', serverId: 'a', conversationId: 'chat' }))
+    .toMatchObject({ status: 'stored', snapshot: { display: [{ turnId: 'other', rowKey: 0 }] } })
+  expect(h.lines.join('\n')).not.toContain('denied')
+})
+
 it('retains exact served receipts and reserved client identities across fresh protected instances', async () => {
   const h = await setup()
   const snapshot = { ...timeline(), coverage: { status: 'received', cursor: 'opaque', atStart: false },

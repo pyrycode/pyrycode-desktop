@@ -7,11 +7,11 @@ failure. The daemon's append-only log supplies one page per request. The rendere
 of the live bridges, keeping the existing [history/live join](conversation-timeline-store-internals.md#the-historylive-join-1225).
 
 Introduced in [#1222](../codebase/1222.md), with payload decoding in #1227 and
-rendering in #1223. The former opening ask and scroll-event walk are now replaced
-by [user-demand paging](chat-history.md#received-state-admission-and-ownership):
-`requestOlderHistory` sends the same payload for first and subsequent pages only
-on qualifying upward input or explicit Retry of a retryable failure. Opening and
-reconnect send no history requests.
+rendering in #1223. The [renderer demand policy](chat-history.md#received-state-admission-and-ownership)
+asks one newest page per owned connected opening/reconnect after read/request
+settlement. `requestOlderHistory` asks backwards on qualifying upward input;
+explicit Retry resends the failed cursor/purpose. Every path shares ownership and
+pending exclusion with `limit: HISTORY_PAGE_LIMIT` (200); opening never fills a range.
 Successful coverage survives interruption; neither a failure's `retryable` flag
 nor page arrival starts an automatic retry.
 
@@ -29,15 +29,18 @@ outbound frame, never a string parsed off the network. This is exactly `pendingC
 argument for `session_settings` ([daemon connection — correlation](daemon-connection-correlation.md)),
 reused here rather than re-derived.
 
-Explicit Retry delegates to `requestOlderHistory` through `historyAskDeps`, so it
-uses the same correlation path with a fresh envelope id. Retained successful
-coverage supplies the failed page's exact opaque cursor (or `''` before any page);
-the page limit remains `0`. Rows, prepend metadata and coverage survive pending
+Explicit Retry delegates to `requestHistoryPage` through `historyAskDeps`, so it
+uses the same correlation path with a fresh envelope id. Failed state supplies the
+captured opaque cursor/purpose, including newest `''` despite held `atStart`;
+legacy failures fall back to backwards coverage. The page limit is `200`.
+Rows, prepend metadata and oldest-end coverage survive pending
 and failed requests. Synchronous pending state discards duplicate clicks and upward
 demand. Success applies the correlated page and clears failure; another failure
 replaces its retryability. See [history status](conversation-shell-composer-status.md#history-page-failure-and-retry)
 for display and activation gates. Fresh upward demand remains valid after either
-failure classification; opening, reconnect and page arrival never request a page.
+failure classification, subject to backwards completion/input guards. Opening and
+reconnect create one newest demand; page arrival only releases existing deferred
+demand and never starts a walk or automatic retry.
 
 ## Where it lives
 
@@ -649,5 +652,5 @@ Fakes over mocks throughout: the existing driver fake drives the frames, exactly
   count, and the two Open Questions both resolving as planned.
 - [Conversation timeline store](conversation-timeline-store.md) — the render consumer:
   `historyPageBridge.ts` independently applies pages and settles failures. Current
-  [user-demand paging](chat-history.md#received-state-admission-and-ownership)
-  replaces the former opening ask; explicit Retry uses the same request path.
+  [newest lifecycle and backwards paging](chat-history.md#received-state-admission-and-ownership)
+  share the request path with explicit Retry.

@@ -4,6 +4,7 @@ import type { ChatHistoryResult } from '../src/shared/chatHistory'
 import { pairAnotherServerFromSettings } from './fixtures/pairingArrival'
 import { readMainProcess } from './fixtures/mainProcessRead'
 import { installUnreadableLocalList } from './fixtures/localListFailure'
+import { HISTORY_ASK_BAND_VIEWPORTS } from '../src/renderer/src/screens/conversation/threadScrollPosition'
 
 const ts = '2026-07-07T12:00:00.000Z'
 const frame = (type: string, payload: Record<string, unknown>, in_reply_to?: number) =>
@@ -12,6 +13,24 @@ const entry = (i: number) => ({ id: i, type: 'message', ts, payload: {
   conversation_id: SEEDED_ROW.id, message_id: `old-${i}`, role: 'user', text: `loaded history ${i}` } })
 const snapshotText = (result: ChatHistoryResult): string => result.status === 'stored' && result.snapshot.kind === 'timeline'
   ? result.snapshot.items.map((i) => 'text' in i ? i.text : '').join('|') : ''
+
+async function pushDeltaThroughPausedFrame(app: PairedApp, turnId: string, seq: number, text: string) {
+  await app.page.evaluate(({ turnId, seq }) => {
+    Object.assign(window, { bufferedDeltaDelivered: false })
+    const off = window.pyry.onDaemonEvent(event => {
+      if (event.type === 'assistantDelta' && event.turnId === turnId && event.seq === seq) {
+        Object.assign(window, { bufferedDeltaDelivered: true })
+        off()
+      }
+    })
+  }, { turnId, seq })
+  await app.daemon.pushFrame(frame('assistant_delta', {
+    conversation_id: SEEDED_ROW.id, turn_id: turnId, seq, text }))
+  await expect.poll(() => app.page.evaluate(() =>
+    (window as typeof window & { bufferedDeltaDelivered: boolean }).bufferedDeltaDelivered)).toBe(true)
+  // Publish on the next frame, keeping the writer's 200ms save timer buffered for removal/close.
+  await app.page.clock.runFor(16)
+}
 
 test('confirmed deletion removes saved content through restart without waiting for a list refresh', async ({ launchPairedApp }) => {
   const commands: string[] = []
@@ -86,7 +105,7 @@ test('confirmed deletion removes saved content through restart without waiting f
     .toMatchObject({ status: 'stored', snapshot: { conversations: [] } })
   expect(snapshotText(await read(second.page, serverId, 'surviving-chat'))).toBe('same-host saved peer')
   expect(snapshotText(await read(second.page, otherId))).toBe('saved before confirmed deletion')
-  expect(commands.filter(c => c === 'request_history')).toEqual([])
+  expect(commands.filter(c => c === 'request_history')).toHaveLength(1)
 })
 
 test('explicit unpair discards buffered history across restart while same-server repair retains it', async ({ launchPairedApp }) => {
@@ -128,14 +147,13 @@ test('explicit unpair discards buffered history across restart while same-server
   await expect(first.page.getByRole('dialog', { name: 'Pair', exact: true })).toHaveCount(0)
   expect(await read(first.page)).toEqual(saved)
   expect(await read(first.page, serverId, 'omitted-chat')).toMatchObject({ status: 'stored' })
-  expect(commands).not.toContain('request_history')
+  expect(commands.filter(c => c === 'request_history')).toHaveLength(1)
   await first.page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
   await expect(first.page.locator('.bubble[data-thread-role="assistant"]')).toContainText('saved before removal')
 
   await first.page.clock.install({ time: new Date('2026-09-13T00:00:00Z') })
   await first.page.clock.pauseAt(new Date('2026-09-13T00:00:01Z'))
-  await first.daemon.pushFrame(frame('assistant_delta', {
-    conversation_id: SEEDED_ROW.id, turn_id: 'before-forget', seq: 1, text: ' buffered stale tail' }))
+  await pushDeltaThroughPausedFrame(first, 'before-forget', 1, ' buffered stale tail')
   await expect(first.page.locator('.bubble[data-thread-role="assistant"]')).toContainText('buffered stale tail')
   expect(await read(first.page)).toEqual(saved)
   await first.page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
@@ -163,7 +181,7 @@ test('explicit unpair discards buffered history across restart while same-server
     conversation_id: 'omitted-chat', turn_id: 'fresh-omitted', seq: 0, text: 'fresh omitted timeline' }))
   await expect.poll(async () => snapshotText(await read(second.page))).toBe('fresh after re-pair')
   await expect.poll(async () => snapshotText(await read(second.page, serverId, 'omitted-chat'))).toBe('fresh omitted timeline')
-  expect(commands).not.toContain('request_history')
+  expect(commands.filter(c => c === 'request_history')).toHaveLength(3)
   await second.app.close()
   const third = await launchPairedApp({}, { reuseUserDataDir: first.userDataDir })
   expect(snapshotText(await read(third.page))).toBe('fresh after re-pair')
@@ -198,20 +216,40 @@ test('receipt saturation still saves a repeated page and later live content acro
   const snapshot = { version: 1 as const, kind: 'timeline' as const, serverId, conversationId: SEEDED_ROW.id,
     items: [{ kind: 'assistantText' as const, turnId: 'retained', text: 'retained assistant' }], prependedRows: 0,
     coverage: { status: 'received' as const, cursor: 'page-499', atStart: false },
+    display: [{ id: 0, kind: 'row' as const, rowKey: -8, joinKey: `assistantDelta ${ts}`,
+      item: { kind: 'assistantText' as const, turnId: 'retained', text: 'retained assistant' } }],
     served: { ids, highestId: 199, receipts }, rowIdentity: { rowKeys: [-8], nextRowKey: 42 } }
   const read = (page: PairedApp['page']) => page.evaluate(({ serverId, conversationId }) =>
     window.pyry.chatHistory({ operation: 'readTimeline', serverId, conversationId }),
   { serverId, conversationId: SEEDED_ROW.id })
+  // Settle the opening page's buffered save before seeding a different protected snapshot.
+  await expect.poll(async () => snapshotText(await read(first.page))).toBe('retained assistant')
   expect(await first.page.evaluate(snapshot => window.pyry.chatHistory({ operation: 'replaceTimeline',
     serverId: snapshot.serverId, conversationId: snapshot.conversationId, snapshot }), snapshot)).toEqual({ status: 'ok' })
   await first.app.close()
   const second = await launchPairedApp({}, { reuseUserDataDir: first.userDataDir })
+  const commands = await observeCommands(second)
+  await second.page.evaluate(({ serverId, conversationId }) => {
+    Object.assign(window, { repeatPageDelivered: false })
+    const off = window.pyry.onDaemonEvent(event => {
+      if (event.type === 'historyPageReceived' && event.serverId === serverId &&
+          event.conversationId === conversationId && event.cursor === 'repeat') {
+        Object.assign(window, { repeatPageDelivered: true })
+        off()
+      }
+    })
+  }, { serverId, conversationId: SEEDED_ROW.id })
   await second.page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
   await expect(second.page.locator('.bubble[data-thread-role="assistant"]')).toHaveCount(1)
   await expect(second.page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled({ timeout: 20_000 })
-  await second.page.locator('.conversation__thread').focus()
-  await second.page.keyboard.press('Home')
-  const expected = { ...snapshot, coverage: { status: 'received', cursor: 'repeat', atStart: false },
+  // Restored rows and enabled Send can precede this receipt; focus creates no history demand.
+  await expect.poll(() => second.page.evaluate(() => (window as typeof window & {
+    repeatPageDelivered: boolean
+  }).repeatPageDelivered), { timeout: 20_000 }).toBe(true)
+  expect((await commands()).filter(command => 'type' in command && command.type === 'requestHistory')).toEqual([
+    { type: 'requestHistory', payload: { conversation_id: SEEDED_ROW.id, cursor: '', limit: 200 } }
+  ])
+  const expected = { ...snapshot, coverage: snapshot.coverage, gaps: [], newestCursor: 'repeat',
     served: { ids, highestId: 199, receipts: [...receipts.slice(1), { ids, cursor: 'repeat', atStart: false }] } }
   await expect.poll(() => read(second.page)).toEqual({ status: 'stored', snapshot: expected })
   await expect(second.page.locator('.bubble[data-thread-role="assistant"]')).toHaveCount(1)
@@ -250,8 +288,6 @@ test('records received content, drains buffered quit, and reads locally after re
   const serverId = servers[0].serverId
   const read = () => page.evaluate(({ serverId, conversationId }) => window.pyry.chatHistory({
     operation: 'readTimeline', serverId, conversationId }), { serverId, conversationId: SEEDED_ROW.id })
-  await page.locator('.conversation__thread').focus()
-  await page.keyboard.press('Home')
   await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveCount(14)
   await expect.poll(async () => {
     await page.locator('.conversation__thread').evaluate((el) => { el.scrollTop = el.scrollTop === 1 ? 2 : 1 })
@@ -345,21 +381,57 @@ test('records received content, drains buffered quit, and reads locally after re
   expect(historyAsks).toBe(2)
 })
 
-test('window close drains the writer and a reopened window can read its saved rows', async ({ launchPairedApp }) => {
-  // macOS only: everywhere else `window-all-closed` quits the app, so there is no window to reopen.
-  test.skip(process.platform !== 'darwin', 'only macOS keeps the app running after its last window closes')
-  const { page, app, daemon, servers } = await launchPairedApp()
-  await page.clock.install({ time: new Date('2026-09-12T12:00:00Z') })
-  await page.clock.pauseAt(new Date('2026-09-12T12:00:01Z'))
-  await daemon.pushFrame(frame('assistant_delta', {
-    conversation_id: SEEDED_ROW.id, turn_id: 'window-turn', seq: 0, text: 'buffered before window close' }))
-  await expect.poll(() => page.locator('.bubble[data-thread-role="assistant"]').textContent()).toContain('buffered before window close')
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close())
-  await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(0)
-  const [reopened] = await Promise.all([app.waitForEvent('window'), app.evaluate(({ app }) => app.emit('activate'))])
-  const result = await reopened.evaluate(({ serverId, conversationId }) => window.pyry.chatHistory({
-    operation: 'readTimeline', serverId, conversationId }), { serverId: servers[0].serverId, conversationId: SEEDED_ROW.id })
-  expect(snapshotText(result)).toBe('buffered before window close')
+test('window close saves accepted deltas before their frame and reopening restores the full reply', async ({ launchPairedApp }) => {
+  const first = await launchPairedApp()
+  const { page, app, servers } = first
+  const serverId = servers[0].serverId
+  const read = (target: typeof page) => target.evaluate(({ serverId, conversationId }) => window.pyry.chatHistory({
+    operation: 'readTimeline', serverId, conversationId }), { serverId, conversationId: SEEDED_ROW.id })
+  const push = (seq: number, text: string) => first.daemon.pushFrame(encodeEnvelope({
+    id: 100 + seq, type: 'assistant_delta', history_entry_id: seq + 1,
+    ts: `2026-10-08T00:00:0${seq}Z`,
+    payload: { conversation_id: SEEDED_ROW.id, turn_id: 'window-turn', seq, text }
+  }))
+  await push(0, 'saved prefix')
+  await expect.poll(async () => snapshotText(await read(page))).toBe('saved prefix')
+  await page.evaluate(() => {
+    const state = { delivered: 0, requested: 0 }
+    Object.assign(window, { heldShutdownFrames: state })
+    window.requestAnimationFrame = () => { state.requested++; return -state.requested }
+    const cancel = window.cancelAnimationFrame.bind(window)
+    window.cancelAnimationFrame = handle => { if (handle >= 0) cancel(handle) }
+    window.pyry.onDaemonEvent(event => {
+      if (event.type === 'assistantDelta' && event.turnId === 'window-turn' && event.seq === 1) state.delivered++
+    })
+  })
+  await push(1, ' accepted tail')
+  const held = () => page.evaluate(() => (window as typeof window & {
+    heldShutdownFrames: { delivered: number; requested: number }
+  }).heldShutdownFrames)
+  await expect.poll(async () => (await held()).delivered).toBe(1)
+  expect((await held()).requested).toBe(1)
+  await expect(page.locator('[data-thread-role="assistant"] .bubble__markdown')).toHaveText('saved prefix')
+  expect(snapshotText(await read(page))).toBe('saved prefix')
+
+  // Close the real window with the accepted tail still held; never release its animation frame.
+  let reopened: typeof page
+  if (process.platform === 'darwin') {
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close())
+    await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(0)
+    ;[reopened] = await Promise.all([app.waitForEvent('window'), app.evaluate(({ app }) => app.emit('activate'))])
+  } else {
+    await Promise.all([app.waitForEvent('close'),
+      app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close())])
+    await first.daemon.close()
+    const second = await launchPairedApp({}, { reuseUserDataDir: first.userDataDir })
+    reopened = second.page
+  }
+  await expect(reopened.locator('section[aria-label="Conversations"]')).toBeVisible()
+  const result = await read(reopened)
+  expect(snapshotText(result)).toBe('saved prefix accepted tail')
+  expect(result).toMatchObject({ status: 'stored', snapshot: { display: [{ id: 1 }, { id: 2 }] } })
+  await reopened.locator('.channel-list__row-open').click()
+  await expect(reopened.locator('[data-thread-role="assistant"] .bubble__markdown')).toHaveText('saved prefix accepted tail')
 })
 
 test('restores a pairing-rejected saved host beside a usable connected host', async ({ launchPairedApp }) => {
@@ -525,14 +597,12 @@ test('saved coverage survives offline restart, reconnect, live receipts and conn
     if (env.type !== 'request_history') return []
     cursors.push(env.payload.cursor)
     return [frame('history_page', { entries: env.payload.cursor === '' ? [entry(1)] : [
-      { id: 99, type: 'assistant_delta', ts, payload: newPayload }, entry(0)],
+      { id: 2, type: 'assistant_delta', ts, payload: newPayload }, entry(0)],
     cursor: env.payload.cursor === '' ? 'saved-cursor' : 'advanced-cursor', at_start: false }, env.id)]
   } }, { onLaunched: observe })
   drop = () => first.forwarder.dropClientLeg()
   await settle(first.page)
-  expect(await count(first.app)).toBe(0)
-  await first.page.locator('.conversation__thread').focus()
-  await first.page.keyboard.press('Home')
+  expect(await count(first.app)).toBe(1)
   await expect(first.page.locator('.bubble')).toHaveCount(1)
   await first.daemon.pushFrame(frame('assistant_delta', {
     conversation_id: SEEDED_ROW.id, turn_id: 'saved-partial', seq: 0, text: 'Restored partial reply' }))
@@ -555,7 +625,7 @@ test('saved coverage survives offline restart, reconnect, live receipts and conn
   await expect(second.page.locator('.bubble__cursor')).toHaveCount(0)
   await expect(second.page.locator('.bubble')).toHaveCount(2)
   await settle(second.page)
-  expect(await count(second.app)).toBe(0)
+  expect(await count(second.app)).toBe(1)
   await second.page.setViewportSize({ width: 800, height: 800 })
   await second.page.screenshot({ path: '/tmp/builder-1395-reconnected-800.png', animations: 'disabled' })
   await first.daemon.pushFrame(frame('assistant_delta', newPayload))
@@ -566,8 +636,8 @@ test('saved coverage survives offline restart, reconnect, live receipts and conn
   await second.page.locator('.conversation__thread').focus()
   await second.page.keyboard.press('Home')
   await expect(second.page.locator('.bubble')).toHaveCount(4)
-  expect(cursors).toEqual(['', 'saved-cursor'])
-  expect(await count(second.app)).toBe(1)
+  expect(cursors).toEqual(['', '', 'saved-cursor'])
+  expect(await count(second.app)).toBe(2)
   await expect.poll(() => read(second.page)).toMatchObject({ status: 'stored', snapshot: {
     prependedRows: 2, coverage: { status: 'received', cursor: 'advanced-cursor', atStart: false } } })
   const saved = await read(second.page)
@@ -606,7 +676,7 @@ test('saved coverage survives offline restart, reconnect, live receipts and conn
   await third.page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
   await expect(third.page.locator('.bubble')).toHaveCount(4)
   await settle(third.page)
-  expect(await count(third.app)).toBe(0)
+  await expect.poll(() => count(third.app)).toBe(1)
   expect(await third.page.locator('.bubble').allTextContents()).toEqual([
     expect.stringContaining('loaded history 0'), expect.stringContaining('loaded history 1'),
     expect.stringContaining('Restored partial reply'), expect.stringContaining('New same-host reply')])
@@ -615,6 +685,104 @@ test('saved coverage survives offline restart, reconnect, live receipts and conn
   await third.page.locator('.conversation__thread').evaluate(el => { el.scrollTop = 0 })
   await third.page.locator('.conversation__thread').focus()
   await third.page.keyboard.press('ArrowUp')
-  await expect.poll(() => count(third.app)).toBe(1)
-  expect(cursors).toEqual(['', 'saved-cursor', 'advanced-cursor'])
+  await expect.poll(() => count(third.app)).toBe(2)
+  expect(cursors).toEqual(['', '', 'saved-cursor', '', 'advanced-cursor'])
+})
+
+test('protected restoration joins partial pages while retaining an expanded tool and content anchor', async ({ launchPairedApp }) => {
+  let request: number | undefined
+  let asks = 0
+  const history = (id: number, type: string, payload: Record<string, unknown>) => ({ id, type, ts: `join-${id}`,
+    payload: { conversation_id: SEEDED_ROW.id, turn_id: 'join', ...payload } })
+  const delta = (id: number, text: string) => history(id, 'assistant_delta', { seq: id, text })
+  const tool = (id: number, tool_use_id: string) => history(id, 'tool_use', { tool_use_id, name: 'Read', input_summary: tool_use_id })
+  const result = (id: number, tool_use_id: string) => history(id, 'tool_result', { tool_use_id, is_error: false, result_summary: `result ${tool_use_id}` })
+  const covering = (entries: ReturnType<typeof history>[]) => {
+    const ids = new Set(entries.map(entry => entry.id))
+    const oldest = Math.min(...ids), newest = Math.max(...ids)
+    // Undrawable envelopes cover consecutive served IDs; gaps are not this join fixture's demand.
+    return [...entries, ...Array.from({ length: newest - oldest + 1 }, (_, i) => oldest + i)
+      .filter(id => !ids.has(id)).map(id => history(id, 'unsupported', {}))].sort((a, b) => b.id - a.id)
+  }
+  const firstEntries = covering([delta(20, 'newer text'), tool(30, 'survivor'), result(31, 'survivor'),
+    entry(40), tool(50, 'pending'), result(61, 'orphan'), ...Array.from({ length: 30 }, (_, i) => entry(100 + i))])
+  const first = await launchPairedApp({ buildReplyFrames: bytes => {
+    const env = decodeEnvelope(bytes)
+    if (env.type === 'list_conversations') return [seedConversationsFrame()]
+    if (env.type !== 'request_history') return []
+    asks++
+    if (env.payload.cursor === '') return [frame('history_page', { entries: firstEntries, cursor: 'older', at_start: false }, env.id)]
+    request = env.id
+    return []
+  } })
+  const serverId = first.servers[0].serverId
+  const read = (page: PairedApp['page']) => page.evaluate(({ serverId, conversationId }) =>
+    window.pyry.chatHistory({ operation: 'readTimeline', serverId, conversationId }), { serverId, conversationId: SEEDED_ROW.id })
+  await expect.poll(async () => {
+    const saved = await read(first.page)
+    return saved.status === 'stored' && saved.snapshot.kind === 'timeline' ? saved.snapshot.display?.length : 0
+  }).toBe(36)
+  await first.app.close()
+  const second = await launchPairedApp({}, { reuseUserDataDir: first.userDataDir })
+  await second.page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
+  const thread = second.page.locator('.conversation__thread')
+  await expect(thread).toContainText('newer text')
+  await expect.poll(() => asks).toBe(2)
+  await expect(thread.locator('[data-history-gap]')).toHaveCount(0)
+  await expect(second.page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled({ timeout: 20_000 })
+  const survivor = thread.locator('.tool-row:not(.tool-run__row)').filter({ has: second.page.locator('.tool-row__summary', { hasText: /^survivor$/ }) })
+  await survivor.locator('.tool-row__chip').click()
+  await expect(survivor.locator('.tool-row__result')).toHaveText('result survivor')
+  const toolNode = await survivor.elementHandle()
+  await thread.focus()
+  // Collapsed metadata can leave tool expansion outside the pre-input history-demand band.
+  // Settle focus/hover geometry, then park inside the measured band without asking for a page.
+  await second.page.mouse.move(0, 0)
+  await second.page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+  const demandOffset = await thread.evaluate((el, band) => {
+    const offset = band * el.clientHeight / 2
+    el.scrollTop = offset
+    return offset
+  }, HISTORY_ASK_BAND_VIEWPORTS)
+  await second.page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+  await expect.poll(() => thread.evaluate(el => el.scrollTop)).toBe(demandOffset)
+  expect(asks).toBe(2)
+  await second.page.keyboard.press('Home')
+  await expect.poll(() => request).toBeDefined()
+  // Home animates: finish its navigation before establishing the held content anchor.
+  await expect.poll(() => thread.evaluate(el => el.scrollTop)).toBe(0)
+  const anchor = thread.locator('.message-row--user').filter({ hasText: 'loaded history 105' })
+  await anchor.evaluate(element => {
+    const thread = element.closest('.conversation__thread')
+    if (thread) thread.scrollTop += element.getBoundingClientRect().top - thread.getBoundingClientRect().top - 250
+  })
+  await second.page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+  const anchorNode = await anchor.elementHandle()
+  const before = (await anchor.boundingBox())!.y
+  expect(await thread.evaluate(el => el.scrollTop)).toBeGreaterThan(0)
+  const joinedEntries = covering([result(61, 'orphan'), tool(60, 'orphan'), result(51, 'pending'), result(31, 'survivor'),
+    tool(30, 'survivor'), delta(20, 'newer text'), delta(10, 'older ')])
+  await first.daemon.pushFrame(frame('history_page', { entries: joinedEntries, cursor: 'repeat', at_start: false }, request))
+  await expect(thread.locator('.bubble[data-thread-role="assistant"]')).toHaveText('older newer text')
+  await expect(survivor.locator('.tool-row__chip')).toHaveAttribute('aria-expanded', 'true')
+  await expect(survivor.locator('.tool-row__result')).toHaveText('result survivor')
+  expect(await toolNode!.evaluate(el => el.isConnected)).toBe(true)
+  expect(await anchorNode!.evaluate(el => el.isConnected)).toBe(true)
+  await expect.poll(async () => (await anchor.boundingBox())!.y).toBeCloseTo(before, 0)
+  await expect.poll(async () => {
+    const saved = await read(second.page)
+    return saved.status === 'stored' && saved.snapshot.kind === 'timeline'
+      ? saved.snapshot.items.filter(item => item.kind === 'toolCall' && item.result !== null).length : 0
+  }).toBe(3)
+  expect(asks).toBe(3)
+  request = undefined
+  await thread.focus()
+  await second.page.keyboard.press('Home')
+  await expect.poll(() => request).toBeDefined()
+  await first.daemon.pushFrame(frame('history_page', { entries: joinedEntries, cursor: '', at_start: true }, request))
+  await expect.poll(async () => {
+    const saved = await read(second.page)
+    return saved.status === 'stored' && saved.snapshot.kind === 'timeline' ? saved.snapshot.coverage : null
+  }).toEqual({ status: 'received', cursor: '', atStart: true })
+  await expect(thread.locator('.bubble[data-thread-role="assistant"]')).toHaveCount(1)
 })

@@ -6,15 +6,57 @@ Received ownership and storage behavior are defined in the parent overview.
 ## Demand and snapshot contracts
 
 [`historyDemand.test.ts`](../../../src/renderer/src/store/historyDemand.test.ts)
-checks unknown/restored/complete coverage, discarded pending demand, failure retry
-from the retained cursor and host isolation. Main connection tests cover abandoned
+checks unknown/restored/complete coverage, discarded pending backwards demand,
+failure retry from the retained cursor and host isolation. Main connection tests cover abandoned
 requests and late replies. [`history-on-open.spec.ts`](../../../e2e/history-on-open.spec.ts)
-now tests explicit demand: its main IPC observer is installed before pairing and
-activation, so zero commands cannot be confused with commands discarded by host
-routing. Genuine wheel/keyboard input is compared with composer navigation,
-synthetic events and programmatic movement, including empty/short threads and
-reconnect. An empty page needs a later received live frame as a receipt barrier;
+counts opening/reconnect asks and leave/reopen deferral behind an owned read and
+original request. Its IPC observer is installed before pairing/activation, so
+counts cannot be confused with commands discarded by host routing. Settle opening
+with backwards paging eligible before rejecting composer/synthetic/downward input,
+resize and programmatic movement; pending exclusion alone would hide broken input
+gates. A separate case withholds opening to prove pending exclusion. Mounted newest
+content appears without upward input and arrival creates no scroll cascade.
+An empty page needs a later received live frame as a receipt barrier;
 row count alone cannot prove that the empty response has settled.
+
+The known-gap scenario in [`history-gaps.spec.ts`](../../../e2e/history-gaps.spec.ts)
+measures eligibility before each fresh ArrowUp, including after protected restoration.
+A successful programmatic park or screenshot can precede a layout pin that moves
+the marker out of view. Its local helper moves the pointer away, focuses the thread,
+and polls for scroll offset, content height and viewport dimensions stable within
+0.1px over three animation frames. It then centers the marker between the measured
+top/input chrome, settles movement, and asserts focused, positive-height marker
+intersection with that unobscured reading area and unchanged request count.
+Older-end `isNearTop` readiness cannot establish gap eligibility. One fresh key
+must add exactly one request with `gap-start`, or the saved `gap-step` after reload;
+retain negative/pending-input, no settlement cascade, failure/Retry, sub-two-pixel
+anchor, expanded-tool and final-content assertions. See
+[controlled cause and counted validation](development-verification-history.md#known-gap-recovery-verification).
+
+The real-daemon gap scenario preserves the same demand contract across a full
+Electron exit: save served/display baseline evidence, write all 205 posts while
+closed, reopen the same protected profile, and ask newest exactly once with the
+empty cursor. Programmatic positioning asks nothing; each fresh focused ArrowUp
+at the visible gap asks once, settlement asks nothing, and the resolved transcript
+places the baseline before all 205 posts in order, each appearing once.
+
+Its scenario-local `asks(): Promise<string[]>` polls only inspection availability
+through `readMainProcess`, bounded at five seconds. `NOT_YET_AVAILABLE` cannot
+satisfy a count assertion; every caller gets an actual successful read, including
+the immediate empty-cursor and no-cascade checks. A count read failing after a key
+does not establish a rejected request or invalid geometry. Never replay the key,
+observer installation or posts to recover inspection; other errors propagate.
+See [observer recovery](e2e-harness-context-recovery.md#tolerating-a-transient-inspection-context-loss-on-reads)
+and [diagnosis and counted live evidence](development-verification-history.md#known-gap-recovery-verification).
+
+[`newestHistoryDemand.test.ts`](../../../src/renderer/src/store/newestHistoryDemand.test.ts)
+covers offline opening, connection edges, navigation/equal-id host isolation,
+duplicate sync, read settlement/cancellation/live supersession, pending deferral,
+held `atStart`, newest failure/Retry and retained coverage/receipts. Page-first
+missing/stored read completion must also be covered after reopening, including a
+failed following refresh: read-first tests alone miss disk results erasing newly
+admitted rows and evidence. Empty/undrawable/legacy settlement retires loading read
+ownership while settled saved presentation survives.
 
 [`chatHistory.test.ts`](../../../src/shared/chatHistory.test.ts) checks row shapes, projection,
 detached inputs, limits and coordinates. Read-ID cases round-trip zero/safe maximum, restore older
@@ -27,7 +69,8 @@ held overlapping writes/removals and preservation after read/write/delete failur
 These tests exercise the storage seams without proving the OS keychain adapter.
 [`chatHistoryHandler.test.ts`](../../../src/main/chatHistoryHandler.test.ts)
 covers membership, rejected requests before record access, ordering and contained
-failures for all six operations.
+failures for the original six operations; the daemon-cache tests below cover the
+additive `readThread`/`replaceThread` operations.
 
 ## Recording and removal
 
@@ -71,7 +114,62 @@ five seconds, so a transient loss of Electron's inspection context does not redd
 reads](e2e-harness-context-recovery.md#tolerating-a-transient-inspection-context-loss-on-reads)); the counting
 wrapper's own install stays a single un-retried call.
 
+[`daemonItemCache.test.ts`](../../../src/renderer/src/store/daemonItemCache.test.ts)
+injects the optional thread source into the same writer. It holds an in-flight save
+while newer snapshots and an epoch replacement arrive, then checks the final owned
+snapshot and the equal-id peer host. Hydration schedules no write; subsequent owned
+facts remain saveable. Confirmation during buffered/held saves clears the held
+conversation, suppresses later captures and queues removal behind admitted writes.
+Successful/failed unpair cases exercise the pause, off-screen scopes, delayed reads,
+other-host preservation and fresh same-host reuse rather than restarting away
+ownership bugs. `stop()` must detach the thread observer and finish its owned work.
+
+[`daemonItemHistory.test.ts`](../../../src/main/daemonItemHistory.test.ts) uses the
+existing protected filesystem seam and fresh storage services to check coexistence
+of legacy/daemon records, equal conversation/item ids on two hosts, and ordered
+removal of both formats plus the saved-list entry. Main-handler unpair tests reject
+stale reads/writes, remove off-screen records and allow fresh same-host requests.
+Malformed IPC/disk metadata, bounded inert JSON, missing optional availability and
+unavailable encryption cases check classified failures and preservation of data.
+Arrival-order rejection fixtures include missing, duplicate, unknown and invalid
+ids; diagnostics remain content-free and inert keys cannot affect object prototypes.
+
 ## Restoration
+
+Daemon restoration uses `readSavedTimeline({ threads, ... })` and `readThread`,
+separately from the legacy holder path below. `daemonItemCache.test.ts` covers
+stored/missing/error/rejected reads settling after live admission, cancellation,
+replacement reads, epoch-string reuse and conversation/host/global cleanup. Its
+incomplete/repair fixture restores checkpoint 100, applied version 300 and unfinished
+version 250: a certificate through 200 clears repair but leaves later live success
+fenced until certification covers 250. A completed snapshot's restoration retains
+its exact ranges and older availability without adding coverage.
+
+[`daemon-item-cache.test.ts`](../../../e2e/daemon-item-cache.test.ts) is a Node Vitest
+integration test, despite its directory. It connects the real writer to protected
+temporary-file storage, flushes or stops the writer, constructs fresh storage and thread
+store instances, and hydrates through the local reader without Electron or a daemon.
+Both completion variants compare snapshots across restart, preserve hidden items,
+patch nulls and inert own keys, and apply later live changes on one of two equal-id
+hosts. The test encryption backend proves the protected persistence seam, not the
+OS keychain adapter. Keeping cross-process imports here avoids pulling renderer
+implementation into the composite Node production project.
+
+Permanent restart regressions in that file cover two traps that a same-instance
+read misses. `saves live success after abandoning a batch already covered through
+%s` uses both 50 and 100 beneath/equal to checkpoint 100, checks that revision and
+checkpoint 200 reach fresh storage, then verifies live progress after hydration.
+`restart preserves first-arrival ties after order changes and clears` compares
+restored and uninterrupted stores after numeric ties and null-cleared orders.
+The renderer test `restores snapshots without arrival metadata using their supplied
+held order` covers the older-snapshot fallback. These fixtures complement unfinished
+progress tests; accepting covered values must not weaken fences above checkpoint.
+
+These supplied-state tests cover cache preparation and local hydration. Production
+thread subscriptions, capability activation, actual offline screen display and
+reconnect from the saved complete checkpoint through #1902 remain
+[#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908). Existing legacy
+browser/liveness proofs below do not establish that daemon-item integration.
 
 [`savedTimelineRestorer.test.ts`](../../../src/renderer/src/store/savedTimelineRestorer.test.ts)
 covers explicit admission, row identity metadata and coverage, equal-id host
@@ -103,7 +201,7 @@ must schedule no save, while a later received list must still record.
 [`received-read-marks.spec.ts`](../../../e2e/received-read-marks.spec.ts) separates immediate mounted
 dot/badge clearing from persistence: after host A's push, saved host marks remain the received
 list values `[0, 2]`. A store update alone cannot prove a saved mark. See
-[counted verifier evidence](development-verification.md#what-each-test-tier-proves).
+[counted verifier evidence](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves).
 
 ## Browser persistence and lifecycle
 
@@ -115,7 +213,7 @@ the first host, then reopens its saved chat offline and quotes only its original
 reply into that host's draft. Both saved timelines remain independent afterward.
 Draft isolation and ordinary saved/offline reply tests remain enabled: either
 could pass while received persistence is broken, so neither substitutes for this
-regression. See [counted fake-transport evidence](development-verification.md#equal-id-received-history).
+regression. See [counted fake-transport evidence](development-verification-what-each-test-tier-proves.md#equal-id-received-history).
 
 [`chat-history-recording.spec.ts`](../../../e2e/chat-history-recording.spec.ts)
 exercises the mounted production observer and handler, real composer cancellation,
@@ -141,15 +239,43 @@ as their receipt barrier; saved rows can return without a status replay, so row
 count alone is not that barrier. The test encryption backend does not prove the OS
 keychain adapter.
 
+Repeated-page persistence needs separate receipt and save barriers. Restored rows
+and enabled Send can precede the newest reply; focusing the thread creates no
+history demand. Install `observeCommands` and a `historyPageReceived` listener
+before opening the saved chat, match the host/conversation/expected cursor, then
+await delivery before polling the actual protected `readTimeline` snapshot. The
+receipt is not proof of the writer's buffered save. Keep immediate fake replies
+so synchronization does not remove restoration-overlap coverage; a held reply is
+useful for diagnosis, not a replacement for that timing.
+
+The receipt-saturation scenario keeps 500 receipts × 200 ids, evicts only `page-0`
+for `repeat`, and preserves oldest-end coverage and the single assistant's key
+`-8`. It verifies exactly one newest command (`cursor: ''`, limit 200), retains the
+five-second full saved-snapshot predicate after the separate 20-second receipt
+wait, then saves later live content at key `42` with next key `43` and checks
+equality after a third fresh Electron launch. See
+[cause and counted validation](development-verification-history.md#served-page-persistence-verification).
+
 ## History continuity and overlap
 
 The continuity scenario starts with incomplete saved coverage, restarts offline,
-reads, reconnects and receives new same-host text, then demands one older page with
-the saved cursor. A connected restart checks ordered older/restored/new content and
-the advanced coverage, with no duplicate rows on reopening. Holding the local read
-and observing commands before host routing proves opening, pending demand, settlement
-and reconnect send zero history requests; only fresh qualifying input requests a page.
-Overlap fixtures must place the live overlap at the newest end of the newest-first
+reads, then reconnects and asks newest once while retaining saved partial-assistant
+presentation. Later same-host live text resumes normal rendering; trusted upward
+input asks older with the saved cursor. A connected restart checks ordered content,
+retained coverage and no duplicate rows. Holding the local read proves zero asks
+before settlement, then exactly one newest ask without further reader input.
+
+[`real-daemon-history-on-open.spec.ts`](../../../e2e/real-daemon-history-on-open.spec.ts)
+saves a baseline with served/display evidence, fully exits Electron through the
+shared protected-profile relaunch fixture, and writes 205 unique `pyry channel post`
+entries only in its awaited while-closed callback. Reopening asks newest once
+without upward input and exposes the gap. Fresh focused input fills it under the
+[demand and observation contract](#demand-and-snapshot-contracts), retaining the
+baseline and all posts exactly once in order. `spawnClaude: false` proves real
+daemon storage/transport, not a Claude turn or production-relay delivery; see
+[counted live acceptance](live-e2e-runbook.md#current-real-claude-gate-state).
+
+Legacy row-fold overlap fixtures must place the live overlap at the newest end of the newest-first
 page. Putting an unmatched older entry first exercises the intentional
 stop-at-first-unmatched rule in `withoutLiveEntries`, producing a duplicate instead
 of testing overlap suppression. A `messageReceived` entry is the one exception to

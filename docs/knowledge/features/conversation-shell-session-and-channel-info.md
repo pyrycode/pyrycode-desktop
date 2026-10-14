@@ -246,7 +246,7 @@ sheet, then waits for a later conversation-list frame to become visible as a del
 ordering prevents a sheet-mounted listener from accidentally passing the pre-open retention check.
 The fake-transport test also observes updates while open and switches both ways between two
 conversations. Store and cleanup tests cover complete replacement, isolation, hostile Map keys and
-pairing reset. See [verification boundaries](development-verification.md#what-each-test-tier-proves).
+pairing reset. See [verification boundaries](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves).
 
 ### Session running cost, as Claude's estimate ([#1567](https://github.com/pyrycode/pyrycode-desktop/issues/1567))
 

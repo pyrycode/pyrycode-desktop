@@ -243,7 +243,14 @@ join(app.getPath('userData'), ATTACHMENT_OPEN_DIR_NAME)`. `attachmentBytesListen
 Image activation in `BubbleAttachmentImage.tsx` sends the attachment ID and
 `attachmentAskTarget` owner from its click handler. It still does not subscribe to
 open outcomes. File activation in `downloadAttachment.ts` subscribes before its
-local-only ask so only `unavailable` proceeds to retrieval/save.
+local-only ask so only `unavailable` proceeds to retrieval/save. It captures conversation and optional
+host once at activation, validates every supplied retrieval identifier before subscribing, and reuses
+that scope in the fallback even if selection changes. Supplied `ThreadItemsView` rows bind these
+getters to the snapshot host/conversation. The retrieval listener uses
+`matchesAttachmentRetrieval` and ignores same-ID outcomes from another host or conversation;
+unscoped callers retain legacy event compatibility. Only its matching `completed` asks
+`saveAttachment({ attachmentId, filename })`. Local-open outcomes and save/byte-read contracts
+remain attachment-ID-addressed; scoped retrieval does not change their correlation or the disk layout.
 
 ## State and concurrency
 
@@ -317,7 +324,9 @@ Unit tests use temporary directories and an injected `open` seam. `localAttachme
 checks repeat opens of spaced file/image names, immutable owner/ID matching, fresh-process
 absence, unavailable originals, OS refusal and content-free outcomes/logs.
 `downloadAttachment.test.ts` checks original-first sequencing and fallback only on
-`unavailable`.
+`unavailable`, plus captured host/conversation across selection changes, mismatched retrieval
+terminals and legacy compatibility. See [retrieval testing](attachment-retrieval.md#testing)
+for the enabled two-host production regression and delayed-disconnect evidence.
 
 `e2e/sent-local-attachment.spec.ts` drives actual picker and native path-backed drop
 uploads through fake transport, sends the attachment, then records OS-open calls.

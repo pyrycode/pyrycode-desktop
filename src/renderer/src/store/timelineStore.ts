@@ -9,7 +9,7 @@
 // structure — wrapping a real reducer + `dispatch` rather than `runConfigStore`'s single setter,
 // because there is a real event set (`ThreadEvent`) to reduce. No diagnostics observer: the `#134`
 // instrumentation seam is session-only, and a speculative observer would defend an unobserved need.
-import { createStore } from 'zustand/vanilla'
+import { createPublishedTimelineStore } from './timelinePublication'
 import { useStore } from 'zustand'
 import {
   reduceTimeline,
@@ -31,7 +31,7 @@ export type TimelineStore = TimelineState & {
  * observer param (the timeline store is not instrumented).
  */
 export function createTimelineStore(init: TimelineState = initialTimelineState) {
-  return createStore<TimelineStore>((set) => ({
+  return createPublishedTimelineStore<TimelineStore>((set) => ({
     ...init,
     dispatch: (event) => set((s) => reduceTimeline(s, event))
   }))

@@ -1287,7 +1287,7 @@ describe('createDaemonConnection — reconnect (connect-on-pair, #82)', () => {
     expect(emitted(ctx.sink).length).toBe(beforeEvents)
   })
 
-  it('restarts the fresh session envelope numbering at 2', async () => {
+  it('keeps app envelope IDs unique across fresh sessions', async () => {
     const ctx = await reachConnected()
     ctx.connection.send({ conversation_id: 'c1', message_id: 'm1', text: 'first' })
     expect(decodeEnvelope(ctx.drivers[0].sent[0]).id).toBe(2)
@@ -1298,7 +1298,7 @@ describe('createDaemonConnection — reconnect (connect-on-pair, #82)', () => {
 
     ctx.connection.send({ conversation_id: 'c1', message_id: 'm2', text: 'second' })
     expect(ctx.drivers[1].sent).toHaveLength(1)
-    expect(decodeEnvelope(ctx.drivers[1].sent[0]).id).toBe(2)
+    expect(decodeEnvelope(ctx.drivers[1].sent[0]).id).toBe(3)
   })
 
   it('never logs, and no event carries the token or keys, across a reconnect', async () => {
@@ -2998,7 +2998,7 @@ describe('createDaemonConnection — context_usage stream (#1419)', () => {
         id: 50, type: 'context_usage', ts: FIXED_TS, in_reply_to: requestId,
         payload: { ...USAGE, ...extra }
       }) })
-      expect(emitted(sink).slice(before)).toEqual([CARRIED])
+      expect(emitted(sink).slice(before)).toEqual([{ ...CARRIED, inReplyTo: requestId }])
     }
   )
 
@@ -4400,7 +4400,7 @@ describe('createDaemonConnection — session_settings_updated correlation (#261,
     })
 
     expect(emitted(sink).slice(before)).toEqual([
-      { type: 'sessionSettingsUpdated', sessionId: 'sess-2', changeId: 'change-1' }
+      { type: 'sessionSettingsUpdated', sessionId: 'sess-2', changeId: 'change-1', inReplyTo: id }
     ])
   })
 
@@ -4420,7 +4420,7 @@ describe('createDaemonConnection — session_settings_updated correlation (#261,
     expect(emitted(sink).slice(before)).toEqual([])
   })
 
-  it('emits a fresh literal — only type + sessionId + changeId cross IPC, never in_reply_to or a spurious echoed key (AC2 no-echo)', async () => {
+  it('emits named fields with supplied envelope correlation, ignoring spurious payload keys', async () => {
     const { connection, sink, drivers } = await connected()
 
     connection.setSessionSettings({ session_id: 'sess-3' }, 'change-1')
@@ -4428,7 +4428,7 @@ describe('createDaemonConnection — session_settings_updated correlation (#261,
     const before = emitted(sink).length
 
     // A hostile frame echoing a spurious model / in_reply_to onto the PAYLOAD must not ride the arm;
-    // the emitted event carries the CLIENT-minted changeId, never the wire in_reply_to routing id.
+    // the event keeps the client changeId and envelope correlation, ignoring payload correlation.
     drivers[0].emit({
       type: 'message',
       plaintext: sessionSettingsUpdatedPlaintext(
@@ -4439,12 +4439,12 @@ describe('createDaemonConnection — session_settings_updated correlation (#261,
 
     const events = emitted(sink).slice(before)
     expect(events).toEqual([
-      { type: 'sessionSettingsUpdated', sessionId: 'sess-3', changeId: 'change-1' }
+      { type: 'sessionSettingsUpdated', sessionId: 'sess-3', changeId: 'change-1', inReplyTo: id }
     ])
-    // Exactly the three keys — no in_reply_to / inReplyTo, no echoed key. Load-bearing regression pin.
-    expect(Object.keys(events[0]).sort()).toEqual(['changeId', 'sessionId', 'type'])
+    // Only named fields and supplied envelope correlation cross IPC; payload extras do not.
+    expect(Object.keys(events[0]).sort()).toEqual(['changeId', 'inReplyTo', 'sessionId', 'type'])
     const serialized = JSON.stringify(events)
-    for (const dropped of ['in_reply_to', 'inReplyTo', 'model', 'claude-opus-4-8']) {
+    for (const dropped of ['in_reply_to', 'model', 'claude-opus-4-8']) {
       expect(serialized).not.toContain(dropped)
     }
   })
@@ -4470,8 +4470,8 @@ describe('createDaemonConnection — session_settings_updated correlation (#261,
     })
 
     expect(emitted(sink).slice(before)).toEqual([
-      { type: 'sessionSettingsUpdated', sessionId: 'sess-x', changeId: 'change-2' },
-      { type: 'sessionSettingsUpdated', sessionId: 'sess-x', changeId: 'change-1' }
+      { type: 'sessionSettingsUpdated', sessionId: 'sess-x', changeId: 'change-2', inReplyTo: id2 },
+      { type: 'sessionSettingsUpdated', sessionId: 'sess-x', changeId: 'change-1', inReplyTo: id1 }
     ])
   })
 
@@ -6617,7 +6617,7 @@ describe('createDaemonConnection — setSessionSettings (outbound set_session_se
       })
       expect(emitted(sink).slice(beforeEvents)).toEqual([
         rejection,
-        { type: 'sessionSettingsUpdated', sessionId: 'sess-a', changeId: 'successful-change' }
+        { type: 'sessionSettingsUpdated', sessionId: 'sess-a', changeId: 'successful-change', inReplyTo: id }
       ])
       expect(JSON.stringify(records)).not.toMatch(/private-|sess-a|successful-change/)
       connection.stop()
@@ -8382,7 +8382,7 @@ describe('createDaemonConnection — requestMcpStatus (#1578)', () => {
     ctx.drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({ id: 50, type: 'mcp_status', ts: FIXED_TS,
       in_reply_to: lastSentId(ctx), payload: { conversation_id: 'conv-42', servers: SERVERS, dropped_servers: 0 } }) })
     expect(emitted(ctx.sink).slice(before)).toEqual([
-      { type: 'mcpStatus', conversationId: 'conv-42', servers: SERVERS, droppedServers: 0 }
+      { type: 'mcpStatus', conversationId: 'conv-42', servers: SERVERS, droppedServers: 0, inReplyTo: lastSentId(ctx) }
     ])
     ctx.connection.stop()
   })
@@ -8591,7 +8591,7 @@ describe('createDaemonConnection — reconnectMcpServer (#1582)', () => {
     ctx.drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({ id: 50, type: 'mcp_status', ts: FIXED_TS,
       in_reply_to: id, payload: { conversation_id: 'conv-42', servers: [], dropped_servers: 0 } }) })
     expect(emitted(ctx.sink).slice(before)).toEqual([
-      { type: 'mcpStatus', conversationId: 'conv-42', servers: [], droppedServers: 0 }
+      { type: 'mcpStatus', conversationId: 'conv-42', servers: [], droppedServers: 0, inReplyTo: id }
     ])
     ctx.drivers[0].emit({ type: 'message', plaintext: refusal('mcp_actuation.refused', id + 1) })
     expect(rejections(ctx.sink)).toEqual([])
@@ -8786,7 +8786,7 @@ describe('createDaemonConnection — toggleMcpServer (#1586)', () => {
     ctx.drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({ id: 50, type: 'mcp_status', ts: FIXED_TS,
       in_reply_to: id, payload: { conversation_id: 'conv-42', servers: [], dropped_servers: 0 } }) })
     expect(emitted(ctx.sink).slice(before)).toEqual([
-      { type: 'mcpStatus', conversationId: 'conv-42', servers: [], droppedServers: 0 }
+      { type: 'mcpStatus', conversationId: 'conv-42', servers: [], droppedServers: 0, inReplyTo: id }
     ])
     ctx.drivers[0].emit({ type: 'message', plaintext: refusal('mcp_actuation.refused', id + 1) })
     expect(mcpRejections(ctx.sink)).toEqual([])
@@ -9358,7 +9358,7 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
 
     const events = emitted(sink).filter((e) => e.type === 'runConfigReceived')
     expect(events).toEqual([
-      { ...BASE_EVENT, slashCommands: flag, mcpServers: flag, contextUsageDetail: flag, midTurnInput: flag }
+      { ...BASE_EVENT, inReplyTo: replyTo, slashCommands: flag, mcpServers: flag, contextUsageDetail: flag, midTurnInput: flag }
     ])
     expect(events[0]).not.toHaveProperty('mid_turn_input')
     expect(events[0]).not.toHaveProperty('capabilities')
@@ -9372,7 +9372,7 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
     drivers[0].emit({ type: 'message', plaintext: sessionSettingsPlaintext(RUN_CONFIG, replyTo) })
 
     const event = emitted(sink).find((e) => e.type === 'runConfigReceived')
-    expect(event).toEqual(BASE_EVENT)
+    expect(event).toEqual({ ...BASE_EVENT, inReplyTo: replyTo })
     if (event?.type !== 'runConfigReceived') throw new Error('expected runConfigReceived')
     expect(event.slashCommands).toBeUndefined()
     expect(event.mcpServers).toBeUndefined()
@@ -9439,6 +9439,7 @@ describe('createDaemonConnection — requestSessionSettings (run-config request/
     expect(emitted(sink).filter((e) => e.type === 'runConfigReceived')).toEqual([
       {
         type: 'runConfigReceived',
+        inReplyTo: replyTo,
         conversationId: CONV,
         sessionId: 'sess-a',
         model: 'claude-opus-4-8',
@@ -12785,6 +12786,26 @@ describe('conversation mute write results (#1595)', () => {
     expect(results(sink)).toEqual([])
     connection.stop()
   })
+})
+
+it('publishes an allowlisted durable read target and forwards direct replay identity', async () => {
+  const { connection, drivers, sink } = build({ serverId: 'a' })
+  connection.start(); await tick()
+  drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+  connection.markConversationRead?.({ conversation_id: 'conv-42', up_to: 0 })
+  expect(decodeEnvelope(drivers[0].sent[0])).toMatchObject({ type: 'mark_conversation_read', payload: { conversation_id: 'conv-42', up_to: 0 } })
+  drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({ id: 900, event_id: 700,
+    history_entry_id: 12, type: 'assistant_delta', ts: FIXED_TS,
+    payload: { conversation_id: 'conv-42', turn_id: 't', seq: 0, text: 'synthetic' } }) })
+  expect(emitted(sink).at(-1)).toMatchObject({ type: 'assistantDelta', historyEntryId: 12 })
+  connection.stop()
+  connection.markConversationRead?.({ conversation_id: 'conv-42', up_to: 2 })
+  expect(drivers[0].sent).toHaveLength(1)
+  const failed = build({ throwOnSend: true })
+  failed.connection.start(); await tick()
+  failed.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+  expect(() => failed.connection.markConversationRead?.({ conversation_id: 'conv-42', up_to: 2 })).not.toThrow()
+  failed.connection.stop()
 })
 
 /** The envelope ids of every `read_workspace_file` a driver has been handed, in send order. */

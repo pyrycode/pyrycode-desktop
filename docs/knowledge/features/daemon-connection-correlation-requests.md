@@ -236,10 +236,12 @@ would misattribute the same way it would for `pendingSettings`.
   === undefined` short-circuits before the map lookup (no event), a `pendingConfigRequests.get` miss
   short-circuits the same way (a stale reply from a cleared connection, a duplicate of an
   already-matched reply, or a daemon forging a snapshot for a request never sent), and a hit `delete`s
-  the entry and emits `runConfigReceived` carrying the recorded conversation id — never the numeric
-  `in_reply_to` itself, which stops here. Both silent branches: the only values a diagnostic could carry
-  are the conversation id and the wire routing id, and neither may reach a sink (`emitDaemonEvent` is
-  log-free by construction, matching the decode-side `session_settings` log's own content-free pin).
+  the entry and emits `runConfigReceived` carrying the recorded conversation id. The per-frame
+  [live-state metadata forwarding](daemon-event-channel.md#session-scoped-live-state) also carries
+  supplied `in_reply_to` as `inReplyTo` and envelope session provenance; neither replaces the map's
+  attribution or settlement. A family clear returns before this lookup and leaves the request pending
+  for its ordinary reply. Conversation and wire routing IDs never enter diagnostics
+  (`emitDaemonEvent` is log-free, matching the decode-side `session_settings` log's content-free pin).
 - **Reset — `dial()` clears the map next to `pendingSettings.clear()`.** A reconnect abandons every
   outstanding read request, which is what makes `nextEnvelopeId`'s restart-at-2 recycling safe for this
   store the same way it is for the other four.

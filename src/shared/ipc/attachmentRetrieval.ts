@@ -57,8 +57,8 @@ export const ATTACHMENT_RETRIEVAL_EVENT_CHANNEL = 'pyry:attachment-retrieval-eve
 export const MAX_RETRIEVAL_IDENTIFIER_LENGTH = 256
 
 /**
- * What the window asks for: a conversation and an attachment, AND NOTHING ELSE. No path, no directory
- * and no filename crosses in either direction — the attachment directory is computed at the
+ * What the window asks for: a conversation, an attachment and optional client-local host scope.
+ * No path, directory or filename crosses in either direction — the attachment directory is computed at the
  * composition root from Electron's per-user app-data location, never from anything the window sent.
  *
  * camelCase, not the wire's snake_case, because this is a client-internal IPC contract rather than a
@@ -67,6 +67,8 @@ export const MAX_RETRIEVAL_IDENTIFIER_LENGTH = 256
  * even when the ask carries extra ones.
  */
 export interface AttachmentRetrievalRequest {
+  /** Optional paired host; never forwarded onto the wire. */
+  serverId?: string
   /** The conversation whose attachment is wanted. A LOOKUP KEY the daemon validates against its own
    *  registry, never authorization — authorization on this wire is pairing, enforced structurally at
    *  the Noise handshake. It goes to the daemon and NEVER touches a local path on this side, which is
@@ -110,8 +112,11 @@ export interface AttachmentRetrievalRequest {
 export function isAttachmentRetrievalRequest(value: unknown): value is AttachmentRetrievalRequest {
   if (typeof value !== 'object' || value === null) return false
   if (!('conversationId' in value) || !('attachmentId' in value)) return false
-  const { conversationId, attachmentId } = value as Record<string, unknown>
+  const { conversationId, attachmentId } = value
+  const serverId = 'serverId' in value ? value.serverId : undefined
   return (
+    (serverId === undefined || (typeof serverId === 'string' && serverId.length > 0 &&
+      serverId.length <= MAX_RETRIEVAL_IDENTIFIER_LENGTH)) &&
     typeof conversationId === 'string' &&
     conversationId.length > 0 &&
     conversationId.length <= MAX_RETRIEVAL_IDENTIFIER_LENGTH &&
@@ -201,12 +206,18 @@ export type AttachmentRetrievalFailure =
  * the field `debugBundleSaved` carries and this event must not — `attachmentStore`'s docblock is
  * explicit that the path is a return value for #814/#866/#867 to consume, not something to forward.
  *
- * `attachmentId` is the correlation key, and it is the window's OWN value coming back — never a
- * wire-supplied one. It is what lets a window tell two concurrent retrievals apart, and it is echoed
- * rather than replaced by a minted id precisely because the window named it and can match on it.
+ * Conversation, attachment and optional requested server scope are the caller's own values echoed
+ * for terminal matching. They carry no daemon response text. Production always emits conversationId;
+ * its optional type retains legacy unscoped event compatibility for unscoped consumers.
  */
 export type AttachmentRetrievalEvent =
   /** The file is on this machine. Where it lives is deliberately not said. */
-  | { type: 'completed'; attachmentId: string }
+  | { type: 'completed'; attachmentId: string; conversationId?: string; serverId?: string }
   /** The retrieval ended without the file. */
-  | { type: 'failed'; attachmentId: string; reason: AttachmentRetrievalFailure }
+  | { type: 'failed'; attachmentId: string; conversationId?: string; serverId?: string; reason: AttachmentRetrievalFailure }
+
+/** Match captured caller scope; legacy fixtures without conversation scope serve only legacy asks. */
+export function matchesAttachmentRetrieval(event: AttachmentRetrievalEvent, ask: AttachmentRetrievalRequest): boolean {
+  return event.attachmentId === ask.attachmentId && event.serverId === ask.serverId &&
+    (event.conversationId === ask.conversationId || (ask.serverId === undefined && event.conversationId === undefined))
+}

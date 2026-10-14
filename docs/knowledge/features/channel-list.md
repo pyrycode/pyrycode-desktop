@@ -361,6 +361,36 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
 `channels.css` header comment was updated at #670 to record the new parent rather than leave the old
 "not a flex item" claim standing.
 
+#### Row control hover
+
+Each edit pen, section-create plus and Save-as-channel chevron paints its own
+`--color-state-hover` rectangle with `--radius-xs` corners when the control itself
+is hovered. Row hover alone reveals the glyph without this layer; keyboard-only
+focus retains the existing outline and name pill without painting the layer.
+The layer extends 4px beyond each side of the SVG box: 20px square for the 12px
+conversation pens/chevron, 22px for the 14px host/workspace pens and 24px for
+the 16px pluses.
+
+The shared `:hover::before` rule covers `.channel-list__host-edit`,
+`.channel-list__workspace-edit`, `.channel-list__rename`, `.channel-list__chat-edit`,
+`.channel-list__host-add`, `.channel-list__workspace-create`,
+`.channel-list__section-create` and `.channel-list__save`. Host-add and workspace
+controls remain retained CSS surfaces without sidebar entry points.
+The absolutely positioned, non-interactive layer sits over the row fill and below
+the relatively positioned SVG. Sizing the paint from the larger hit box would
+give the wrong glyph clearance; changing button padding or dimensions would
+move existing geometry. Keep the centring transform on the pseudo-element:
+transforming the button would trap its [fixed name pill](channel-list-control-name-pill.md)
+in a new containing block.
+
+[`e2e/sidebar-control-hover.spec.ts`](../../../e2e/sidebar-control-hover.spec.ts)
+checks layer tokens, glyph-relative clearance and unchanged row/button/SVG boxes
+at 1280×800 and 800×600, plus keyboard-only focus and pointer-following pills.
+It applies the three dormant classes to equivalent existing controls only inside
+the test; that proves their CSS treatment, not a restored action. Static markup
+cannot establish hover paint or layout stability. See the
+[hover design](../../specs/architecture/1865-sidebar-control-hover.md).
+
 ## Edge cases and limitations
 
 - Archived rows are excluded by `partitionActive` before either section is grouped.

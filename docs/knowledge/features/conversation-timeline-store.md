@@ -5,6 +5,11 @@ conversation timelines. The [keyed holder](conversation-timeline-holder.md) reta
 each conversation's rows and transient state; it is the chat pane's render source.
 The legacy flat store remains dual-written.
 
+The separate [retained daemon item store](thread-item-store.md) holds decoded items
+by host/conversation/epoch and daemon id/revision for sync/cache consumers. Its
+exact-base updates and certified checkpoints do not use this event reconstruction
+or its receipt/history joins; production consumer migration remains with #1908.
+
 ## Where the detail lives
 
 - [Internals](conversation-timeline-store-internals.md): reducers, translation, subscriptions and history joins.
@@ -132,9 +137,13 @@ Live and history `assistant_delta` share
 as `parentToolUseId`, which forwards it onto `ThreadEvent.assistantDelta` and then
 `ThreadItem.assistantText`, without consulting the current agent roster.
 
-The reducer coalesces only adjacent assistant deltas with equal turn **and** parent,
-keeping the first stamp. Main-thread text and two helpers sharing a turn must not
-merge into one bubble. Stored rows remain in arrival order; loaded Agent/Task calls,
+The reducer coalesces assistant deltas with equal turn **and** parent, keeping the
+first stamp. Attributed text requires adjacency; main-thread text can join across
+nonempty-parent tool calls, including completed calls. History contribution
+admission keeps that reply joinable when live overlap suppresses a call, while
+preserving held row positions and keys; see [history joins](conversation-timeline-store-internals.md#the-page-half--the-join).
+Main-thread text and two helpers sharing a turn must not merge into one bubble.
+Stored rows remain in arrival order; loaded Agent/Task calls,
 including completed calls, own matching text in the
 [display projection](conversation-shell-tool-row-header-groups.md#subagent-tool-groups).
 An absent owner or a matching ordinary tool leaves the reply top-level. Prepending
@@ -243,15 +252,18 @@ See [configuration and usage](conversation-timeline-store-usage.md#configuration
   symbol checked with host and loading status, survives notice replacement, client
   consumption and host error clearing. Completion/failure uses current sidecars,
   preventing a cleared notice from returning or a read from remaining loading forever.
-  Live content, local sends, cancellation, eviction and host replacement still invalidate
-  the request; settled handles cannot settle again. Neither owner nor notice is saved.
+  Live content, successful owned page admission, local sends, cancellation, eviction
+  and host replacement invalidate the disk read; settled handles cannot settle again.
+  Read start/settlement/cancellation preserves an independently pending same-host
+  history request. Settled saved presentation survives newest refreshes. Neither
+  owner nor notice is saved.
   See [local admission](conversation-timeline-holder.md#local-timeline-admission).
 - **Navigation cleanup must distinguish departure from StrictMode effect replay.**
   The overlay keys cleanup by conversation, defers consumption to a microtask and
   checks its mounted-conversation ref. Immediate setup cancels consumption; actual
   navigation consumes the departed notice without clearing a replacement while open.
   Client clearing preserves host/read ownership and creates no absent slice. See
-  [development-runtime proof](development-verification.md#what-each-test-tier-proves).
+  [development-runtime proof](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves).
 
 See [timeline limits](conversation-timeline-store-limits.md#edge-cases-and-limitations)
 for ordering, status reconciliation, send windows and prepend identity.

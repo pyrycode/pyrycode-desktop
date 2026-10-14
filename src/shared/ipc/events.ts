@@ -1,3 +1,4 @@
+import type { ThreadReply, ThreadQueryFailure } from '../wire/thread'
 // The typed event pipe from the background process to the renderer window: one sealed
 // discriminated union plus the channel it travels on, imported by both process sides. This
 // is the event-pipe half of the background↔window bridge (#18); the command half is #17.
@@ -11,6 +12,8 @@
 //
 // Imported by src/main and src/preload, which have no @shared path alias — hence the
 // relative import here and in those callers (see tsconfig.node.json).
+import type { ThreadUpdate, ThreadRepairReason } from '../wire/thread'
+import type { Envelope, SessionStateFamily } from '../wire/types'
 import type {
   HelloAckPayload,
   MessagePayload,
@@ -304,6 +307,11 @@ export type RelayLinkStatus = 'connected' | 'offline' | 'daemon-absent'
  * `DaemonEventTimestamp` for why the field is added by intersection rather than per arm.
  */
 type BaseDaemonEvent =
+  | { type: 'threadReply'; conversationId: string; requestId: string; reply: ThreadReply; correlation: Omit<Envelope, 'payload' | 'type'> }
+  | { type: 'threadQueryFailed'; conversationId: string; requestId: string; inReplyTo: number; reason: ThreadQueryFailure }
+  | { type: 'sessionStateCleared'; family: SessionStateFamily; correlation: Omit<Envelope, 'payload' | 'type'> }
+  | { type: 'threadUpdate'; conversationId: string; update: ThreadUpdate; correlation: Omit<Envelope, 'payload' | 'type'> }
+  | { type: 'threadRepairNeeded'; conversationId: string; reason: ThreadRepairReason }
   | { type: 'messageDelivery'; conversationId: string; messageId: string; status: 'waiting' | 'not-sent' | 'written' }
   | { type: 'replySuggestion'; conversationId: string; sessionId: string; revision: number; suggestedReply: string | null }
   | { type: 'hostSystemPromptReceived'; requestId: string; operation: 'read' | 'write'; systemPrompt: string; defaultSystemPrompt: string }
@@ -1971,7 +1979,12 @@ type BaseDaemonEvent =
  * comparands and fail open on unusable input so uncertain identity cannot silently remove a row.
  */
 interface DaemonEventTimestamp {
+  /** Producing envelope session; distinct from any payload sessionId. */
+  envelopeSessionId?: string | null
+  /** Supplied wire correlation; existing request settlement remains main-owned. */
+  inReplyTo?: number
   daemonTs?: string
+  historyEntryId?: number
 }
 
 /** Distributes `DaemonEventTimestamp` over each arm of a union — `WithOrigin`'s mechanism below, and

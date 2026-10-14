@@ -68,29 +68,36 @@ union behind an exhaustive mapping switch, bought a consumer nothing the literal
 in step every time an upstream member lands. `busy` is a member of both source unions and collapses
 correctly in the alias: the answer is to wait either way.
 
-Seven seams, all injected so the whole decision surface runs under `environment: 'node'` with plain
+The seams are injected so the whole decision surface runs under `environment: 'node'` with plain
 fakes — the `AttachmentDownloadDeps` idiom:
 
 | Seam | Purpose |
 |---|---|
 | `getOpenConversationId` | The retrieval ask needs a conversation; `downloadAttachment`'s two-line getter, duplicated a fourth time rather than relocated. |
+| Optional `getServerId` | Capture the requested paired host alongside the conversation at the start of each ask. Omission retains legacy routing. |
 | `requestAttachment` / `onAttachmentRetrievalEvent` | Leg one — [attachment retrieval](attachment-retrieval.md). |
 | `requestAttachmentBytes` / `onAttachmentBytesEvent` | Leg two — [attachment bytes](attachment-bytes.md). |
 | `createObjectUrl` | `URL.createObjectURL`. Injected although it works unfaked under node (a `Blob` over a `Uint8Array` mints `blob:nodedata:<uuid>`), because the lifetime claim is only assertable against recorded URLs. |
 | `revokeObjectUrl` | `URL.revokeObjectURL`. |
 
-**Constructed once, for the app lifetime, not per ask** — `createAttachmentBytes`'s recorded trap, one
-process over. The live-URL map is the only state and it is only meaningful *across* asks; a per-ask
-closure would reset it every time and silently disable the sharing that makes a second ask join rather
-than mint again.
+**Retain a driver across asks.** The legacy singleton lives for the window lifetime;
+`ThreadItemsView` instead owns a driver for its supplied host/conversation scope, with getters bound
+to that snapshot rather than the globally selected chat. A per-ask driver would silently disable URL
+sharing. The view remounts on host/conversation/epoch changes, releasing old subscriptions and URL
+shares through effect cleanup.
 
 ## The sequence one `request` runs
 
-1. **Cache hit** — an entry for this id already has a live URL: join it (`holders += 1`), deliver
+Capture `conversationId` and optional `serverId` once, before cache lookup or subscription; use that
+scope throughout both legs and release. The live-URL key is the JSON tuple of requested host,
+conversation and attachment, so switching host/thread with a reused attachment ID cannot join the
+previous scope's URL.
+
+1. **Cache hit** — an entry for this scope already has a live URL: join it (`holders += 1`), deliver
    `ready` with that URL, touch no seam at all. This is what makes a scroll-away-and-back remount free.
 2. **Local refusals**, both answered `refused` (the bytes leg's own literal, reused rather than widened —
    it already means "never retry, no fetch makes this resolvable"): no open conversation, or an
-   identifier — either `conversationId` or `attachmentId` — outside `addressable` (non-empty, within
+   identifier — `conversationId`, `attachmentId` or a supplied `serverId` — outside `addressable` (non-empty, within
    `MAX_RETRIEVAL_IDENTIFIER_LENGTH`, imported rather than restated). **Answering rather than returning
    silently is the departure from `downloadAttachment`**, which had no caller to answer; a consumer left
    with no terminal here is a thumbnail spinning forever.
@@ -104,9 +111,12 @@ than mint again.
 Subscribe-before-ask on both legs, for `downloadAttachment`'s recorded reason: `busy` and
 `not-connected` are decided synchronously inside main's receiver, so the reverse order is a race by
 construction. Each `awaitTerminal` call holds `settled` beside a `let` handle so a seam that fires during
-subscription still tears down exactly once. Correlation is on `attachmentId` — this window's own value
-echoed back, never a wire-supplied one — so a terminal naming another attachment is ignored and the ask
-keeps waiting.
+subscription still tears down exactly once. Leg one filters with the shared
+`matchesAttachmentRetrieval(event, capturedAsk)`: attachment, requested host and conversation must
+match. An unscoped ask accepts legacy terminals without conversation scope, but a supplied host
+requires both scope fields. Mismatched terminals leave the listener pending. Leg two still matches
+only attachment ID and asks exactly `{ attachmentId }`; the byte-read channel and flat disk cache
+have no host/conversation fields. URL isolation does not establish scoped persistence or byte reads.
 
 ### Two orderings inside step 5 are load-bearing, and neither is visible from the code's shape once written
 
@@ -140,10 +150,11 @@ whichever ticket decides how many thumbnails can exist at once (#1045).
 
 ## Two callers, and the two legs disagree on what that means
 
-- **Leg one is coalesced main-side** into one retrieval that pushes *one* event on the asking window's
+- **Leg one is coalesced main-side within a resolved owner/conversation/attachment tuple**, pushing
+  one terminal per requesting window and requested host scope on the asking window's
   `webContents`, and every renderer listener on that channel runs — so two callers asking for the same
-  attachment both settle from that single pushed event. A spec asserting two retrieval events for two
-  asks is asserting the wrong thing.
+  attachment in the same scope both settle from that single pushed event. A spec asserting two retrieval
+  events for two asks is asserting the wrong thing.
 - **Leg two is not coalesced**: two asks produce two `delivered` events. Both listeners are still
   subscribed when the first arrives, so both settle on it; the first handler mints and the second takes
   the join branch at step 5. One URL, `holders: 2`. The second event finds no listeners and is dropped.
@@ -203,7 +214,8 @@ relaxed `default-src` would reopen the vector `img-src` alone does not, and #104
 
 ## State and concurrency model
 
-One `Map<string, { url: string; holders: number }>` keyed by `attachmentId`, closed inside
+One `Map<string, { url: string; holders: number }>` keyed by the JSON tuple of requested host,
+conversation and attachment, closed inside
 `createAttachmentImageSources`. No Zustand store: nothing renders from this module and a store would put
 a revocable browser resource under a reducer.
 
@@ -222,12 +234,12 @@ pushed terminal, and the release handle is the cancellation path.
 Architect self-review verdict **PASS**, no MUST FIX. Full review in
 `docs/specs/architecture/1044-attachment-image-source.md`. Points not covered above:
 
-- **Three untrusted inputs, for different reasons.** `attachmentId` originates on this machine (hygiene);
-  `conversationId` comes from `activeConversationStore`, which holds the daemon's
+- **Validate caller scope before subscribing.** `attachmentId` originates on this machine or arrives
+  in a supplied thread; `conversationId` comes from the snapshot or `activeConversationStore`, which holds the daemon's
   `ConversationCreatedPayload` verbatim off the wire (a hostile or buggy daemon chooses that string) —
-  both are checked by `addressable` before either leg is asked, a listener-lifetime precondition rather
+  both and any supplied `serverId` are checked by `addressable` before either leg is asked, a listener-lifetime precondition rather
   than a second security gate (canonicity stays the single gate at `resolveAttachmentPath`). The
-  delivered **bytes** are the third: a hostile host can return arbitrary bytes under an attachment id
+  delivered **bytes** are also untrusted: a hostile host can return arbitrary bytes under an attachment id
   (the reassembler verifies against the host's *own* declared digest, main-side, before this module ever
   sees them). They are never parsed, sniffed, decoded or inspected here — they go into a `Blob` and
   nothing else.
@@ -259,18 +271,25 @@ listener count per channel, and counting fakes for mint/revoke recording the exa
 - **Two callers (leg disagreement)** — one pushed retrieval event settles both callers to `ready`; the
   bytes leg's two-events case joins to a single URL.
 - **Correlation** — a terminal naming another attachment is ignored and the ask keeps waiting; two
-  different attachments run independently and settle out of order.
-- **Boundary** — an empty and an over-length identifier on each of the two ids; the value at the bound
-  passes.
+  different attachments run independently and settle out of order. Scoped same-ID asks ignore other
+  hosts/conversations, capture scope despite later getter changes, share URLs only in the same scope,
+  and release independently. Legacy unscoped terminals still complete unscoped asks.
+- **Boundary** — empty/over-length conversation and attachment IDs, and their inclusive bound;
+  an empty supplied host refuses before subscription. IPC guard tests cover the host's full bounds.
 - **Media type** — `blob.type === ''`, so a later guess has to redden this before shipping.
 
-The `contextBridge` hop stays unpinned by this module's tests, as [attachment bytes § the one property no
+The `contextBridge` hop stays unpinned by this module's unit tests, as [attachment bytes § the one property no
 tier in this repo can pin](attachment-bytes.md#the-one-property-no-tier-in-this-repo-can-pin) records:
 this is the first renderer *caller* of that channel, but its vitest tier is a node-environment static
 render with no DOM and no bridge, so it cannot exercise the hop either. #1045's `npm run e2e` (a real
 browser context) is the first tier that can. This module deliberately does not re-wrap or re-validate the
 delivered typed array beyond the `toBlob` copy above; if that hop ever proves lossy, the repair is local
 to the preload listener.
+
+The enabled production snapshot retrieval and delayed-disconnect cases in `e2e/thread-items.spec.ts`
+prove scoped completion through real preload/main and image decoding after a host/thread switch.
+See [retrieval testing](attachment-retrieval.md#testing) for counted gate evidence and the relay-leg
+disconnect/receipt-barrier fixture requirement.
 
 ## Edge cases and limitations
 

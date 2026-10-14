@@ -21,7 +21,9 @@ its call sites as one-liners: `router.route(command.payload.conversation_id)?.se
 
 ## The index, and where it learns from
 
-A module-local `Map<string, string>` (conversation id → server id) — a `Map`, never a bare object,
+A module-local `Map<string, string | null>` (conversation id → ordinary routing owner, or a null
+slot preserving surviving read claims) plus `Map<string, Set<string>>` for current list claims.
+Both use `Map`, never a bare object,
 since both keys and values are daemon-supplied strings and a `Record` written through `__proto__`
 would be prototype pollution reachable from a hostile or confused daemon (the same rule
 `ServerOrigin`'s docblock states for `serverId`).
@@ -40,20 +42,21 @@ access (`isAttachmentRetrievalRequest`'s idiom), never a cast and never by re-de
 `send` as `StampedDaemonEvent`: that second form *compiles*, because method parameters are bivariant,
 and is unsound.
 
-Two arms are read for a conversation id: `conversationsReceived` (one entry per row) and
-`conversationCreated` (one entry). Everything else passes through unread. **Record happens before
+`conversationsReceived` learns one index entry per row and replaces only that host's read claims;
+`conversationCreated` learns one ordinary index entry. `conversationDeleted` removes only its
+stamped host's read claim. Other arms pass through unread. **Record happens before
 forward** — the whole no-race argument: anything the window can name, the index has already seen, with
 no gap for a renderer that reacts synchronously to route against a stale index. `live.sink.isDestroyed()`
 is hard-coded `false` ([Live window](live-window.md)), which is load-bearing here too: the observer
 keeps recording even while no window exists, so a macOS window-close does not blind the index.
 
-**Last write wins.** A conversation reported later by a different server re-points to that server — the
+**Ordinary routing is last write wins.** A conversation reported later by a different server re-points to that server — the
 connection registry's own record list (§ The connection registry, above) has the identical property,
 and a first-write-wins rule would make a conversation that genuinely moved hosts (a daemon restored on
 new hardware) permanently unroutable. A re-point that actually **changes** the owner logs
 `conversation-reindexed`/`reassigned` (content-free); an identical re-write logs nothing.
 
-**Nothing is un-learned by a later list**, on purpose — a per-server replace-on-`conversationsReceived`
+**The ordinary index is not un-learned by a later list**, on purpose — a per-server replace-on-`conversationsReceived`
 sweep was considered and rejected because it can un-know a conversation the window still has open (the
 open thread holds its id independently of the list store), turning a conforming command into a
 refusal. The growth this admits is bounded instead: `MAX_INDEXED_CONVERSATIONS = 10_000`. At the cap a
@@ -63,20 +66,21 @@ for the *process* lifetime, not per over-cap transition (code review NIT, accept
 if the hygiene delete below ever drops the index back under the cap and it refills, a second exhaustion
 stays silent — nothing routes incorrectly either way).
 
-## The two refusals
+## Ordinary routing refusals
 
 `route(conversationId)`:
 
 1. Absent, or not in the index → `null`, logged `unknown-conversation`. This is also what
    `requestSessionSettings`'s **optional** id gets — no separate branch, since an absent id is not a
    known conversation.
-2. In the index, but `connectionFor(serverId)` answers `null` (server unpaired, or never paired) →
-   delete the mapping, then `null`, logged `server-not-connected`.
+2. A null index slot, or `connectionFor(serverId)` answers `null` (server unpaired, or never paired) →
+   `null`, logged `server-not-connected`. Cleanup removes only the stale indexed host's read claim.
+   Surviving claims retain a null index slot; with no surviving claims, delete the index and claim entry.
 3. Otherwise → that connection.
 
 Branch 2's two halves are deliberately unequal weight. **The connection lookup is the boundary** — a
 known conversation whose server has no entry refuses on the connection side whether or not the index
-still holds the mapping, so an unpair can never leave anything routable. The mapping delete beside it
+still holds the mapping, so an unpair can never leave that host routable. The index cleanup beside it
 is hygiene, not the safety property; there is no reconcile-driven sweep, because `reconcile()` is
 asynchronous and a prune called beside it would run before the registry had dropped anything — a no-op
 on exactly the unpair path it exists for.
@@ -84,6 +88,24 @@ on exactly the unpair path it exists for.
 There is **no fallback**, ever — not "the first connection," not "the most recent one." Refusing is the
 entire reason this index lives in the background process instead of trusting a routing hint from the
 window.
+
+## Host-bound read routing
+
+`markConversationRead` calls `route(conversationId, observedHost)`. It resolves from current list
+claims whose hosts still have connections, requiring exactly one and a match to the observation's
+host. An unknown conversation, removed observed host or multiple connected claims refuses; the
+last-written ordinary index owner cannot authorize or veto a surviving unique claim. A list
+replacement, deletion or pairing removal can therefore leave another host eligible without
+redirecting the removed host's pending observation.
+
+Ordinary command cleanup must preserve those surviving claims: deleting the whole claim set would
+make a valid read depend on whether `sendMessage` or `requestHistory` ran first. The null index slot
+keeps them within `MAX_INDEXED_CONVERSATIONS`, without choosing a new ordinary owner. Repeated
+cleanup remains inert. Ordinary routing waits for fresh stamped ownership evidence; reconnecting or
+re-pairing the removed host alone restores neither that route nor its removed read claim. Fresh list
+evidence can restore a claim, and surviving ambiguity still refuses host-bound reads. Regression
+units cover the ordinary-call-before-read interleaving as well as direct surviving-host routing.
+See [read publication](conversation-last-read-store.md#how-it-works).
 
 ## The registry's per-server accessor
 
@@ -135,4 +157,3 @@ conversation id — widening the allowlist would drag `RendererDiagnosticEvent` 
 `receiveDiagnostic.test.ts`'s reviewed `Omit` pin into a main-process routing slice. Full design and
 the security review (PASS, one re-point-logging SHOULD FIX folded in before ship) are in
 `docs/specs/architecture/1118-conversation-routing-index.md`.
-

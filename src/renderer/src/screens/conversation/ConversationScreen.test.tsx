@@ -386,6 +386,34 @@ describe('Timeline — the streamed assistant text', () => {
     expect(markup.indexOf(CURSOR)).toBeGreaterThan(markup.indexOf('after tool'))
   })
 
+  // #1872: a background subagent's rows trail the main thread bubble while it is still growing, so the
+  // open bubble keeps its cursor even though it is no longer the last item.
+  it('keeps the cursor on the open main thread bubble behind a trailing subagent tool call', () => {
+    const items: ThreadItem[] = [
+      { kind: 'assistantText', turnId: 't1', text: 'still writing' },
+      {
+        kind: 'toolCall',
+        turnId: 't1',
+        toolUseId: 'u2',
+        parentToolUseId: 'agent-1',
+        name: 'WebFetch',
+        inputSummary: 'https://example.com',
+        result: null
+      }
+    ]
+    const markup = renderToStaticMarkup(<Timeline items={items} />)
+    expect(markup.match(new RegExp(CURSOR, 'g'))?.length ?? 0).toBe(1)
+    expect(markup.indexOf(CURSOR)).toBeGreaterThan(markup.indexOf('still writing'))
+  })
+
+  it('gives no cursor to a bubble closed by a main thread tool call', () => {
+    const items: ThreadItem[] = [
+      { kind: 'assistantText', turnId: 't1', text: 'before tool' },
+      { kind: 'toolCall', turnId: 't1', toolUseId: 'u1', name: 'read_file', inputSummary: 'a.ts', result: null }
+    ]
+    expect(renderToStaticMarkup(<Timeline items={items} />)).not.toContain(CURSOR)
+  })
+
   // #230: the resolved tool row. When #121's reducer fills a toolCall's `result` in place (matched by
   // toolUseId, replacing the item at its own index), the row resolves where it sits — the pending
   // dimming lifts and `result.isError` selects a success vs error treatment. The className is the
@@ -1583,7 +1611,7 @@ describe('Timeline — the message bubble meta row and its copy control (#969)',
   const COPY_LABEL = 'Copy message'
 
   const settled = (text: string): ThreadItem[] => [
-    { kind: 'assistantText', turnId: 't1', text },
+    { kind: 'assistantText', createdAt: 1768312500000, turnId: 't1', text },
     { kind: 'turnBoundary', turnId: 't1', stopReason: 'end_turn' }
   ]
 
@@ -1593,8 +1621,8 @@ describe('Timeline — the message bubble meta row and its copy control (#969)',
     // is as copyable as a finished one.
     const cases = [
       renderToStaticMarkup(<Timeline items={settled('a settled reply')} />),
-      renderToStaticMarkup(<Timeline items={[{ kind: 'assistantText', turnId: 't1', text: 'growing' }]} />),
-      renderToStaticMarkup(<Timeline items={[{ kind: 'userText', text: 'typed by the operator' }]} />)
+      renderToStaticMarkup(<Timeline items={[{ kind: 'assistantText', createdAt: 1768312500000, turnId: 't1', text: 'growing' }]} />),
+      renderToStaticMarkup(<Timeline items={[{ kind: 'userText', createdAt: 1768312500000, text: 'typed by the operator' }]} />)
     ]
     for (const markup of cases) {
       expect(markup.match(new RegExp(META, 'g'))?.length ?? 0).toBeGreaterThan(0)
@@ -1606,9 +1634,9 @@ describe('Timeline — the message bubble meta row and its copy control (#969)',
     const cases = [
       { items: settled('settled'), side: 'assistant' },
       { items: settled('```ts\nconst x = 1\n```'), side: 'assistant' },
-      { items: [{ kind: 'assistantText', turnId: 't1', text: 'streaming' }] as ThreadItem[], side: 'assistant' },
-      { items: [{ kind: 'userText', text: 'mine' }] as ThreadItem[], side: 'user' },
-      { items: [{ kind: 'userText', text: 'attached', attachments: [
+      { items: [{ kind: 'assistantText', createdAt: 1768312500000, turnId: 't1', text: 'streaming' }] as ThreadItem[], side: 'assistant' },
+      { items: [{ kind: 'userText', createdAt: 1768312500000, text: 'mine' }] as ThreadItem[], side: 'user' },
+      { items: [{ kind: 'userText', createdAt: 1768312500000, text: 'attached', attachments: [
         { attachmentId: 'file', filename: 'report.pdf' },
         { attachmentId: 'image', filename: 'chart.png' }
       ] }] as ThreadItem[], side: 'user' }
@@ -1641,16 +1669,16 @@ describe('Timeline — the message bubble meta row and its copy control (#969)',
     expect(settledMarkup.indexOf(META)).toBeGreaterThan(settledMarkup.indexOf('the reply body'))
 
     const streaming = renderToStaticMarkup(
-      <Timeline items={[{ kind: 'assistantText', turnId: 't1', text: 'still growing' }]} />
+      <Timeline items={[{ kind: 'assistantText', createdAt: 1768312500000, turnId: 't1', text: 'still growing' }]} />
     )
     expect(streaming.indexOf(META)).toBeGreaterThan(streaming.indexOf(CURSOR))
 
-    const user = renderToStaticMarkup(<Timeline items={[{ kind: 'userText', text: 'user says' }]} />)
+    const user = renderToStaticMarkup(<Timeline items={[{ kind: 'userText', createdAt: 1768312500000, text: 'user says' }]} />)
     expect(user.indexOf(META)).toBeGreaterThan(user.indexOf('user says'))
   })
 
   it('right-aligns the user row with its own modifier and leaves the assistant row unmodified', () => {
-    const user = renderToStaticMarkup(<Timeline items={[{ kind: 'userText', text: 'mine' }]} />)
+    const user = renderToStaticMarkup(<Timeline items={[{ kind: 'userText', createdAt: 1768312500000, text: 'mine' }]} />)
     expect(user).toContain(`${META} ${META}--user`)
 
     const assistant = renderToStaticMarkup(<Timeline items={settled('theirs')} />)
@@ -1697,7 +1725,7 @@ describe('Timeline — the message bubble meta row and its copy control (#969)',
   it('draws NO meta row while a row is queued — it has no delivery time and nothing sent yet to copy', () => {
     const markup = renderToStaticMarkup(
       <Timeline
-        items={[{ kind: 'userText', text: 'waiting to send', messageId: 'm1', createdAt: 1768312500000 }]}
+        items={[{ kind: 'userText', createdAt: 1768312500000, text: 'waiting to send', messageId: 'm1' }]}
         localEchoes={[{ rowKey: 0, messageId: 'm1', waiting: false }]}
         queued={[{ queued_msg_id: 1, text: 'waiting to send', ts: '2026-07-12T00:00:00Z', message_id: 'm1' }]}
       />
@@ -1707,13 +1735,13 @@ describe('Timeline — the message bubble meta row and its copy control (#969)',
     expect(markup).toContain('data-thread-role="queued"')
     expect(markup).not.toContain(META)
     expect(markup).not.toContain(COPY)
-    expect(markup).not.toContain('message-actions')
+    expect(markup).toContain('message-actions--queued')
     expect(markup).not.toContain('Reply to message')
     expect(markup).toContain('message-row--text')
     // …and the SAME item, once the daemon stops reporting it queued, draws the meta row it always did.
     const delivered = renderToStaticMarkup(
       <Timeline
-        items={[{ kind: 'userText', text: 'waiting to send', messageId: 'm1', createdAt: 1768312500000 }]}
+        items={[{ kind: 'userText', createdAt: 1768312500000, text: 'waiting to send', messageId: 'm1' }]}
         localEchoes={[{ rowKey: 0, messageId: 'm1', waiting: false }]}
       />
     )
@@ -1739,7 +1767,7 @@ describe('Timeline — the message bubble meta row and its copy control (#969)',
     const markup = renderToStaticMarkup(
       <Timeline
         items={[
-          { kind: 'userText', text: 'ask' },
+          { kind: 'userText', createdAt: 1768312500000, text: 'ask' },
           ...settled('answer')
         ]}
       />
@@ -1758,23 +1786,19 @@ describe('Timeline — the message bubble meta row and its copy control (#969)',
       expect(markup).toContain(locator)
     }
     const streaming = renderToStaticMarkup(
-      <Timeline items={[{ kind: 'assistantText', turnId: 't1', text: 'tail' }]} />
+      <Timeline items={[{ kind: 'assistantText', createdAt: 1768312500000, turnId: 't1', text: 'tail' }]} />
     )
     expect(streaming).toContain('bubble__markdown')
   })
 })
 
 // #1014: the timestamp #969 left the slot empty for. What this tier owns is the WIRING — which items put
-// a string in `bubble__meta-time`, that an unstamped one still emits the empty span #969 ships, and that
+// a string in `bubble__meta-time`, that an unstamped row without stats emits no metadata, and that
 // nothing else in the row moved. WHICH characters the string is made of is messageTime.test.ts, which can
 // assert them exactly without rendering anything; the fixtures here therefore use one moment and one
 // expected string rather than re-testing the format.
 describe('Timeline — the meta row timestamp (#1014)', () => {
   const TIME_SLOT = 'bubble__meta-time'
-  // The empty slot exactly as #969 emits it — a self-closing JSX span renders as an open/close pair with
-  // no children, and `{null}` children render identically, which is what makes AC3 a markup fact.
-  const EMPTY_SLOT = `<span class="${TIME_SLOT}"></span>`
-
   // Local construction, the inverse of the formatter's local getters, so this expectation holds on a
   // runner in any zone (messageTime.test.ts's header records why nothing here may be a literal epoch).
   const CREATED_AT = new Date(2026, 0, 13, 13, 55).getTime()
@@ -1806,7 +1830,7 @@ describe('Timeline — the meta row timestamp (#1014)', () => {
     }
   })
 
-  it('leaves the slot EMPTY for an item carrying no stamp — no placeholder, no `Invalid Date`, no NaN', () => {
+  it('omits metadata when neither a timestamp nor turn stats is available', () => {
     // #1013's contract: an absent `createdAt` is a LEGAL item, not a defect — it is what every producer
     // with no injected clock yields, which is also why the 39 stamp-free item literals elsewhere in this
     // file needed no edit. The read is `=== undefined`; `'createdAt' in item` would be TRUE here, because
@@ -1821,10 +1845,19 @@ describe('Timeline — the meta row timestamp (#1014)', () => {
         ]}
       />
     )
-    expect(markup.match(new RegExp(EMPTY_SLOT, 'g'))?.length ?? 0).toBe(2)
+    expect(markup).not.toContain('bubble__meta')
     for (const wrong of ['Invalid Date', 'NaN', 'undefined', 'null']) {
       expect(markup).not.toContain(wrong)
     }
+  })
+
+  it('keeps available stats when the assistant timestamp is absent', () => {
+    const markup = renderToStaticMarkup(<Timeline items={[
+      { kind: 'assistantText', turnId: 'stats-only', text: 'reply' },
+      { kind: 'turnBoundary', turnId: 'stats-only', stopReason: 'end_turn', outputTokens: 800 }
+    ]} />)
+    expect(markup).toContain('<span class="bubble__turn-stats">800 out</span>')
+    expect(markup).not.toContain(TIME_SLOT)
   })
 
   it('keeps the timestamp as text in the meta row without a copy control', () => {
@@ -1833,7 +1866,7 @@ describe('Timeline — the meta row timestamp (#1014)', () => {
       <Timeline items={[{ kind: 'userText', text: 'mine', createdAt: CREATED_AT }]} />
     )
     expect(markup).toContain(
-      `<div class="bubble__meta bubble__meta--user"><span class="${TIME_SLOT}">${DRAWN}</span></div>`
+      `<div class="bubble__meta bubble__meta--user bubble__meta--details"><span class="${TIME_SLOT}">${DRAWN}</span></div>`
     )
     // Once, in that one sink — not duplicated into an attribute, a title or a second element.
     expect(markup.match(new RegExp(DRAWN.replace(/\./g, '\\.'), 'g'))?.length ?? 0).toBe(1)
@@ -1902,6 +1935,7 @@ describe('Timeline — the attachment file row in the message bubble (#815)', ()
     {
       kind: 'userText',
       text: 'here is the report',
+      createdAt: 1768312500000,
       attachments: [{ attachmentId: 'att-1', filename: 'report.pdf' }]
     }
   ]
@@ -1938,6 +1972,7 @@ describe('Timeline — the attachment file row in the message bubble (#815)', ()
           {
             kind: 'userText',
             text: 'two of them',
+            createdAt: 1768312500000,
             attachments: [
               { attachmentId: 'att-1', filename: 'first.pdf' },
               { attachmentId: 'att-2', filename: 'second.zip' }
@@ -2164,6 +2199,7 @@ describe('Timeline — the attachment file row in the message bubble (#815)', ()
             {
               kind: 'userText',
               text: 'both kinds',
+              createdAt: 1768312500000,
               attachments: [
                 { attachmentId: 'att-1', filename: 'holiday.png' },
                 { attachmentId: 'att-2', filename: 'report.pdf' }
@@ -3792,6 +3828,16 @@ describe('the merged queued row — the backlog folded into the thread (#1214)',
   })
 
   // #1726: Send now rides a queued row only while the session reports mid_turn_input: true.
+  it('groups the queued 12px glyphs in a column before the bubble', () => {
+    const markup = renderToStaticMarkup(
+      <Timeline items={[]} queued={[item(1, 'waiting')]} midTurnInput />
+    )
+    expect(markup).toContain('<div class="message-actions message-actions--queued"><button')
+    expect(markup).toContain('<span class="queued-row__send-now-icon" aria-hidden="true"></span>')
+    expect(markup).toContain('<span class="queued-row__drop-icon" aria-hidden="true"></span>')
+    expect(markup).toMatch(/Drop queued message[^]*?<\/button><\/div><div class="bubble bubble--user"/)
+  })
+
   it('draws Send now before the drop control on each queued row when the session supports it (#1726)', () => {
     const markup = renderToStaticMarkup(
       <Timeline

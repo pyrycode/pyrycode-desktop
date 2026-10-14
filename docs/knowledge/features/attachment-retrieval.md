@@ -1,15 +1,15 @@
 # Attachment retrieval (ask, correlate, assemble, store, report)
 
-The driver that joins the retrieval leg together: the window names a conversation and an attachment,
-this feature asks the host over the live session, routes the answering stream to
-[attachment reassembly and store](attachment-reassembly-and-store.md)'s two leaves, and pushes back
-exactly one terminal. Before this ticket every piece of the return path — the wire contract
+The window names a conversation, an attachment and optionally its paired host. The retrieval driver
+asks that host over the live session, routes the answering stream to
+[attachment reassembly and store](attachment-reassembly-and-store.md)'s two leaves, and reports a
+terminal to each originating recipient. Before this ticket every piece of the return path — the wire contract
 ([#993](request-attachment-envelope.md)), the recognition layer ([#998](attachment-chunk-retrieval-decode.md)/[#999](daemon-error-outcome.md))
 and the reassemble-and-store path ([#995](attachment-reassembly-and-store.md)) — existed unwired;
 nothing asked the host for anything until this landed.
 
-Introduced in [#996](https://github.com/pyrycode/pyrycode-desktop/issues/996), split from #687. Ships
-**unwired on the renderer side**, deliberately, the upload leg's own shape: [attachment save](attachment-save.md)
+Introduced in [#996](https://github.com/pyrycode/pyrycode-desktop/issues/996), split from #687. Renderer
+callers now drive retrieval before saving or displaying bytes: [attachment save](attachment-save.md)
 ([#814](https://github.com/pyrycode/pyrycode-desktop/issues/814), landed — save into Downloads),
 [attachment bytes](attachment-bytes.md)
 ([#866](https://github.com/pyrycode/pyrycode-desktop/issues/866), landed — deliver bytes to the window)
@@ -47,7 +47,7 @@ export const ATTACHMENT_RETRIEVAL_CHANNEL = 'pyry:attachment-retrieval' as const
 export const ATTACHMENT_RETRIEVAL_EVENT_CHANNEL = 'pyry:attachment-retrieval-event' as const   // main → renderer
 export const MAX_RETRIEVAL_IDENTIFIER_LENGTH = 256   // UTF-16 code units, each field
 
-export interface AttachmentRetrievalRequest { conversationId: string; attachmentId: string }
+export interface AttachmentRetrievalRequest { conversationId: string; attachmentId: string; serverId?: string }
 export function isAttachmentRetrievalRequest(value: unknown): value is AttachmentRetrievalRequest
 
 export type AttachmentRetrievalFailure =
@@ -56,24 +56,34 @@ export type AttachmentRetrievalFailure =
   | 'stream-contradiction' | 'too-large' | 'verification-failed' | 'stream-aborted' | 'connection-lost'
 
 export type AttachmentRetrievalEvent =
-  | { type: 'completed'; attachmentId: string }
-  | { type: 'failed'; attachmentId: string; reason: AttachmentRetrievalFailure }
+  | { type: 'completed'; attachmentId: string; conversationId?: string; serverId?: string }
+  | { type: 'failed'; attachmentId: string; conversationId?: string; serverId?: string; reason: AttachmentRetrievalFailure }
 ```
 
 **The request is *not* bare, unlike `requestAttachmentUpload`.** That intent carries no payload
-because the picker runs in the background process; this one carries two identifiers from an untrusted
+because the picker runs in the background process; this one carries identifiers from an untrusted
 renderer, so `isAttachmentRetrievalRequest` guards the boundary the way `isRendererCommand` guards
 `COMMAND_CHANNEL`. It checks **shape and size only, never canonicity**: `resolveAttachmentPath` (via
 `storeAttachment`) is the sole gate that decides whether an identifier may become a path component, on
 its own argument that two divergent checks on one directory end with one of them weaker — a `../..`
 identifier still passes here, goes to the daemon, and comes back `not-found`. `conversationId` gets no
-validator at all: it goes to the daemon and never touches a local path, and naming a conversation is
+canonicity validator: it goes to the daemon and never touches a local path, and naming a conversation is
 not authorization on this wire (authorization is pairing, at the Noise handshake).
 
 Both fields must be non-empty (`buildRequestAttachment`'s docblock names the zero-valued request as
 the contract's silent failure: joining `''` onto a directory yields the directory) and no longer than
 `MAX_RETRIEVAL_IDENTIFIER_LENGTH` — added in a follow-up fix (see § Revision below) after the
 verifier found that an unbounded identifier is not merely absurd input but a live desync trigger.
+
+Optional `serverId` uses the same nonempty, 256-UTF-16-unit bound. Omission and explicit `undefined`
+retain legacy conversation routing; `null`, non-string, empty and over-length hosts fail the guard
+before owner lookup, transport, storage or outcome emission. The preload forwards scope unchanged.
+
+Production terminals always include `conversationId` and echo the caller's requested `serverId` when
+supplied, rather than substituting the resolved host. `matchesAttachmentRetrieval(event, ask)` requires
+equal attachment and requested host scope, plus equal conversation. Only an unscoped ask can accept a
+legacy event with neither host nor conversation. An unscoped event with a conversation must match it;
+an explicitly scoped listener cannot consume an unscoped or another host's terminal.
 
 **A request failing the guard is dropped** — no request frame, no filesystem call, no event. There is
 no id to address an answer to, and a conforming renderer never sends one.
@@ -95,8 +105,9 @@ already spends a paragraph explaining why two of its inherited members are unrea
 that sevenfold here would buy nothing a consumer can act on. The catch-all is total by construction:
 a tenth daemon code added upstream lands on `'daemon-error'` with no edit.
 
-Two fields, both camelCase (a client-internal IPC contract, not a wire type): `daemonConnection`
-rebuilds `request_attachment` as a **fresh literal** from these two fields, so no renderer-supplied key
+The identifiers use camelCase in this client-internal IPC contract. Main rebuilds the wire payload as
+exactly `{ conversation_id, attachment_id }`; `serverId` stays client-local. `daemonConnection`
+builds `request_attachment` from those two fields, so no renderer-supplied key
 can reach the envelope even when the ask carries extra ones (`createConversation`'s posture).
 
 ### 2. The preload pair — `src/preload/index.ts`
@@ -188,7 +199,7 @@ where `debugBundleSaved` carries one (`attachmentStore`'s docblock: the path is 
 export const ATTACHMENT_MAX_CONCURRENT_RETRIEVALS = 4
 
 export interface AttachmentRetrievalDeps {
-  requestAttachment: (payload, consumer: AttachmentRetrievalConsumer) => void
+  resolve: (ask: AttachmentRetrievalRequest) => ServerTarget<Pick<DaemonConnection, 'requestAttachment'>> | null
   store: (attachmentId: string, bytes: Uint8Array) => Promise<StoreAttachmentResult>
   diagnosticLog?: DiagnosticLog
 }
@@ -199,15 +210,23 @@ export function createAttachmentRetrieval(
 ): (request: AttachmentRetrievalRequest, emit: AttachmentRetrievalEmit) => void
 ```
 
-State is one `Map<string, AttachmentRetrievalEmit>` keyed by attachment id, doing four jobs: it bounds
-concurrency at `ATTACHMENT_MAX_CONCURRENT_RETRIEVALS` (a `'busy'` refusal *before* the transport is
-touched, so no reassembler is armed); it coalesces a duplicate ask for an id already in flight into a
-total no-op (nothing sent, nothing reported — the live retrieval's own terminal, naming the same id,
-answers both asks); it is what makes `attachmentId` a sound correlation key for the window (at most one
-retrieval per id is live); and it holds the *asker's* emit, so a terminal reaches the window that
-started the retrieval rather than whichever asked last. The entry is held **across** the async `store`
-call and released only at the terminal — `debugBundleDownload`'s "holding the flag across the save"
-argument, closing the window in which a duplicate ask could race the first one's write.
+One process-lifetime map keys entries by the JSON tuple `(resolved serverId, conversationId,
+attachmentId)`. Resolve ownership before coalescing and capture the connection at admission: equal
+attachment IDs on different hosts or in different conversations start independent work. Duplicates
+within one resolved tuple share its transport and store operation, including legacy and explicit asks
+that resolve to the same owner. Coalescing by attachment ID alone would suppress an unrelated owner's
+request and let its outcome settle the wrong listener.
+
+Each entry retains recipients with their requested scope. Its terminal fans out to every originating
+window without replacing the original emitter. Recipients are deduplicated by stable emitter identity
+and requested host scope, so repeated asks from one window do not retain an unbounded callback list;
+legacy and explicit asks still receive separately scoped terminals when they share the work.
+
+The four-slot cap spans every host and conversation. Register the entry before calling transport and
+hold it through asynchronous storage. An entry-local `transportSettled` fence accepts only the first
+complete/fail callback, preventing a disconnect during storage or a stale callback after a retry from
+settling or releasing another retrieval's slot. Delete the entry before emitting its terminal so a
+synchronous retry can be admitted. Storage completion uses the captured entry and recipients.
 
 **Security cap, not just a nicety.** Without `ATTACHMENT_MAX_CONCURRENT_RETRIEVALS`, an untrusted
 renderer could open an unbounded number of concurrent retrievals with distinct ids, each accumulating
@@ -228,8 +247,15 @@ computed here and only here — `join(app.getPath('userData'), ATTACHMENT_DIR_NA
 anything the window sent, closed into `store`. **One driver for the app lifetime, not one per ask**:
 its concurrency cap and its coalescing are state that only means anything across asks, so a
 per-ask driver would silently disable both (the bug the first implementation attempt shipped — see
-§ Revision below). The answer rides `event.sender`, captured per ask and closed into the `emit`
-argument, guarded by `isDestroyed()` — a window closed mid-retrieval drops the outcome rather than
+§ Revision below). Explicit `serverId` uses `ServerRouter.resolve`, a paired-registry lookup independent
+of the conversation index: unlisted conversations and equal conversation IDs on other hosts are valid
+asks for that owner. Unknown or unpaired hosts yield `not-connected` without fallback; a disconnected
+owner yields the transport's `not-connected`. Omitted/undefined host uses `ConversationRouter.resolve`
+with its existing last-indexed-owner routing and unknown/stale-owner refusal behavior. `route` remains its connection-only
+wrapper; forwarding an observed-host hint there would still refuse unlisted or ambiguous conversations.
+
+The answer rides `event.sender`, retained in a stable emitter per WebContents in a `WeakMap` and
+closed into the `emit` argument, guarded by `isDestroyed()` — a window closed mid-retrieval drops the outcome rather than
 throwing. Cannot route through `live.sink`: its `send` re-supplies `DAEMON_EVENT_CHANNEL` regardless of
 the channel argument given.
 
@@ -239,20 +265,23 @@ the channel argument given.
 row](conversation-shell-message-bubble-attachments.md#the-attachment-file-row-815-816) its click, and wired it to
 this driver first — not to [attachment save](attachment-save.md) (#814) directly, because the save
 channel does not fetch and this driver's retrieval leg is the only writer of the directory it copies
-from. `src/renderer/src/screens/conversation/downloadAttachment.ts` (new) subscribes to
-`onAttachmentRetrievalEvent`, **then** calls `requestAttachment({ conversationId, attachmentId })` —
+from. `src/renderer/src/screens/conversation/downloadAttachment.ts` first tries the local original with
+`localOnly: true`; only `unavailable` starts retrieval/save. Capture conversation and optional host at
+activation, validate them, and reuse that ask through the fallback even if the active pane changes.
+Subscribe to `onAttachmentRetrievalEvent`, **then** call `requestAttachment` with those identifiers —
 subscribe-before-ask is load-bearing, since `busy`/`not-connected` are decided synchronously in main and
-the reverse order would be a race by construction. The listener ignores every event not naming this row's
-`attachmentId`, tears itself down on the first one that does, and calls `saveAttachment({ attachmentId,
-filename })` only on that event's own `completed` — never on `failed`, and never a second time. Full
+the reverse order would be a race by construction. The listener uses `matchesAttachmentRetrieval` for
+the captured ask, leaves mismatched terminals pending, tears down on the first match, and calls
+`saveAttachment({ attachmentId, filename })` only on that event's own `completed` — never on `failed`,
+and never a second time. Full
 design, including the fetch/save sequencing rationale, the button and accessible-name shape, and the
 per-activation listener lifetime, is in [Conversation shell — message bubble § The attachment file
 row](conversation-shell-message-bubble-attachments.md#the-attachment-file-row-815-816).
 
-**A pre-ask bound on *both* identifiers, not just `attachmentId`.** A malformed ask is dropped by
+**Bound every supplied identifier before subscribing.** A malformed ask is dropped by
 `isAttachmentRetrievalRequest` with no terminal at all (§ above), which would leak the renderer's
 subscription forever if taken for an ask the guard was always going to drop. `downloadAttachment.ts`
-therefore refuses to subscribe or ask when either identifier is empty or exceeds
+therefore refuses to subscribe or ask when conversation, attachment or supplied host is empty or exceeds
 `MAX_RETRIEVAL_IDENTIFIER_LENGTH`, imported rather than restated. This is a listener-lifetime
 precondition, not a second security gate — `resolveAttachmentPath` stays the sole canonicity check. The
 architect's security review's one MUST FIX against the first draft: `attachmentId` is client-minted, but
@@ -263,8 +292,9 @@ taken, accumulating one leaked `ipcRenderer` listener per click.
 
 **No de-duplication on the renderer side**, deliberately: a second activation of the same row simply
 fetches again, and this driver's own in-flight map (§ 4 above) already collapses a duplicate ask for an
-attachment already being fetched into the live retrieval's single terminal, which every registered
-listener receives — so two clicks on one row yield two save asks and two Downloads copies, accepted as
+attachment already being fetched within the same resolved owner/conversation into its terminal,
+which every matching listener receives — so two fallback retrievals for one row yield two save asks
+and two Downloads copies, accepted as
 \#814's collision suffix to resolve, not this ticket's.
 
 ## The renderer image source (#1044)
@@ -277,18 +307,18 @@ bytes channel, mints a `blob:` URL from what comes back, and answers its own cal
 than with nothing.
 
 The one wrinkle #816 didn't have to handle: **this driver's coalescing reaches every caller of one
-attachment, and #1044's own AC4 depends on that.** Two concurrent asks for the same attachment id from
+resolved owner/conversation/attachment tuple.** Two concurrent asks in the same requested scope from
 this module both go through `awaitTerminal`, subscribing before either asks; the in-flight map here (§ 4
 above) collapses the second `requestAttachment` call into a no-op, so main sends one `request_attachment`
-and pushes one `attachment-chunk`/completion terminal on the window's `webContents` — and both of
+and pushes one retrieval terminal on the window's `webContents` — and both of
 `attachmentImageSource`'s listeners are still registered when it arrives, so both settle from that single
 event. A spec asserting two retrieval events for two asks here would be asserting the wrong thing; the
 [attachment bytes](attachment-bytes.md) leg that follows behaves oppositely (no coalescing, two events),
 which is the asymmetry [attachment image source § two callers](attachment-image-source.md#two-callers-and-the-two-legs-disagree-on-what-that-means)
 is built around.
 
-Same pre-ask bound as #816's click — both `conversationId` and `attachmentId` pass `addressable` before
-either leg is subscribed, `MAX_RETRIEVAL_IDENTIFIER_LENGTH` imported rather than restated — for the
+Same pre-ask bound as #816's click — `conversationId`, `attachmentId` and any supplied host pass
+`addressable` before either leg is subscribed, `MAX_RETRIEVAL_IDENTIFIER_LENGTH` imported rather than restated — for the
 identical reason: a malformed ask is dropped with no terminal at all, so subscribing first would leak a
 listener with nothing to ever tear it down.
 
@@ -315,7 +345,7 @@ never an id to ask for, is the host answering the right ask with the wrong bytes
 exists when the client names the transfer itself, as `request_attachment` still does.
 
 **Correlation on the IPC boundary is a window-minted request key, not the path.** A retrieval's outcome
-addresses by attachment id because at most one retrieval per id is ever live (§ 4's coalescing); a
+addresses by requested host/conversation/attachment scope (§ 4's resolved-owner coalescing); a
 read has no such invariant — the reader's Refresh asks for the *same path* again, so the path cannot
 tell two asks apart. `src/shared/ipc/workspaceFileRead.ts` mints its own channel pair
 (`WORKSPACE_FILE_READ_CHANNEL` / `WORKSPACE_FILE_READ_EVENT_CHANNEL`, off `DAEMON_EVENT_CHANNEL` for
@@ -367,8 +397,8 @@ the answer must go back to `event.sender`, a per-ask value — the two cannot bo
 at construction. The first implementation attempt built a driver *per ask* to reconcile them, which
 silently disabled the cap and the coalescing outright (the security review's cap would have shipped as
 a no-op). The fix: `createAttachmentRetrieval(deps)` returns `(request, emit) => void`, and the
-in-flight set became a map from attachment id to that ask's `emit`, captured at start so a coalesced
-duplicate cannot redirect a retrieval already under way to a different window.
+in-flight state now retains recipients per resolved owner/conversation/attachment tuple. Capturing each
+recipient prevents a later duplicate from redirecting the reply and lets every originating window finish.
 
 **The pending entry is registered after the send, not before it** (fixed in a follow-up commit, review
 of PR #1003). The original design armed `pendingRetrievals` *before* building and sending the frame —
@@ -396,9 +426,9 @@ canonicity one, so it does not duplicate `resolveAttachmentPath`'s gate.
 | Failure | Detected by | Terminal |
 |---|---|---|
 | Malformed or over-length ask | `isAttachmentRetrievalRequest` at the main boundary | dropped — no frame, no fs call, no event |
-| Duplicate ask, same id already in flight | orchestrator's in-flight map | no-op; the live retrieval's terminal answers it |
-| 5th+ concurrent id | orchestrator's cap | `busy` |
-| Not connected | `driver === null` | `not-connected` |
+| Duplicate ask, same resolved owner/conversation/attachment | orchestrator's in-flight map | shared work; scoped terminal to each originating recipient |
+| 5th+ concurrent resolved tuple across all hosts | orchestrator's cap | `busy` |
+| Unresolvable owner or disconnected connection | routers or `driver === null` | `not-connected`, no fallback |
 | Envelope build/send throws | `requestAttachment`'s catch | `send-failed` |
 | `attachment.not_found` | correlated `daemon-error` | `not-found` |
 | `attachment.stream_aborted` | correlated `daemon-error`, through the reassembler's door | `stream-aborted`, accumulated bytes discarded |
@@ -416,10 +446,14 @@ the identifier length bound, § Revisions above). Full findings in
 `docs/specs/architecture/996-attachment-retrieval-driver.md` § Security review, including its
 Revisions section. Load-bearing points not covered above:
 
-- `conversationId` crosses to the wire deliberately unvalidated — naming a conversation is not
-  authorization on this wire, and it never touches a local path on this side.
+- `conversationId` crosses to the wire after shape/size validation, without canonicity validation.
+  Naming a conversation is not authorization on this wire, and it never touches a local path on this side.
 - `attachmentId` reaches a filesystem call through exactly one route — `storeAttachment` →
   `resolveAttachmentPath` — and this feature adds no second canonicity check.
+- Explicit host scope is bounded and registry-backed, never a path component or a wire field.
+  Terminals carry caller-supplied scope and closed-set outcomes, never daemon text, paths or bytes.
+  Recipient deduplication, terminal fencing and the aggregate storage-held cap are security boundaries;
+  see the [scoped retrieval security review](../../specs/architecture/1926-scoped-attachment-retrieval.md#security-review).
 - Logging is the static event name `attachment-fetch` plus a client-owned `code` and nothing else — no
   identifier, no byte length, no chunk count, no path, no digest. Narrower than the upload leg's on
   purpose: the byte length the upload leg logs is *this side's own file* there; here it is
@@ -432,7 +466,8 @@ Revisions section. Load-bearing points not covered above:
 
 ## Testing
 
-All vitest — main-process and IPC-contract work with no renderer surface, so no Playwright spec.
+Unit coverage exercises IPC, main orchestration and renderer sequencing; mounted fake-transport
+coverage proves real preload/main routing and image completion.
 
 - `src/shared/ipc/attachmentRetrieval.test.ts` — the guard's accept/refuse table (non-object, `null`,
   missing field, non-string, empty string, over-length, an explicitly-`undefined` field — structured
@@ -456,17 +491,43 @@ A settle-once driver makes `request(); assert()` tests wrong at the wiring layer
 terminal crosses a real microtask boundary through `store`, so terminal-state tests drain the microtask
 queue rather than taking a single tick.
 
+`src/main/attachmentRetrievalScope.test.ts` uses real routers with fake connections for explicit
+unlisted/equal-ID ownership, unknown/unpaired/disconnected refusal and unchanged legacy routing. It
+checks independent same-ID outcomes, originating-window fanout, repeated-emitter deduplication,
+legacy/explicit shared work, aggregate admission during delayed storage and stale-terminal retry
+fencing. IPC and renderer tests cover host bounds and scoped terminal matching.
+
+In `e2e/thread-items.spec.ts`, `snapshot attachment scope through daemon retrieval` is enabled and
+uses real preload/main with two fake hosts: off-selection, unlisted snapshots reach each supplied
+owner and both image rows decode. The renderer-only sibling `snapshot attachment actions retain
+their host and conversation across reused IDs` remains. `a late retrieval disconnect cannot settle
+a switched thread with reused image IDs` holds both replies, switches host/thread, waits for the old
+host's actual `connection-lost` through preload, then completes the still-pending new host's image.
+It also sends malformed hosts through preload/main and waits for a valid unknown-host terminal before
+asserting no malformed outcomes or wire requests. Closing only the fake daemon leaves the client relay
+leg open: use `forwarder.closeClientLeg` and an outcome receipt barrier, or a negative assertion can
+pass before a disconnect terminal reaches the listener.
+
+Recorded dispatcher gate 6 at `ce88dd0029db01f4d13a3d5db6569be002376e9d` (2026-10-10):
+`npx playwright test --reporter=json` executed 382, passed 382, failed 0, skipped 3. All three named
+attachment cases above were present and passed. The
+[verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1933#issuecomment-6102697014)
+also records all five thread-items cases executed/passed, failed 0, skipped 0, and unit suite
+executed/passed 9,829, failed 0, skipped 3. Fake transport satisfies this ticket; no live Claude run
+was required or recorded.
+
 ## Edge cases and limitations
 
-- **The served case is narrower than the parent user story.** The only attachment identifiers this app
-  knows are ones it minted itself when uploading (`randomUUID` in `attachmentUpload.ts`) — the daemon's
-  inbound `message` payload carries no attachment ids and no list verb exists on the wire. So this
-  serves fetching back the operator's own file after a reopen or from another machine, not an
-  assistant-produced file; that needs a daemon-side change with no ticket in any repo.
+- **Retrieval requires a known attachment identifier.** Callers obtain records from uploads,
+  [assistant offers](conversation-shell-message-bubble-attachments.md#the-assistant-offered-file-row-1621)
+  or supplied thread snapshots; this driver does not discover files or enumerate attachments.
 - **Retry is out of scope.** `stream-aborted` is documented retryable after a backoff, but no automatic
   retry is built — the operator asks again.
 - **No per-attachment eviction.** Repeated fetches of the same id simply replace the stored file
   (`storeAttachment`'s content-addressed behaviour); nothing ever deletes it.
+- **Persistence and byte reads still address by attachment ID alone.** Scoped retrieval ownership
+  does not partition the flat disk cache or add scope to `requestAttachmentBytes`; equal-ID stored
+  files still share that address. The repair scopes live work, terminals and renderer URL sharing.
 - **The concurrency cap (4) and the idle deadline (30 s) are both fixed constants**, not configurable
   per request — revisit if a consumer ticket needs otherwise.
 

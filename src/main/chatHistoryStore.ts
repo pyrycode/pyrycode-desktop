@@ -9,7 +9,7 @@ import type { DiagnosticLog } from './diagnosticLog'
 const NAME = 'chat-history'
 function sameRecord(a: ChatHistorySnapshot, b: ChatHistorySnapshot): boolean {
   return a.serverId === b.serverId && a.kind === b.kind &&
-    (a.kind === 'list' || (b.kind === 'timeline' && a.conversationId === b.conversationId))
+    (a.kind === 'list' || (b.kind !== 'list' && a.conversationId === b.conversationId))
 }
 function decode(bytes: Uint8Array): ChatHistorySnapshot[] {
   const value: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
@@ -46,13 +46,13 @@ export function createChatHistoryStore(deps: { secureStore: SecureStore; log: Di
       }
     }
     const { operation, serverId } = request
-    if (operation === 'readList' || operation === 'readTimeline') {
+    if (operation === 'readList' || operation === 'readTimeline' || operation === 'readThread') {
       const snapshot = snapshots.find((s) => s.serverId === serverId && (operation === 'readList'
-        ? s.kind === 'list' : s.kind === 'timeline' && s.conversationId === request.conversationId))
+        ? s.kind === 'list' : s.kind === (operation === 'readThread' ? 'daemon-items' : 'timeline') && s.conversationId === request.conversationId))
       return snapshot === undefined ? { status: 'missing' } : { status: 'stored', snapshot }
     }
     let next: ChatHistorySnapshot[]
-    if (operation === 'replaceList' || operation === 'replaceTimeline') {
+    if (operation === 'replaceList' || operation === 'replaceTimeline' || operation === 'replaceThread') {
       const index = snapshots.findIndex((s) => sameRecord(s, request.snapshot))
       next = snapshots.slice()
       if (index < 0) next.push(request.snapshot)
@@ -60,7 +60,7 @@ export function createChatHistoryStore(deps: { secureStore: SecureStore; log: Di
     } else if (operation === 'removeServer') {
       next = snapshots.filter((s) => s.serverId !== serverId)
     } else {
-      next = snapshots.filter((s) => !(s.serverId === serverId && s.kind === 'timeline' &&
+      next = snapshots.filter((s) => !(s.serverId === serverId && s.kind !== 'list' &&
           s.conversationId === request.conversationId))
         .map((s) => s.serverId === serverId && s.kind === 'list'
           ? { ...s, conversations: s.conversations.filter((c) => c.id !== request.conversationId) } : s)

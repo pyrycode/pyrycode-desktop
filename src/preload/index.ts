@@ -465,7 +465,7 @@ const api = {
    * after the ask — after a request frame, a stream of chunks, a digest check and a disk write, which
    * an invoke reply cannot straddle.
    *
-   * CALLED WITH TWO IDENTIFIERS AND NOTHING ELSE, which is where it parts from
+   * CALLED WITH TWO IDENTIFIERS AND OPTIONAL CLIENT-LOCAL HOST SCOPE, which is where it parts from
    * `requestAttachmentUpload`'s bare intent: that one carries no argument because the picker runs in
    * the background process, and this one names what to fetch. NO PATH AND NO DIRECTORY CROSSES in
    * either direction — the attachment directory is derived in the background process from Electron's
@@ -485,10 +485,9 @@ const api = {
    * remounts. The onDaemonEvent shape — the raw IpcRendererEvent (exposing .sender/.ports) is stripped
    * before the listener runs, and removeListener uses the exact handler registered.
    *
-   * Correlate on the event's `attachmentId`: it is this window's OWN value coming back, and at most one
-   * retrieval per identifier is live, so two concurrent fetches of different attachments stay
-   * distinguishable. A duplicate ask for an attachment already being fetched delivers ONE event, not
-   * two — it joins the retrieval in flight rather than starting a second. The event carries no path,
+   * Match the captured conversation/attachment and optional server scope. Equal IDs on different
+   * owners have independent terminals; duplicate scoped asks share transport work and each originating
+   * window receives a terminal. The bridge forwards scope unchanged. The event carries no path,
    * no filename and no file byte by construction (see AttachmentRetrievalEvent). No consumer is wired
    * yet — the rendering is #814/#866/#867.
    */

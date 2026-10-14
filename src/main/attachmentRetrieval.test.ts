@@ -41,7 +41,7 @@ function harness(
   const events: AttachmentRetrievalEvent[] = []
   const records: DiagnosticEvent[] = []
   const deps: AttachmentRetrievalDeps = {
-    requestAttachment: (payload, consumer) => asks.push({ payload, consumer }),
+    resolve: () => ({ serverId: 'host', connection: { requestAttachment: (payload, consumer) => { asks.push({ payload, consumer }) } } }),
     store: overrides.store ?? ((): Promise<StoreAttachmentResult> =>
       Promise.resolve({ ok: true, path: LOCAL_PATH })),
     diagnosticLog: overrides.diagnosticLog ?? {
@@ -51,10 +51,11 @@ function harness(
     }
   }
   const driver = createAttachmentRetrieval(deps)
+  const collect = (event: AttachmentRetrievalEvent): void => { events.push(event) }
   return {
     // The emit is per-ask, so the harness defaults it to the shared collector and lets a test pass
     // its own to prove a terminal reaches the window that ASKED rather than whichever asked last.
-    request: (ask, emit) => driver(ask, emit ?? ((event) => events.push(event))),
+    request: (ask, emit) => driver(ask, emit ?? collect),
     asks,
     events,
     records
@@ -83,7 +84,7 @@ describe('createAttachmentRetrieval', () => {
     ctx.asks[0].consumer.complete(new Uint8Array([1, 2, 3]))
     await drain()
 
-    expect(ctx.events).toEqual([{ type: 'completed', attachmentId: ATTACHMENT }])
+    expect(ctx.events).toEqual([{ type: 'completed', conversationId: CONVERSATION, attachmentId: ATTACHMENT }])
     // The store's path is a RETURN VALUE for #814/#866/#867, never something to forward. Checked as a
     // property of the serialized event, so a later added field cannot smuggle it.
     expect(JSON.stringify(ctx.events)).not.toContain(LOCAL_PATH)
@@ -117,7 +118,7 @@ describe('createAttachmentRetrieval', () => {
     await drain()
 
     expect(ctx.events).toEqual([
-      { type: 'failed', attachmentId: ATTACHMENT, reason: 'store-failed' }
+      { type: 'failed', conversationId: CONVERSATION, attachmentId: ATTACHMENT, reason: 'store-failed' }
     ])
   })
 
@@ -134,7 +135,7 @@ describe('createAttachmentRetrieval', () => {
     await drain()
 
     expect(ctx.events).toEqual([
-      { type: 'failed', attachmentId: ATTACHMENT, reason: 'store-failed' }
+      { type: 'failed', conversationId: CONVERSATION, attachmentId: ATTACHMENT, reason: 'store-failed' }
     ])
     expect(JSON.stringify(ctx.events)).not.toContain('/private/secret')
     expect(JSON.stringify(ctx.records)).not.toContain('/private/secret')
@@ -159,7 +160,7 @@ describe('createAttachmentRetrieval', () => {
 
     // No second mapping layer: the transport's terminal IS the window's reason. AC3's two published
     // codes therefore stay distinguishable end to end.
-    expect(ctx.events).toEqual([{ type: 'failed', attachmentId: ATTACHMENT, reason }])
+    expect(ctx.events).toEqual([{ type: 'failed', conversationId: CONVERSATION, attachmentId: ATTACHMENT, reason }])
   })
 
   it('runs two retrievals of different attachments at once without cross-feeding', async () => {
@@ -174,8 +175,8 @@ describe('createAttachmentRetrieval', () => {
     ctx.asks[0].consumer.fail('not-found')
 
     expect(ctx.events).toEqual([
-      { type: 'completed', attachmentId: OTHER_ATTACHMENT },
-      { type: 'failed', attachmentId: ATTACHMENT, reason: 'not-found' }
+      { type: 'completed', conversationId: CONVERSATION, attachmentId: OTHER_ATTACHMENT },
+      { type: 'failed', conversationId: CONVERSATION, attachmentId: ATTACHMENT, reason: 'not-found' }
     ])
   })
 
@@ -204,11 +205,11 @@ describe('createAttachmentRetrieval', () => {
 
     // The emit is captured per ask and held with the in-flight entry, so the terminal goes back to
     // the asker rather than to a process-lifetime target that #519 would have to keep current.
-    expect(first).toEqual([{ type: 'failed', attachmentId: ATTACHMENT, reason: 'not-found' }])
+    expect(first).toEqual([{ type: 'failed', conversationId: CONVERSATION, attachmentId: ATTACHMENT, reason: 'not-found' }])
     expect(second).toEqual([])
   })
 
-  it('answers a coalesced duplicate on the ORIGINAL asker’s emit', () => {
+  it('answers every coalesced originating window without redirecting the original', () => {
     const ctx = harness()
     const first: AttachmentRetrievalEvent[] = []
     const second: AttachmentRetrievalEvent[] = []
@@ -217,10 +218,9 @@ describe('createAttachmentRetrieval', () => {
     ctx.request({ conversationId: CONVERSATION, attachmentId: ATTACHMENT }, (e) => second.push(e))
     ctx.asks[0].consumer.fail('timed-out')
 
-    // A duplicate ask must not be able to REDIRECT a retrieval already under way to a different
-    // window; the entry's emit is left exactly as the retrieval that started it set it.
-    expect(first).toEqual([{ type: 'failed', attachmentId: ATTACHMENT, reason: 'timed-out' }])
-    expect(second).toEqual([])
+    // Both originating windows receive the shared terminal; neither replaces the other's emitter.
+    expect(first).toEqual([{ type: 'failed', conversationId: CONVERSATION, attachmentId: ATTACHMENT, reason: 'timed-out' }])
+    expect(second).toEqual(first)
   })
 
   it('holds the in-flight identifier across the store, then releases it', async () => {
@@ -242,7 +242,7 @@ describe('createAttachmentRetrieval', () => {
 
     settleStore({ ok: true, path: LOCAL_PATH })
     await drain()
-    expect(ctx.events).toEqual([{ type: 'completed', attachmentId: ATTACHMENT }])
+    expect(ctx.events).toEqual([{ type: 'completed', conversationId: CONVERSATION, attachmentId: ATTACHMENT }])
 
     // Released on the terminal: a fresh ask starts a fresh retrieval.
     ctx.request({ conversationId: CONVERSATION, attachmentId: ATTACHMENT })
@@ -262,7 +262,7 @@ describe('createAttachmentRetrieval', () => {
     // which is what keeps #995's per-transfer memory bound meaningful against an untrusted window.
     expect(ctx.asks).toHaveLength(ATTACHMENT_MAX_CONCURRENT_RETRIEVALS)
     expect(ctx.events).toEqual([
-      { type: 'failed', attachmentId: 'one-too-many', reason: 'busy' }
+      { type: 'failed', conversationId: CONVERSATION, attachmentId: 'one-too-many', reason: 'busy' }
     ])
   })
 
@@ -335,7 +335,7 @@ describe('createAttachmentRetrieval', () => {
     const events: AttachmentRetrievalEvent[] = []
     const asks: AttachmentRetrievalConsumer[] = []
     const request = createAttachmentRetrieval({
-      requestAttachment: (_payload, consumer) => asks.push(consumer),
+      resolve: () => ({ serverId: 'host', connection: { requestAttachment: (_payload, consumer) => { asks.push(consumer) } } }),
       store: () => Promise.resolve({ ok: true, path: LOCAL_PATH })
     })
 
@@ -345,6 +345,6 @@ describe('createAttachmentRetrieval', () => {
     asks[0].fail('timed-out')
 
     const expected: AttachmentRetrievalFailure = 'timed-out'
-    expect(events).toEqual([{ type: 'failed', attachmentId: ATTACHMENT, reason: expected }])
+    expect(events).toEqual([{ type: 'failed', conversationId: CONVERSATION, attachmentId: ATTACHMENT, reason: expected }])
   })
 })

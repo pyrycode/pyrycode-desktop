@@ -1,3 +1,4 @@
+import { dispatchThreadQuery } from './threadQueryCommand'
 import { createAppUpdateController, registerAppUpdate, createQuitDrain } from './appUpdate'
 import { APP_UPDATE_STATE_CHANNEL } from '../shared/ipc/appUpdate'
 import { createMessageLifecycle } from './messageLifecycle'
@@ -54,6 +55,7 @@ import { emitDaemonEvent, bindServerOrigin } from './emitDaemonEvent'
 import { createLiveWindow } from './liveWindow'
 import { fireNotification, activateWindow, windowHasFocus } from './fireNotification'
 import { createContextMenuListener } from './editContextMenu'
+import { createWindowOpenHandler } from './windowOpenHandler'
 import { createDiagnosticLog } from './diagnosticLog'
 import { fileRotatingSink, stdoutSink } from './diagnosticLogSinks'
 import { logSessionStart } from './sessionBanner'
@@ -77,7 +79,8 @@ import {
 import {
   ATTACHMENT_RETRIEVAL_CHANNEL,
   ATTACHMENT_RETRIEVAL_EVENT_CHANNEL,
-  isAttachmentRetrievalRequest
+  isAttachmentRetrievalRequest,
+  type AttachmentRetrievalEvent
 } from '../shared/ipc/attachmentRetrieval'
 import {
   WORKSPACE_FILE_READ_CHANNEL,
@@ -145,21 +148,14 @@ function createWindow(presentation: WindowPresentation): BrowserWindow {
 
   if (!hidden) mainWindow.on('ready-to-show', () => mainWindow.show())
 
-  // Open external links in the OS browser, never in-app, and only for web schemes. A file:
-  // URL or a custom protocol-handler URL is dropped, so a hostile link cannot open a local
-  // file or launch a registered protocol handler through the window-open path.
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    let scheme = ''
-    try {
-      scheme = new URL(url).protocol
-    } catch {
-      return { action: 'deny' }
-    }
-    if (scheme === 'https:' || scheme === 'http:') {
-      void shell.openExternal(url)
-    }
-    return { action: 'deny' }
-  })
+  // Open external links outside the app, never in-app, and only the shapes the shared allowlist admits:
+  // web links, and Obsidian `open` links with read-only parameters (src/shared/externalLink.ts, the same
+  // check the renderer uses). A file: URL or any other protocol-handler URL is dropped, so a hostile link
+  // cannot open a local file or launch a registered protocol handler through the window-open path.
+  // `shell.openExternal` is read at call time, which the e2e stub in assistant-link-opens-externally relies on.
+  mainWindow.webContents.setWindowOpenHandler(
+    createWindowOpenHandler((url) => void shell.openExternal(url))
+  )
 
   // #1445: right-click opens the OS's own edit menu. The decision — whether a menu applies at all, and
   // which items it carries — lives in editContextMenu.ts, which imports no `electron`; this is the only
@@ -864,6 +860,9 @@ app.whenReady().then(() => {
         router.route(conversationId)?.stopBackgroundTask(conversationId, command.payload.task_id)
         return
       }
+      case 'queryThread':
+        dispatchThreadQuery(command, serverId => servers.route(serverId), live.sink)
+        return
       case 'requestHistory':
         // ROUTED BY CONVERSATION, mirroring the two cases above — a conversation's history belongs to
         // the server that hosts it, so the frame goes there or to no wire at all (#1222). The WHOLE
@@ -1081,6 +1080,9 @@ app.whenReady().then(() => {
         // which can emit the rejection an operator has to see; a check at this arm would have to
         // return silently.
         router.route(command.payload.conversation_id)?.setSystemPrompt(command.payload)
+        return
+      case 'markConversationRead':
+        router.route(command.payload.conversation_id, command.serverId)?.markConversationRead?.(command.payload)
         return
       case 'setConversationMuted': {
         // ROUTED BY CONVERSATION (#1595), like setSystemPrompt: the frame goes to the one host that
@@ -1430,22 +1432,11 @@ app.whenReady().then(() => {
   // state that only means anything ACROSS asks, so rebuilding it per ask would silently disable both.
   const attachmentDir = join(app.getPath('userData'), ATTACHMENT_DIR_NAME)
   const retrieveAttachment = createAttachmentRetrieval({
-    // ROUTED BY CONVERSATION (#1118), and the tenth of the ten entry points that carry the key they
-    // need: `AttachmentRetrievalRequest.conversationId` already survived the boundary guard, so this
-    // is a lookup rather than a new field. It is the one routed site that OWES ITS ASKER AN ANSWER —
-    // the window is waiting on a terminal — so a refusal is reported rather than dropped, on the
-    // existing `not-connected` outcome ("the ask arrived with no live session, so nothing was sent"),
-    // which the driver turns into exactly one `failed` on the asker's own emit and releases its
-    // in-flight slot. No member is added to AttachmentRetrievalFailure. Attachment UPLOAD carries no
-    // conversation id and stays on the stand-in above.
-    requestAttachment: (payload, consumer) => {
-      const owner = router.route(payload.conversation_id)
-      if (owner === null) {
-        consumer.fail('not-connected')
-        return
-      }
-      owner.requestAttachment(payload, consumer)
-    },
+    // Explicit thread scope uses paired registry lookup, including unlisted/equal-ID conversations.
+    // Legacy requests retain the conversation index's refusal behavior.
+    resolve: ask => ask.serverId === undefined
+      ? router.resolve(ask.conversationId)
+      : servers.resolve(ask.serverId),
     store: (attachmentId, bytes) => storeAttachment(attachmentDir, attachmentId, bytes),
     diagnosticLog
   })
@@ -1460,13 +1451,20 @@ app.whenReady().then(() => {
   // with the in-flight entry. The isDestroyed() guard is the upload edge's: a window closed
   // mid-retrieval drops the outcome instead of throwing. It cannot route through `live.sink`, whose
   // send re-supplies DAEMON_EVENT_CHANNEL and ignores the channel it is given.
+  // Stable emitter identity bounds duplicate subscribers to one per window and caller scope.
+  const retrievalEmitters = new WeakMap<Electron.WebContents, (event: AttachmentRetrievalEvent) => void>()
   const attachmentRetrievalListener = (event: Electron.IpcMainEvent, request: unknown): void => {
     if (!isAttachmentRetrievalRequest(request)) return
     const sender = event.sender
-    retrieveAttachment(request, (retrievalEvent) => {
-      if (sender.isDestroyed()) return
-      sender.send(ATTACHMENT_RETRIEVAL_EVENT_CHANNEL, retrievalEvent)
-    })
+    let emit = retrievalEmitters.get(sender)
+    if (emit === undefined) {
+      emit = retrievalEvent => {
+        if (sender.isDestroyed()) return
+        sender.send(ATTACHMENT_RETRIEVAL_EVENT_CHANNEL, retrievalEvent)
+      }
+      retrievalEmitters.set(sender, emit)
+    }
+    retrieveAttachment(request, emit)
   }
   ipcMain.on(ATTACHMENT_RETRIEVAL_CHANNEL, attachmentRetrievalListener)
   app.on('will-quit', () =>

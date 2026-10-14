@@ -1,5 +1,10 @@
-import { Children, isValidElement, useMemo, useRef, type ReactNode } from 'react'
-import Markdown, { type AllowElement, type Components } from 'react-markdown'
+import { Children, isValidElement, memo, useMemo, useRef, type ReactNode } from 'react'
+import Markdown, {
+  defaultUrlTransform,
+  type AllowElement,
+  type Components,
+  type UrlTransform
+} from 'react-markdown'
 import { gfmTable } from 'micromark-extension-gfm-table'
 import { gfmTableFromMarkdown } from 'mdast-util-gfm-table'
 import { gfmTaskListItem } from 'micromark-extension-gfm-task-list-item'
@@ -12,6 +17,7 @@ import { gfmStrikethroughFromMarkdown } from 'mdast-util-gfm-strikethrough'
 import type {} from 'remark-parse'
 import type { Processor } from 'unified'
 import { MAX_WORKSPACE_FILE_PATH_LENGTH } from '@shared/ipc/workspaceFileRead'
+import { allowedLinkHref } from '@shared/externalLink'
 import { copyMessageText } from './copyMessageText'
 
 // #608: assistant-reply markdown → React elements. Daemon-supplied text may render as content
@@ -43,7 +49,8 @@ import { copyMessageText } from './copyMessageText'
 //     discriminator the tests use to tell "escaped" from "absent".
 //
 // The transport-side posture is unchanged and is not rebuilt here: sandbox + contextIsolation, the
-// http/https-only setWindowOpenHandler, the same-document will-navigate guard (src/main/index.ts),
+// setWindowOpenHandler that opens only `allowedLinkHref` links (src/shared/externalLink.ts, shared with
+// the `a` override below), the same-document will-navigate guard (src/main/index.ts),
 // and a CSP with no img-src so a remote subresource fails by policy (src/renderer/index.html).
 //
 // TimelineRow uses this same boundary for settled replies and progressive streaming units.
@@ -171,58 +178,18 @@ function fenceLanguage(children: ReactNode): string | null {
 }
 
 /**
- * An absolute http/https URL, authority and all. Anchored, with no quantified group to backtrack on, so
- * it carries no ReDoS exposure on an unbounded daemon-supplied href.
+ * The link allowlist is `allowedLinkHref` in src/shared/externalLink.ts, enforced HERE in the renderer,
+ * at render time, before any anchor element exists, and by the main process's window-open handler with
+ * the very same function. It does not lean on the main-process guard alone: a `javascript:` href
+ * executes in the document rather than navigating it, so `will-navigate` would never see it.
+ *
+ * `urlTransform` lets through EXACTLY what that allowlist admits and hands every other value to
+ * react-markdown's default, unchanged. The default blanks every scheme outside its own short list, which
+ * includes `obsidian:`, so without this the override would only ever receive `href=""` for an Obsidian
+ * link. The default stays a prior, independent narrowing for everything else, and the override below
+ * remains the enforcement point. A module constant for a stable prop identity.
  */
-const ABSOLUTE_WEB_URL = /^https?:\/\//i
-
-/**
- * The href VERBATIM when it is an absolute http/https URL carrying an authority; null otherwise.
- *
- * This is #610's whole allowlist, and it is enforced HERE — in the renderer, at render time, before any
- * anchor element exists. It deliberately does not lean on the main-process guards: a `javascript:` href
- * executes in the document rather than navigating it, so `will-navigate` (src/main/index.ts:79) would
- * never see it. It narrows to match `setWindowOpenHandler` (:56) rather than the other way round —
- * `mailto:` is permitted by react-markdown's built-in `urlTransform` but denied by that handler, and a
- * link that renders live and then silently does nothing is worse than one that renders as text.
- *
- * It FAILS CLOSED, like `fenceLanguage` above: every shape that is not an allowed link returns null and
- * renders as the link's visible text — a complete UI state, not a degraded one. There is no error path.
- * Nothing is logged on the null path either: the value is untrusted daemon text and the repo's
- * diagnostics are content-free (#126).
- *
- * The RETURN IS THE ORIGINAL STRING, never `url.href`. The parser normalises — it adds a trailing slash
- * to `https://example.com` and punycodes/percent-encodes a non-ASCII authority — and the criterion is
- * that an allowed link carries its href unchanged. The parse decides; the original renders.
- */
-function allowedLinkHref(href: string | undefined): string | null {
-  // react-markdown types the prop as optional, so this is the shape check, not a scheme decision.
-  if (href === undefined) return null
-  let url: URL
-  try {
-    // NO BASE ARGUMENT, and that is the reject-without-resolving rule rather than an omission: every
-    // relative, protocol-relative, empty and unparseable href throws right here. Resolving instead would
-    // make the same reply behave differently in the two builds — under the dev server the document base
-    // is http:, so `./doc.md` would resolve to a web scheme and be ALLOWED, while a packaged build's
-    // file: base would deny the identical href.
-    url = new URL(href)
-  } catch {
-    return null
-  }
-  // THE ALLOWLIST — the one line to read when asking which schemes ship. `protocol` is lowercased by the
-  // parser, so `HTTPS://…` matches by construction and a toLowerCase() here would be noise.
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
-  // THE BASE-INDEPENDENCE GUARD, not a second scheme check, and deliberately not fused with the test
-  // above even though it implies it today: `http:example.com` is a scheme with NO AUTHORITY, so it parses
-  // absolutely and passes the allowlist, but the browser still resolves it against the document base when
-  // the click navigates — to the dev server unpackaged, to the real host when packaged. Requiring the
-  // authority is also what keeps this check and the main process's independent one (index.ts:56, which
-  // re-derives the scheme from the URL it is handed) in agreement: with it, the string checked here and
-  // the string that process receives are the same URL. Fusing the two conditions would mean a later
-  // widening of the allowlist silently dropped that.
-  if (!ABSOLUTE_WEB_URL.test(href)) return null
-  return href
-}
+const urlTransform: UrlTransform = (url) => allowedLinkHref(url) ?? defaultUrlTransform(url)
 
 /** A trailing `:line` or `:line:column` suffix. Anchored, digits only: nothing to backtrack on. */
 const LINE_SUFFIX = /:\d+(?::\d+)?$/
@@ -260,8 +227,9 @@ export function markdownLinkPath(href: string | undefined): string | null {
 }
 
 /**
- * The #610 link rule, shared by both component tables below so the two cannot drift: an allowed web link
- * is an anchor, and everything else is its visible text.
+ * The #610 link rule, shared by both component tables below so the two cannot drift: an allowed link (a
+ * web link, or an Obsidian `open` link since the allowlist moved to src/shared/externalLink.ts) is an
+ * anchor, and everything else is its visible text.
  *
  * `target="_blank"` IS THE CLICK MECHANISM, not decoration. It is what makes the click a window-open
  * request, which setWindowOpenHandler (src/main/index.ts) answers by handing the URL to
@@ -291,9 +259,9 @@ function webLink(href: string | undefined, children: ReactNode): JSX.Element {
  * passing. Each override renders its own values and nothing else.
  */
 const components: Components = {
-  // #610 opened the allowlist to exactly http/https, and THIS override is where it is enforced — not
-  // react-markdown's built-in `urlTransform`, which stays at its default and is a prior, independent
-  // narrowing nothing here depends on. Measured against the pinned react-markdown 10.1.0: the transform
+  // #610 opened the allowlist to http/https, later widened to Obsidian `open` links in the shared
+  // `allowedLinkHref`, and THIS override is where it is enforced, not `urlTransform` above, which only
+  // lets that same allowlist through and otherwise defers to react-markdown's default. Measured against the pinned react-markdown 10.1.0: the transform
   // BLANKS a denied href, it does not remove the anchor, so relying on it emits `<a href="">` for the
   // javascript:, data:, file:, custom-scheme and empty cases — an anchor, a click target and the literal
   // string `href`, all three of which the deny criterion forbids. Only an override can render no element
@@ -400,7 +368,7 @@ function CodeBlock({ children }: { children?: ReactNode }): JSX.Element {
  * CommonMark ends the language token at the first whitespace character and CSS class separators ARE
  * whitespace, so a fence can never contribute more than that one token.
  */
-export function AssistantMarkdown({ text, onOpenMarkdownPath, allowElement }: {
+export const AssistantMarkdown = memo(function AssistantMarkdown({ text, onOpenMarkdownPath, allowElement }: {
   text: string
   /** Streaming presentation can remove elements; all renderer security rules still apply. */
   allowElement?: AllowElement
@@ -428,8 +396,8 @@ export function AssistantMarkdown({ text, onOpenMarkdownPath, allowElement }: {
     }
   }, [onOpenMarkdownPath])
   return (
-    <Markdown components={table} remarkPlugins={remarkPlugins} allowElement={allowElement} unwrapDisallowed={allowElement !== undefined}>
+    <Markdown components={table} remarkPlugins={remarkPlugins} urlTransform={urlTransform} allowElement={allowElement} unwrapDisallowed={allowElement !== undefined}>
       {text}
     </Markdown>
   )
-}
+})

@@ -1,3 +1,4 @@
+import type { ThreadQuery } from '../shared/wire/thread'
 // The background-process consumer the Noise relay driver (#50) was built for: it SOURCES the
 // device static key (#43), the paired-server record (#44), and the `hello` early-data (#10),
 // CONSTRUCTS and drives the driver, and MAPS its four lifecycle events onto the typed DaemonEvent
@@ -19,6 +20,7 @@
 // classification code and the event name — never the caught error object, the human-readable banner
 // (messageFor), the ack/plaintext bytes, or the numeric close code (that is #127's relay leg). Every
 // failure surfaces as a non-connected DaemonEvent; nothing throws out of the module.
+import { createThreadUpdateReceiver } from './transport/threadUpdates'
 import type { MessageLifecycle } from './messageLifecycle'
 import { notifySend } from './transport/sendObservation'
 import type { SendOutcome } from './transport/sendObservation'
@@ -82,7 +84,7 @@ import {
   buildQuestionAnswer,
   buildQuestionRefused
 } from './transport/questionResolutionEnvelope'
-import { parseInboundMessage, turnEndMetricsOf, type InboundDaemonMessage } from './transport/inboundMessage'
+import { parseInboundMessage, sessionStateFamily, turnEndMetricsOf, type InboundDaemonMessage } from './transport/inboundMessage'
 import {
   createBundleReassembler,
   type BundleConsumer,
@@ -283,6 +285,7 @@ interface PendingRetrieval {
  * record-reload.
  */
 export interface DaemonConnection {
+  queryThread(query: ThreadQuery, requestId: string): void
   requestHostSystemPrompt(requestId: string): void
   setHostSystemPrompt(systemPrompt: string, requestId: string): void
   /** Idempotent. Emits `connecting`, then sources the inputs and constructs the driver. */
@@ -580,6 +583,8 @@ export interface DaemonConnection {
    * optimistic local value. NOTHING RETRIES on any path. NEVER throws out of the module (parity #490).
    */
   setSystemPrompt(payload: SetSystemPromptPayload): void
+  /** Publish an observed durable tail; only a received daemon mark acknowledges it. Never throws. */
+  markConversationRead?(payload: { conversation_id: string; up_to: number }): void
   /**
    * Encrypt a `set_conversation_muted` envelope onto the live session — mutes or unmutes one
    * conversation's notifications on its host (#1595). Exactly one content-free conversationMuteResult
@@ -786,6 +791,27 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // one — is the only binding by that name in the factory, and the unbound sink can be reached only
   // by naming `deps.sink` again, which nothing below does.
   const sink = bindServerOrigin(deps.sink, deps.serverId)
+  const threadReceiver = createThreadUpdateReceiver(event => {
+    if (event.kind === 'thread-query-failed') {
+      emitDaemonEvent(sink, { type: 'threadQueryFailed', conversationId: event.conversationId,
+        requestId: event.requestId, inReplyTo: event.inReplyTo, reason: event.reason })
+      return
+    }
+    if (event.kind === 'thread-reply') {
+      const { payload, type, ...correlation } = event.envelope
+      emitDaemonEvent(sink, { type: 'threadReply', conversationId: event.reply.payload.conversation_id,
+        requestId: event.requestId, reply: event.reply, correlation })
+      return
+    }
+    if (event.kind === 'thread-repair') {
+      emitDaemonEvent(sink, { type: 'threadRepairNeeded', conversationId: event.conversationId, reason: event.reason })
+      return
+    }
+    const { payload, type, ...correlation } = event.envelope
+    emitDaemonEvent(sink, { type: 'threadUpdate', conversationId: event.update.payload.conversation_id,
+      update: event.update, correlation, daemonTs: correlation.ts, historyEntryId: correlation.history_entry_id })
+  }, deps.diagnosticLog)
+  const connectionSink = sink
   const now = deps.now ?? ((): string => new Date().toISOString())
   const createDriver = deps.createDriver ?? createNoiseRelayDriver
   // The main-side answer_token mint (#236). Default: crypto.randomUUID (Node CSPRNG). A DI seam like
@@ -1166,9 +1192,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // it has already abandoned. Idempotent and total — an empty set is a no-op, and a settled transfer's
   // own `settled` flag absorbs a second fail.
   //
-  // This is also what makes dial()'s reset of nextEnvelopeId to 2 safe: every live transfer is failed
-  // before ids recycle, so a stale envelope id can never correlate a reject on the reconnected
-  // session (the pendingSettings.clear() rationale, applied to the transfer set).
+  // Every live transfer is failed on dial; monotonically unique envelope IDs also keep late
+  // rejects from correlating on the reconnected session (the pendingSettings.clear() rationale, applied to the transfer set).
   function failAttachmentTransfers(): void {
     const abandoned = [...activeTransfers]
     activeTransfers.clear()
@@ -1186,9 +1211,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // already abandoned. Clearing the map also drops each reassembler's accumulated chunk bytes.
   // Idempotent and total — an empty map is a no-op.
   //
-  // This is what makes dial()'s reset of nextEnvelopeId to 2 safe for this map: every live retrieval
-  // is failed before ids recycle, so a stale envelope id can never correlate an answer on the
-  // reconnected session (the pendingSettings.clear() rationale, applied to the retrieval map).
+  // Every live retrieval is failed on dial; monotonically unique envelope IDs also keep late
+  // answers from correlating on the reconnected session (the pendingSettings.clear() rationale, applied to the retrieval map).
   function failAttachmentRetrievals(): void {
     const abandoned = [...pendingRetrievals.values()]
     pendingRetrievals.clear()
@@ -1245,6 +1269,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   function onDriverEvent(event: RelaySessionEvent): void {
     switch (event.type) {
       case 'handshake-complete': {
+        threadReceiver.reset()
         let ack: HelloAckPayload
         try {
           ack = parseHelloAck(event.helloAck)
@@ -1268,8 +1293,16 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         // Decode the decrypted app-envelope at the transport boundary, then map its narrowed result
         // onto the IPC layer — the consumer's only job (transport/ stays IPC-free).
         let inbound: InboundDaemonMessage | null
+        let liveStateMetadata: { envelopeSessionId?: string | null; inReplyTo?: number } = {}
         try {
           inbound = parseInboundMessage(event.plaintext, deps.diagnosticLog, (envelope) => {
+            if (sessionStateFamily(envelope.type) !== null) {
+              liveStateMetadata = {
+                ...('session_id' in envelope ? { envelopeSessionId: envelope.session_id } : {}),
+                ...('in_reply_to' in envelope ? { inReplyTo: envelope.in_reply_to } : {})
+              }
+            }
+            if (envelope.session_state_cleared === true) return
             if (envelope.type === 'resync') {
               replayCursor = undefined
               deps.diagnosticLog?.event({ event: 'replay-cursor-reset', code: 'resync' })
@@ -1281,17 +1314,34 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             }
           })
         } catch {
-          // Fail-closed (AC4): oversized / malformed / unparseable / mistyped payload. Drop the
-          // frame — no event, no throw. The caught WireDecodeError is DROPPED (classify-don't-
-          // forward: its message could echo message plaintext; it never reaches a log or an event).
+          // Rejected envelopes have no trusted correlation. Interrupt queries and release assembly
+          // so a later marker cannot certify a batch dropped before receiver admission. The caught
+          // error is discarded: only the receiver's static failure reason reaches IPC or logs.
+          threadReceiver.reset()
           return
         }
         if (inbound === null) return // AC5: a well-formed envelope of another type is ignored.
+        const historyEntryId = 'historyEntryId' in inbound ? inbound.historyEntryId : undefined
+        const sink: DaemonEventSink = {
+          isDestroyed: () => connectionSink.isDestroyed(),
+          webContents: { send: (channel, typed) => connectionSink.webContents.send(channel,
+            { ...typed,
+              ...(historyEntryId === undefined ? {} : { historyEntryId }),
+              ...liveStateMetadata
+            }) }
+        }
         // Route on the narrowed kind. Messages forward their envelope time for receipt display; the three
         // debug-bundle kinds (#116) feed the armed reassembler (a no-op when none is in flight —
         // optional chaining, or the settled reassembler's own inert guard — preserving the prior
         // drop behaviour and keeping an unrelated `error` harmless when no bundle is streaming).
         switch (inbound.kind) {
+          case 'session-state-cleared':
+            emitDaemonEvent(sink, { type: 'sessionStateCleared', family: inbound.family,
+              correlation: inbound.correlation, daemonTs: inbound.correlation.ts })
+            return
+          case 'thread-frame':
+            if (authenticated && !stopped) threadReceiver.receive(inbound.envelope)
+            return
           case 'message':
             emitDaemonEvent(sink, { type: 'messageReceived', message: inbound.message, daemonTs: inbound.ts })
             return
@@ -1306,6 +1356,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             return
           case 'daemon-error': {
             if (inbound.pairingReject === 'pairing-rejected') {
+              threadReceiver.reset()
               pairingRejected = true
               failBundleStream()
               failAttachmentTransfers()
@@ -1321,6 +1372,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // generation and are dropped before onDriverEvent, so neither can overwrite the reason
             // with `connection-closed`. Nothing is persisted; a manual reconnect() dials afresh.
             if (inbound.updateRequired !== undefined) {
+              threadReceiver.reset()
               failBundleStream()
               failAttachmentTransfers()
               failAttachmentRetrievals()
@@ -1344,6 +1396,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // client never dispatched) falls through unchanged (AC3). The emitted event carries ONLY the
             // client's OWN changeId, never a field read from the untrusted error payload (AC1/AC4 no-echo).
             const inReplyTo = inbound.inReplyTo
+            if (inReplyTo !== undefined && threadReceiver.fail(inReplyTo, 'daemon-error')) return
             if (inReplyTo !== undefined) {
               for (const operation of ['read', 'write'] as const) {
                 const found = takeHostPrompt(inReplyTo, operation)
@@ -1616,8 +1669,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // session was resolved — and crosses verbatim for the same reason. The two are read as a
             // pair; neither is inferred from the other, and neither is inferred from `yolo`.
             // `conversationId` is the map's value, never a field of the decoded payload — the reply
-            // has none — and the numeric in_reply_to it was resolved from is NOT placed on the event:
-            // the renderer receives the id it supplied, not the wire routing id.
+            // has none — and conversation attribution still comes only from this pending request. Supplied
+            // wire correlation is also carried as metadata by the per-frame sink.
             emitDaemonEvent(sink, {
               type: 'runConfigReceived',
               conversationId,
@@ -2365,8 +2418,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             // reply, or a hostile daemon forging a confirmation for a change the client never dispatched)
             // is ignored — no coercion (AC3). The emitted event carries `sessionId` (the reply's field) +
             // `changeId` (the map value) in a FRESH literal — never a spread of the decoded payload, and
-            // the numeric in_reply_to is NEVER placed on the event (the renderer receives its own changeId,
-            // not the wire routing id). A session_id is a routing id, not a secret. Consumed by #256.
+            // supplied numeric in_reply_to travels separately as metadata; settlement still uses this
+            // main-owned pending map and client changeId. A session_id is a routing id, not a secret.
             const inReplyTo = inbound.inReplyTo
             if (inReplyTo === undefined) return
             const changeId = pendingSettings.get(inReplyTo)
@@ -2925,6 +2978,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         emitDaemonEvent(sink, { type: 'relayLinkChanged', status: 'connected' })
         return
       case 'relay-link-down': {
+        threadReceiver.reset()
         abandonHostPrompts()
         pendingSwitchAgents.clear()
         const wasAuthenticated = authenticated
@@ -2950,6 +3004,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         return
       }
       case 'terminal':
+        threadReceiver.reset()
         abandonHostPrompts()
         // A stream interrupted by a socket drop resolves the consumer (no hang, no lingering bytes).
         // Deterministic code, safe unconditionally: fail on a settled/absent reassembler is inert.
@@ -2970,6 +3025,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         emitFailed('connection-closed', `The connection to pyrybox was closed (code ${event.code}).`)
         return
       case 'error':
+        threadReceiver.reset()
         // Same teardown net for a connection-level driver error mid-stream.
         failBundleStream()
         failAttachmentTransfers()
@@ -3326,6 +3382,23 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     const pending = [...pendingHistoryRequests.values()]
     pendingHistoryRequests.clear()
     for (const conversationId of pending) failHistoryRequest(conversationId, 'interrupted')
+  }
+
+  function queryThread(query: ThreadQuery, requestId: string): void {
+    const id = nextEnvelopeId++
+    threadReceiver.register(id, requestId, query)
+    if (driver === null || !authenticated || stopped) { threadReceiver.fail(id, 'unavailable'); return }
+    const p = query.payload
+    const payload = { conversation_id: p.conversation_id,
+      ...(query.type === 'thread_catch_up' ? { epoch: query.payload.epoch, version: query.payload.version } : { before_order: query.payload.before_order }),
+      ...(p.limit === undefined ? {} : { limit: p.limit }) }
+    try {
+      const bytes = encodeEnvelope({ id, type: query.type, ts: now(), payload })
+      driver.sendMessage(bytes, outcome => {
+        if (outcome.type === 'dropped') threadReceiver.fail(id, 'send-failed')
+      })
+      deps.diagnosticLog?.event({ event: 'thread-query-sent', code: query.type })
+    } catch { threadReceiver.fail(id, 'send-failed') }
   }
 
   function requestHistory(payload: RequestHistoryPayload): void {
@@ -3827,6 +3900,18 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     emitDaemonEvent(sink, { type: 'conversationMuteResult', attemptId, outcome })
   }
 
+  function markConversationRead(payload: { conversation_id: string; up_to: number }): void {
+    if (driver === null || !authenticated || !Number.isSafeInteger(payload.up_to) || payload.up_to < 0) return
+    try {
+      const bytes = encodeEnvelope({ id: nextEnvelopeId++, type: 'mark_conversation_read', ts: now(),
+        payload: { conversation_id: payload.conversation_id, up_to: payload.up_to } })
+      driver.sendMessage(bytes)
+      deps.diagnosticLog?.event({ event: 'conversation-read-sent' })
+    } catch {
+      deps.diagnosticLog?.event({ event: 'conversation-read-failed', code: 'local-send' })
+    }
+  }
+
   function setConversationMuted(payload: SetConversationMutedPayload, attemptId: string): void {
     if (driver === null) {
       conversationMuteResult(attemptId, 'rejected')
@@ -4285,6 +4370,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
 
   // The single fresh-connect path both start() and reconnect() funnel through.
   function dial(): void {
+    threadReceiver.reset()
     abandonHostPrompts()
     authenticated = false
     deliveryFailed = false
@@ -4296,31 +4382,28 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // this is a no-op.
     driver?.stop()
     driver = null
-    // Fresh session, fresh app-envelope numbering — each dial rebuilds `hello` at id 1, so app
-    // envelopes restart at 2. Correctness-neutral (the daemon correlates by id, not sequence; see
-    // the nextEnvelopeId comment above) but keeps a re-dialed session self-consistent.
-    nextEnvelopeId = 2
+    // Each hello still uses id 1. Keep app IDs monotonic across dials so delayed history
+    // replies cannot match a successor query after the old pending state is released.
     // Reset the modal-answer correlation window (#248): a fresh connection starts with no outstanding
     // answer, so a stale answer from a dead session can never correlate an `error` on the reconnected
     // one. Holds only strings — nothing to abort, just clear the array in place.
     outstandingAnswers.length = 0
     // Reset the set_session_settings pending map (#261, AC5): a reconnect abandons outstanding changes,
-    // so a stale reply from a dead session can never correlate on the reconnected one. This is what makes
-    // the recycled envelope ids (nextEnvelopeId restarts at 2 above) safe.
+    // releasing the old pending state independently of the monotonically unique envelope IDs.
     pendingSettings.clear()
     // Reset the create_workspace_folder pending set (#396, AC1): a reconnect abandons outstanding
     // requests, so a stale envelope id from a dead session can never correlate an `error` on the
-    // reconnected one (which recycles ids from 2). The pendingSettings.clear() rationale, applied to the
+    // reconnected one. The pendingSettings.clear() rationale, applied to the
     // create-folder set.
     pendingCreateFolders.clear()
     // Reset the create_conversation pending set (#1307, AC1): the pendingCreateFolders rationale applied
     // to the create verb. A reconnect abandons outstanding creates, so a stale envelope id from a dead
-    // session can never correlate an `error` on the reconnected one (which recycles ids from 2).
+    // session can never correlate an `error` on the reconnected one.
     pendingCreateConversations.clear()
     pendingSwitchAgents.clear()
     // Reset the run-config request correlation map (#1176, AC4): a reconnect abandons outstanding
     // reads, so a reply correlated against a previous connection's envelope ids can never match on the
-    // reconnected one — which is what makes the recycled ids safe here too. Without it, the fresh
+    // reconnected one. Without it, the fresh
     // connection's first request would inherit the dead one's conversation. The pendingSettings.clear()
     // rationale, applied to the read leg.
     pendingConfigRequests.clear()
@@ -4334,7 +4417,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // here a surviving entry would settle a NEW connection's write against a dead one's conversation —
     // reporting a prompt as stored on a conversation that was never written to.
     pendingSystemPromptWrites.clear()
-    // The same rationale for the MCP status ask (#1578): a recycled id must not settle a new connection's
+    // The same rationale for the MCP status ask (#1578): old pending state must not settle a new connection's
     // refusal against a dead one's conversation.
     pendingMcpStatusRequests.clear()
     pendingMcpReconnects.clear()
@@ -4378,6 +4461,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     stop(): void {
       if (stopped) return
       stopped = true
+      threadReceiver.reset()
       authenticated = false
       failHeldMessages(true)
       pendingSwitchAgents.clear()
@@ -4397,6 +4481,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     requestHostSystemPrompt,
     setHostSystemPrompt,
     requestSystemPrompt,
+    queryThread,
     requestHistory,
     requestConversations,
     requestRecentWorkspaces,
@@ -4415,6 +4500,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     changeWorkspace,
     renameWorkspace,
     setSystemPrompt,
+    markConversationRead,
     setConversationMuted,
     setSessionSettings,
     answerModal,

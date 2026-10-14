@@ -254,6 +254,7 @@ export function createConnectionRegistry(deps: ConnectionRegistryDeps): Connecti
     toggleMcpServer: (conversationId, serverName, enabled) =>
       resolve().toggleMcpServer(conversationId, serverName, enabled),
     stopBackgroundTask: (conversationId, taskId) => resolve().stopBackgroundTask(conversationId, taskId),
+    queryThread: (query, requestId) => resolve().queryThread(query, requestId),
     requestHistory: (payload) => resolve().requestHistory(payload),
     requestSystemPrompt: (conversationId) => resolve().requestSystemPrompt(conversationId),
     requestConversations: () => resolve().requestConversations(),
@@ -273,6 +274,7 @@ export function createConnectionRegistry(deps: ConnectionRegistryDeps): Connecti
     changeWorkspace: (payload) => resolve().changeWorkspace(payload),
     renameWorkspace: (payload, attemptId) => resolve().renameWorkspace(payload, attemptId),
     setSystemPrompt: (payload) => resolve().setSystemPrompt(payload),
+    markConversationRead: payload => resolve().markConversationRead?.(payload),
     setConversationMuted: (payload, attemptId) => resolve().setConversationMuted(payload, attemptId),
     setSessionSettings: (payload, changeId) => resolve().setSessionSettings(payload, changeId),
     answerModal: (payload) => resolve().answerModal(payload),

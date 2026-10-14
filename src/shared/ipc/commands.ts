@@ -15,6 +15,7 @@
 //
 // Imported by src/main and src/preload, which have no @shared path alias — hence the
 // relative import here and in those callers (see tsconfig.node.json).
+import type { ThreadQuery } from '../wire/thread'
 import type {
   SetHostSystemPromptPayload,
   SendMessagePayload,
@@ -346,6 +347,7 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * the boundary.
  */
 export type RendererCommand =
+  | { type: 'queryThread'; serverId: string; requestId: string; query: ThreadQuery }
   | { type: 'requestHostSystemPrompt'; serverId: string; requestId: string }
   | { type: 'setHostSystemPrompt'; serverId: string; requestId: string; payload: SetHostSystemPromptPayload }
   | { type: 'sendMessage'; payload: SendMessagePayload; serverId?: string }
@@ -376,6 +378,7 @@ export type RendererCommand =
   // Routed by conversation (#1595). The client-only attemptId is required and correlates exactly one
   // content-free conversationMuteResult; it never reaches the wire.
   | { type: 'setConversationMuted'; payload: SetConversationMutedPayload; attemptId: string }
+  | { type: 'markConversationRead'; serverId: string; payload: { conversation_id: string; up_to: number } }
   | { type: 'createWorkspaceFolder'; payload: CreateWorkspaceFolderPayload; serverId?: string }
   | { type: 'renameWorkspace'; payload: RenameWorkspacePayload; serverId?: string; attemptId?: string }
   | { type: 'setSessionSettings'; payload: SetSessionSettingsPayload; changeId: string }
@@ -515,6 +518,18 @@ export function interruptCommand(fields: InterruptCommandPayload): RendererComma
 export function isRendererCommand(value: unknown): value is RendererCommand {
   if (typeof value !== 'object' || value === null || !('type' in value)) return false
   switch (value.type) {
+    case 'queryThread': {
+      const text = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 1024
+      const number = (v: unknown): boolean => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
+      if (!('serverId' in value) || !text(value.serverId) || !('requestId' in value) || !text(value.requestId) ||
+          !('query' in value) || typeof value.query !== 'object' || value.query === null) return false
+      const q = value.query
+      if (!('type' in q) || !('payload' in q) || typeof q.payload !== 'object' || q.payload === null || Array.isArray(q.payload)) return false
+      const p = q.payload
+      return 'conversation_id' in p && text(p.conversation_id) && (!('limit' in p) || number(p.limit)) &&
+        (q.type === 'thread_catch_up' ? 'epoch' in p && typeof p.epoch === 'string' && p.epoch.length <= 1024 && 'version' in p && number(p.version) :
+          q.type === 'thread_page' && 'before_order' in p && number(p.before_order))
+    }
     case 'sendMessage': {
       const serverId = 'serverId' in value ? value.serverId : undefined
       return (serverId === undefined || (typeof serverId === 'string' && serverId.length > 0 && serverId.length <= 1024)) &&
@@ -595,6 +610,14 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       // Payload-required (#1249) — the neighbours' idiom verbatim, including why the
       // explicitly-`undefined` case is refused by the payload guard rather than by the `in` check.
       return 'payload' in value && isSetSystemPromptPayload(value.payload)
+    case 'markConversationRead': {
+      if (!('serverId' in value) || typeof value.serverId !== 'string' || value.serverId.length === 0 ||
+          !('payload' in value) || typeof value.payload !== 'object' || value.payload === null || Array.isArray(value.payload)) return false
+      const payload = value.payload
+      return Object.keys(payload).length === 2 && 'conversation_id' in payload &&
+        typeof payload.conversation_id === 'string' && payload.conversation_id.length > 0 &&
+        'up_to' in payload && typeof payload.up_to === 'number' && Number.isSafeInteger(payload.up_to) && payload.up_to >= 0
+    }
     case 'setConversationMuted':
       return 'payload' in value && isSetConversationMutedPayload(value.payload) &&
         'attemptId' in value && typeof value.attemptId === 'string' &&

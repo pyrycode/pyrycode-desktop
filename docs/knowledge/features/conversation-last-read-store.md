@@ -27,13 +27,65 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
 
 ## How it works
 
+- **Daemon publication observes a committed display.** `useReadObservation`, mounted in
+  `ConversationScreen`, updates a ref with the rendered slice and derived durable target only in a
+  layout effect. Stable callbacks read that ref, never an initial captured slice or an uncommitted
+  timeline-store snapshot; current list state supplies ownership and read eligibility only. Each
+  commit explicitly rechecks observation: a target can advance without any geometry change, so
+  resize alone cannot establish publication. The newest user/assistant
+  message's trailing edge must be inside the thread viewport between the measured header and input
+  borders; the document must be focused and visible, and the Markdown reader closed. Opening,
+  receipt and bottom-following alone prove nothing; hidden or queued rows cannot publish.
+  Scroll, focus, resize and list changes recheck
+  that committed slice. List changes matter because received-read eligibility can arrive after the
+  display commits; waiting for another timeline change would leave a visible tail unpublished.
+- **Observation setup follows row and mounted-node identity, not streamed slice identity.** A layout
+  effect reconciles setup after each commit. The same conversation, numeric newest-message row key,
+  pane and thread nodes, and connected tail inside that thread reuse one ResizeObserver, scroll and
+  focus listeners, and list subscription. Newest-row discovery searches backwards and stops at the
+  first user/assistant item; replacement uses a targeted numeric `data-read-row` selector rather than
+  querying all read rows. Durable-target calculation still considers retained contributions below.
+  Setup exists even when its initial target is unknown, so independently admitted identity can later
+  publish without rediscovery. A changed conversation, key or mounted node disposes replaced setup;
+  reader coverage, missing slice/nodes/key and unmount also unsubscribe, remove listeners and
+  disconnect all observer targets. Observation watches thread, pane, tail and measured chrome.
+- **Only retained display identity supplies a target.** `readTargetFor` requires a contribution
+  bound to the newest message's surviving numeric row key, then takes the highest retained row-bound
+  ID (including folded deltas/tool patches) and transient display-state ID. The layout commit must
+  precede observation. Validated live/replayed `history_entry_id` and independently admitted history
+  contributions supply durable IDs; connection/replay IDs, timestamps alone, row counts, optimistic
+  echoes, served coverage and list `latest_entry_id` do not. Missing/ambiguous identity cannot advance
+  a target, and ID-less replay triggers no identity-recovery fetch. An independently admitted page
+  can bind its own durable contribution to that same displayed content; this does not recover or
+  assign the replay frame's identity. Ordinary opening/reconnect timeline demand remains owned by
+  [the history bridge](conversation-timeline-store-internals.md#the-opening-ask-1259), independently
+  of read publication. See [snapshot identity](chat-history.md#retained-display-contributions).
+- **Commands are bound to the observed host.** `markConversationRead` requires a nonempty `serverId`
+  and exactly `{ conversation_id, up_to }`, with a nonempty conversation ID and non-negative safe
+  integer target, including zero. Main validates IPC, resolves the sole current connected claim and
+  requires it to match the observed host before sending a fresh allowlisted `mark_conversation_read`
+  payload through that connection. Duplicate renderer ownership sends nothing; main refuses ambiguous
+  connected claims. See [routing](daemon-connection-conversation-routing.md#host-bound-read-routing).
+- **Sending does not acknowledge reading.** Only that host/conversation's received daemon mark
+  confirms the target. The daemon stores `max(held, min(up_to, latest))`; a clamped reply below the
+  target leaves it unconfirmed. Neither command delivery nor a send result clears attention.
+- **Pending observations survive navigation and disconnection in memory.** `createReadPublisher`
+  coalesces to the highest observed target and consumes an attempt before sending, so repeated delivery,
+  renders and effect replay cannot duplicate it. Each host reconnect permits at most one resend of
+  that unconfirmed target even while blurred; a newer eligible observation can publish a higher target.
+  Send failure, refusal and a lower acknowledgement retain it without an automatic retry loop.
+  Confirmation settles it; deletion, host/pairing removal, loss of the read contract or ambiguous/changed
+  ownership discards it. A later owner never inherits another host's pending mark. Pending commands
+  are never persisted; the local count store below remains the legacy path.
 - **Complete daemon rows suppress local stamping.** Both activation and timeline-driven writes call
   `stampLastReadFor`, whose production `isDaemonBacked(id)` dependency reads the current list at
   invocation time. Any matching row with both `read_up_to` and `latest_entry_id` (including zero)
   suppresses the write. The local map is ID-keyed, so a duplicate ID with a complete row on any host
   also suppresses stamping for its legacy peer; selecting only the first match would make protection
   depend on host order. Daemon unread still compares each actual row independently. The store's direct
-  `recordLastRead` API remains a local count writer, not a daemon mark publisher.
+  `recordLastRead` API remains a local count writer, not a daemon mark publisher. A missing frame
+  `history_entry_id` never re-enables local authority for a complete daemon row; legacy rows receive
+  no read command and retain count persistence and both clear paths.
 - **Shape:** the house four-part store (`zustand/vanilla` DI factory → app-wide singleton → `useStore`
   hook → selector factory bound to one id), the same shape as [conversation activity
   store](conversation-activity-store.md) and [conversation timeline
@@ -182,6 +234,23 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
   [Unpair channel § The two renderer callers](unpair-channel.md#the-two-renderer-callers) and [Paired
   shell routing](paired-shell-routing.md) for both call sites (the composer's Re-pair control and the
   Settings row's per-server Unpair).
+
+## Testing
+
+Keep connection, replay and durable IDs distinct in fixtures: equal IDs would let a mistaken identity
+source pass. `visible-tail-read.spec.ts` uses connection `900` and replay `700` while asserting actual
+outbound durable targets. Its ID-less replay case checks both no read command and no additional
+history request; the existing opening request's independently admitted page then supplies target `30`
+without duplicating the bubble. `history-on-open.spec.ts` separately pins ordinary newest-page demand
+from #1815. Publisher tests cover zero, retained/folded contributions and ID-less changes; last-read
+bridge/store tests pin daemon-backed stamp suppression and legacy count persistence/clears.
+
+The [#1844 verifier confirmation](https://github.com/pyrycode/pyrycode-desktop/pull/1884#issuecomment-6050590586)
+at `ca1529d7` on 2026-10-08 records 9,587 unit tests executed/passed, 0 failed, 3 skipped, and
+357 fake-transport tests executed/passed, 0 failed, 4 skipped. It explicitly confirms every case in
+`visible-tail-read.spec.ts` (6 executed/passed, 0 failed, 0 skipped) and `history-on-open.spec.ts`
+(5 executed/passed, 0 failed, 0 skipped) was present and passed without retries. No live-Claude result
+is claimed; the skips supply no acceptance evidence.
 
 ## Edge cases and limitations
 

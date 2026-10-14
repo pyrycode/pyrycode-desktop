@@ -174,7 +174,7 @@ the two box reads must still reject a missing or stationary pill.
 A hidden pill has no layout box, so a null box after a completed `hover()` does
 not by itself establish a placement defect. Capture actual hover, computed pill
 visibility and control/pill geometry together before teardown if it recurs; see
-[Layout and input](development-verification.md#layout-and-input). Use the paired
+[Layout and input](development-verification-layout-and-input.md#layout-and-input). Use the paired
 fixture's shared native-pointer protection before considering a local correction.
 Preserve ordinary Playwright input and all assertions without retries, increased
 timeouts, arbitrary sleeps or suite serialization.

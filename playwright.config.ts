@@ -19,7 +19,8 @@ const CLIPBOARD_SPECS = [
   'markdown-reader-menu',
   'message-copy',
   'message-side-actions',
-  'offline-conversation-actions'
+  'offline-conversation-actions',
+  'thread-items'
 ].map((name) => new RegExp(`(^|/)${name}\\.spec\\.ts$`))
 
 // Four, or half the machine's cores when that is fewer. Measured on a 10-core Mac, 2026-10-06: the run

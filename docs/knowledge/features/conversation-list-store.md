@@ -20,9 +20,9 @@ precedents.
 
 Requests a fresh `conversations` list for each connected host on mount and on each host's transition
 to `connected`, always with an explicit `serverId`. Mutation events refresh only their emitting host.
-Received lists replace only their stamped host's rows, preserving higher known read marks for
-matching IDs. Received read updates advance existing rows immediately. There is no row union or
-deduplication within a slot, and the flat read every consumer sees is a
+Received lists replace only their stamped host's rows, preserving higher known read marks and
+latest-entry IDs for matching IDs. Received read updates and durable live/replayed IDs advance
+existing rows immediately. There is no row union or deduplication within a slot, and the flat read every consumer sees is a
 **union across every server's slot**. Deliberately **not** a [session store](session-store.md) facet:
 a list update never touches connection/messages state and vice versa, so a list arrival re-renders
 only components selecting this slice.
@@ -50,6 +50,7 @@ export type ConversationListStore = ConversationListState & {
     cancel: () => void
   } | null
   setConversations: (conversations: readonly ConversationSummary[], serverId?: string | null) => void
+  advanceLatestEntry: (serverId: string, conversationId: string, latest: number) => void
   advanceReadMark: (serverId: string, conversationId: string, readUpTo: number) => void
   clearAllConversations: () => void   // the pairing-boundary drop (#1086, AC5) — nullary
   clearConversationsFor: (serverId: string) => void   // the per-server drop (#1196), see below
@@ -74,7 +75,7 @@ late success and failure after received data, clears or cancellation. Missing/em
 local success installs `[]`; failure leaves the slot absent. These local changes
 never authorize persistence or establish connection state. See
 [restoration admission](chat-history.md#received-state-admission-and-ownership).
-Rows retain **wire snake_case** fields, with monotonic read-mark reconciliation and one client-owned
+Rows retain **wire snake_case** fields, with monotonic read/latest-ID reconciliation and one client-owned
 property added beside them: no parallel camelCase
 renderer type, no per-field remap — unlike `runConfigSnapshot`'s `used_tokens → usedTokens`, this
 reuses `ConversationSummary` directly (`ServerConversationSummary extends` it) so the slice needs
@@ -98,13 +99,19 @@ synchronous updater. Other host arrays retain their references, including when t
 same conversation ID. An unknown host/row, invalid value, or lower/equal known mark is a no-op;
 an unknown mark can become zero. No incomplete update fabricates a row or a latest entry.
 
-`setConversations` still replaces metadata, latest-entry IDs, ordering and membership from the
-incoming list. For each matching ID in that host only, its read mark is the maximum of the incoming
-and held numbers; an omitted incoming mark retains a known one. With neither known, no mark is
-invented. An omitted latest-entry ID stays omitted even if held previously; removed rows stay
-removed. Thus latest 10/read 2 → update read 10 → delayed latest 10/read 2 remains read, while a
-later latest 11/read 10 becomes unread. Monotonicity lasts only while the row is held; clears and
-removal retain their existing behavior.
+`advanceLatestEntry(serverId, conversationId, latest)` admits non-negative safe integers, including
+zero, and raises only an existing owning-host row's `latest_entry_id`. The timeline bridge feeds
+validated live/replayed `historyEntryId` before dispatch, including for closed conversations and
+folded entries. Connection/replay IDs are never substituted. This establishes latest-entry evidence,
+not a read mark: without `read_up_to` it cannot establish the complete received-read contract.
+
+`setConversations` replaces metadata, ordering and membership from the incoming list. For each
+matching ID in that host only, both `read_up_to` and `latest_entry_id` retain the maximum held/incoming
+number; omission retains a known value, and with neither known no value is invented. Removed rows
+stay removed. Thus latest 10/read 2 → live latest 12 → acknowledgement read 10 → delayed
+latest 10/read 2 remains latest 12/read 10 and unread. A newer unseen list/live entry remains unread
+when only an older displayed tail is acknowledged. Monotonicity lasts only while the row is held;
+clears and removal retain their existing behavior.
 
 The [unread predicate](conversation-unread.md) uses both received fields before local counts, even
 without a timeline. [Read pushes do not themselves save history](chat-history.md#snapshot-contract).

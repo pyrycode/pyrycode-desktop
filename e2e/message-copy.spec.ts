@@ -176,6 +176,7 @@ test('copies a message to the OS clipboard by pointer and by keyboard, and draws
 
   // --- 5. The row sits at the FOOT of the bubble, below the content (AC2). The unit tier proves it in
   // markup order; this proves the browser lays it out there, which is what the drawing actually says. ---
+  await assistantBubble.hover()
   const laidOutAtFoot = await assistantBubble.evaluate((el) => {
     const content = el.querySelector('.bubble__markdown')
     const meta = el.querySelector('.bubble__meta')

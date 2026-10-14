@@ -1,7 +1,7 @@
 // The renderer delete-confirmation bridge (#652) — the twin of conversationCreatedBridge, and strictly
 // narrower: it subscribes to the daemon's `conversationDeleted` reply and invokes a caller-supplied
-// `onDeleted` (in PairedShell, that runs the exitActiveConversation decision). It SENDS NOTHING — the
-// delete command itself is fired by the Channel Info sheet's confirm (ConversationScreen.tsx:1699), so
+// `onDeleted` (in PairedShell, that runs the confirmed-deletion decision). It SENDS NOTHING — the
+// delete command itself is fired by the Channel Info sheet's confirm, so
 // there is no request half here. The two data-path helpers are React-free and injected, so the whole path
 // is unit-testable with plain spies (the conversationCreatedBridge idiom); `useConversationDeletedExit` is
 // the thin React glue over them. Nothing here touches keys, sockets, ipcRenderer, or raw frames — it only
@@ -28,8 +28,9 @@ export function translateConversationDeleted(event: DaemonEvent): string | null 
 
 /**
  * Subscribe via the injected `onDaemonEvent`; each `conversationDeleted` invokes `onDeleted` with the
- * deleted id; every unrelated event no-ops. Returns the unsubscribe handle (the subscribeConversations
- * off-handle idiom) so the React binding can use it as its effect cleanup. The `!== null` guard, not a
+ * deleted id and main-stamped origin; every unrelated event no-ops. Returns the unsubscribe handle
+ * (the subscribeConversations off-handle idiom) so the React binding can use it as its effect cleanup.
+ * The `!== null` guard, not a
  * truthiness check, is the conversationListBridge.ts:82-84 doctrine — here it also matters materially,
  * because a degenerate `''` id is falsy but is still a real value the daemon emitted. The listener only
  * invokes the callback — it never throws into React.
@@ -43,11 +44,15 @@ export function translateConversationDeleted(event: DaemonEvent): string | null 
  */
 export function subscribeConversationDeleted(
   onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
-  onDeleted: (conversationId: string) => void
+  onDeleted: (conversationId: string, serverId?: string | null) => void
 ): () => void {
   return onDaemonEvent((event) => {
     const deletedId = translateConversationDeleted(event)
-    if (deletedId !== null) onDeleted(deletedId)
+    if (deletedId !== null) {
+      const serverId = 'serverId' in event &&
+        (typeof event.serverId === 'string' || event.serverId === null) ? event.serverId : undefined
+      onDeleted(deletedId, serverId)
+    }
   })
 }
 
@@ -63,15 +68,17 @@ export function subscribeConversationDeleted(
  * re-renders. `window.pyry` is dereferenced only inside the effect, so PairedShell stays
  * server-renderable.
  */
-export function useConversationDeletedExit(onDeleted: (conversationId: string) => void): void {
+export function useConversationDeletedExit(
+  onDeleted: (conversationId: string, serverId?: string | null) => void
+): void {
   const onDeletedRef = useRef(onDeleted)
   useEffect(() => {
     onDeletedRef.current = onDeleted
   })
   useEffect(
     () =>
-      subscribeConversationDeleted(window.pyry.onDaemonEvent, (conversationId) =>
-        onDeletedRef.current(conversationId)
+      subscribeConversationDeleted(window.pyry.onDaemonEvent, (conversationId, serverId) =>
+        onDeletedRef.current(conversationId, serverId)
       ),
     []
   )

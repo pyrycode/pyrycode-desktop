@@ -1,5 +1,6 @@
 import {
   MAX_RETRIEVAL_IDENTIFIER_LENGTH,
+  matchesAttachmentRetrieval,
   type AttachmentRetrievalEvent,
   type AttachmentRetrievalRequest
 } from '@shared/ipc/attachmentRetrieval'
@@ -17,6 +18,7 @@ import {
 export interface AttachmentDownloadDeps {
   /** The conversation the thread is showing, or `null` when none is open. */
   getOpenConversationId: () => string | null
+  getServerId?: () => string | undefined
   openLocalAttachment: (request: AttachmentRetrievalRequest) => void
   onAttachmentOpenEvent: (listener: (event: AttachmentOpenEvent) => void) => () => void
   /** `window.pyry.requestAttachment` — fire-and-forget; the terminal arrives on the listener below. */
@@ -33,6 +35,7 @@ export function downloadAttachment(
   attachment: MessageAttachment
 ): void {
   const conversationId = deps.getOpenConversationId()
+  const serverId = deps.getServerId?.()
   if (conversationId === null) {
     // A row can only be drawn inside an open conversation, so this is unreachable rather than a state to
     // present. Logged as a bare event name — no identifier, no name.
@@ -40,11 +43,14 @@ export function downloadAttachment(
     return
   }
 
-  if (!addressable(conversationId) || !addressable(attachment.attachmentId)) {
+  if (!addressable(conversationId) || !addressable(attachment.attachmentId) ||
+      (serverId !== undefined && !addressable(serverId))) {
     console.error('attachment download refused a malformed identifier')
     return
   }
 
+  const ask = { conversationId, attachmentId: attachment.attachmentId,
+    ...(serverId === undefined ? {} : { serverId }) }
   let unsubscribe: (() => void) | null = null
   let settled = false
   unsubscribe = deps.onAttachmentOpenEvent(event => {
@@ -52,18 +58,18 @@ export function downloadAttachment(
     settled = true
     unsubscribe?.()
     if (event.type === 'failed' && event.reason === 'unavailable') {
-      retrieveAndSave(deps, attachment, conversationId)
+      retrieveAndSave(deps, attachment, ask)
     }
   })
   if (settled) unsubscribe()
-  deps.openLocalAttachment({ conversationId, attachmentId: attachment.attachmentId })
+  deps.openLocalAttachment(ask)
 }
 
 /** Fallback for attachments without a readable original under this upload owner. */
 function retrieveAndSave(
   deps: AttachmentDownloadDeps,
   attachment: MessageAttachment,
-  conversationId: string
+  ask: AttachmentRetrievalRequest
 ): void {
   // Subscribe BEFORE asking. Load-bearing rather than stylistic: `busy` and `not-connected` are decided
   // synchronously inside main's receiver, so the reverse order is a race by construction — it survives
@@ -77,10 +83,8 @@ function retrieveAndSave(
   let settled = false
 
   const listener = (event: AttachmentRetrievalEvent): void => {
-    // `attachmentId` is this window's OWN value coming back, never a wire-supplied one, so it is the
-    // correlation key: two rows fetched at once stay distinguishable, and an event belonging to another
-    // activation is left for that activation's own listener.
-    if (settled || event.attachmentId !== attachment.attachmentId) return
+    // Match the activation's captured scope, even after the selected host or thread changes.
+    if (settled || !matchesAttachmentRetrieval(event, ask)) return
     settled = true
     unsubscribe?.()
 
@@ -102,11 +106,9 @@ function retrieveAndSave(
   unsubscribe = deps.onAttachmentRetrievalEvent(listener)
   if (settled) unsubscribe()
 
-  // A FRESH LITERAL rather than a spread of the record, so no field this timeline item carries now or
-  // later can reach the ask by accident — `daemonConnection`'s posture for the envelope it builds from
-  // these same two values, applied one boundary earlier. AC2: the conversation and the attachment, and
-  // nothing else.
-  deps.requestAttachment({ conversationId, attachmentId: attachment.attachmentId })
+  // The captured ask contains only conversation/attachment identifiers and optional host scope.
+  // Timeline display fields never cross this retrieval boundary.
+  deps.requestAttachment(ask)
 
   // No save-event subscription. AC4 draws nothing on either save outcome, so there is no consumer; a
   // second subscription taken purely to log would double a listener's lifetime for a line main already

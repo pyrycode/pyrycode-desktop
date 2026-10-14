@@ -33,10 +33,12 @@ Each section below keeps the heading it had here, so an existing `#anchor` still
 ## What it does
 
 Conversation activation requests configuration and the [context reading](reported-context-store.md#how-it-works)
-only for a connected owner, including on same-chat reopening; it never requests history.
-First and subsequent history pages require new
-[upward thread input](chat-history.md#received-state-admission-and-ownership),
-including after reconnect or reopening an evicted conversation.
+only for a connected owner, including on same-chat reopening. A retained controller
+separately requests one newest history page per owned connected opening/reconnect
+after saved-read and outstanding-request settlement. Offline opening waits for its
+first connection; departure/disconnect invalidates delayed demand. Further
+[backwards pages](chat-history.md#received-state-admission-and-ownership)
+require trusted upward thread input; opening never fills the missing range.
 
 The container mounts `createSavedListRestorer` for its lifetime, independently of
 route changes. Saved identities can populate the sidebar without a connected host;
@@ -108,7 +110,10 @@ reconnect preserves restored rows and their recording ownership. See
   the discussion currently open in the thread now returns to `list` on the daemon's own confirmation.
   Unlike the three `open` triggers above, this reuses the existing absolute `back` transition — no new
   `PairedNav` arm, no `PairedRoute` member — via `useConversationDeletedExit` mounted beside
-  `useConversationCreatedNav`. See [below](#the-delete-exit-exitactiveconversationts-conversationdeletedbridgets-652).
+  `useConversationCreatedNav`. The callback now carries the main-stamped origin into
+  `confirmConversationDeleted`: exact retained-slice ownership authorizes removal, while only an active
+  match invokes the exit. A delayed confirmation after opening another conversation clears only the
+  deleted slice. See [confirmed deletion](paired-shell-conversation-deletion.md).
 - [#653](../codebase/653.md) added a **fifth** `back` trigger, the archive sibling of #652's delete
   trigger: the discussion currently open in the thread returning to `list` once the daemon's
   authoritative conversation list shows it archived. Same reused `back` transition, same

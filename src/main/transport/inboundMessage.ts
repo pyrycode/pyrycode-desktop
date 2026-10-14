@@ -32,6 +32,7 @@ import {
 } from '../../shared/wire/types'
 import type {
   Envelope,
+  SessionStateFamily,
   ReplySuggestionPayload,
   WireAgent,
   BannerPayload,
@@ -352,6 +353,7 @@ export interface RetrievedAttachmentChunk extends Omit<AttachmentChunkPayload, '
  */
 interface FrameTimestamp {
   ts: string
+  historyEntryId?: number
 }
 
 /**
@@ -808,7 +810,15 @@ interface FrameTimestamp {
  * Nothing consumes this arm yet: the reassembler is #995, and daemonConnection's inbound switch has no
  * catch-all, so the stream stops here until claimed.
  */
-export type InboundDaemonMessage =
+export type InboundDaemonMessage = InboundPayload & {
+  /** Envelope provenance is independent of payload session fields. */
+  envelopeSessionId?: string | null
+  inReplyTo?: number
+}
+
+type InboundPayload =
+  | { kind: 'session-state-cleared'; family: SessionStateFamily; correlation: Omit<Envelope, 'payload' | 'type'> }
+  | { kind: 'thread-frame'; envelope: Envelope }
   | { kind: 'reply-suggestion'; replySuggestion: ReplySuggestionPayload }
   | { kind: 'host-system-prompt'; hostSystemPrompt: HostSystemPromptPayload; inReplyTo: number | undefined }
   | { kind: 'banner'; banner: BannerPayload }
@@ -3185,8 +3195,23 @@ function parseConversationSummary(payload: unknown): ConversationSummary {
     workspace_label,
     ...optionalAgent(payload),
     ...optionalReadId(payload, 'read_up_to'),
-    ...optionalReadId(payload, 'latest_entry_id')
+    ...optionalReadId(payload, 'latest_entry_id'),
+    ...optionalSummaryMetadata(payload)
   }
+}
+
+/** Supplied zero/empty readings are values, while omitted metadata remains absent. */
+function optionalSummaryMetadata(payload: Record<string, unknown>): Pick<ConversationSummary, 'current_session_id' | 'last_shown_version'> {
+  const metadata: Pick<ConversationSummary, 'current_session_id' | 'last_shown_version'> = {}
+  if ('current_session_id' in payload) metadata.current_session_id = requireString(payload, 'current_session_id')
+  if ('last_shown_version' in payload) {
+    const value = payload.last_shown_version
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+      throw new WireDecodeError('invalid shown version')
+    }
+    metadata.last_shown_version = value
+  }
+  return metadata
 }
 
 /** Omitted legacy fields remain unknown; numeric IDs are admitted without coercion. */
@@ -4083,6 +4108,21 @@ function parseBannerPayload(payload: unknown): BannerPayload {
   }
 }
 
+/** A switch avoids prototype lookup and admits only the published live-state families. */
+export function sessionStateFamily(type: string): SessionStateFamily | null {
+  switch (type) {
+    case 'modal_dismissed': return 'modal_shown'
+    case 'question_dismissed': return 'question_shown'
+    case 'session_settings_updated': return 'session_settings'
+    case 'modal_shown': case 'question_shown': case 'turn_state': case 'stall': case 'api_retry':
+    case 'compacting': case 'thinking_progress': case 'tool_progress': case 'background_task_progress':
+    case 'resetting': case 'rate_limited': case 'context_usage': case 'model_announced': case 'session_facts':
+    case 'session_settings': case 'mcp_status': case 'slash_command_list': case 'model_list':
+    case 'reply_suggestion': case 'session_error': return type
+    default: return null
+  }
+}
+
 /**
  * Decode + route + narrow one decrypted app-message plaintext. Returns an InboundDaemonMessage for a
  * `message` / `message_chunk` envelope, the three debug-bundle kinds (`debug_bundle_chunk` /
@@ -4107,10 +4147,36 @@ export function parseInboundMessage(
   const envelope = decodeEnvelope(plaintext)
   // Replay position belongs to the admitted envelope, even when payload narrowing later fails.
   observeEnvelope?.(envelope)
+  const family = sessionStateFamily(envelope.type)
+  const metadata = {
+    ...('session_id' in envelope ? { envelopeSessionId: envelope.session_id } : {}),
+    ...('in_reply_to' in envelope ? { inReplyTo: envelope.in_reply_to } : {})
+  }
+  if (envelope.session_state_cleared === true) {
+    if (family === null || !isRecord(envelope.payload) || Object.keys(envelope.payload).length !== 0) {
+      diagnosticLog?.event({ event: 'inbound-rejected', code: 'session-clear-invalid' })
+      throw new WireDecodeError('invalid session state clear')
+    }
+    const { payload, type, ...correlation } = envelope
+    diagnosticLog?.event({ event: 'inbound-decoded', code: 'session-state-cleared', bytes: plaintext.length })
+    return { kind: 'session-state-cleared', family, correlation, ...metadata }
+  }
+  const inbound = parseInboundPayload(envelope, plaintext, diagnosticLog)
+  if (inbound === null || family === null) return inbound
+  return { ...inbound, ...metadata }
+}
+
+function parseInboundPayload(envelope: Envelope, plaintext: Uint8Array, diagnosticLog?: DiagnosticLog): InboundPayload | null {
   // Each log fires AFTER the modeled envelope has fully narrowed, so the throw path stays unlogged: a
   // frame that fails to narrow throws first and leaves no record. Optional chaining short-circuits the
   // whole call (including hashPlaintext) when no logger is injected — absent-logger costs nothing.
   switch (envelope.type) {
+    case 'thread_items':
+    case 'thread_reset':
+    case 'thread_item_added':
+    case 'thread_item_changed':
+    case 'thread_text_append':
+      return { kind: 'thread-frame', envelope }
     case 'reply_suggestion': {
       const payload = envelope.payload
       const text = isRecord(payload) ? payload.suggested_reply : undefined
@@ -4142,7 +4208,7 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'message', message, ts: envelope.ts }
+      return { kind: 'message', message, ts: envelope.ts, historyEntryId: envelope.history_entry_id }
     }
     case 'message_chunk': {
       const { messages } = parseMessageChunkPayload(envelope.payload)
@@ -4190,7 +4256,8 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'session-settings', sessionSettings, inReplyTo: envelope.in_reply_to }
+      return { kind: 'session-settings', sessionSettings,
+        ...('in_reply_to' in envelope ? { inReplyTo: envelope.in_reply_to } : {}) }
     }
     case 'host_system_prompt': {
       const payload = envelope.payload
@@ -4281,7 +4348,7 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'assistant-delta', delta, ts: envelope.ts }
+      return { kind: 'assistant-delta', delta, ts: envelope.ts, historyEntryId: envelope.history_entry_id }
     }
     case 'turn_end': {
       // Narrow BEFORE logging (see the assistant_delta case). No decoded field (turn_id / stop_reason)
@@ -4293,7 +4360,7 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'turn-end', turnEnd, ts: envelope.ts }
+      return { kind: 'turn-end', turnEnd, ts: envelope.ts, historyEntryId: envelope.history_entry_id }
     }
     case 'turn_state': {
       // Narrow BEFORE logging so a malformed frame (a `state` outside the closed enum) throws first
@@ -4306,7 +4373,7 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'turn-state', turnState, ts: envelope.ts }
+      return { kind: 'turn-state', turnState, ts: envelope.ts, historyEntryId: envelope.history_entry_id }
     }
     case 'session_error': {
       if (!isRecord(envelope.payload)) throw new WireDecodeError('malformed session_error payload')
@@ -4331,7 +4398,7 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'stall', stall, ts: envelope.ts }
+      return { kind: 'stall', stall, ts: envelope.ts, historyEntryId: envelope.history_entry_id }
     }
     case 'api_retry': {
       // Narrow BEFORE logging so a malformed frame (an absent boolean `active`, a string `current`)
@@ -4345,7 +4412,7 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'api-retry', apiRetry, ts: envelope.ts }
+      return { kind: 'api-retry', apiRetry, ts: envelope.ts, historyEntryId: envelope.history_entry_id }
     }
     case 'banner': {
       const banner = parseBannerPayload(envelope.payload)
@@ -4371,7 +4438,7 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'compacting', compacting, ts: envelope.ts }
+      return { kind: 'compacting', compacting, ts: envelope.ts, historyEntryId: envelope.history_entry_id }
     }
     case 'resetting': {
       // Narrow BEFORE logging so a malformed frame (an unknown token, a non-boolean `active`, a
@@ -4549,7 +4616,7 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'background-task-started', backgroundTaskStarted, ts: envelope.ts }
+      return { kind: 'background-task-started', backgroundTaskStarted, ts: envelope.ts, historyEntryId: envelope.history_entry_id }
     }
     case 'background_task_updated': {
       // Narrow BEFORE logging so a malformed frame (an omitted `patch` or `truncated_fields` key, a
@@ -4564,7 +4631,7 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'background-task-updated', backgroundTaskUpdated, ts: envelope.ts }
+      return { kind: 'background-task-updated', backgroundTaskUpdated, ts: envelope.ts, historyEntryId: envelope.history_entry_id }
     }
     case 'background_task_roster': {
       // Narrow BEFORE logging so a malformed frame (a `tasks: null`, an omitted `dropped_tasks`, one bad
@@ -4613,7 +4680,7 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'unrecognized-message', unrecognized, ts: envelope.ts }
+      return { kind: 'unrecognized-message', unrecognized, ts: envelope.ts, historyEntryId: envelope.history_entry_id }
     }
     case 'session_transition': {
       // Narrow BEFORE logging so a malformed frame (a `reason` outside the closed enum, an
@@ -4627,7 +4694,7 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'session-transition', sessionTransition, ts: envelope.ts }
+      return { kind: 'session-transition', sessionTransition, ts: envelope.ts, historyEntryId: envelope.history_entry_id }
     }
     case 'session_settings_updated': {
       // Narrow BEFORE logging so a malformed frame (an absent / non-string `session_id`) throws first
@@ -4643,7 +4710,8 @@ export function parseInboundMessage(
       })
       // Propagate the ALREADY-decoded Envelope.in_reply_to (#261) — do not re-decode. `undefined` when
       // the frame omits it, which makes the consumer's correlation fail closed.
-      return { kind: 'session-settings-updated', sessionSettingsUpdated, inReplyTo: envelope.in_reply_to }
+      return { kind: 'session-settings-updated', sessionSettingsUpdated,
+        ...('in_reply_to' in envelope ? { inReplyTo: envelope.in_reply_to } : {}) }
     }
     case 'tool_use': {
       // Narrow BEFORE logging so a malformed frame (a missing / non-string field, or a malformed
@@ -4660,19 +4728,19 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'tool-use', toolUse, ts: envelope.ts }
+      return { kind: 'tool-use', toolUse, ts: envelope.ts, historyEntryId: envelope.history_entry_id }
     }
     case 'model_refusal_fallback': {
       const refusal = parseModelRefusalFallbackPayload(envelope.payload)
       diagnosticLog?.event({ event: 'inbound-decoded', code: 'model_refusal_fallback',
         bytes: plaintext.length, hash: hashPlaintext(plaintext) })
-      return { kind: 'model-refusal-fallback', refusal, ts: envelope.ts }
+      return { kind: 'model-refusal-fallback', refusal, ts: envelope.ts, historyEntryId: envelope.history_entry_id }
     }
     case 'model_refusal_no_fallback': {
       const refusal = parseModelRefusalNoFallbackPayload(envelope.payload)
       diagnosticLog?.event({ event: 'inbound-decoded', code: 'model_refusal_no_fallback',
         bytes: plaintext.length, hash: hashPlaintext(plaintext) })
-      return { kind: 'model-refusal-no-fallback', refusal, ts: envelope.ts }
+      return { kind: 'model-refusal-no-fallback', refusal, ts: envelope.ts, historyEntryId: envelope.history_entry_id }
     }
     case 'tool_denied': {
       const toolDenied = parseToolDeniedPayload(envelope.payload)
@@ -4682,7 +4750,7 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'tool-denied', toolDenied, ts: envelope.ts }
+      return { kind: 'tool-denied', toolDenied, ts: envelope.ts, historyEntryId: envelope.history_entry_id }
     }
     case 'tool_result': {
       // Narrow BEFORE logging so a malformed frame (a missing / non-string field, or a non-boolean
@@ -4698,7 +4766,7 @@ export function parseInboundMessage(
         bytes: plaintext.length,
         hash: hashPlaintext(plaintext)
       })
-      return { kind: 'tool-result', toolResult, ts: envelope.ts }
+      return { kind: 'tool-result', toolResult, ts: envelope.ts, historyEntryId: envelope.history_entry_id }
     }
     case 'queue_state': {
       // Narrow BEFORE logging so a malformed snapshot (a non-array `queued`, a string `queued_msg_id`)

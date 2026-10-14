@@ -1,9 +1,18 @@
+import { createAttachmentImageSources } from './attachmentImageSource'
+import { useReadObservation } from '../../store/conversationReadPublisher'
+import type { ThreadSnapshot } from '../../store/threadItemStore'
+import { threadTaskPresentations, type ThreadTaskInputs } from './threadTaskPresentation'
+import { threadItemPresentations } from './threadItemPresentation'
+import { historyGapId } from '@shared/chatHistory'
 import { agentSwitchStore, type AgentSwitchStatus } from '../../store/agentSwitchStore'
 import { useReplySuggestionStore, selectReplySuggestion, visibleReplySuggestion } from '../../store/replySuggestionStore'
 import { useSessionFactsStore, selectSessionFactsFor } from '../../store/sessionFactsStore'
 import { McpServersSection, boundMcpText, requestMcpStatus } from './McpServersSection'
 import { mcpStatusStore, selectUnacknowledgedMcpFailureFor, useMcpStatusStore } from '../../store/mcpStatusStore'
 import {
+  memo,
+  useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -36,13 +45,14 @@ import { canRespondToPromptNow, usePromptResponseAvailability } from './promptRe
 import { useTimelineStore } from '../../store/timelineStore'
 import { useCollapseToolUsesPrefStore, selectCollapseToolUses } from '../../store/collapseToolUsesPrefStore'
 import {
+  type ConversationSlice, type HistoryRequestState,
   conversationTimelineStore,
   useConversationTimelineStore,
   selectPrependedRowsFor,
   selectTimelineFor,
   type ConversationTimelineState
 } from '../../store/conversationTimelineStore'
-import { historyAskDeps, requestOlderHistory } from '../../store/historyPageBridge'
+import { historyAskDeps, requestOlderHistory, requestGapHistory } from '../../store/historyPageBridge'
 import { historyRetryDeps, retryHistoryPage, selectHistoryFailure } from './historyRetry'
 import { useQueueStore, selectBacklogFor } from '../../store/queueStore'
 import {
@@ -66,6 +76,7 @@ import { TopOverlay } from './TopOverlay'
 import { useUsagePillDismissalStore, usagePillDismissalStore } from '../../store/usagePillDismissalStore'
 import {
   initialTimelineState,
+  openBubbleIndex,
   type ThreadItem,
   type TimelineState,
   type TurnPhase,
@@ -146,7 +157,7 @@ import { formatMessageTime } from './messageTime'
 import { turnStatsByItemIndex } from './turnStats'
 import { AttachmentFileIcon } from './AttachmentFileIcon'
 import { isImageAttachmentName } from './attachmentIsImage'
-import { BubbleAttachmentImage } from './BubbleAttachmentImage'
+import { BubbleAttachmentImage, ThreadAttachmentScopeContext } from './BubbleAttachmentImage'
 import { downloadAttachment, attachmentDownloadDeps } from './downloadAttachment'
 import { sendInterrupt } from './sendInterrupt'
 import { sendNewSession } from './sendNewSession'
@@ -181,7 +192,7 @@ import { EditChatDialogView, requestRenameConversation } from '../channels/EditC
 // whose lifetime has to be the dialog's open lifetime. It imports nothing from this directory, so this
 // is the one-way seam `EditChatDialog` already crosses, not a cycle.
 import { EditChannelDialog } from '../channels/EditChannelDialog'
-import { BackgroundTaskPanel } from './BackgroundTaskPanel'
+import { BackgroundTaskPanelView, BackgroundTaskPanel } from './BackgroundTaskPanel'
 import type { RendererCommand } from '@shared/ipc/commands'
 
 // The conversation shell: a scrollable message thread above a pinned composer,
@@ -301,14 +312,14 @@ export function ConversationScreen({
     return () => dispatch({ type: 'paneChanged', pane: null })
   }, [selectedHost, openConversationId])
   const [replyFocusRequest, setReplyFocusRequest] = useState(0)
-  const replyToMessage = (role: 'user' | 'assistant', text: string): void => {
+  const replyToMessage = useCallback((role: 'user' | 'assistant', text: string): void => {
     if (selectedHost === null || openConversationId === null) return
     const drafts = composerDraftStore.getState()
     drafts.setDraft(selectedHost, openConversationId,
       appendMessageQuote(selectDraft(drafts, selectedHost, openConversationId), role, text))
     setReplyFocusRequest(request => request + 1)
     window.pyry.sendDiagnostic({ event: 'message-reply-appended', code: role })
-  }
+  }, [selectedHost, openConversationId])
   const offline = useSessionStore(s => selectedHost !== null && s.statuses.get(selectedHost)?.type !== 'connected')
   const heldSlice = useConversationTimelineStore(s => openConversationId === null ? undefined : s.timelines.get(openConversationId))
   const ownSlice = heldSlice?.serverId === selectedHost ? heldSlice : undefined
@@ -431,6 +442,19 @@ export function ConversationScreen({
   // deleted `QueuedBacklog` was until #1214 folded its rows into it).
   const dispatchTimeline = useTimelineStore((s) => s.dispatch)
   const dispatchTimelineFor = useConversationTimelineStore((s) => s.dispatchFor)
+  const onDropQueued = useCallback((queuedMsgId: number, messageId: string | undefined): void => {
+    if (openConversationId === null || connectedConversationHostNow(openConversationId) === null) return
+    dropQueuedMessage(openConversationId, queuedMsgId, messageId, {
+      diagnose: window.pyry.sendDiagnostic,
+      sendCommand: window.pyry.sendCommand,
+      dispatch: dispatchTimeline,
+      dispatchFor: dispatchTimelineFor
+    })
+  }, [openConversationId, selectedHost, dispatchTimeline, dispatchTimelineFor])
+  const onSendQueuedNow = useCallback((queuedMsgId: number): void => {
+    if (openConversationId === null || connectedConversationHostNow(openConversationId) === null) return
+    sendQueuedNow(openConversationId, queuedMsgId, { sendCommand: window.pyry.sendCommand })
+  }, [openConversationId, selectedHost])
   // #177: the Run configuration sheet's open/closed state — a single-value screen-local boolean →
   // useState, never the store (ADR 0006). It resets to closed on remount for free, so the sheet
   // never reopens itself across a screen remount. #962 retired the StatusRow trigger that used to sit
@@ -492,6 +516,7 @@ export function ConversationScreen({
   // attachments and its upload listener are mount-local, so an early return here would silently drop them
   // on a same-conversation round trip through the reader. Hiding also keeps the thread's scroll position.
   const readerOpen = reader.state.type !== 'closed'
+  useReadObservation(openConversationId, readerOpen, paneRef, scrollPin.ref)
   return (
     <div className="conversation">
       {reader.state.type !== 'closed' && (
@@ -567,6 +592,10 @@ export function ConversationScreen({
       {(!offline || items.length > 0 || visibleQueued.length > 0 || pendingBatch !== undefined || hasPermissionSurface) && <Timeline
         key={openConversationId}
         items={items}
+        gapState={ownSlice}
+        onRetryGap={failure => {
+          if (activeConversation !== null && selectedHost !== null) retryHistoryPage(historyRetryDeps, activeConversation, selectedHost, failure)
+        }}
         rowKeys={thread.rowKeys}
         rowArrivalOrder={thread.rowArrivalOrder}
         localEchoes={thread.localEchoes}
@@ -584,22 +613,11 @@ export function ConversationScreen({
         saved={offline || ownSlice?.localRead !== undefined}
         onOpenMarkdownPath={reader.open}
         agent={openAgent}
-        onDropQueued={actionsAvailable ? (queuedMsgId, messageId) => {
-          if (openConversationId === null || connectedConversationHostNow(openConversationId) === null) return
-          dropQueuedMessage(openConversationId, queuedMsgId, messageId, {
-            diagnose: window.pyry.sendDiagnostic,
-            sendCommand: window.pyry.sendCommand,
-            dispatch: dispatchTimeline,
-            dispatchFor: dispatchTimelineFor
-          })
-        } : undefined}
+        onDropQueued={actionsAvailable ? onDropQueued : undefined}
         midTurnInput={midTurnInput}
         // #1726: the drop closure's gate and guard, verbatim, so Send now is disabled exactly when the drop
         // control is. No timeline write: the message is being delivered, so its echo stays true.
-        onSendQueuedNow={actionsAvailable ? (queuedMsgId) => {
-          if (openConversationId === null || connectedConversationHostNow(openConversationId) === null) return
-          sendQueuedNow(openConversationId, queuedMsgId, { sendCommand: window.pyry.sendCommand })
-        } : undefined}
+        onSendQueuedNow={actionsAvailable ? onSendQueuedNow : undefined}
       />}
       <TopOverlayControl onRepairHost={onRepairHost} />
       {/* #581: the background-task panel, reading the roster store itself, so only the conversation id goes
@@ -797,7 +815,7 @@ const useThreadLayoutEffect = typeof document === 'undefined' ? useEffect : useL
  * IDEMPOTENT: it writes only while following, and assigns scrollTop a value it already holds — a no-op that
  * fires no scroll event — so neither caller can drive a feedback loop, and a StrictMode double-invoke is
  * likewise a no-op. And it is NOT A WRITER OF THE FLAG: `following` is taken read-only, so the hook's
- * contract that only the container's own scroll events and `followBottom` ever set it survives the arrival of
+ * contract that only reader input, scroll events and `followBottom` set it survives the arrival of
  * a second caller.
  *
  * ⭐ `pinnedOffset` IS WHAT KEEPS THAT SECOND CALLER FROM CORRUPTING THE FLAG, and it is not defensive
@@ -846,8 +864,8 @@ function measureThreadChrome(pane: HTMLElement): void {
 /**
  * #601: keep the thread following the conversation while the operator is already reading at the bottom.
  *
- * The ORDER of the decision is the whole design. The flag is written only by the container's own scroll
- * events; the re-assert reads that flag and never re-measures. A measurement taken when new content lands
+ * The ORDER of the decision is the whole design. Reader input and the container's own scroll events
+ * write the flag; the re-assert reads it and never re-measures. A measurement taken when new content lands
  * reads a layout that already includes it, so it cannot say whether the operator was at the bottom
  * beforehand. Mobile draws the same separation with its `userScrolledAway` flag (ThreadScreen.kt:249-256) —
  * what carries over from mobile is the flag, not the measurement (it reverses its layout and tests an exact
@@ -872,16 +890,23 @@ function measureThreadChrome(pane: HTMLElement): void {
  * dependency array it already runs after every render, so "jump to the bottom now" and "stay pinned while
  * the reply streams" are not two behaviours: both are consequences of the flag being `true`.
  */
-function useThreadScrollPin(conversationId: string | null, prependedRows: number): ThreadPin {
+function useThreadScrollPin(conversationId: string | null, prependedRows: number, legacyHistory = true, presentation?: object): ThreadPin {
   const ref = useRef<HTMLDivElement>(null)
   const paneRef = useRef<HTMLDivElement>(null)
   const following = useRef(true)
-  const viewport = useRef({ width: 0, height: 0 })
+  // Direction distinguishes a reader returning to the bottom from a small upward move in its tolerance.
+  const scrollOffset = useRef(0)
+  const viewport = useRef({ width: 0, height: 0, contentHeight: 0 })
   // #1049's growth observer, and the node its observation set was last synced against. Constructed on first
   // use rather than here, so `ResizeObserver` is never referenced under vitest's `node` environment — where
   // neither hook below runs at all, since renderer tests server-render through renderToStaticMarkup.
   const growth = useRef<ResizeObserver | null>(null)
   const observedRegion = useRef<HTMLElement | null>(null)
+  const membership = useRef<MutationObserver | null>(null)
+  const rows = useRef<{ root: Element | null; positions: Map<Element, number>;
+    eligible: Element[]; visible: Set<Element> }>({ root: null,
+    positions: new Map(), eligible: [], visible: new Set() })
+  const chromeTargets = useRef(new Set<Element>())
   // The offset the pin itself last wrote, while the scroll event that write queued is still outstanding. See
   // `reassertPinnedToBottom` for why this exists and why it cannot go stale.
   const pinnedOffset = useRef<number | null>(null)
@@ -889,13 +914,68 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
     row: Element
     top: number
     prependedRows: number
+    presentation?: object
     conversationId: string | null
   } | null>(null)
+  const refreshRow = (row: Element): void => {
+    const index = rows.current
+    const position = index.positions.get(row)
+    if (position === undefined) return
+    const visible = !row.hasAttribute('data-history-gap') && row.getBoundingClientRect().height > 0
+    if (visible === index.visible.has(row)) return
+    let lo = 0
+    let hi = index.eligible.length
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1
+      const candidatePosition = index.positions.get(index.eligible[mid])
+      if (candidatePosition !== undefined && candidatePosition < position) lo = mid + 1
+      else hi = mid
+    }
+    if (visible) { index.eligible.splice(lo, 0, row); index.visible.add(row) }
+    else { index.eligible.splice(lo, 1); index.visible.delete(row) }
+  }
+  const syncRows = (el: Element, records = membership.current?.takeRecords() ?? []): void => {
+    const index = rows.current
+    if (index.root !== el || records.some(record => record.type === 'childList' && record.target === el)) {
+      const children = Array.from(el.children)
+      const positions = new Map(children.map((row, position) => [row, position]))
+      for (const row of index.positions.keys()) {
+        if (!positions.has(row)) growth.current?.unobserve(row)
+      }
+      for (const row of children) {
+        if (!index.positions.has(row)) growth.current?.observe(row)
+      }
+      index.root = el
+      index.positions = positions
+      index.eligible = children.filter(row => !row.hasAttribute('data-history-gap') && row.getBoundingClientRect().height > 0)
+      index.visible = new Set(index.eligible)
+      return
+    }
+    const changed = new Set<Element>()
+    for (const record of records) {
+      let node = record.target instanceof Element ? record.target : record.target.parentElement
+      while (node !== null && node !== el && node.parentElement !== el) node = node.parentElement
+      if (node !== null && node.parentElement === el) changed.add(node)
+    }
+    for (const row of changed) refreshRow(row)
+  }
   const rememberTop = (el: HTMLDivElement): void => {
-    const row = el.firstElementChild
-    topAnchor.current = el.scrollTop === 0 && row !== null
-      ? { row, top: row.getBoundingClientRect().top - el.getBoundingClientRect().top,
-          prependedRows, conversationId }
+    syncRows(el)
+    const threadTop = el.getBoundingClientRect().top
+    const edge = Math.max(threadTop,
+      paneRef.current?.querySelector('.conversation__top-chrome')?.getBoundingClientRect().bottom ?? 0)
+    const candidates = rows.current.eligible
+    let lo = 0
+    let hi = candidates.length
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1
+      if (candidates[mid].getBoundingClientRect().bottom <= edge) lo = mid + 1
+      else hi = mid
+    }
+    const row = candidates[lo] ?? null
+    topAnchor.current = row !== null
+      ? { row, top: row.getBoundingClientRect().top - threadTop,
+          prependedRows, presentation, conversationId }
       : null
   }
 
@@ -963,13 +1043,8 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
   // wrapper would move all three, change the markup run every renderer test asserts against, and interpose an
   // element between the rows and a container several CSS rules describe themselves as stretch items of.
   //
-  // THE OBSERVED SET SYNCS HERE because this effect already runs after every render and rows can only appear
-  // via a render. `observe()` on an already-observed target with the same box is a no-op, so the loop is
-  // O(rows) early returns — and re-observing unconditionally is also what makes the set heal itself after
-  // StrictMode's simulated teardown. Rows only ever LEAVE the set with the container: within one container's
-  // lifetime the timeline is append-only with tail mutation under index keys, so rows are updated in place,
-  // and `.conversation__thread` unmounts outright when the timeline empties (Timeline renders <EmptyThread />
-  // at zero items). A change of container identity is therefore the one and only disconnect point.
+  // Membership mutations reconcile row targets; same-row growth updates only that row's eligibility.
+  // The layout effect drains pending mutations before lookup, including hidden tool-group changes.
   //
   // Two properties make the dep-free form safe. It is IDEMPOTENT: it writes only while following, and
   // assigning scrollTop a value it already holds is a no-op that fires no scroll event, so there is no
@@ -987,17 +1062,18 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
     measureThreadChrome(pane)
 
     const anchor = topAnchor.current
-    if (el !== null && !following.current && el.scrollTop === 0 && anchor !== null &&
-        anchor.conversationId === conversationId && prependedRows > anchor.prependedRows &&
+    if (el !== null && !following.current && anchor !== null &&
+        anchor.conversationId === conversationId &&
+        (presentation === undefined ? prependedRows > anchor.prependedRows : presentation !== anchor.presentation) &&
         anchor.row.parentElement === el) {
-      // Chromium suppresses anchoring at zero. Measure the surviving row, not scrollHeight:
+      // Preserve the surviving visible row at zero and during middle-of-thread gap insertion:
       // short threads include unused viewport space that is not part of the inserted content.
-      const offset = anchor.row.getBoundingClientRect().top - el.getBoundingClientRect().top - anchor.top
+      const offset = el.scrollTop + anchor.row.getBoundingClientRect().top - el.getBoundingClientRect().top - anchor.top
       const padding = Number.parseFloat(getComputedStyle(el).paddingBottom)
       const contentBottom = Array.from(el.children).reduce(
         (bottom, row) => Math.max(bottom, row.getBoundingClientRect().bottom),
         el.getBoundingClientRect().top
-      ) - el.getBoundingClientRect().top + padding
+      ) - el.getBoundingClientRect().top + padding + el.scrollTop
       const missingRoom = offset + el.clientHeight - contentBottom
       if (missingRoom > 0) {
         // Retain the short thread's blank space below its rows so the target is reachable.
@@ -1008,30 +1084,45 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
       if (el.scrollTop !== 0) pinnedOffset.current = el.scrollTop
     }
 
-    const observer = (growth.current ??= new ResizeObserver(() => {
+    const observer = (growth.current ??= new ResizeObserver(entries => {
       // Re-read the ref rather than closing over `el`: an observation can be delivered in the same frame as
       // an unmount, and the null path is that case.
       const region = ref.current
       const currentPane = paneRef.current
       if (currentPane) measureThreadChrome(currentPane)
       if (region !== null) {
+        syncRows(region)
+        for (const entry of entries) refreshRow(entry.target)
         reassertPinnedToBottom(region, following, pinnedOffset)
-        viewport.current = { width: region.clientWidth, height: region.clientHeight }
+        viewport.current = { width: region.clientWidth, height: region.clientHeight, contentHeight: region.scrollHeight }
       }
     }))
     const observationRoot = el ?? pane
     if (observedRegion.current !== observationRoot) {
       observer.disconnect()
+      membership.current?.disconnect()
+      membership.current = null
+      rows.current = { root: null, positions: new Map(), eligible: [], visible: new Set() }
+      chromeTargets.current.clear()
+      topAnchor.current = null
       observedRegion.current = observationRoot
+      if (el !== null) {
+        membership.current = new MutationObserver(records => syncRows(el, records))
+        membership.current.observe(el, { childList: true, subtree: true, characterData: true,
+          attributes: true, attributeFilter: ['hidden', 'style', 'class', 'data-history-gap'] })
+      }
     }
-    observer.observe(pane)
-    if (header) observer.observe(header)
-    if (input) observer.observe(input)
+    const chrome = new Set<Element>([pane])
+    if (header) chrome.add(header)
+    if (input) chrome.add(input)
+    if (el) chrome.add(el)
+    for (const target of chromeTargets.current) if (!chrome.has(target)) observer.unobserve(target)
+    for (const target of chrome) if (!chromeTargets.current.has(target)) observer.observe(target)
+    chromeTargets.current = chrome
     if (el !== null) {
-      observer.observe(el)
-      for (const row of el.children) observer.observe(row)
+      syncRows(el)
       reassertPinnedToBottom(el, following, pinnedOffset)
-      viewport.current = { width: el.clientWidth, height: el.clientHeight }
+      viewport.current = { width: el.clientWidth, height: el.clientHeight, contentHeight: el.scrollHeight }
       rememberTop(el)
     }
   })
@@ -1044,13 +1135,39 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
   useEffect(() => {
     return () => {
       growth.current?.disconnect()
+      membership.current?.disconnect()
+      membership.current = null
+      rows.current = { root: null, positions: new Map(), eligible: [], visible: new Set() }
+      chromeTargets.current.clear()
+      topAnchor.current = null
       observedRegion.current = null
     }
   }, [])
 
   const demandHistory = (el: HTMLDivElement): void => {
+    if (!legacyHistory) {
+      following.current = false
+      rememberTop(el)
+      return
+    }
     // Measure before the input scrolls: crossing into the band needs a new input.
     if (connectedConversationHostNow(conversationId) === null) return
+    if (conversationId === null) return
+    const viewport = el.getBoundingClientRect()
+    const top = Math.max(viewport.top, paneRef.current?.querySelector('.conversation__top-chrome')?.getBoundingClientRect().bottom ?? viewport.top)
+    const bottom = Math.min(viewport.bottom, paneRef.current?.querySelector('.conversation__input-chrome')?.getBoundingClientRect().top ?? viewport.bottom)
+    const marker = Array.from(el.querySelectorAll<HTMLElement>('[data-history-gap]')).reverse().find(node => {
+      const rect = node.getBoundingClientRect()
+      return rect.height > 0 && rect.bottom > top && rect.top < bottom
+    })
+    if (marker !== undefined) {
+      following.current = false
+      rememberTop(el)
+      const gap = conversationTimelineStore.getState().timelines.get(conversationId)?.gaps?.find(g =>
+        String(historyGapId(g)) === marker.dataset.historyGap)
+      if (gap !== undefined) requestGapHistory(historyAskDeps, conversationId, historyGapId(gap))
+      return
+    }
     const nearTop = isNearTop({ scrollOffset: el.scrollTop,
       viewportHeight: el.clientHeight, contentHeight: el.scrollHeight })
     if (nearTop) following.current = false
@@ -1058,24 +1175,37 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
     requestOlderHistory(historyAskDeps, conversationId, nearTop)
   }
 
+  const readUpward = (el: HTMLDivElement): void => {
+    // Release before native scrolling starts: a render or growth observation can otherwise
+    // pin during the input-to-scroll-event interval and interrupt Chromium's animated movement.
+    // No upward range means no movement intent, except for demandHistory's deliberate release.
+    scrollOffset.current = el.scrollTop
+    if (el.scrollTop > 0) following.current = false
+    demandHistory(el)
+  }
+
   return {
     paneRef,
     scrollPin: {
       onWheel: (event) => {
-        if (event.isTrusted && event.deltaY < 0) demandHistory(event.currentTarget)
+        if (!event.isTrusted) return
+        const el = event.currentTarget
+        // Native wheel movement can reach the bottom before its scroll event is delivered.
+        if (event.deltaY > 0 && isAtBottom({ scrollOffset: el.scrollTop,
+          viewportHeight: el.clientHeight, contentHeight: el.scrollHeight })) following.current = true
+        if (event.deltaY < 0) readUpward(el)
       },
       onKeyDown: (event) => {
         if (event.isTrusted && event.target === event.currentTarget &&
-          ['ArrowUp', 'PageUp', 'Home'].includes(event.key)) demandHistory(event.currentTarget)
+          ['ArrowUp', 'PageUp', 'Home'].includes(event.key)) readUpward(event.currentTarget)
       },
       ref,
-      // The metric mapping is the one thing this feature can get wrong with no type error and no unit test:
-      // scrollTop is the offset, clientHeight the viewport, scrollHeight the total content. Named fields are
-      // what make it correct by inspection. Read synchronously off `currentTarget` and assigned with no
-      // branch of its own — every case is a consequence of isAtBottom's single comparison. No useCallback:
+      // Following resumes only on downward movement into the bottom band. No useCallback:
       // Timeline is not memoized, so a stable identity buys nothing and React attaches this directly.
       onScroll: (event) => {
         const el = event.currentTarget
+        const movingDown = el.scrollTop > scrollOffset.current
+        scrollOffset.current = el.scrollTop
         rememberTop(el)
         // #1049: the pin's own write queues a scroll event, and that event is not the operator scrolling.
         // Cleared unconditionally so a record can never outlive one event, and matched on the EXACT offset
@@ -1086,10 +1216,10 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
         const echo = pinnedOffset.current
         pinnedOffset.current = null
         if (echo !== null && el.scrollTop === echo) return
-        // Native anchoring can emit a scroll during resize/zoom before the observer re-pins.
-        // That movement is layout, not a reader leaving the bottom.
+        // Native anchoring can scroll before resize observation, including metadata reveal/collapse.
+        // Retain following through changed geometry; trusted upward input already releases it.
         if (following.current && (el.clientWidth !== viewport.current.width ||
-            el.clientHeight !== viewport.current.height)) return
+            el.clientHeight !== viewport.current.height || el.scrollHeight !== viewport.current.contentHeight)) return
         // Measure the local bottom-following position. The mapping is the one thing
         // this glue can get wrong with no type error and no unit test — scrollTop is the offset,
         // clientHeight the viewport, scrollHeight the total content — so it is written exactly once.
@@ -1098,8 +1228,11 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
           viewportHeight: el.clientHeight,
           contentHeight: el.scrollHeight
         }
-        following.current = isAtBottom(metrics)
-        if (following.current && el.style.paddingBottom !== '') {
+        // The tolerance allows rounding while following; it must not undo upward reader intent.
+        const atBottom = isAtBottom(metrics)
+        // Downward motion cannot release an already following reader; metadata may have moved the end.
+        following.current = (following.current && movingDown) || (atBottom && (following.current || movingDown))
+        if (following.current && (!atBottom || el.style.paddingBottom !== '')) {
           reassertPinnedToBottom(el, following, pinnedOffset)
         }
       }
@@ -1198,6 +1331,7 @@ export function Timeline({
   midTurnInput = false,
   onSendQueuedNow,
   firstRowKey = 0,
+  gapState, onRetryGap,
   olderSaved = false,
   saved = false,
   onOpenMarkdownPath,
@@ -1206,6 +1340,8 @@ export function Timeline({
   onReply
 }: {
   trailing?: ReactNode
+  gapState?: Pick<ConversationSlice, 'gaps' | 'display' | 'history'>
+  onRetryGap?: (failure: Extract<HistoryRequestState, { status: 'failed' }>) => void
   items: readonly ThreadItem[]
   backgroundAgents?: ReadonlyMap<string, BackgroundAgentTimeline>
   rowKeys?: TimelineState['rowKeys']
@@ -1241,7 +1377,17 @@ export function Timeline({
   const provisionalIndices = new Set(rows.map((_, index) => index).slice(ordinaryRows.length))
   // Stats use source item indices; projection may move waiting echoes.
   const turnStats = turnStatsByItemIndex(items)
+  // #1872: the open main thread bubble streams even when a subagent's tool calls trail it.
+  const openBubble = openBubbleIndex(items)
   const [expandedTools, setExpandedTools] = useState<ReadonlySet<number | string>>(() => new Set())
+  const toggleTool = useCallback((key: number | string): void => {
+    setExpandedTools(previous => {
+      const next = new Set(previous)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }, [])
   const [expandedRuns, setExpandedRuns] = useState<ReadonlySet<number | string>>(() => new Set())
   const agentNodes = useRef(new Map<number | string, HTMLDivElement>())
   const agentKeys = useRef(new Map<number, number | string>())
@@ -1303,94 +1449,253 @@ export function Timeline({
       !next?.marker && below?.kind === 'toolCall' && 'tool-group-row--joined-below'
     ].filter(Boolean).join(' ')]
   }))
+  const gapRows = new Map<number, ReactNode[]>()
+  const sourcePositions = new Map(rows.map((row, index) => [rowKeys?.[row.itemIndex] ?? firstRowKey + row.itemIndex, index]))
+  const displayed = (gapState?.display ?? []).flatMap(d => {
+    const index = d.rowKey === undefined ? undefined : sourcePositions.get(d.rowKey)
+    return index === undefined ? [] : [{ id: d.id, lastId: d.lastId ?? d.id, index }]
+  })
+  let lastPosition = -1
+  const earlierPositions = displayed.map(d => (lastPosition = Math.max(lastPosition, d.index)))
+  for (const gap of gapState?.gaps ?? []) {
+    // Binary search retained contributions; large IDs never size a walk or allocation.
+    let low = 0, high = displayed.length
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2)
+      if (displayed[middle].lastId < gap.newerId) low = middle + 1
+      else high = middle
+    }
+    let index = displayed[low]?.index
+    if (index === undefined) {
+      low = 0; high = displayed.length
+      while (low < high) {
+        const middle = Math.floor((low + high) / 2)
+        if (displayed[middle].id <= (gap.olderId ?? -1)) low = middle + 1
+        else high = middle
+      }
+      index = low === 0 ? rows.length : earlierPositions[low - 1] + 1
+    }
+    const gapId = historyGapId(gap)
+    const projected = projection.find(group => group.index === index && !group.marker)
+    if (projected && hiddenRows.has(index)) index = projected.ancestors.find(ancestor => !hiddenRows.has(ancestor)) ?? runByMember.get(index)?.index ?? index
+    const failure = gapState?.history?.status === 'failed' && gapState.history.gapId === gapId ? gapState.history : null
+    const pending = gapState?.history?.status === 'requested' && gapState.history.gapId === gapId
+    const marker = <div key={`gap-${gapId}`} data-history-gap={gapId}>
+      {failure !== null ? <ComposerHistoryFailure retryable={failure.retryable && onRetryGap !== undefined}
+        onRetry={() => onRetryGap?.(failure)} /> :
+        <p className="conversation__banner" role={pending ? 'status' : undefined}>
+          {pending ? 'Loading earlier messages…' : 'Load earlier messages'}
+        </p>}
+    </div>
+    gapRows.set(index, [...(gapRows.get(index) ?? []), marker])
+  }
+  const renderGroup = (group: (typeof projection)[number]): ReactNode => {
+    const row = rows[group.index]
+    if (!row) return null
+    const key = rowKeyAt(group.index)
+    const hidden = !group.marker && hiddenRows.has(group.index)
+    if (group.marker && row.item.kind === 'toolCall') {
+      const launchId = row.item.toolUseId
+      const historicalDescription = [...(backgroundAgents?.values() ?? [])]
+        .find(entry => entry.historyOnly && entry.toolCallId === launchId)?.description
+      return (
+        <button key={`agent-marker${key}`} type="button" className="agent-start-marker"
+          onClick={() => setRevealAgent({ key })}>
+          <span className={`conversation-status-dot ${group.running ? 'agent-start-marker__running' : 'agent-start-marker__finished'}`} aria-hidden="true" />
+          <span className="agent-start-marker__state">{group.running ? 'Agent started, still working' : 'Agent finished'}</span>
+          <span aria-hidden="true">·</span>
+          <span className="agent-start-marker__description">{(historicalDescription ?? toolHeadlineRuns(row.item).subject ?? '').slice(0, 4096)}</span>
+          <span className="agent-start-marker__action">Go to agent ↓</span>
+        </button>
+      )
+    }
+    if (row.item.kind !== 'toolCall') {
+      const rowKey = row.itemIndex !== -1 ? key : `q${row.queued?.queuedMsgId ?? group.index}`
+      const content = <TimelineRow key={rowKey}
+        item={row.item} readRowKey={typeof rowKey === 'number' ? rowKey : undefined} delivery={localEchoes?.find(e => e.rowKey === rowKeys?.[row.itemIndex])?.delivery} queued={row.queued} onDropQueued={onDropQueued} turnStats={turnStats.get(row.itemIndex)}
+        midTurnInput={midTurnInput} onSendQueuedNow={onSendQueuedNow}
+        onOpenMarkdownPath={onOpenMarkdownPath} agent={agent}
+        onReply={onReply}
+        inProgress={!saved && row.item.kind === 'assistantText' &&
+          (row.itemIndex === items.length - 1 || (row.itemIndex === openBubble && !row.item.parentToolUseId))} />
+      // Keep attributed text mounted through collapse and late-owner history regrouping.
+      if (row.item.kind === 'assistantText' && row.item.parentToolUseId) return (
+        <div key={rowKey} className={`tool-group-row tool-group-row--depth-${group.depth}`} hidden={hidden}>
+          {content}
+        </div>
+      )
+      return content
+    }
+    const content = (
+      <TimelineToolRow
+        item={row.item}
+        rowKey={key}
+        count={group.hasChildren || group.background ? group.count : undefined}
+        background={group.background}
+        running={group.background ? group.running : !saved && group.running}
+        expanded={expandedTools.has(key)}
+        onToggle={toggleTool}
+      />
+    )
+    // Origin-relative identity survives history prepends and display regrouping. Keep hidden
+    // descendants mounted so their own result expansion survives an outer collapse.
+    const run = runByStart.get(group.index)
+    const expanded = expandedRunStarts.has(group.index)
+    return [
+      run && <div key={`run${key}`} className={`tool-group-row tool-run${expanded ? ' tool-group-row--joined-below' : ''}`}>
+        <ToolRunHeader run={run} expanded={expanded} onToggle={() => setExpandedRuns((previous) => {
+          const next = new Set(previous)
+          if (run.members.some((index) => previous.has(rowKeyAt(index)))) {
+            for (const index of run.members) next.delete(rowKeyAt(index))
+          } else next.add(key)
+          return next
+        })} />
+      </div>,
+      <div key={provisionalIndices.has(group.index) || row.itemIndex !== -1 ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
+        ref={node => { if (node) agentNodes.current.set(key, node); else agentNodes.current.delete(key) }}
+        className={`tool-group-row tool-group-row--depth-${group.depth} ${joins.get(group.index) ?? ''}`} hidden={hidden}>
+        {content}
+      </div>
+    ]
+  }
   return (
     <div className="conversation__thread" ref={scrollPin?.ref} onScroll={scrollPin?.onScroll}
       aria-label="Conversation history" tabIndex={0} onWheel={scrollPin?.onWheel} onKeyDown={scrollPin?.onKeyDown}>
       {rows.length === 0 && !trailing && <EmptyThread />}
       {olderSaved && <p className="conversation__banner">Older messages require a connection.</p>}
-      {projection.flatMap((group) => {
-        const row = rows[group.index]
-        if (!row) return null
-        const key = rowKeyAt(group.index)
-        const hidden = !group.marker && hiddenRows.has(group.index)
-        if (group.marker && row.item.kind === 'toolCall') {
-          const launchId = row.item.toolUseId
-          const historicalDescription = [...(backgroundAgents?.values() ?? [])]
-            .find(entry => entry.historyOnly && entry.toolCallId === launchId)?.description
-          return (
-            <button key={`agent-marker${key}`} type="button" className="agent-start-marker"
-              onClick={() => setRevealAgent({ key })}>
-              <span className={`conversation-status-dot ${group.running ? 'agent-start-marker__running' : 'agent-start-marker__finished'}`} aria-hidden="true" />
-              <span className="agent-start-marker__state">{group.running ? 'Agent started, still working' : 'Agent finished'}</span>
-              <span aria-hidden="true">·</span>
-              <span className="agent-start-marker__description">{(historicalDescription ?? toolHeadlineRuns(row.item).subject ?? '').slice(0, 4096)}</span>
-              <span className="agent-start-marker__action">Go to agent ↓</span>
-            </button>
-          )
-        }
-        if (row.item.kind !== 'toolCall') {
-          const rowKey = row.itemIndex !== -1 ? key : `q${row.queued?.queuedMsgId ?? group.index}`
-          const content = <TimelineRow key={rowKey}
-            item={row.item} delivery={localEchoes?.find(e => e.rowKey === rowKeys?.[row.itemIndex])?.delivery} queued={row.queued} onDropQueued={onDropQueued} turnStats={turnStats.get(row.itemIndex)}
-            midTurnInput={midTurnInput} onSendQueuedNow={onSendQueuedNow}
-            onOpenMarkdownPath={onOpenMarkdownPath} agent={agent}
-            onReply={onReply}
-            inProgress={!saved && row.itemIndex === items.length - 1 && row.item.kind === 'assistantText'} />
-          // Keep attributed text mounted through collapse and late-owner history regrouping.
-          if (row.item.kind === 'assistantText' && row.item.parentToolUseId) return (
-            <div key={rowKey} className={`tool-group-row tool-group-row--depth-${group.depth}`} hidden={hidden}>
-              {content}
-            </div>
-          )
-          return content
-        }
-        const content = (
-          <ToolRow
-            item={row.item}
-            group={group.hasChildren || group.background ? {
-              count: group.count,
-              background: group.background,
-              running: group.background ? group.running : !saved && group.running
-            } : undefined}
-            expansion={{
-              expanded: expandedTools.has(key),
-              onToggle: () => setExpandedTools((previous) => {
-                const next = new Set(previous)
-                if (next.has(key)) next.delete(key)
-                else next.add(key)
-                return next
-              })
-            }}
-          />
-        )
-        // Origin-relative identity survives history prepends and display regrouping. Keep hidden
-        // descendants mounted so their own result expansion survives an outer collapse.
-        const run = runByStart.get(group.index)
-        const expanded = expandedRunStarts.has(group.index)
-        return [
-          run && <div key={`run${key}`} className={`tool-group-row tool-run${expanded ? ' tool-group-row--joined-below' : ''}`}>
-            <ToolRunHeader run={run} expanded={expanded} onToggle={() => setExpandedRuns((previous) => {
-              const next = new Set(previous)
-              if (run.members.some((index) => previous.has(rowKeyAt(index)))) {
-                for (const index of run.members) next.delete(rowKeyAt(index))
-              } else next.add(key)
-              return next
-            })} />
-          </div>,
-          <div key={provisionalIndices.has(group.index) || row.itemIndex !== -1 ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
-            ref={node => { if (node) agentNodes.current.set(key, node); else agentNodes.current.delete(key) }}
-            className={`tool-group-row tool-group-row--depth-${group.depth} ${joins.get(group.index) ?? ''}`} hidden={hidden}>
-            {content}
-          </div>
-        ]
+      {projection.flatMap(group => {
+        const content = renderGroup(group)
+        // Keep rows and markers in one keyed sibling list across prepends and Agent regrouping.
+        return [...(!group.marker ? gapRows.get(group.index) ?? [] : []),
+          ...(Array.isArray(content) ? content : [content])]
       })}
+      {gapRows.get(rows.length)}
       {trailing}
     </div>
   )
 }
 
-// The stable empty backlog for a `<Timeline>` render that passes none — module scope so the fold's input
-// identity does not churn per render (the EMPTY_BACKLOG idiom from queueStore).
+type ThreadItemsProps = {
+  snapshot: ThreadSnapshot
+  taskInputs?: ThreadTaskInputs
+  turnRunning?: boolean
+  foldTools?: boolean
+  onReply?: (role: 'user' | 'assistant', text: string) => void
+  onOpenMarkdownPath?: (path: string) => void
+}
+/** Explicit presentation seam; the ordinary app keeps selecting the legacy Timeline. */
+export function ThreadItemsTimeline(props: ThreadItemsProps): JSX.Element {
+  const s = props.snapshot
+  return <ThreadItemsView key={JSON.stringify([s.hostId, s.conversationId, s.epoch])} {...props} />
+}
+function ThreadItemsView({ snapshot, taskInputs, turnRunning = false, foldTools = false, onReply, onOpenMarkdownPath }: ThreadItemsProps): JSX.Element {
+  const tasks = useMemo(() => threadTaskPresentations(snapshot, taskInputs), [snapshot, taskInputs])
+  const [tasksOpen, setTasksOpen] = useState(false)
+  const activeTaskCount = tasks.filter(task => task.active).length
+  const rows = useMemo(() => threadItemPresentations(snapshot), [snapshot])
+  const attachmentScope = useMemo(() => {
+    const target = { conversationId: snapshot.conversationId, serverId: snapshot.hostId }
+    return { hostId: snapshot.hostId, conversationId: snapshot.conversationId,
+      imageSources: createAttachmentImageSources({
+        getOpenConversationId: () => target.conversationId,
+        getServerId: () => target.serverId,
+        requestAttachment: request => window.pyry.requestAttachment({ ...request, ...target }),
+        onAttachmentRetrievalEvent: listener => window.pyry.onAttachmentRetrievalEvent(listener),
+        requestAttachmentBytes: request => window.pyry.requestAttachmentBytes(request),
+        onAttachmentBytesEvent: listener => window.pyry.onAttachmentBytesEvent(listener),
+        createObjectUrl: blob => URL.createObjectURL(blob), revokeObjectUrl: url => URL.revokeObjectURL(url)
+      }) }
+  }, [snapshot.hostId, snapshot.conversationId])
+  // Completed older pages change the immutable item list without necessarily advancing the watermark.
+  const { scrollPin, paneRef } = useThreadScrollPin(snapshot.conversationId, 0, false, snapshot.items)
+  const [expandedTools, setTools] = useState<ReadonlySet<number>>(() => new Set())
+  const [expandedRuns, setRuns] = useState<ReadonlySet<number>>(() => new Set())
+  const items: ThreadItem[] = rows.map(row => row.item ?? { kind: 'userText', text: '' })
+  const positions = new Map(rows.flatMap((row, index) => row.marker ? [] : [[row.source.id, index] as const]))
+  const projection = rows.map((row, index) => ({ index, depth: row.depth,
+    ancestors: row.ancestors.flatMap(id => { const at = positions.get(id); return at === undefined ? [] : [at] }),
+    count: row.count, hasChildren: row.hasChildren, marker: row.marker,
+    background: row.source.kind === 'agent', running: row.source.active === true }))
+  const agentNodes = useRef(new Map<number, HTMLDivElement>())
+  const [revealAgent, setRevealAgent] = useState<number | null>(null)
+  useThreadLayoutEffect(() => {
+    if (revealAgent === null) return
+    agentNodes.current.get(revealAgent)?.scrollIntoView({ block: 'nearest' })
+    setRevealAgent(null)
+  }, [revealAgent])
+  const runs = foldTools ? foldToolRuns(items, projection) : []
+  const byMember = new Map(runs.flatMap(run => run.members.map(index => [index, run] as const)))
+  const byStart = new Map(runs.map(run => [run.index, run]))
+  const open = (run: ToolRun) => run.members.some(index => expandedRuns.has(rows[index].source.id))
+  const toggleTool = (id: number) => setTools(previous => {
+    const next = new Set(previous)
+    if (next.has(id)) next.delete(id); else next.add(id)
+    return next
+  })
+  return <ThreadAttachmentScopeContext.Provider value={attachmentScope}><div className="conversation__message-area" ref={paneRef}>
+    <div className="conversation__thread" ref={scrollPin.ref} onScroll={scrollPin.onScroll}
+      onWheel={scrollPin.onWheel} onKeyDown={scrollPin.onKeyDown} aria-label="Conversation history" tabIndex={0}>
+      {rows.flatMap((row, index) => {
+        const id = row.source.id, item = row.item, run = byMember.get(index), start = byStart.get(index)
+        const collapsedOwner = row.ancestors.some(owner => !expandedTools.has(owner))
+        const hidden = collapsedOwner || (run !== undefined && !open(run))
+        if (row.marker) return <div key={`marker-${id}`} className={`tool-group-row tool-group-row--depth-${row.depth}`} hidden={collapsedOwner}>
+          <button type="button" className="agent-start-marker" onClick={() => {
+            setTools(previous => new Set([...previous, ...row.ancestors]))
+            setRevealAgent(id)
+          }}>
+            <span className={`conversation-status-dot${row.source.active === true ? ' agent-start-marker__running'
+              : row.source.status === 'finished' ? ' agent-start-marker__finished' : ''}`} aria-hidden="true" />
+            <span className="agent-start-marker__state">{row.source.active === true ? 'Agent working · ' : ''}{row.outcome}</span>
+            <span aria-hidden="true">·</span>
+            <span className="agent-start-marker__description">{item?.kind === 'toolCall' ? item.inputSummary.slice(0, 4096) : ''}</span>
+            <span className="agent-start-marker__action">Go to agent ↓</span>
+          </button>
+        </div>
+        const adjacentTool = (at: number) => rows[at]?.item?.kind === 'toolCall' && !rows[at].marker &&
+          rows[at].ancestors.at(-1) === row.ancestors.at(-1)
+        const classes = ['tool-group-row', `tool-group-row--depth-${row.depth}`,
+          item?.kind === 'toolCall' && (adjacentTool(index - 1) || (start && open(start))) && 'tool-group-row--joined-above',
+          item?.kind === 'toolCall' && adjacentTool(index + 1) && 'tool-group-row--joined-below'].filter(Boolean).join(' ')
+        const summary = typeof row.source.summary === 'string' ? row.source.summary.slice(0, 4096) : 'Unsupported item'
+        const agent = row.source.agent === 'claude' || row.source.agent === 'codex' ? row.source.agent : undefined
+        return [start && <div key={`run-${id}`} hidden={collapsedOwner} className={`tool-group-row tool-run${open(start) ? ' tool-group-row--joined-below' : ''}`}>
+          <ToolRunHeader run={start} expanded={open(start)} onToggle={() => setRuns(previous => {
+            const next = new Set(previous)
+            if (start.members.some(member => previous.has(rows[member].source.id))) {
+              for (const member of start.members) next.delete(rows[member].source.id)
+            }
+            else for (const member of start.members) next.add(rows[member].source.id)
+            return next
+          })} />
+        </div>, <div key={id} data-read-row={id} className={classes} hidden={hidden}
+          ref={node => { if (node) agentNodes.current.set(id, node); else agentNodes.current.delete(id) }}>
+          {item === null ? row.hasChildren
+            ? <button type="button" className="tool-row__chip tool-row__chip--toggle" aria-expanded={expandedTools.has(id)}
+                onClick={() => toggleTool(id)}>{summary}</button>
+            : <p className="session-delimiter__title">{summary}</p> : item.kind === 'toolCall'
+            ? <ToolRow item={item} running={row.source.active === true}
+                suppliedOutcome={row.outcome === undefined ? undefined : { label: row.outcome,
+                  failed: row.source.status === 'failed', denied: row.source.status === 'denied' }}
+                group={row.source.kind === 'agent' ? { count: row.count, running: row.source.active === true } : undefined}
+                expansion={{ expanded: expandedTools.has(id), onToggle: () => toggleTool(id) }} />
+            : <TimelineRow item={item} inProgress={row.source.active === true} authoritativeSummary={summary}
+                turnStats={row.stats} agent={agent} onReply={onReply} onOpenMarkdownPath={onOpenMarkdownPath} />}
+        </div>]
+      })}
+    </div>
+    {tasks.length > 0 && <div className="composer-status">
+      <span className="composer-status__activity" aria-hidden="true" />
+      <ComposerTaskCount count={activeTaskCount} open={tasksOpen} onToggle={() => setTasksOpen(open => !open)} />
+    {tasks.length > 0 && activeTaskCount === 0 && <button type="button" className="composer-status__tasks"
+      aria-expanded={tasksOpen} onClick={() => setTasksOpen(open => !open)}>Background tasks</button>}
+    </div>}
+    {tasksOpen && <BackgroundTaskPanelView entry={null} suppliedTasks={tasks} turnRunning={turnRunning} onClose={() => setTasksOpen(false)}
+      onStopTask={taskId => taskInputs?.onStopTask?.(snapshot.hostId, snapshot.conversationId, taskId)} />}
+  </div></ThreadAttachmentScopeContext.Provider>
+}
+
+// The stable empty backlog for a `<Timeline>` render that passes none.
 const EMPTY_QUEUED: readonly QueuedItem[] = []
 
 // The accessible name on the message copy control — a CLIENT-OWNED constant, beside
@@ -1399,8 +1704,8 @@ const EMPTY_QUEUED: readonly QueuedItem[] = []
 // and "the control has an accessible name" is exactly the requirement that invites it.
 const COPY_MESSAGE_LABEL = 'Copy message'
 
-// Timestamp space remains reserved even without a stamp. Turn stats keep their independent
-// meta-row hover reveal; copy lives in MessageActions beside the bubble.
+// Time and stats share the row hover/focus reveal. Empty metadata contributes no space;
+// delivery status uses a separate row that remains readable at rest.
 function BubbleMeta({
   side,
   createdAt,
@@ -1409,12 +1714,13 @@ function BubbleMeta({
   side: 'user' | 'daemon'
   createdAt?: number
   turnStats?: string
-}): JSX.Element {
+}): JSX.Element | null {
+  if (createdAt === undefined && turnStats === undefined) return null
   return (
-    <div className={side === 'user' ? 'bubble__meta bubble__meta--user' : 'bubble__meta'}>
-      <span className="bubble__meta-time">
-        {createdAt === undefined ? null : formatMessageTime(createdAt)}
-      </span>
+    <div className={side === 'user' ? 'bubble__meta bubble__meta--user bubble__meta--details' : 'bubble__meta bubble__meta--details'}>
+      {createdAt !== undefined && <span className="bubble__meta-time">
+        {formatMessageTime(createdAt)}
+      </span>}
       {turnStats !== undefined && <span className="bubble__turn-stats">{turnStats}</span>}
     </div>
   )
@@ -1515,16 +1821,24 @@ function MessageActions({ text, role, onReply }: {
 // Cleaning the name here would make what the operator SEES differ from what a save WRITES — a worse defect
 // than the tidiness it buys.
 function BubbleAttachmentRow({ attachment }: { attachment: MessageAttachment }): JSX.Element {
-  const conversationId = useActiveConversationStore(s => s.activeConversation?.id ?? null)
-  const available = useConversationActionAvailability(conversationId)
+  const scope = useContext(ThreadAttachmentScopeContext)
+  const conversationId = useActiveConversationStore(s => scope?.conversationId ?? s.activeConversation?.id ?? null)
+  const available = useConversationActionAvailability(conversationId, scope?.hostId)
   return (
     <button
       type="button"
       className="bubble__file"
       disabled={!available}
       onClick={() => {
-        if (connectedConversationHostNow(conversationId) === null) return
-        downloadAttachment(attachmentDownloadDeps, attachment)
+        if (connectedConversationHostNow(conversationId, scope?.hostId) === null) return
+        const target = scope && { conversationId: scope.conversationId, serverId: scope.hostId }
+        downloadAttachment(target === null ? attachmentDownloadDeps : {
+          ...attachmentDownloadDeps,
+          getOpenConversationId: () => target.conversationId,
+          getServerId: () => target.serverId,
+          openLocalAttachment: request => window.pyry.openAttachment({ ...request, ...target, localOnly: true }),
+          requestAttachment: request => window.pyry.requestAttachment({ ...request, ...target })
+        }, attachment)
       }}
     >
       {/* #1262 LIFTED THE DRAWING INTO `AttachmentFileIcon`, which the composer's pending tile now shares.
@@ -1558,9 +1872,7 @@ function BubbleAttachmentRow({ attachment }: { attachment: MessageAttachment }):
 // #1214 moved it up here with the control itself, off the deleted QueuedBacklog.
 const DROP_QUEUED_LABEL = 'Drop queued message'
 
-// #296, moved onto the timeline row by #1214: the drop / cancel affordance a queued row carries — an
-// icon-only button, a LEADING sibling of the bubble inside the right-aligned .message-row--user, so it
-// sits at the row's inner edge. Unchanged markup; only its home moved off the deleted region.
+// The queued action column leads the right-aligned bubble; Cancel always remains available.
 //
 // It rides a row ONLY while the daemon's last snapshot reported that message queued, which is what
 // `queued !== null` means. Before this ticket "no delivered row can reach this button" was structural
@@ -1583,25 +1895,15 @@ function QueuedRowDrop({
       disabled={!onDropQueued}
       onClick={() => onDropQueued?.(queued.queuedMsgId, queued.messageId)}
     >
-      <svg
-        className="queued-row__drop-icon"
-        viewBox="0 0 24 24"
-        width="18"
-        height="18"
-        fill="currentColor"
-        aria-hidden="true"
-      >
-        <path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-      </svg>
+      <span className="queued-row__drop-icon" aria-hidden="true" />
     </button>
   )
 }
 
 const SEND_QUEUED_NOW_LABEL = 'Send queued message now'
 
-// #1726: Send now on a queued row — the drop control's icon-button idiom by decision (the design file
-// draws no queued state), leading it so the drop keeps its place beside the bubble. Drawn only while
-// the session reports `mid_turn_input: true`; disabled under the drop control's own condition. The
+// Send now sits above Cancel only while the session reports `mid_turn_input: true`;
+// disabled under the drop control's own condition. The
 // click writes nothing: the row stays queued until the daemon's next `queue_state` omits it.
 function QueuedRowSendNow({
   queued,
@@ -1618,16 +1920,7 @@ function QueuedRowSendNow({
       disabled={!onSendQueuedNow}
       onClick={() => onSendQueuedNow?.(queued.queuedMsgId)}
     >
-      <svg
-        className="queued-row__send-now-icon"
-        viewBox="0 0 24 24"
-        width="18"
-        height="18"
-        fill="currentColor"
-        aria-hidden="true"
-      >
-        <path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8-8 8z" />
-      </svg>
+      <span className="queued-row__send-now-icon" aria-hidden="true" />
     </button>
   )
 }
@@ -1676,8 +1969,9 @@ export function stoppedTurnText(item: {
 // #1214: `queued` is the row's not-yet-run state, non-null exactly while the daemon reports this row's
 // message queued. Only the `userText` arm reads it — foldQueuedRows can mark no other kind — and the
 // whole visual difference is that arm's fork.
-function TimelineRow({
+const TimelineRow = memo(function TimelineRow({
   item,
+  readRowKey,
   inProgress,
   queued = null,
   delivery,
@@ -1687,9 +1981,11 @@ function TimelineRow({
   turnStats,
   onOpenMarkdownPath,
   agent,
-  onReply
+  onReply,
+  authoritativeSummary
 }: {
   item: ThreadItem
+  readRowKey?: number
   inProgress: boolean
   queued?: QueuedRowHandle | null
   delivery?: 'waiting' | 'not-sent'
@@ -1704,12 +2000,13 @@ function TimelineRow({
   /** #1656: read by the banner and turnBoundary arms, which name the conversation's agent. */
   agent?: WireAgent
   onReply?: (role: 'user' | 'assistant', text: string) => void
+  authoritativeSummary?: string
 }): JSX.Element | null {
   switch (item.kind) {
     case 'assistantText': {
       // Streaming owns only derived presentation; settlement always renders the original source.
       return (
-        <div className="message-row message-row--daemon message-row--text">
+        <div className="message-row message-row--daemon message-row--text" data-read-row={readRowKey}>
           <div className="bubble bubble--daemon" data-thread-role="assistant">
             <div className="bubble__markdown">
               {inProgress
@@ -1731,15 +2028,16 @@ function TimelineRow({
       // produces.
       return <ToolRow item={item} />
     case 'banner':
-      return item.level === 'info' ? null : (
+      return item.level === 'info' && authoritativeSummary === undefined ? null : (
         <p className={item.level === 'warning'
           ? 'session-delimiter__title claude-banner claude-banner--warning'
-          : 'session-delimiter__title claude-banner'}>{bannerDisplayText(item, agent)}</p>
+          : 'session-delimiter__title claude-banner'}>{authoritativeSummary !== undefined && agent === undefined ? item.text : bannerDisplayText(item, agent)}</p>
       )
     case 'modelRefusal':
       return <ModelRefusalRow refusal={item.refusal} />
     case 'turnBoundary': {
-      const text = stoppedTurnText(item, agent)
+      const text = (authoritativeSummary !== undefined && agent === undefined
+        ? authoritativeSummary : stoppedTurnText(item, agent) ?? authoritativeSummary) ?? null
       return text === null ? null : <p className="session-delimiter__title stopped-turn">{text}</p>
     }
     case 'compactionBoundary':
@@ -1802,14 +2100,19 @@ function TimelineRow({
       // draws none because the wire item carries none — a difference in what is known, not in treatment.
       return (
         <div
+          data-read-row={readRowKey}
           className={
             queued
               ? 'message-row message-row--user message-row--queued message-row--text'
               : 'message-row message-row--user message-row--text'
           }
         >
-          {queued && midTurnInput && <QueuedRowSendNow queued={queued} onSendQueuedNow={onSendQueuedNow} />}
-          {queued && <QueuedRowDrop queued={queued} onDropQueued={onDropQueued} />}
+          {queued && (
+            <div className="message-actions message-actions--queued">
+              {midTurnInput && <QueuedRowSendNow queued={queued} onSendQueuedNow={onSendQueuedNow} />}
+              <QueuedRowDrop queued={queued} onDropQueued={onDropQueued} />
+            </div>
+          )}
           {!queued && <MessageActions text={item.text} role="user" onReply={onReply} />}
           <div className="bubble bubble--user" data-thread-role={queued ? 'queued' : 'user'}>
             {item.text}
@@ -1869,7 +2172,7 @@ function TimelineRow({
         </div>
       )
   }
-}
+})
 
 /** Refusal content is bounded, escaped text; model identifiers remain unchanged in the store. */
 export function ModelRefusalRow({ refusal, defaultExpanded = false }: {
@@ -2147,29 +2450,53 @@ function ToolFailedIcon(): JSX.Element {
   </svg>
 }
 
+// Compare primitive group state and the existing row identity. Legacy ToolRow props are
+// constructed only when something this row consumes changes, including its toggle handler.
+const TimelineToolRow = memo(function TimelineToolRow({
+  item, rowKey, count, background, running, expanded, onToggle
+}: {
+  item: Extract<ThreadItem, { kind: 'toolCall' }>
+  rowKey: number | string
+  count?: number
+  background?: boolean
+  running: boolean
+  expanded: boolean
+  onToggle: (key: number | string) => void
+}): JSX.Element {
+  return <ToolRow item={item}
+    group={count === undefined ? undefined : { count, background, running }}
+    expansion={{ expanded, onToggle: () => onToggle(rowKey) }} />
+})
+
 export function ToolRow({
   item,
   defaultExpanded = false,
   group,
-  expansion
+  expansion,
+  running,
+  suppliedOutcome
 }: {
   item: Extract<ThreadItem, { kind: 'toolCall' }>
   defaultExpanded?: boolean
   group?: { count: number; running: boolean; background?: boolean }
   expansion?: { expanded: boolean; onToggle: () => void }
+  running?: boolean
+  suppliedOutcome?: { label: string; failed: boolean; denied: boolean }
 }): JSX.Element {
   const { result, denial } = item
-  const elapsed = !group?.background && result === null && denial === undefined ? item.elapsedSeconds : undefined
-  const expandable = group !== undefined || result !== null || denial !== undefined
+  const elapsed = suppliedOutcome !== undefined ? running === true ? item.elapsedSeconds : undefined
+    : running !== false && !group?.background && result === null && denial === undefined ? item.elapsedSeconds : undefined
+  const expandable = group !== undefined || result !== null || denial !== undefined || (running !== undefined && item.input !== undefined)
   const [localExpanded, setExpanded] = useState(defaultExpanded)
   const expanded = expansion?.expanded ?? localExpanded
-  const rowClass =
-    group?.background ? 'tool-row tool-row--resolved' : denial !== undefined
+  const rowClass = suppliedOutcome !== undefined
+    ? `tool-row${running === true ? '' : ' tool-row--resolved'}${suppliedOutcome.failed ? ' tool-row--error' : suppliedOutcome.denied ? ' tool-row--denied' : ''}`
+    : group?.background || (running === false && result === null && denial === undefined) ? 'tool-row tool-row--resolved' : denial !== undefined
       ? 'tool-row tool-row--resolved tool-row--denied'
       : result
         ? `tool-row tool-row--resolved${result.isError ? ' tool-row--error' : ''}`
         : 'tool-row'
-  const body = expanded && (result !== null || denial !== undefined)
+  const body = expanded && (result !== null || denial !== undefined || (running !== undefined && item.input !== undefined))
   const resultText = denial !== undefined
     ? denialDisplayText(result?.resultSummary ?? denial.message)
     : result?.resultSummary ?? ''
@@ -2225,7 +2552,8 @@ export function ToolRow({
       {(expandable || elapsed !== undefined) && (
         <span className="tool-row__right">
           {elapsed !== undefined && <span className="tool-row__count">{formatToolElapsed(elapsed)}</span>}
-          {denial !== undefined && <span className="tool-row__denied-tag">Denied</span>}
+          {suppliedOutcome !== undefined && <span className="tool-row__count">{suppliedOutcome.label}</span>}
+          {suppliedOutcome === undefined && denial !== undefined && <span className="tool-row__denied-tag">Denied</span>}
           {/* #856: the daemon's précis of what the call returned — "265 lines", "110 of 1676 lines".
               A <span> and never Figma's <p>: a resolved chip is a real <button>, which admits phrasing
               content only, so flow content in here is invalid HTML and a React DOM-nesting warning.
@@ -2254,10 +2582,10 @@ export function ToolRow({
           {group && (
             <span className="tool-row__count">{group.running ? 'running · ' : ''}{group.count} {group.count === 1 ? 'tool' : 'tools'}</span>
           )}
-          {!group && result && result.resultDetail !== undefined && result.resultDetail !== '' && (
+          {suppliedOutcome === undefined && !group && result && result.resultDetail !== undefined && result.resultDetail !== '' && (
             <span className="tool-row__count">{result.resultDetail}</span>
           )}
-          {denial === undefined && result?.isError && <ToolFailedIcon />}
+          {(suppliedOutcome?.failed || (suppliedOutcome === undefined && denial === undefined && result?.isError)) && <ToolFailedIcon />}
           {/* The .status-row__chevron / .composer__actions-icon idiom: a bare inline <svg> sized by its
               own width/height, fill="currentColor" so it takes the ink from CSS, and aria-hidden so it
               adds no accessible name — the button's name stays exactly its text runs, three of them
@@ -2379,7 +2707,7 @@ export function ToolRow({
               {denial.decisionReason !== '' ? `: ${denialDisplayText(denial.decisionReason)}` : ''}
             </p>
           )}
-          {resultText === '' ? (
+          {(result !== null || denial !== undefined) && (resultText === '' ? (
             // `=== ''` exactly — never `.trim()`, which would relabel whitespace-only output (real
             // output the daemon sent) as absent, and never a falsy check, which would read as if
             // `undefined` were reachable on a `string` field.
@@ -2392,7 +2720,7 @@ export function ToolRow({
             // shape and scrolls — the .unrecognized-row__raw side of the whitespace rule stated on
             // .code-block__body in conversation.css, not the reflowing code-block side.
             <pre className="tool-row__result">{resultText}</pre>
-          )}
+          ))}
         </div>
       )}
     </div>
@@ -3303,9 +3631,8 @@ export function isStatusIconTurning(phase: TurnPhase, state: WorkingIndicatorSta
 // (foldQueuedRows → Timeline → TimelineRow's userText arm), so there is one row per message and the
 // "waiting" treatment is a modifier on that row rather than a container around a copy of it. Everything
 // this view owned survived the move: the queued thread role, the reused right-aligned user bubble, the
-// 50% dimming (now .message-row--queued, which is the smallest element containing both the bubble and the
-// drop button the region's opacity used to dim as one group) and the drop control itself (QueuedRowDrop,
-// above). `DROP_QUEUED_LABEL` moved with the control.
+// 50% bubble dimming and the drop control itself (QueuedRowDrop, above). The queued action column
+// now stays fully opaque beside that bubble. `DROP_QUEUED_LABEL` moved with the control.
 
 // A stable id tying the dialog's aria-labelledby to its title element.
 const STATUS_SHEET_TITLE_ID = 'status-sheet-title'
@@ -4877,7 +5204,7 @@ function ComposerErrorSlotControl({
           stoppingBanner !== undefined ? <ComposerBannerReport report={stoppingBanner} agent={agent} /> : null
         )
       }
-      history={historyFailure === null ? null :
+      history={historyFailure === null || (historyFailure.purpose === 'gap' || historyFailure.purpose === 'gap-newest') ? null :
         <ComposerHistoryFailure retryable={historyFailure.retryable} onRetry={retryHistory} />}
       mcpFailure={mcpFailure === null ? null : <ComposerMcpFailure name={mcpFailure} onOpen={openMcpFailure} />}
       /* The count is checked HERE and not left to the view's own guard: `??` tests the element, not what

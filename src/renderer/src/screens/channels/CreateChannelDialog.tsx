@@ -1,14 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { MAX_SYSTEM_PROMPT_BYTES, type ConversationCreatedPayload } from '@shared/wire/types'
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
+import { agentFromWire, MAX_SYSTEM_PROMPT_BYTES, type ConversationCreatedPayload, type WireModelOption } from '@shared/wire/types'
 import { ChannelForm } from './ChannelForm'
 import { Modal } from '../../components/Modal'
 import { requestNewChannel } from '../../store/conversationCreatedBridge'
 import { selectStatusFor, sessionStore } from '../../store/sessionStore'
 import { submitSystemPrompt } from '../../store/systemPromptWriteBridge'
 import { systemPromptWriteStore } from '../../store/systemPromptWriteStore'
+import { selectConversationsFor, useConversationListStore } from '../../store/conversationListStore'
+import { useModelListStore, type ModelListState } from '../../store/modelListStore'
+import { lastEffortStore, selectLastEffort } from '../../store/lastEffortStore'
+import { cachedChannelModels, channelCreateChoice } from './channelCreateChoice'
 
 export function CreateChannelDialogView({
-  name, busy, error, systemPrompt, promptOverLimit,
+  name, busy, error, systemPrompt, promptOverLimit, model,
   onNameChange, onSystemPromptChange, onCancel, onCreate
 }: {
   name: string
@@ -16,6 +20,7 @@ export function CreateChannelDialogView({
   error: string | null
   systemPrompt: string
   promptOverLimit: boolean
+  model?: ComponentProps<typeof ChannelForm>['model']
   onNameChange: (next: string) => void
   onSystemPromptChange: (next: string) => void
   onCancel: () => void
@@ -39,6 +44,7 @@ export function CreateChannelDialogView({
         <ChannelForm
           name={name} busy={busy} error={error} onNameChange={onNameChange}
           prompt={{ value: systemPrompt, overLimit: promptOverLimit, onChange: onSystemPromptChange }}
+          model={model}
         />
       </Modal>
     </div>
@@ -143,6 +149,15 @@ export function CreateChannelDialog({ serverId, onDismiss }: {
   // unmount this container, so a reopen starts empty (AC4). An operator can paste a credential into a
   // system prompt, so nothing on this path touches localStorage, sessionStorage, IndexedDB or persist.
   const [systemPrompt, setSystemPrompt] = useState('')
+  const [modelDraft, setModelDraft] = useState<WireModelOption | null>(null)
+  const selectHostConversations = useMemo(() => selectConversationsFor(serverId), [serverId])
+  const conversations = useConversationListStore(selectHostConversations)
+  const selectHostModels = useCallback((state: ModelListState) =>
+    cachedChannelModels(conversations, state), [conversations])
+  const models = useModelListStore(selectHostModels)
+  const selectedModel = models?.find(row => modelDraft === null
+    ? row.value === 'default' && agentFromWire(row.agent) === 'claude'
+    : row.value === modelDraft.value && agentFromWire(row.agent) === agentFromWire(modelDraft.agent))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const pending = useRef<Pending>({ type: 'idle' })
@@ -202,6 +217,13 @@ export function CreateChannelDialog({ serverId, onDismiss }: {
   return <CreateChannelDialogView
     name={name} busy={busy} error={error}
     systemPrompt={systemPrompt} promptOverLimit={promptOverLimit}
+    model={models === null || models.length === 0 ? undefined : {
+      rows: models, selected: selectedModel,
+      onChange: index => {
+        const row = models[index]
+        if (row !== undefined) setModelDraft(row)
+      }
+    }}
     onNameChange={setName}
     onSystemPromptChange={setSystemPrompt}
     onCancel={() => dismiss('cancelled')}
@@ -226,7 +248,8 @@ export function CreateChannelDialog({ serverId, onDismiss }: {
       }
       window.pyry.sendDiagnostic({ event: 'channel-create-state', code: 'channel-requested' })
       try {
-        requestNewChannel(window.pyry.sendCommand, displayName, null, serverId)
+        requestNewChannel(window.pyry.sendCommand, displayName, null, serverId,
+          channelCreateChoice(selectedModel, selectLastEffort(lastEffortStore.getState())))
       } catch {
         fail()
       }

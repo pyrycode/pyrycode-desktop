@@ -70,7 +70,19 @@ test('remote and timeout resolutions use the Default pill, X and four seconds fr
   await expect(page.locator('.permission-panel')).toHaveCount(0)
   daemon.pushFrame(dismissed('local-answer', 'timeout'))
   // Positive frame delivery after the local dismissal prevents a premature absence pass.
+  await page.evaluate(() => {
+    Object.assign(window, { resolutionBarrierDelivered: false })
+    const off = window.pyry.onDaemonEvent(event => {
+      if (event.type === 'assistantDelta' && event.turnId === 'barrier') {
+        Object.assign(window, { resolutionBarrierDelivered: true })
+        off()
+      }
+    })
+  })
   daemon.pushFrame(frame('assistant_delta', { conversation_id: SEEDED_ROW.id, turn_id: 'barrier', seq: 1, text: 'Local answer acknowledged' }))
+  await expect.poll(() => page.evaluate(() =>
+    (window as typeof window & { resolutionBarrierDelivered: boolean }).resolutionBarrierDelivered)).toBe(true)
+  await page.clock.runFor(16)
   await expect(page.locator('[data-thread-role="assistant"]').last()).toContainText('Local answer acknowledged')
   await expect(notice(page)).toHaveCount(0)
 })

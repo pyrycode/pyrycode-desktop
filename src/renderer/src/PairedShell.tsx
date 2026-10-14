@@ -1,5 +1,7 @@
 import './pairedShell.css'
 import { readSavedTimeline } from './store/savedTimelineRestorer'
+import { createNewestHistoryDemand } from './store/newestHistoryDemand'
+import { historyAskDeps } from './store/historyPageBridge'
 import { createSavedListRestorer } from './store/savedListRestorer'
 import { connectedConversationHostNow, initializeCreatedConversationAfterList } from './screens/conversation/conversationActionAvailability'
 import { useEffect, useReducer, useRef, useState } from 'react'
@@ -61,6 +63,7 @@ import { slashCommandListStore } from './store/slashCommandListStore'
 import { timelineStore } from './store/timelineStore'
 import { usageLimitStore } from './store/usageLimitStore'
 import { reportedContextStore } from './store/reportedContextStore'
+import { confirmConversationDeleted } from './confirmConversationDeleted'
 
 /** Compile-time exhaustiveness guard: a new PairedRoute member without a case is a type error. */
 function assertNever(route: never): never {
@@ -413,6 +416,29 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   const [route, dispatch] = useReducer(nextPairedRoute, 'list')
   const localRead = useRef<ReturnType<typeof readSavedTimeline> | null>(null)
   const [savedTimelineTarget, setSavedTimelineTarget] = useState<{ serverId: string; conversationId: string }>()
+  const [newestHistory] = useState(() => createNewestHistoryDemand(historyAskDeps))
+  useEffect(() => {
+    let listening = true
+    const sync = (): void => {
+      const target = route === 'thread' && savedTimelineTarget !== undefined &&
+        activeConversationStore.getState().activeConversation?.id === savedTimelineTarget.conversationId
+        ? savedTimelineTarget : null
+      newestHistory.sync(target, target !== null &&
+        connectedConversationHostNow(target.conversationId) === target.serverId)
+    }
+    // Let receipt admission and writer capture finish before releasing deferred demand.
+    const schedule = (): void => { queueMicrotask(() => { if (listening) sync() }) }
+    const connectionChanged = (): void => {
+      // Observe loss immediately even if a reconnect arrives in the same event turn.
+      if (savedTimelineTarget !== undefined &&
+        sessionStore.getState().statuses.get(savedTimelineTarget.serverId)?.type !== 'connected') sync()
+      else schedule()
+    }
+    const offs = [activeConversationStore.subscribe(schedule), conversationListStore.subscribe(schedule),
+      sessionStore.subscribe(connectionChanged), conversationTimelineStore.subscribe(schedule)]
+    sync()
+    return () => { listening = false; offs.forEach(off => off()) }
+  }, [newestHistory, route, savedTimelineTarget])
 
   useEffect(() => {
     const off = activeConversationStore.subscribe((state, previous) => {
@@ -505,14 +531,21 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // #652: the delete confirmation → thread exit. Symmetric with the created-event nav above and driven
   // by the same rule — navigate on the DAEMON's confirmation, not on the click — so a delete the daemon
   // never confirms leaves the operator in the thread (AC5) rather than stranding them on a list that
-  // still shows the row. exitActiveConversation gates on the id, so a confirmation naming a different
-  // discussion (the operator opened another one while the reply was in flight) changes nothing (AC4).
+  // still shows the row. Confirmed deletion also removes an explicitly owned off-screen timeline;
+  // exitActiveConversation keeps the active-id gate, so another open thread stays intact.
   // The per-render object allocation is free: the hook holds this inline arrow in a ref and re-reads it
   // on each delivery, so nothing needs memoizing and the subscription never re-establishes.
-  useConversationDeletedExit((conversationId) =>
-    exitActiveConversation(
-      { ...exitConversationDeps, navigateToList: () => { leaveRecovery(); dispatch({ type: 'back' }) } },
-      conversationId
+  useConversationDeletedExit((conversationId, serverId) =>
+    confirmConversationDeleted(
+      { ...exitConversationDeps,
+        getTimelineServerId: id => {
+          conversationTimelineStore.flushTimeline()
+          return conversationTimelineStore.getState().timelines.get(id)?.serverId
+        },
+        log: event => window.pyry.sendDiagnostic(event),
+        navigateToList: () => { leaveRecovery(); dispatch({ type: 'back' }) } },
+      conversationId,
+      serverId
     )
   )
   // #653: the archive half of the same exit — the SAME decision, a different trigger, and no new deps

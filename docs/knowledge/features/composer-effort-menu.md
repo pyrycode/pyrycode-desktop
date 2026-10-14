@@ -434,4 +434,4 @@ without clearing the held conversation state. This avoids relying on the daemon'
 unsolicited model-list push; history's own gate prevents a second prepend. A turn assertion first
 waits for the nonempty assistant count to increase from its pre-send value, then for streaming to
 finish: history can satisfy a bare positive count, and a closing absence assertion can pass before
-the turn starts. See [development verification](development-verification.md#evidence-that-cannot-pass-too-early).
+the turn starts. See [development verification](development-verification-evidence-that-cannot-pass-too-early.md#evidence-that-cannot-pass-too-early).

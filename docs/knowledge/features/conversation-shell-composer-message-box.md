@@ -410,6 +410,58 @@ where the variable holds `min(3.5%, var(--space-5))` since #1728. That value dat
 \#1107 — see below; it was a flat `gap: var(--space-5)` (the design's measured 20px) from #811 through
 \#682/#683, inert with one child and then live between the Actions trigger and the context reading.
 
+### Footer button hover
+
+Actions, permission mode, model, effort and Attach paint a hover-only `::before` layer
+in `conversation.css` ([design and plan](../../specs/architecture/1863-composer-footer-hover.md)).
+The fill is `--color-state-hover` (8% `--color-on-surface`) with `--radius-xs` (6px) corners:
+
+| Control | Layer extends beyond its box |
+| --- | --- |
+| Four text buttons | 6px left/right, 4px top/bottom |
+| Attach icon button | 4px on every side |
+
+Insets derive from `--space-1` (4px), multiplied by 1.5 for text-button horizontal extents.
+The layer is absolutely positioned, with `z-index: -1` and `pointer-events: none` inside an
+isolated paint container. Hover changes no padding, border, margin or size, so footer and
+descendant geometry stay fixed. Pointer exit removes the layer; keyboard focus alone does
+not create it, and existing focus outlines remain visible and unchanged during hover.
+
+**Keep the text button's shrink-policy clip.** Painting an outward layer on the button
+would clip it; removing `overflow: hidden` would let squeezed chevrons escape their boxes.
+Instead, the existing same-sized `.composer-options-anchor` owns the layer, selected only
+when its direct `button.composer__footer-button` is hovered. Inert model/effort spans receive
+no layer, and hovering an open menu does not trigger it. Attach never shrinks, so its own
+box owns the layer with `position: relative` and `overflow: visible`. Run configuration
+is available through the thread menu; there is no corresponding footer button.
+
+**Browser and visual evidence.** `e2e/composer-footer-hover.spec.ts` checks all five controls'
+layer colour, radius/insets, unchanged footer/descendant rectangles, preserved text clipping,
+pointer exit, keyboard outlines and inert-label exclusion at native 1280×800 and 800×600.
+The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1869#issuecomment-6043572480)
+confirms both `footer hover layers preserve geometry and keyboard focus at 1280` and
+`footer hover layers preserve geometry and keyboard focus at 800` were present, executed
+and passed, as was `composer footer: the row compresses instead of overflowing at the 800px
+minimum (AC1-AC3)` in `e2e/composer-footer-overflow.spec.ts`. The 2026-10-07 dispatcher
+browser run at `b090b45a71710cb2fa0e00954917950d2a8c068f` recorded 339 executed,
+339 passed, 0 failed and 4 skipped. These assertions establish geometry and interaction;
+computed styles alone cannot establish that the outward layer is visibly painted.
+
+The same verdict compared all ten hover and ten keyboard-focus captures with fresh Figma
+references for [text](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG?node-id=840-16115)
+and [icons](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG?node-id=840-16155), confirming
+the visible layers and outlines with no unresolved in-scope discrepancy. Original scratch
+captures are `/tmp/builder-1863/hover-{1280,800}-{0..4}.png` and
+`/tmp/builder-1863/focus-{1280,800}-{0..4}.png`, revision
+`39f950a5e6d078e62b0d6713203948dafd4c03f8`; indices 0–4 are Actions, permission, model,
+effort and Attach. The synthetic paired session uses Hover model, low effort and manual
+approval; content viewports are 1280×773 and 800×573. Retained manifest hashes matched,
+and the relevant CSS, hover spec and menu component were unchanged through the reviewed head.
+Fresh Figma references are under `/tmp/verifier-1869/current/`. The supplemental
+`/tmp/verifier-1869/menus-results.json` recorded 2 executed, 2 passed, 0 failed and 0 skipped,
+covering menu hit-testing at both sizes, Escape/focus return and an effort-item click
+overlapping the input.
+
 ## Footer row shrink policy (#1107)
 
 Before #1107, at the app's documented 800px minimum window the row above overflowed its content box:

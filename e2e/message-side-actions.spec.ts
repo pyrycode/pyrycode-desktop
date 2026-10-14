@@ -270,6 +270,10 @@ test('side copy and row cap retain sizing while metadata expands on hover and fo
     await expect(bubble.locator('.bubble__meta button')).toHaveCount(0)
   }
 
+  // Prove the earlier presses wrote a different value, so a stale matching clipboard
+  // from another execution cannot satisfy the streaming-copy assertion below.
+  await expect.poll(() => app.evaluate(({ clipboard }) => clipboard.readText())).toBe(SHORT)
+
   // Upload completion is the production IPC event seam used by attachment-file-row.spec.ts.
   await app.evaluate(({ BrowserWindow }, payload) => {
     BrowserWindow.getAllWindows()[0].webContents.send(payload.channel, payload.event)

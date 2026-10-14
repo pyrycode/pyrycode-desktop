@@ -86,6 +86,8 @@ before pressing and require identical focused/hovered button and scroll geometry
 across consecutive animation frames. Shipping activation remains ordinary
 `Locator.click()`, with a trusted click receipt and exact OS clipboard readback.
 All original assertions remain; no production change is justified.
+An explicit OS readback also requires the earlier presses to have copied “Hi”,
+making the later replacement assertion nonvacuous even across repeated executions.
 
 Evidence under `/tmp/builder-1976/`: `baseline.json` (10 executed/passed),
 `probe.json` (20 executed/passed), `press.json` (3 executed/failed),

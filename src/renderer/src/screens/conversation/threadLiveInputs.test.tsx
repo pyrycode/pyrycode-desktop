@@ -97,3 +97,71 @@ it('does not surface unanswerable empty question readings', () => {
     questions: [], serverId: 'host', envelopeSessionId: 'session' } as DaemonEvent })
   expect(threadLiveInputs(store.getState()).questions).toHaveLength(1)
 })
+
+it.each(['thinking', 'responding', 'idle'] as const)('clears stalls atomically on admitted %s activity', state => {
+  const store = createThreadLiveState({ sendResponse: vi.fn(), isConnected: () => true })
+  store.getState().dispatch({ type: 'summary', serverId: 'host', summary: { id: 'chat', current_session_id: 'B' } })
+  const emit = (event: DaemonEvent, session = 'B') => store.getState().dispatch({ type: 'daemon',
+    event: { ...event, serverId: 'host', envelopeSessionId: session } })
+  emit({ type: 'stallDetected', conversationId: 'chat' })
+  let input = threadLiveInputs(store.getState())
+  expect(input.status.stalled).toBe(true)
+  expect(input.indicator).toBe('stalled')
+  expect(resolveConversationStatus(input.hasOutstanding, input.activity, false)).toBe('working')
+  const retry: DaemonEvent = { type: 'apiRetry', conversationId: 'chat', active: true, current: 2, total: 4 }
+  const compact: DaemonEvent = { type: 'compacting', conversationId: 'chat', active: true }
+  emit(retry); emit(compact)
+  const before = store.getState()
+  const observed = vi.fn((next: typeof before) => threadLiveInputs(next))
+  const off = store.subscribe(observed)
+  const turn: DaemonEvent = { type: 'turnState', conversationId: 'chat', state }
+  emit(turn, 'A')
+  expect(store.getState()).toBe(before)
+  expect(observed).not.toHaveBeenCalled()
+  emit(turn)
+  off()
+  expect(observed).toHaveBeenCalledTimes(1)
+  input = observed.mock.results[0].value
+  expect(input.status).toMatchObject({ phase: state, stalled: false, apiRetry: { current: 2, total: 4 }, compacting: true })
+  expect(input.activity).toMatchObject({ stalled: false, apiRetrying: true, compacting: true })
+  expect(input.indicator).toBe('retrying')
+  expect(store.getState().readings.get('api_retry')).toBe(before.readings.get('api_retry'))
+  expect(store.getState().readings.get('compacting')).toBe(before.readings.get('compacting'))
+  emit({ ...retry, active: false })
+  expect(threadLiveInputs(store.getState()).indicator).toBe('compacting')
+  emit({ ...compact, active: false })
+  input = threadLiveInputs(store.getState())
+  expect(input.indicator).toBe(state === 'idle' ? null : state === 'thinking' ? 'thinking' : 'working')
+  expect(resolveConversationStatus(input.hasOutstanding, input.activity, false)).toBe(state === 'idle' ? 'idle' : 'working')
+})
+
+it.each(['responding', 'idle'] as const)('ends thinking progress atomically on %s and starts the next think fresh', state => {
+  const store = createThreadLiveState({ sendResponse: vi.fn(), isConnected: () => true })
+  store.getState().dispatch({ type: 'summary', serverId: 'host', summary: { id: 'chat', current_session_id: 'B' } })
+  const emit = (event: DaemonEvent, session = 'B') => store.getState().dispatch({ type: 'daemon',
+    event: { ...event, serverId: 'host', envelopeSessionId: session } })
+  const thinking: DaemonEvent = { type: 'turnState', conversationId: 'chat', state: 'thinking' }
+  emit({ type: 'thinkingProgress', conversationId: 'chat', estimatedTokens: 1234 })
+  emit(thinking); emit(thinking)
+  expect(threadLiveInputs(store.getState()).thinkingTokens).toBe(1234)
+  const before = store.getState()
+  const observed = vi.fn((next: typeof before) => threadLiveInputs(next))
+  const off = store.subscribe(observed)
+  const end: DaemonEvent = { type: 'turnState', conversationId: 'chat', state }
+  emit(end, 'A')
+  expect(store.getState()).toBe(before)
+  expect(observed).not.toHaveBeenCalled()
+  emit(end)
+  off()
+  expect(observed).toHaveBeenCalledTimes(1)
+  expect(observed.mock.results[0].value).toMatchObject({ status: { phase: state }, thinkingTokens: null })
+  emit({ type: 'turnState', conversationId: 'chat', state: 'idle' }); emit(thinking)
+  const input = threadLiveInputs(store.getState())
+  const markup = renderToStaticMarkup(createElement(ThinkingIndicator, { state: input.indicator, toolName: null,
+    retry: input.status.apiRetry, resetting: input.status.resetting, thinkingTokens: input.thinkingTokens }))
+  expect(input.thinkingTokens).toBeNull()
+  expect(markup).toContain('Thinking…')
+  expect(markup).not.toContain('tokens')
+  emit({ type: 'thinkingProgress', conversationId: 'chat', estimatedTokens: 4321 }); emit(thinking)
+  expect(threadLiveInputs(store.getState()).thinkingTokens).toBe(4321)
+})

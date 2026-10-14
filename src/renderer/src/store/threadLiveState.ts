@@ -123,6 +123,10 @@ export function createThreadLiveState(deps: ThreadLiveDeps) {
         if (event.type === 'modalDismissed' || event.type === 'questionDismissed') { remove(family, identity(event)); return }
         if (event.type === 'questionShown' && event.questions.length === 0) { report('reading-ineligible'); return }
         const readings = new Map(get().readings), entries = new Map(readings.get(family))
+        if (event.type === 'turnState') {
+          readings.delete('stall')
+          if (event.state !== 'thinking') readings.delete('thinking_progress')
+        }
         entries.set(identity(event), event); readings.set(family, entries); set({ readings }); report('reading-admitted')
       },
       respond(displayed, command) {

@@ -84,3 +84,10 @@ Resolved: use an injected host-bound response sink for the inactive route; enabl
 2026-10-14: `reduceQuestionBatches` intentionally ignores empty question readings, including an empty replacement. Keep that eligibility guard in the adapter so an unanswerable batch cannot create attention or replace an outstanding request. `threadLiveInputs` has a named return interface because the TypeScript declaration build cannot name the event union's private metadata through an inferred return type. No production UI or IPC composition is enabled.
 
 2026-10-14: An owning-host `connected` event atomically retires outstanding prompt families and retained request correlation without a resolution, following the existing prompt reconnect contract. Current supplied shown readings repopulate them; a different host's connection event does nothing. Retry/compaction stay available until current supplied active/inactive values replace them. This closes the stale-prompt gap when payload-less reconnect clears cannot establish conversation ownership.
+
+2026-10-14: Verifier findings 1 and 2 require the existing turn-activity lifecycle in `dispatch`: after admission, every `turnState` removes the onset-only `stall` family, and a non-thinking state also removes `thinking_progress`. Publish the phase and both removals in one store update; repeated thinking preserves its estimate, and rejected readings change nothing. Retry/compaction remain independent. The security verdict remains PASS: lifecycle clearing occurs only after the unchanged host, provenance and ownership guards.
+
+| Additional lifecycle event | Supplied-input regression |
+| --- | --- |
+| Thinking/responding/idle after a stall; rejected old-session activity | `clears stalls atomically on admitted %s activity` |
+| Non-thinking phase, repeated thinking and a later thinking phase; rejected old-session activity | `ends thinking progress atomically on %s and starts the next think fresh` |

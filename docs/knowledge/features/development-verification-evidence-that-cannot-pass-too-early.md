@@ -48,7 +48,18 @@ for the positive barrier, then assert duplicate absence. In
 through the mounted app before the one-row checks; an immediate count alone could
 pass before either receipt arrived.
 
+Visible assistant text can also precede `turn_end` processing. A whole-row replay
+snapshot taken then includes the streaming cursor, so normal settlement can look
+like a replay mutation. In
+[`disconnected-message-delivery.spec.ts`](../../../e2e/disconnected-message-delivery.spec.ts),
+observe each answer with its cursor before pushing its `turn_end`, then wait for
+that answer's cursor to disappear before reading the baseline. Requiring the
+cursor to appear first prevents an absence assertion from passing before the delta
+is rendered. Keep the later replay-processing barrier before comparing rows;
+settlement and replay processing are separate observations. The
+[delivery verification](daemon-connection-lifecycle.md#delivery-verification) records
+the controlled reproduction and counted automatic, explicit and terminal evidence.
+
 The footer needs a session-settings snapshot before its controls can render.
 Check the current refresh trigger. A lone idle event does not produce a transition
 from running to idle. Drive the prerequisite transition when the fixture requires it.
-

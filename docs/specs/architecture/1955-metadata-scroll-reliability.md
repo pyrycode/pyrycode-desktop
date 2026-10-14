@@ -27,3 +27,17 @@ This initial test-only design introduces no exported type, product state or fail
 - The existing named Playwright test covers width changes, wheel return, repeated tail reveal/collapse and above-viewport `preventScroll` focus/collapse. Require the above-viewport condition positively and keep one immutable reference through both effects.
 - Run 20 focused repetitions with four configured/actual workers, zero retries and zero skips, recording candidate revision, Linux/Xvfb presentation and executed/pass/fail/skip counts.
 - Merge main, run pre-verify and build. The verifier/dispatcher owns the full four-worker default gate and its named attempt-zero result; no live Claude proof is required.
+
+## Revisions
+
+2026-10-14 — Diagnosis requires the minimal renderer correction allowed by the ticket. At base `9fddff32`, instrumented original repetitions failed 20/20 (17 first-wheel failures, 3 final-wheel failures); complete event-ordering trials and a 20-stable-frame control each failed 3/3. All 42 rows were present. A representative first wheel began at offset 0, height 3109, viewport 760, hovered row 4. Before scroll delivery hover moved to row 38; offset became 2321 while height remained 3109. The old row's 28px collapse anchored the reader upward while the new row's 28px reveal replaced that height. The 28px bottom distance never resumed following; row resize consequently made no pin write. Settling pre-input geometry cannot repair this native input/layout ordering. Reports: `/tmp/builder-1955/diagnostic.json`, `ordering.json`, `settled-control.json`.
+
+Original verifier evidence at `3bba3878fc`: `verifier-gate_#1953_6.log`, four actual workers, 395 executed / 394 passed / 1 failed / 3 skipped; named test attempt 0 failed at its first clearance, 28px for the 5000ms poll. Focused rerun `2026-10-14T18-44-29-837Z_verifier-gate-rerun_#1953.log`: four configured / one actual worker, 1 executed/passed, zero failed/skipped, attempt 0.
+
+Cleaner shape: extend the existing trusted downward-wheel guard rather than introduce a pending gesture state or new observer. A pixel-mode wheel whose positive delta covers the measured remaining scroll range expresses bottom intent, even before native movement. Set the existing following ref; perform no immediate scroll write. Existing scroll and resize paths restore clearance. Short downward movement does not acquire following early, non-pixel input retains the existing measured-bottom guard, and trusted upward input still releases it synchronously. No new types, state, failure modes or consumer updates; written work remains below 220 lines.
+
+The regression now proves completed overflow and stable pointer/layout, uses trusted upward motion to establish history start and held position, and preserves an immutable content reference after positive above-viewport reveal/collapse. A short 40px downward nudge before that baseline guards against snapping ordinary reader movement to bottom.
+
+## Design source
+
+Figma: https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG?node-id=132-4225 and https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG?node-id=814-12025, read with screenshots on 2026-10-14. Existing left/right bubbles hug content at rest; row hover/focus reveals the body-small time/stats row with inverse-primary ink and existing action icons. The correction changes scroll intent only; existing components, assets and theme tokens render these states.

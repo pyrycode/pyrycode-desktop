@@ -67,3 +67,34 @@ records 8,835 unit tests executed/passed, 0 failed and 3 skipped, including all 
 tests. Its fake-transport gate executed/passed 276 tests, 0 failed and 4 skipped; the three named
 live cases were excluded there. This separates fixture regression evidence from live acceptance.
 
+### Correlating live settings evidence
+
+An acknowledgement proves a saved choice, not settled applied effort. In the
+[effort observation diagnosis](https://github.com/pyrycode/pyrycode-desktop/issues/1949#issuecomment-6166500926),
+the original failed run took 21,769ms and expected `low` while the footer remained `medium`;
+the named case was the sole failure in 27 executed, 26 passed, 1 failed, 1 skipped.
+The same-tree focused rerun executed and passed that case in 18,434ms: 1 executed,
+1 passed, 0 failed, 0 skipped. Both reported daemon release `0.39.0`.
+Those reports contain no settings sequence, so the exact historical ordering remains unknown.
+The repair capture establishes the mechanism: a medium write, settings request, matching
+acknowledgement, saved-medium/applied-low reply, follow-up request and saved-medium/applied-medium
+reply. Footer samples advanced from low to medium. The old reply-count wait froze the transitional
+low oracle while the product correctly advanced to the settled medium reading.
+
+Use an operation checkpoint, the intended conversation and the latest reply after its settings
+request. Bind creation to the actual `conversationCreated` ID rather than the most recent request,
+which could still belong to an old chat. For writes, match the latest effort write's session and
+change acknowledgement and require a later reading; unrelated acknowledgements or superseded
+replies cannot settle the proof. Record settings evidence synchronously in the page, observe commands
+without replacing the preload API, and sample evidence and footer in one page evaluation on every
+bounded poll. Missing evidence or a persistently incorrect footer must reach the deadline and fail.
+
+Require the intended applied effort when proving a running-session change has settled, while
+retaining unavailable applied effort before the first turn. Keep saved `effort`, applied
+`effectiveEffort` and the confirmed `pyry.lastEffort` preference separate: substituting the chosen
+value for the daemon oracle could conceal an incorrect footer. Attach the ordered evidence and
+deduplicated footer samples with event counts on success and failure. A deterministic replay must
+show the old frozen observation failing and the shared bounded poll succeeding only when current
+evidence arrives, with negative deadline cases for obsolete/unrelated-only replies and wrong labels.
+See [effort proof and bootstrap prerequisites](composer-effort-menu.md#testing-the-default-apply-1169)
+and [counted focused and full live results](live-e2e-runbook.md#current-real-claude-gate-state).

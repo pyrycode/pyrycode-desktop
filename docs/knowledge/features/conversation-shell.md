@@ -10,6 +10,10 @@ Renders the open chat's live timeline and composer. Messages scroll behind trans
 
 The injectable `ThreadItemsTimeline` route instead combines retained daemon snapshots
 with scoped local pending rows from [Composer send](composer-send.md#data-flow).
+A separate inactive live-state adapter uses
+[summary-only session authority](session-id-store.md#summary-authority-in-the-inactive-thread-adapter)
+and projects [live status and lifecycle inputs](conversation-shell-turn-status.md#session-scoped-live-presentation)
+with [host-bound prompts](modal-store-bridge.md#session-scoped-thread-prompts).
 Production selection remains [#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
 After acceptance, text and valid supplied attachment facts come exclusively from the
 daemon `user_message`; local content is retired rather than matched by text or kept

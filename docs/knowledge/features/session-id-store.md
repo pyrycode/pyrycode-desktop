@@ -5,6 +5,9 @@ unidirectional Zustand store fed by the always-arriving `sessionTransition` mark
 [Run configuration](conversation-shell-run-configuration.md#run-configuration-sheet-177) controls ([#257](../codebase/257.md))
 can address a `set_session_settings` write to the session that is actually running.
 
+This is the ordinary app's legacy store. The inactive thread adapter has its own
+[summary authority](#summary-authority-in-the-inactive-thread-adapter).
+
 Introduced in [#259](../codebase/259.md), the renderer-side retention half of #183's interactive
 Run-configuration write path, split alongside #254/#255/#256/#257. Consumes the transport
 [#254](../codebase/254.md) already shipped (`sessionTransition{newSessionId}` daemon event, later
@@ -23,6 +26,44 @@ nothing is correlated — reactive-only, strictly smaller than both `runConfigSt
 sheet-open) and `conversationListStore` (#208, requests on the connected-edge).
 
 ## How it works
+
+### Summary authority in the inactive thread adapter
+
+`createThreadLiveState` in `src/renderer/src/store/threadLiveState.ts` owns a separate,
+injected store for supplied thread readings. Only the displayed host/conversation
+summary's `current_session_id` binds its session. A host, conversation or session
+change synchronously replaces the binding and drops all held readings, outstanding
+prompts and request ownership. Empty or omitted session IDs admit no readings;
+a null summary or empty host/conversation loses the displayed scope. Repeating the
+same binding preserves state; returning after invalidation starts empty.
+
+Admission requires the bound host's client stamp, positive conversation ownership
+and a matching nonempty string `envelopeSessionId`. Absent provenance is unknown;
+explicit null means no producer. Neither can stand in for the current session.
+An event's nonempty `conversationId` must match; when that field is absent,
+retained request correlation can establish ownership, as can a held prompt for
+its dismissal. A mismatching direct conversation field cannot be rescued by
+correlation. Request ownership is released by `requestEnded`, binding invalidation,
+owning-host reconnect or disposal. Correlation never supplies envelope provenance.
+
+Readings live in nested Maps under canonical `SessionStateFamily` names. Modal
+shown/dismissed share `modal_shown`, question shown/dismissed share `question_shown`,
+and settings reports/acknowledgements share `session_settings`. Reports replace by
+event type; tool/task progress and prompts retain their own IDs. An admitted
+`sessionStateCleared` removes only its canonical family. Payload-less clears have
+no conversation field, so they require retained request ownership as well as
+current envelope provenance; selection or a session tag alone cannot admit one.
+An unattributed clear does nothing, even if its family currently holds readings.
+
+The legacy transition/settings writers described below cannot mutate this binding.
+Item snapshots, cache hydration and item content supply neither live readings nor
+ownership. Caller-owned connection, account and conversation readings and
+pending/queued inputs keep their independent lifetimes. Disposal clears the adapter
+and rejects subsequent inputs/actions. Diagnostics contain only fixed event/reason
+codes. See [live presentation and lifecycle](conversation-shell-turn-status.md#session-scoped-live-presentation)
+and [prompt routing](modal-store-bridge.md#session-scoped-thread-prompts).
+Production subscriptions, host-bound IPC composition and combined live-daemon proof
+remain with [#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
 
 ### The store (`src/renderer/src/store/sessionIdStore.ts`)
 

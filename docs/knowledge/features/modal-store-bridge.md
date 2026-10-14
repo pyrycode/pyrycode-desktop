@@ -179,6 +179,38 @@ daemon frame ─(#201/#248 transport, snake→camel; `modal_shown`'s `conversati
   production before then — the store and bridge were built and tested against injected `DaemonEvent`s
   only. Now live.
 
+## Session-scoped thread prompts
+
+The inactive `createThreadLiveState` adapter admits permission/question readings
+through [host/conversation ownership and envelope provenance](session-id-store.md#summary-authority-in-the-inactive-thread-adapter)
+before `threadLiveInputs` uses the existing prompt translators. Original modal and
+question-batch IDs survive. Item snapshots and cache hydration cannot create an
+outstanding prompt. Empty question batches are ignored, including replacements:
+they must neither create attention nor displace an answerable held batch.
+
+Binding invalidation removes old prompts directly, without sending an answer/cancel
+or recording a resolution. An owning-host `connected` event also atomically removes
+both prompt families and retained request correlation, allowing current supplied
+shown readings to recover outstanding requests. Another host's reconnect does
+nothing. This explicit reconnect retirement matters because payload-less clears
+cannot infer conversation ownership from the prompts they would clear.
+Delayed old-session shown/dismissed readings fail admission before touching current
+prompts, even when hosts reuse conversation, session and prompt IDs.
+
+`respond(displayed, command)` requires the exact still-held daemon prompt object,
+a nonempty bound session, a connected owning host and a matching command kind/ID.
+The injected sink receives that host and the existing `answerModal`/`cancelModal`
+or `answerQuestions`/`refuseQuestions` command; it must never substitute the active
+host. Stale callbacks and foreign prompt objects fail even with matching IDs.
+A thrown send returns false and retains the prompt. A successful synchronous send
+removes only the same held object, so a replacement admitted by the sink survives.
+Choice, confirmation and question-selection semantics remain presentation-owned.
+
+The ordinary app keeps its existing bridge/store behavior below. Production
+thread subscriptions and host-bound IPC composition, integrated interaction and
+combined live proof remain with
+[#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
+
 ## Choice and consent lifetime
 
 The app-wide store retains requests and feedback across chat navigation; permission arming belongs

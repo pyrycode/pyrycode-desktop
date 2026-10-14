@@ -38,10 +38,11 @@ const readings: [SessionStateFamily, DaemonEvent][] = [
   ['question_shown', { type: 'questionShown', conversationId: 'chat', questionBatchId: 'question', questions: [
     { question: 'Choose?', header: 'Choice', options: [{ label: 'First', description: '' }], multi_select: false } ] }]
 ]
-function populated() {
+function populated(includeError = false) {
   const store = createThreadLiveState({ sendResponse: vi.fn(), isConnected: () => true })
   store.getState().dispatch({ type: 'summary', serverId: 'host', summary: { id: 'chat', current_session_id: 'session' } })
   for (const [, event] of readings) {
+    if (event.type === 'sessionError' && !includeError) continue
     const supplied = { ...event, serverId: 'host', envelopeSessionId: 'session' }
     store.getState().dispatch({ type: 'daemon', event: supplied })
   }
@@ -49,14 +50,13 @@ function populated() {
 }
 
 it.each(readings)('keeps %s available and clears only that family', (family, event) => {
-  const store = populated(), before = store.getState().readings
-  expect(before.size).toBe(20)
+  const store = populated(family === 'session_error'), before = store.getState().readings
   expect([...before.get(family)!.values()].some(held => held.type === event.type)).toBe(true)
   store.getState().dispatch({ type: 'request', serverId: 'host', conversationId: 'chat', requestId: 5 })
   store.getState().dispatch({ type: 'daemon', event: { type: 'sessionStateCleared', family,
     envelopeSessionId: 'session', inReplyTo: 5, serverId: 'host', correlation: { id: 6, ts: '' } } as DaemonEvent })
   const after = store.getState().readings
-  expect(after.size).toBe(19); expect(after.has(family)).toBe(false)
+  expect(after.size).toBe(before.size - 1); expect(after.has(family)).toBe(false)
   for (const [otherFamily, entries] of before) if (otherFamily !== family) expect(after.get(otherFamily)).toBe(entries)
 })
 
@@ -82,7 +82,7 @@ it('feeds existing views, status ranking and attention with no content items', (
   expect(input.taskProgress[0].currentActivity).toBe('Building'); expect(input.rateLimit?.status).toBe('allowed_warning')
   expect(input.sessionFacts?.claudeCodeVersion).toBe('2.1'); expect(input.mcpStatus?.servers).toEqual([])
   expect(input.slashCommands?.commands).toEqual([]); expect(input.suggestion?.suggestedReply).toBe('Try this')
-  expect(input.sessionError?.code).toBe('session.failed')
+  expect(input.sessionError).toBeNull()
   store.getState().dispatch({ type: 'summary', serverId: 'host', summary: { id: 'chat', current_session_id: 'next' } })
   const local = { messageId: 'pending', queued: true }
   const cleared = threadLiveInputs(store.getState(), local)
@@ -169,3 +169,64 @@ it.each(['responding', 'idle'] as const)('ends thinking progress atomically on %
   emit({ type: 'thinkingProgress', conversationId: 'chat', estimatedTokens: 4321 }); emit(thinking)
   expect(threadLiveInputs(store.getState()).thinkingTokens).toBe(4321)
 })
+
+it.each(['thinking', 'responding', 'idle'] as const)('reconciles session errors atomically on admitted %s activity', state => {
+  const store = populated(true)
+  const before = store.getState()
+  expect(threadLiveInputs(before).sessionError?.code).toBe('session.failed')
+  const observed = vi.fn((next: typeof before) => threadLiveInputs(next))
+  const off = store.subscribe(observed)
+  const event = { type: 'turnState' as const, conversationId: 'chat', state, serverId: 'host', envelopeSessionId: 'old' }
+  store.getState().dispatch({ type: 'daemon', event })
+  expect(store.getState()).toBe(before)
+  expect(observed).not.toHaveBeenCalled()
+  store.getState().dispatch({ type: 'daemon', event: { ...event, envelopeSessionId: 'session' } })
+  off()
+  expect(observed).toHaveBeenCalledTimes(1)
+  const input = observed.mock.results[0].value
+  expect(input.status.phase).toBe(state)
+  expect(input.activity.turnRunning).toBe(state !== 'idle')
+  expect(input.sessionError).toEqual(state === 'idle' ? threadLiveInputs(before).sessionError : null)
+  expect(input.hasOutstanding).toBe(true)
+  expect(resolveConversationStatus(input.hasOutstanding, input.activity, false)).toBe('input-required')
+  for (const [family, entries] of before.readings) {
+    if (!['turn_state', 'stall', 'thinking_progress', 'session_error'].includes(family)) expect(store.getState().readings.get(family)).toBe(entries)
+  }
+})
+
+it.each([null, { messageId: 'pending', queued: false }, { messageId: 'queued', queued: true }])(
+  'ends stale turn feedback atomically on a current session error with local input %j', local => {
+    const store = populated()
+    store.getState().dispatch({ type: 'daemon', event: { type: 'resetting', conversationId: 'chat', active: false, phase: 'wrapping_up', handoff: 'pending', serverId: 'host', envelopeSessionId: 'session' } as DaemonEvent })
+    const before = store.getState(), pending = local === null ? null : { ...local }
+    const inputBefore = threadLiveInputs(before, local)
+    expect(inputBefore).toMatchObject({ status: { phase: 'thinking', stalled: true, apiRetry: { current: 2, total: 4 }, compacting: true }, thinkingTokens: 1234 })
+    expect(inputBefore.indicator).toBe('retrying')
+    const observed = vi.fn((next: typeof before) => threadLiveInputs(next, local))
+    const off = store.subscribe(observed)
+    const error = { type: 'sessionError' as const, conversationId: 'chat', code: 'session.failed', serverId: 'host', envelopeSessionId: 'old' }
+    store.getState().dispatch({ type: 'daemon', event: error })
+    expect(store.getState()).toBe(before)
+    expect(observed).not.toHaveBeenCalled()
+    store.getState().dispatch({ type: 'daemon', event: { ...error, envelopeSessionId: 'session' } })
+    off()
+    expect(observed).toHaveBeenCalledTimes(1)
+    const input = observed.mock.results[0].value
+    expect(input).toMatchObject({ status: { phase: 'idle', stalled: false, apiRetry: null, compacting: false }, thinkingTokens: null, sessionError: { code: 'session.failed' } })
+    expect(input.activity).toEqual({ turnRunning: false, stalled: false, apiRetrying: false, compacting: false, resetting: false })
+    expect(input.hasOutstanding).toBe(true)
+    expect(resolveConversationStatus(input.hasOutstanding, input.activity, false)).toBe('input-required')
+    for (const [family, entries] of before.readings) {
+      if (!['turn_state', 'stall', 'thinking_progress', 'api_retry', 'compacting'].includes(family)) expect(store.getState().readings.get(family)).toBe(entries)
+    }
+    store.getState().dispatch({ type: 'request', serverId: 'host', conversationId: 'chat', requestId: 5 })
+    for (const family of ['modal_shown', 'question_shown'] as const) {
+      store.getState().dispatch({ type: 'daemon', event: { type: 'sessionStateCleared', family, serverId: 'host', envelopeSessionId: 'session', inReplyTo: 5, correlation: { id: 6, ts: '' } } as DaemonEvent })
+    }
+    const ended = threadLiveInputs(store.getState(), local)
+    expect(ended.indicator).toBe(local === null ? null : local.queued ? 'waiting' : 'sending')
+    expect(resolveConversationStatus(ended.hasOutstanding, ended.activity, false)).toBe('idle')
+    expect(ended.sessionError?.code).toBe('session.failed')
+    expect(local).toEqual(pending)
+  }
+)

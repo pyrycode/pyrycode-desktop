@@ -126,6 +126,10 @@ export function createThreadLiveState(deps: ThreadLiveDeps) {
         if (event.type === 'turnState') {
           readings.delete('stall')
           if (event.state !== 'thinking') readings.delete('thinking_progress')
+          if (event.state !== 'idle') readings.delete('session_error')
+        }
+        if (event.type === 'sessionError') {
+          for (const ended of ['turn_state', 'stall', 'api_retry', 'compacting', 'thinking_progress'] as const) readings.delete(ended)
         }
         entries.set(identity(event), event); readings.set(family, entries); set({ readings }); report('reading-admitted')
       },

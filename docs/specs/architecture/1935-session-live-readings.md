@@ -91,3 +91,10 @@ Resolved: use an injected host-bound response sink for the inactive route; enabl
 | --- | --- |
 | Thinking/responding/idle after a stall; rejected old-session activity | `clears stalls atomically on admitted %s activity` |
 | Non-thinking phase, repeated thinking and a later thinking phase; rejected old-session activity | `ends thinking progress atomically on %s and starts the next think fresh` |
+
+2026-10-14: Re-review finding 1 requires session-error lifecycle parity with `reduceTimelineEvent` and `reduceTimelineContent`. After admission, non-idle `turnState` removes `session_error`; idle preserves it. An admitted `sessionError` removes `turn_state`, `stall`, `api_retry`, `compacting` and `thinking_progress` atomically with publishing the error, so derived phase defaults to idle. Other families, outstanding prompts and caller-owned pending/queued inputs remain intact. Canonical-clear fixtures use valid lifecycle sequences rather than assuming every family coexists. Security re-check: PASS; all lifecycle changes remain behind existing host, provenance and ownership checks, with no new response, I/O or logging surface.
+
+| Additional lifecycle event | Supplied-input regression |
+| --- | --- |
+| Current error followed by thinking/responding/idle; rejected old-session activity | `reconciles session errors atomically on admitted %s activity` |
+| Current error after active turn feedback; rejected old-session error; preserved local pending/queued input | `ends stale turn feedback atomically on a current session error with local input %j` |

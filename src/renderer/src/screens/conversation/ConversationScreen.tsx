@@ -2,7 +2,7 @@ import { createAttachmentImageSources } from './attachmentImageSource'
 import { useReadObservation } from '../../store/conversationReadPublisher'
 import type { ThreadSnapshot } from '../../store/threadItemStore'
 import { threadTaskPresentations, type ThreadTaskInputs } from './threadTaskPresentation'
-import { threadItemPresentations } from './threadItemPresentation'
+import { threadItemPresentations, threadQueueHandle, actOnThreadQueue, type ThreadSendInputs } from './threadItemPresentation'
 import { historyGapId } from '@shared/chatHistory'
 import { agentSwitchStore, type AgentSwitchStatus } from '../../store/agentSwitchStore'
 import { useReplySuggestionStore, selectReplySuggestion, visibleReplySuggestion } from '../../store/replySuggestionStore'
@@ -1577,6 +1577,7 @@ export function Timeline({
 
 type ThreadItemsProps = {
   snapshot: ThreadSnapshot
+  sendInputs?: ThreadSendInputs
   taskInputs?: ThreadTaskInputs
   turnRunning?: boolean
   foldTools?: boolean
@@ -1588,11 +1589,17 @@ export function ThreadItemsTimeline(props: ThreadItemsProps): JSX.Element {
   const s = props.snapshot
   return <ThreadItemsView key={JSON.stringify([s.hostId, s.conversationId, s.epoch])} {...props} />
 }
-function ThreadItemsView({ snapshot, taskInputs, turnRunning = false, foldTools = false, onReply, onOpenMarkdownPath }: ThreadItemsProps): JSX.Element {
+function ThreadItemsView({ snapshot, sendInputs, taskInputs, turnRunning = false, foldTools = false, onReply, onOpenMarkdownPath }: ThreadItemsProps): JSX.Element {
   const tasks = useMemo(() => threadTaskPresentations(snapshot, taskInputs), [snapshot, taskInputs])
   const [tasksOpen, setTasksOpen] = useState(false)
   const activeTaskCount = tasks.filter(task => task.active).length
   const rows = useMemo(() => threadItemPresentations(snapshot), [snapshot])
+  const local = sendInputs?.local?.hostId === snapshot.hostId && sendInputs.local.conversationId === snapshot.conversationId
+    ? sendInputs.local : undefined
+  const pending = local?.pending ?? []
+  const newest = local?.localSendPending
+  const sendState = newest && !pending.find(row => row.messageId === newest.messageId)?.delivery
+    ? newest.queued ? 'waiting' : 'sending' : null
   const attachmentScope = useMemo(() => {
     const target = { conversationId: snapshot.conversationId, serverId: snapshot.hostId }
     return { hostId: snapshot.hostId, conversationId: snapshot.conversationId,
@@ -1607,7 +1614,8 @@ function ThreadItemsView({ snapshot, taskInputs, turnRunning = false, foldTools 
       }) }
   }, [snapshot.hostId, snapshot.conversationId])
   // Completed older pages change the immutable item list without necessarily advancing the watermark.
-  const { scrollPin, paneRef } = useThreadScrollPin(snapshot.conversationId, 0, false, snapshot.items)
+  const visibleItems = useMemo(() => [...snapshot.items, ...pending], [snapshot.items, pending])
+  const { scrollPin, paneRef } = useThreadScrollPin(snapshot.conversationId, 0, false, visibleItems)
   const [expandedTools, setTools] = useState<ReadonlySet<number>>(() => new Set())
   const [expandedRuns, setRuns] = useState<ReadonlySet<number>>(() => new Set())
   const items: ThreadItem[] = rows.map(row => row.item ?? { kind: 'userText', text: '' })
@@ -1637,6 +1645,7 @@ function ThreadItemsView({ snapshot, taskInputs, turnRunning = false, foldTools 
       onWheel={scrollPin.onWheel} onKeyDown={scrollPin.onKeyDown} aria-label="Conversation history" tabIndex={0}>
       {rows.flatMap((row, index) => {
         const id = row.source.id, item = row.item, run = byMember.get(index), start = byStart.get(index)
+        const handle = threadQueueHandle(snapshot, row.source, sendInputs)
         const collapsedOwner = row.ancestors.some(owner => !expandedTools.has(owner))
         const hidden = collapsedOwner || (run !== undefined && !open(run))
         if (row.marker) return <div key={`marker-${id}`} className={`tool-group-row tool-group-row--depth-${row.depth}`} hidden={collapsedOwner}>
@@ -1680,10 +1689,18 @@ function ThreadItemsView({ snapshot, taskInputs, turnRunning = false, foldTools 
                 group={row.source.kind === 'agent' ? { count: row.count, running: row.source.active === true } : undefined}
                 expansion={{ expanded: expandedTools.has(id), onToggle: () => toggleTool(id) }} />
             : <TimelineRow item={item} inProgress={row.source.active === true} authoritativeSummary={summary}
+                queuedPresentation={row.source.kind === 'user_message' && row.source.status === 'queued'}
+                queued={handle === null ? null : { queuedMsgId: handle, messageId: undefined }} midTurnInput
+                onDropQueued={() => actOnThreadQueue(snapshot, row.source, sendInputs, 'drop')}
+                onSendQueuedNow={() => actOnThreadQueue(snapshot, row.source, sendInputs, 'send-now')}
+                delivery={row.source.kind === 'user_message' && row.source.status === 'lost' ? 'not-delivered' : undefined}
                 turnStats={row.stats} agent={agent} onReply={onReply} onOpenMarkdownPath={onOpenMarkdownPath} />}
         </div>]
       })}
+      {pending.map(row => <TimelineRow key={`pending-${row.key}`} item={row.item} inProgress={false}
+        delivery={row.delivery} onReply={onReply} />)}
     </div>
+    <ThinkingIndicator state={sendState} toolName={null} retry={null} resetting={null} thinkingTokens={null} />
     {tasks.length > 0 && <div className="composer-status">
       <span className="composer-status__activity" aria-hidden="true" />
       <ComposerTaskCount count={activeTaskCount} open={tasksOpen} onToggle={() => setTasksOpen(open => !open)} />
@@ -1974,6 +1991,7 @@ const TimelineRow = memo(function TimelineRow({
   readRowKey,
   inProgress,
   queued = null,
+  queuedPresentation = false,
   delivery,
   onDropQueued,
   midTurnInput = false,
@@ -1988,7 +2006,8 @@ const TimelineRow = memo(function TimelineRow({
   readRowKey?: number
   inProgress: boolean
   queued?: QueuedRowHandle | null
-  delivery?: 'waiting' | 'not-sent'
+  queuedPresentation?: boolean
+  delivery?: 'waiting' | 'not-sent' | 'not-delivered'
   onDropQueued?: (queuedMsgId: number, messageId: string | undefined) => void
   /** #1726: Timeline's two Send now props, passed through; read only by the queued `userText` arm. */
   midTurnInput?: boolean
@@ -2002,6 +2021,7 @@ const TimelineRow = memo(function TimelineRow({
   onReply?: (role: 'user' | 'assistant', text: string) => void
   authoritativeSummary?: string
 }): JSX.Element | null {
+  const isQueued = queued !== null || queuedPresentation
   switch (item.kind) {
     case 'assistantText': {
       // Streaming owns only derived presentation; settlement always renders the original source.
@@ -2102,7 +2122,7 @@ const TimelineRow = memo(function TimelineRow({
         <div
           data-read-row={readRowKey}
           className={
-            queued
+            isQueued
               ? 'message-row message-row--user message-row--queued message-row--text'
               : 'message-row message-row--user message-row--text'
           }
@@ -2113,8 +2133,8 @@ const TimelineRow = memo(function TimelineRow({
               <QueuedRowDrop queued={queued} onDropQueued={onDropQueued} />
             </div>
           )}
-          {!queued && <MessageActions text={item.text} role="user" onReply={onReply} />}
-          <div className="bubble bubble--user" data-thread-role={queued ? 'queued' : 'user'}>
+          {!isQueued && <MessageActions text={item.text} role="user" onReply={onReply} />}
+          <div className="bubble bubble--user" data-thread-role={isQueued ? 'queued' : 'user'}>
             {item.text}
             {/* #815: the attachment rows, written between the text and the meta row — the slot BubbleMeta's
                 header reserved. The read is `=== undefined`, never `'attachments' in item`, which is always
@@ -2141,9 +2161,9 @@ const TimelineRow = memo(function TimelineRow({
             {/* #969: the same row, right-aligned by its own modifier (the drawing's `justify-end` on
                 132:4435). Queued messages have no delivery meta row. */}
             {delivery !== undefined && <div className="bubble__meta bubble__meta--user">
-              <span className={delivery === 'not-sent' ? 'composer-status__error' : 'bubble__delivery--waiting'}>{COMPOSER_MESSAGE_DELIVERY_COPY[delivery]}</span>
+              <span className={delivery === 'waiting' ? 'bubble__delivery--waiting' : 'composer-status__error'}>{COMPOSER_MESSAGE_DELIVERY_COPY[delivery]}</span>
             </div>}
-            {!queued && delivery === undefined && <BubbleMeta side="user" createdAt={item.createdAt} />}
+            {!isQueued && delivery === undefined && <BubbleMeta side="user" createdAt={item.createdAt} />}
           </div>
         </div>
       )

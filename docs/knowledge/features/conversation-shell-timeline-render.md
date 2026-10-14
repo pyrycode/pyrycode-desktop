@@ -122,7 +122,10 @@ indentation stops at two levels. Counts include distinct shown descendant `tool_
 item ids, excluding messages, nested agent cards and the owner; equal `tool_use_id`
 values do not merge distinct items. Text-only descendants still permit disclosure.
 
-Within each sibling lane, ordinary rows use creation `order`. Task-linked active agent
+Within each sibling lane, user items without positive `order` follow the other rows
+in snapshot first-arrival order. Delivery gives that same item its supplied position.
+This rule belongs in the nesting comparator because a separate pre-sort is overwritten
+by lane placement. Other ordinary rows use creation `order`. Task-linked active agent
 cards follow ordinary rows in creation order, with their descendants. Inactive linked
 cards settle at positive `ended_order`, with ties broken by creation `order`; absent or
 zero ending order retains creation placement. Nesting takes precedence, so a nested
@@ -230,8 +233,11 @@ variant uses real preload/main, while the renderer-only variant retains its loca
 Production thread path selection and combined live acceptance still belong to
 [#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
 
+Local pending settlement and queue actions are supplied through `sendInputs`; see
+[Composer send](composer-send.md#data-flow) and the
+[queue authority contract](conversation-shell.md#what-it-does).
 Task panel/count/stop controls remain [#1938](https://github.com/pyrycode/pyrycode-desktop/issues/1938),
-local settlement/queue actions remain #1906, server paging/recovery remains #1902 and
+server paging/recovery remains #1902 and
 live-state admission remains #1935. Production path selection, subscriptions, capability
 advertisement, command connection and combined live verification remain #1908; this
 injected route is still inactive in production, and ordinary/non-thread connections

@@ -78,3 +78,9 @@ Resolved: use an injected host-bound response sink for the inactive route; enabl
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-14
+
+## Revisions
+
+2026-10-14: `reduceQuestionBatches` intentionally ignores empty question readings, including an empty replacement. Keep that eligibility guard in the adapter so an unanswerable batch cannot create attention or replace an outstanding request. `threadLiveInputs` has a named return interface because the TypeScript declaration build cannot name the event union's private metadata through an inferred return type. No production UI or IPC composition is enabled.
+
+2026-10-14: An owning-host `connected` event atomically retires outstanding prompt families and retained request correlation without a resolution, following the existing prompt reconnect contract. Current supplied shown readings repopulate them; a different host's connection event does nothing. Retry/compaction stay available until current supplied active/inactive values replace them. This closes the stale-prompt gap when payload-less reconnect clears cannot establish conversation ownership.

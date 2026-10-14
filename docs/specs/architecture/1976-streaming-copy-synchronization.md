@@ -95,3 +95,33 @@ Evidence under `/tmp/builder-1976/`: `baseline.json` (10 executed/passed),
 `press-control.patch` and `repair.patch`. All runs used the existing serialized
 clipboard project, isolated Xvfb and zero retries, with zero skips. Control-only
 instrumentation and the frame-spanning press are absent from the shipping spec.
+
+## Acceptance receipts
+Final tested source: `0406469c8a7402a58b03fea6b314e43e26223d00`, after merging
+main `0057a0afe824ae00594ddfd893dac2f26ca87f70`. The following commit adds only
+this receipt. All Electron runs used Linux/Xvfb and the existing clipboard project
+with one concurrent worker; the complete tier retained four configured workers.
+
+| Run | Executed | Passed | Failed | Skipped | Retries |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Named case, twenty repetitions | 20 | 20 | 0 | 0 | 0 |
+| Complete configured fake tier | 395 | 395 | 0 | 3 | 0 |
+| Named case within complete tier | 1 | 1 | 0 | 0 | 0 |
+
+Every Playwright result has retry index 0; neither run is flaky. The existing
+skips are the two `app-badge-count.spec.ts` cases (app icon badges exist only on
+macOS) and `window-reopen-converges.spec.ts` (only macOS retains the app after its
+last window closes). No new skip or unrelated failure occurred.
+
+Commands, each under `xvfb-run -a`: focused `npx playwright test
+e2e/message-side-actions.spec.ts --grep 'side copy and row cap retain sizing while
+metadata expands on hover and focus' --repeat-each=20 --retries=0 --reporter=json`;
+complete `npx playwright test --retries=0 --reporter=json`. Both used separate
+`--output` directories under `/tmp/builder-1976/`.
+
+Final pre-verify passed all five checks, including typecheck and 10,178 unit tests
+passed with 3 existing skips. `npm run build` and `npm run check:docs` passed.
+Retained receipts: `/tmp/builder-1976/final-focused.json`, `final-full.json`,
+`final-pre-verify.log`, `final-build.log`, `diagnosis.tar.gz` and `acceptance.tar.gz`
+in that same directory. The full JSON has a Vite deprecation warning before its
+JSON object. No real-Claude acceptance was required or claimed.

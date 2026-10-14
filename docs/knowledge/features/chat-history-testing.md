@@ -33,6 +33,22 @@ retain negative/pending-input, no settlement cascade, failure/Retry, sub-two-pix
 anchor, expanded-tool and final-content assertions. See
 [controlled cause and counted validation](development-verification-history.md#known-gap-recovery-verification).
 
+The real-daemon gap scenario preserves the same demand contract across a full
+Electron exit: save served/display baseline evidence, write all 205 posts while
+closed, reopen the same protected profile, and ask newest exactly once with the
+empty cursor. Programmatic positioning asks nothing; each fresh focused ArrowUp
+at the visible gap asks once, settlement asks nothing, and the resolved transcript
+places the baseline before all 205 posts in order, each appearing once.
+
+Its scenario-local `asks(): Promise<string[]>` polls only inspection availability
+through `readMainProcess`, bounded at five seconds. `NOT_YET_AVAILABLE` cannot
+satisfy a count assertion; every caller gets an actual successful read, including
+the immediate empty-cursor and no-cascade checks. A count read failing after a key
+does not establish a rejected request or invalid geometry. Never replay the key,
+observer installation or posts to recover inspection; other errors propagate.
+See [observer recovery](e2e-harness-context-recovery.md#tolerating-a-transient-inspection-context-loss-on-reads)
+and [diagnosis and counted live evidence](development-verification-history.md#known-gap-recovery-verification).
+
 [`newestHistoryDemand.test.ts`](../../../src/renderer/src/store/newestHistoryDemand.test.ts)
 covers offline opening, connection edges, navigation/equal-id host isolation,
 duplicate sync, read settlement/cancellation/live supersession, pending deferral,
@@ -251,11 +267,13 @@ before settlement, then exactly one newest ask without further reader input.
 
 [`real-daemon-history-on-open.spec.ts`](../../../e2e/real-daemon-history-on-open.spec.ts)
 saves a baseline with served/display evidence, fully exits Electron through the
-shared protected-profile relaunch fixture, and posts a unique `pyry channel post`
-only in its awaited while-closed callback. Reopening observes exactly one marker
-bubble and one newest command without upward input. The marker was absent from the
-saved baseline. This proves real daemon storage/transport, not a Claude turn or
-production-relay delivery; see [counted live acceptance](live-e2e-runbook.md#current-real-claude-gate-state).
+shared protected-profile relaunch fixture, and writes 205 unique `pyry channel post`
+entries only in its awaited while-closed callback. Reopening asks newest once
+without upward input and exposes the gap. Fresh focused input fills it under the
+[demand and observation contract](#demand-and-snapshot-contracts), retaining the
+baseline and all posts exactly once in order. `spawnClaude: false` proves real
+daemon storage/transport, not a Claude turn or production-relay delivery; see
+[counted live acceptance](live-e2e-runbook.md#current-real-claude-gate-state).
 
 Legacy row-fold overlap fixtures must place the live overlap at the newest end of the newest-first
 page. Putting an unmatched older entry first exercises the intentional

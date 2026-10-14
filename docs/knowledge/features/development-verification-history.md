@@ -203,6 +203,43 @@ transcript assertions require the baseline followed by every post in order with
 no duplicate. `spawnClaude: false` isolates real daemon storage/transport through
 the local test relay; this is not a Claude-turn or production-relay proof.
 
+Its local `asks` reader uses the shared `readMainProcess` helper in a five-second
+availability poll. Only the recognized inspection-context error yields
+`NOT_YET_AVAILABLE`; the sentinel satisfies no assertion and every caller receives
+a successful cursor-array read. Listener installation, posts, keys, geometry and
+renderer recovery are unchanged. See [the observation contract](chat-history-testing.md#demand-and-snapshot-contracts)
+and [read-only recovery](e2e-harness-context-recovery.md#tolerating-a-transient-inspection-context-loss-on-reads).
+
+The [fresh diagnosis](https://github.com/pyrycode/pyrycode-desktop/issues/1947#issuecomment-6165420879)
+at plan-only `f00774c4194aefeccff8f1d47a71cecd14fdfcdf` over main
+`c75bc69d46d61495242ac966a6f180b2a10cdcad` recorded the unchanged named test
+failing in `asks` immediately after ArrowUp: inspection context destruction before
+any count returned (1 executed, 0 passed, 1 failed, 0 skipped, retry 0). Passing
+visible/hidden reruns did not diagnose the cause. Controlled one-shot injection
+after successfully reading two real requests failed the original observer while
+Electron was running (1 executed, 0 passed, 1 failed, 0 skipped/retried); the same
+fault with recovery passed every original assertion (1 executed, 1 passed,
+0 failed/skipped/retried). Injection did not ship. No invalid park or rejected
+eligible input was observed; the upstream inspection trigger and absent original
+October 14 reports' failing assertion remain unproven.
+
+The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1948#issuecomment-6165945171)
+confirms that exact named live test passed in five serial focused runs at
+`fd6598e05c3f099bbb93148ae21af8b9a69a4565`: 5 executed, 5 passed, 0 failed,
+0 skipped, one worker, retries zero, each attempt zero. Each run explicitly used
+`/usr/local/bin/pyry`, version 0.39.0, Go module `github.com/pyrycode/pyrycode`
+v0.39.0; binary SHA-256
+`a76a703551edf81a42e5b0b1112bf453ed52f08fab19c7f7cfee6ee296b2b3c8`.
+The supplied dispatcher per-test report for `2026-10-14T10-10-23-470Z`
+independently records the exact test executing and passing once in 5.4s on that
+feature revision integrated with main `d31ee247313b`: 27 executed, 26 passed,
+1 failed, 1 skipped overall; this named test 1 executed/passed, 0 failed/skipped,
+attempt 1. The configured daemon was `/opt/pyry-test-daemon/pyry`, release 0.39.0
+from annotations on 9 of 28 tests; no source revision or binary digest was supplied
+for that executable. The distinct effort-default failure passed a same-tree
+rerun; the history test passed in the original full run. See
+[current live gate state](live-e2e-runbook.md#current-real-claude-gate-state).
+
 The supplied per-test dispatcher report for run `2026-10-07T22-53-47-094Z` confirms
 that exact live test was present, executed and passed once in 6.2 s. Run counts:
 26 executed, 26 passed, 0 failed, 1 skipped; named-test counts: 1 executed,

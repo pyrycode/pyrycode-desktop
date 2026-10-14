@@ -138,7 +138,7 @@ test("reveals time and turn stats together on row hover or focus and collapses t
   await expect(page.locator('.bubble[data-thread-role="user"] .bubble__turn-stats')).toHaveCount(0)
 })
 
-test('repeated metadata reveal preserves bottom clearance and held reader position', async ({ launchPairedApp }) => {
+test('repeated metadata reveal preserves bottom clearance and held reader position', async ({ launchPairedApp }, testInfo) => {
   const { page, app, daemon } = await launchPairedApp({ buildReplyFrames })
   const composer = page.getByPlaceholder('Message…')
   await composer.fill(WITH_NUMBERS)
@@ -157,26 +157,50 @@ test('repeated metadata reveal preserves bottom clearance and held reader positi
   await expect(rows).toHaveCount(42)
   const tail = rows.last()
   const meta = tail.locator('.bubble__meta--details')
-  const settle = () => page.evaluate(() => new Promise<void>(resolve =>
-    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  // Native motion and metadata anchoring outlive two frames. Sample all three metrics.
+  const settle = () => thread.evaluate(el => new Promise<number>(resolve => {
+    let last = [el.scrollTop, el.scrollHeight, el.clientHeight]
+    let stable = 0
+    const sample = (): void => {
+      const next = [el.scrollTop, el.scrollHeight, el.clientHeight]
+      stable = next.every((value, i) => Math.abs(value - last[i]) < 0.1) ? stable + 1 : 0
+      last = next
+      if (stable >= 20) resolve(el.scrollTop)
+      else requestAnimationFrame(sample)
+    }
+    requestAnimationFrame(sample)
+  }))
   const cleared = async () => {
+    await settle()
     await expect.poll(() => thread.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThanOrEqual(1)
     expect(await tail.evaluate(el => el.getBoundingClientRect().bottom -
       document.querySelector('.conversation__input-chrome')!.getBoundingClientRect().top)).toBeLessThanOrEqual(1)
   }
   for (const width of [1280, 800]) {
     await page.setViewportSize({ width, height: 800 })
-    await thread.evaluate(el => { el.scrollTop = 0 })
+    await composer.focus()
+    await page.mouse.move(0, 0)
+    await expect(tail.locator('.bubble__turn-stats')).toHaveText(EXPECTED_STATS)
+    expect(await thread.evaluate(el => el.scrollHeight - el.clientHeight)).toBeGreaterThan(1500)
+    await settle()
+    await thread.hover()
+    await settle()
+    await page.mouse.wheel(0, -100_000)
+    await expect.poll(() => thread.evaluate(el => el.scrollTop)).toBe(0)
     await settle()
     // Wheel back through hovered rows whose metadata changes height during native motion.
     await thread.hover()
+    await settle()
+    // Exercise layout-before-scroll delivery, rather than relying on compositor timing.
+    // This reads geometry only; it neither moves the reader nor cancels native wheel input.
+    await thread.evaluate(el => el.addEventListener('wheel', () => { void el.scrollHeight }, { once: true }))
     await page.mouse.wheel(0, 100_000)
     await cleared()
     await composer.focus()
     await page.mouse.move(0, 0)
     await expect(meta).toBeHidden()
     await cleared()
-    await capturePairedApp(app, page, `/tmp/builder-1898/metadata-scroll-rest-${width}.png`)
+    await capturePairedApp(app, page, testInfo.outputPath(`metadata-scroll-rest-${width}.png`))
     for (let repeat = 0; repeat < 2; repeat++) {
       await tail.hover({ position: { x: 2, y: 2 } })
       await expect(meta).toBeVisible()
@@ -185,23 +209,44 @@ test('repeated metadata reveal preserves bottom clearance and held reader positi
       await page.mouse.move(0, 0)
       await expect(meta).toBeVisible()
       await cleared()
-      await capturePairedApp(app, page, `/tmp/builder-1898/metadata-scroll-focus-${width}.png`)
+      await capturePairedApp(app, page, testInfo.outputPath(`metadata-scroll-focus-${width}-${repeat}.png`))
       await composer.focus()
       await expect(meta).toBeHidden()
       await cleared()
     }
-    await thread.evaluate(el => { el.scrollTop = 400 })
+    await thread.hover()
+    const bottom = await settle()
+    await page.mouse.wheel(0, 400 - bottom)
+    await expect.poll(() => thread.evaluate(el => el.scrollTop)).toBeLessThan(bottom - 1000)
+    await page.mouse.move(0, 0)
+    const held = await settle()
+    expect(held).toBeGreaterThan(300)
+    expect(await thread.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeGreaterThan(1000)
+    // A short downward gesture must keep the reader held rather than request the bottom.
+    await thread.hover()
     await settle()
+    await page.mouse.wheel(0, 40)
+    await page.mouse.move(0, 0)
+    const nudged = await settle()
+    expect(nudged).toBeGreaterThan(held)
+    expect(nudged).toBeLessThan(held + 100)
     // Focus an above-viewport row without moving the reader; native anchoring preserves content.
     const reference = rows.nth(10)
+    const above = rows.nth(1)
+    expect(await above.evaluate(el => el.getBoundingClientRect().bottom -
+      document.querySelector('.conversation__thread')!.getBoundingClientRect().top)).toBeLessThan(0)
     const top = await reference.evaluate(el => el.getBoundingClientRect().top)
-    await rows.nth(1).getByRole('button', { name: 'Copy message' }).evaluate(el => el.focus({ preventScroll: true }))
+    const aboveMeta = above.locator('.bubble__meta--details')
+    await above.getByRole('button', { name: 'Copy message' }).evaluate(el => el.focus({ preventScroll: true }))
+    await expect(aboveMeta).toBeVisible()
     await settle()
     expect(await reference.evaluate(el => el.getBoundingClientRect().top)).toBeCloseTo(top, 0)
     await composer.focus()
+    await expect(aboveMeta).toBeHidden()
     await settle()
     expect(await reference.evaluate(el => el.getBoundingClientRect().top)).toBeCloseTo(top, 0)
     await thread.hover()
+    await settle()
     await page.mouse.wheel(0, 100_000)
     await cleared()
   }

@@ -69,3 +69,15 @@ Test assertions fail on missing progress, lost/duplicate/reordered payloads or i
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-14
+
+## Revisions
+
+2026-10-14 — Diagnosis resolves the Open Question with a controlled same-assertion reproduction, rather than unavailable original gate logs. Unchanged automatic samples passed 20/20 and 100/100 with retries disabled. A phase probe confirmed disabled Stop can precede the automatic pairing read (zero reads), but that is still a legitimate disconnected backoff gap: `onDriverEvent` already cleared authentication. No delivery defect is inferred from that probe.
+
+The confirmed observation race is the replay comparison: `Answer 1` visibility precedes final `turn_end` processing. Holding that frame until after `before` reproduced the existing deep-equality assertion failure: expected `Answer 1▎…`, received `Answer 1…`; accepted original payloads, waiting, FIFO and receipt checks before it passed. `TimelineRow` renders `▎` while streaming, so normal settlement changes snapshot text without replaying a message.
+
+Final contract: every scripted answer must visibly stream before its `turn_end` is pushed, then visibly lose its cursor before the replay baseline is read. This deterministic separate-frame ordering retains the reproduction as regression coverage and a positive settlement barrier; no production or reconnect synchronization change is needed. Restore the existing intercepted IPC listeners as planned. Target diff remains one spec and this plan, about 110 inserted lines overall, with no new exports or call-site migrations.
+
+The existing main-process seam also counts `WebSocket.send` calls without reading arguments. Record the count after disconnect and require it unchanged after both commands report waiting, alongside zero decoded daemon sends. Restore the original method in `finally`; this observation adds no production API and retains no frame or credential data. Written work remains below 150 lines.
+
+Final verification after merging `origin/main` (`a24efe21335c`): `xvfb-run -a npx playwright test e2e/disconnected-message-delivery.spec.ts --grep 'settle: automatic' --repeat-each=20 --retries=0 --reporter=json` executed/passed 20, failed/skipped 0. The subsequent same command without `--grep` and `--repeat-each` executed/passed all three cases, failed/skipped 0. Pre-verify passed all five checks, including 10,178 unit passes, zero failures and three existing skips; `npm run build` passed. The socket counter also increases after authenticated delivery, proving the no-write observation is attached to the exercised transport. The dispatcher's full fake-transport verifier gate is required and pending, not replaced by these focused runs.

@@ -101,8 +101,10 @@ it('does not surface unanswerable empty question readings', () => {
 it.each(['thinking', 'responding', 'idle'] as const)('clears stalls atomically on admitted %s activity', state => {
   const store = createThreadLiveState({ sendResponse: vi.fn(), isConnected: () => true })
   store.getState().dispatch({ type: 'summary', serverId: 'host', summary: { id: 'chat', current_session_id: 'B' } })
-  const emit = (event: DaemonEvent, session = 'B') => store.getState().dispatch({ type: 'daemon',
-    event: { ...event, serverId: 'host', envelopeSessionId: session } })
+  const emit = (event: DaemonEvent, session = 'B') => {
+    const supplied = { ...event, serverId: 'host', envelopeSessionId: session }
+    store.getState().dispatch({ type: 'daemon', event: supplied })
+  }
   emit({ type: 'stallDetected', conversationId: 'chat' })
   let input = threadLiveInputs(store.getState())
   expect(input.status.stalled).toBe(true)
@@ -138,8 +140,10 @@ it.each(['thinking', 'responding', 'idle'] as const)('clears stalls atomically o
 it.each(['responding', 'idle'] as const)('ends thinking progress atomically on %s and starts the next think fresh', state => {
   const store = createThreadLiveState({ sendResponse: vi.fn(), isConnected: () => true })
   store.getState().dispatch({ type: 'summary', serverId: 'host', summary: { id: 'chat', current_session_id: 'B' } })
-  const emit = (event: DaemonEvent, session = 'B') => store.getState().dispatch({ type: 'daemon',
-    event: { ...event, serverId: 'host', envelopeSessionId: session } })
+  const emit = (event: DaemonEvent, session = 'B') => {
+    const supplied = { ...event, serverId: 'host', envelopeSessionId: session }
+    store.getState().dispatch({ type: 'daemon', event: supplied })
+  }
   const thinking: DaemonEvent = { type: 'turnState', conversationId: 'chat', state: 'thinking' }
   emit({ type: 'thinkingProgress', conversationId: 'chat', estimatedTokens: 1234 })
   emit(thinking); emit(thinking)

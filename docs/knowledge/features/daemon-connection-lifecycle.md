@@ -164,6 +164,20 @@ The mounted `e2e/disconnected-message-delivery.spec.ts` checks fake-daemon decod
 frames and visible waiting/failed rows, running-turn queue correlation, ordered
 settlement and replay stability, with automatic, explicit and terminal recovery.
 
+During the disconnected gap, both accepted commands must report waiting while a
+main-process `WebSocket.send` counter remains unchanged and no decoded send reaches
+the fake daemon. The counter must increase after authenticated delivery, so the
+no-write assertion cannot pass with a disconnected observer. Instrumentation counts
+calls without inspecting frame arguments; teardown restores the socket method, IPC
+listeners and pairing reader and releases the blocked read in `finally`.
+
+Visible assistant text does not establish settlement. Each scripted answer first
+renders with `.bubble__cursor`; only then does the fake send its `turn_end`, and the
+test waits for that answer's cursor to disappear before recording the replay baseline.
+Otherwise normal cursor removal can fail whole-row equality despite correct delivery.
+Keep both the streaming and settled observations: cursor absence alone could pass
+before the delta arrived. See [positive processing barriers](development-verification-evidence-that-cannot-pass-too-early.md#evidence-that-cannot-pass-too-early).
+
 Recorded evidence for #1853 at `cfa9de8b`: verifier gate 6 executed 335 fake-transport
 tests, with 335 passed, 0 failed and 4 skipped. The [verifier PASS verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1855#issuecomment-6036469849)
 confirms that all three named “accepted disconnected messages drain and settle:
@@ -173,6 +187,32 @@ and passed, as did the repaired switch-agent regression. The same verdict record
 9,343 unit tests executed/passed, 0 failed and 3 skipped. This client delivery
 regression requires no new real-Claude acceptance; these counts establish fake
 transport and unit evidence only.
+
+For #1967 at `3d5278633668`, the [diagnosis](https://github.com/pyrycode/pyrycode-desktop/issues/1967#issuecomment-6179663671)
+records a controlled delayed-`turn_end` reproduction: 1 executed, 0 passed, 1 failed,
+0 skipped. The existing replay equality expected `Answer 1` with its streaming cursor
+and received the settled row without it; earlier waiting, FIFO, payload and receipt
+checks passed. The original gate logs were unavailable, so their failing assertion
+remains unknown. Disabled Stop preceding the automatic pairing read was a valid
+disconnected backoff phase, not evidence of a delivery defect.
+
+The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1972#issuecomment-6179920114)
+confirms these counted fake-transport runs:
+
+| Command | Executed | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| `xvfb-run -a npx playwright test e2e/disconnected-message-delivery.spec.ts --grep 'settle: automatic' --repeat-each=20 --retries=0 --reporter=json` | 20 | 20 | 0 | 0 |
+| `xvfb-run -a npx playwright test e2e/disconnected-message-delivery.spec.ts --retries=0 --reporter=json` (subsequent run) | 3 | 3 | 0 | 0 |
+| Dispatcher full `npx playwright test --reporter=json` | 395 | 394 | 1 | 3 |
+| Dispatcher rerun of the unrelated chat-history receipt-saturation failure | 1 | 1 | 0 | 0 |
+
+The automatic case passed all 20 repetitions; the subsequent three-case run and
+the full dispatcher run each contained and passed all three named “accepted
+disconnected messages drain and settle: automatic”, “accepted disconnected messages
+drain and settle: explicit” and “accepted disconnected messages drain and settle:
+terminal” tests. The verifier accepted the full gate plus unrelated rerun under the
+dispatcher's flaky-test policy; the initial full run was not failure-free. No
+real-Claude evidence is required or claimed for this client-only repair.
 
 # How it works
 

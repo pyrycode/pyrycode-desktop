@@ -20,6 +20,18 @@ for native motion to settle before measuring wheel displacement. Two animation f
 flush queued events; held-reader checks additionally need stable offset, content height
 and viewport height after the corresponding rendered effect.
 
+An earlier successful bottom/spacing poll cannot certify a later newest-row read:
+hover or action focus can reveal metadata between them. The
+[composer status-spacing regression](conversation-shell-composer-status-row.md#composer-status-row-796)
+observes chrome geometry, input height, overflow and scroll endpoint together on
+consecutive animation frames. Require identical snapshots and every expected value;
+stable but incorrect geometry must still fail. Retain both snapshots from each poll
+attempt, including dimensions, scroll metrics and hover/focus, even on failure.
+Exercise late action focus and prove it remains held after zero bottom clearance
+settles. Keep this observation local to the scenario, with the existing numeric
+assertions, timeouts, retries and parallelism. Two frames by themselves do not prove
+settlement when their measurements disagree. See [counted proof](#composer-status-spacing-verification).
+
 Stability alone can preserve a bottom baseline overwritten by resize-driven pinning.
 A programmatic park during metadata reflow does not release following through the
 geometry guard. Confirm completed overflowing history, settle dismissal/pointer geometry,
@@ -334,8 +346,54 @@ none counts as proof. Global retry/worker settings and menu assertions are
 unchanged. This is fake-transport evidence; no live Claude or upstream-trigger
 reproduction is claimed. See [diagnosis and deterministic fault coverage](e2e-harness-context-recovery.md#tolerating-a-transient-inspection-context-loss-on-reads).
 
+### Composer status-spacing verification
+
+The [diagnosis](https://github.com/pyrycode/pyrycode-desktop/issues/1953#issuecomment-6175600713)
+and [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1954#issuecomment-6175788661)
+record a controlled observation race and its repair, reviewed at revision `3bba3878`
+on 2026-10-14.
+The two original failure/rerun logs from the earlier gate were not recovered;
+their assertion, values and cause remain unknown. Green unchanged runs do not
+establish that occurrence's cause.
+
+At native width 1280 with an empty draft, late newest-action focus after successful
+bottom/spacing polls changed content height from 1613 to 1641 at scrollTop 880 and
+viewport height 733. The one-shot `chrome.top - newestRow.bottom` assertion returned
+−28px instead of 0. After frame processing it returned 0 with action focus retained.
+Ordinary hover also produced content growth from 1585 to 1613 at offset 852, transient
+−28px clearance, then offset 880 and clearance 0. The comparison distinguishes a
+transient observation boundary from a persistent product geometry defect; it does
+not identify the unrecovered original failure. No production or native-resize
+correction shipped.
+
+Retained reports under `/tmp/builder-1953/` record `controlled.json`: 1 executed,
+1 intentional failure, 0 skipped; `repaired-control.json`: the same input,
+1 executed/passed, 0 failed/skipped. Persistent CSS controls each executed 1 and
+failed 1, with 0 skipped: `status-mutation.json` observed stable 17px upper spacing
+instead of 16px; `padding-mutation.json` observed stable 1px padding/clearance error
+instead of 0. All used zero retries. Commands, diagnostic patches and measurements
+are linked from the diagnosis; raw failure artifacts and patches were retained in
+`/tmp/builder-1953/retained-proof.tar.gz`. Temporary control hooks are absent from
+the shipping spec.
+
+The exact named test, `status spacing and measured input clearance hold with a
+warning and five-line draft`, was present and passed all 20 focused executions:
+20 executed/passed, 0 failed, 0 skipped, 0 flaky, every retry 0, with 4 workers.
+The recorded command was:
+
+```sh
+xvfb-run -a npx playwright test e2e/composer-status-spacing.spec.ts --grep 'status spacing and measured input clearance hold with a warning and five-line draft' --repeat-each=20 --retries=0 --reporter=json --output=/tmp/builder-1953/final-results > /tmp/builder-1953/final.json
+```
+
+Dispatcher verifier gate 6, `npx playwright test --reporter=json`, used 4 workers:
+395 executed, 394 passed, 1 unrelated failed, 3 skipped, all retry 0. The supplied
+gate report confirms the exact composer test was present and passed; the verdict
+records its 1 executed/passed, 0 failed/skipped result. The verdict separately
+records the unrelated hover-test rerun as 1 executed/passed, 0 failed/skipped.
+The supplied report contains no full verifier-gate pass; that rerun does not
+replace or enlarge the composer evidence. Both proofs use fake transport.
+
 ### Inline question verification
 
 Inline-question interaction, live continuation and reviewed captures are recorded in
 [the test-tier reference](development-verification-test-tiers.md#inline-question-verification).
-

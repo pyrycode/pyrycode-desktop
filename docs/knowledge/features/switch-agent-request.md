@@ -212,7 +212,7 @@ automatic retry or claim that wrap-up had no effects.
   owning-pane success, all four settings fields, equal raw models, late replies, navigation/host
   isolation and private confirmation cleanup. The existing ticket-local opening fixture in
   `agent-switch-confirmation.spec.ts` exercises a confirmed own-agent model write followed by
-  incoming footer/sheet readings; see [baseline, counted gate and capture evidence](development-verification.md#agent-switch-settings-verification).
+  incoming footer/sheet readings; see [baseline, counted gate and capture evidence](development-verification-what-each-test-tier-proves.md#agent-switch-settings-verification).
 - `agentSwitchStore.test.ts` covers both directions, empty/verbatim model values,
   supported/unsupported effort, synchronous pending, duplicate confirmation,
   stale pane/connection/binding guards, list-only success, both refusal kinds and

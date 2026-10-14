@@ -61,7 +61,7 @@ Earlier builder evidence at `490ba22e` (1 executed, 1 passed, 0 failed, 0 skippe
 does not substitute for this dispatcher acceptance at the reviewed head. Evidence
 above comes from the supplied counted gate report and linked PASS comment;
 documentation did not read dispatcher logs or run live tests. See
-[fake/unit evidence and input-gate trap](development-verification.md#what-each-test-tier-proves).
+[fake/unit evidence and input-gate trap](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves).
 
 ## #1818, 2026-10-07
 
@@ -233,7 +233,7 @@ coverage alongside the real-Claude results above.
 **Previous verified run: #1785, 2026-10-05 — 24 executed, 24 passed, 0 failed, 1 skipped.**
 At `29e351d298` integrated with main `cb82a7d9d5`, all three required question-answer,
 question-cancel and multi-agent cases executed and passed against daemon release `0.34.0`,
-source `9834e99ee0`; see [per-test evidence and provenance](development-verification.md#live-test-diagnosis).
+source `9834e99ee0`; see [per-test evidence and provenance](development-verification-live-test-diagnosis.md#live-test-diagnosis).
 
 ## #1657, 2026-10-01
 

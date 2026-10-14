@@ -58,7 +58,7 @@ control opacity sets in one synchronous renderer snapshot. Pointer-away observat
 also deliver input before checking that no row is hovered. Polling style alone could
 time out while hover stays lost. Geometry, keyboard focus and activation retain
 their existing checks; timeout, retry and parallelism settings are unchanged. See
-[the verification method](development-verification.md#layout-and-input) and
+[the verification method](development-verification-layout-and-input.md#layout-and-input) and
 [row regression evidence](channel-list-row-hover-control.md#testing-pointer-observations).
 This local observation fix remains distinct from the shared native-pointer
 isolation in [PR #1836](https://github.com/pyrycode/pyrycode-desktop/pull/1836).

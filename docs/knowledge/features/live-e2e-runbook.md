@@ -45,7 +45,8 @@ dedicated path. Equal or descendant locations under either protected root are fo
 including aliases through supplied-path or protected-root symlinks. Existing ancestors and
 dangling symlink targets must be resolved before missing-directory skips: `realpath` alone
 would misclassify a missing protected alias as a harmless missing prerequisite.
-The version probe uses an empty temporary `CODEX_HOME`. The canonical dedicated directory
+The selected PATH executable is probed with `codex --version` using an empty temporary
+`CODEX_HOME`, without accessing the dedicated sign-in. The canonical dedicated directory
 is linked, never copied, at `<daemonHome>/.pyry/test/codex-home` before daemon spawn.
 Successful teardown and failed-setup cleanup remove fixture-owned resources and the link,
 preserving the dedicated directory and its contents.
@@ -113,45 +114,49 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 
 ## Current real-claude gate state
 
-**Latest recorded run: #1809, 2026-10-11 — 26 executed, 26 passed, 0 failed, 2 skipped;
-Luna acceptance blocked.** The supplied dispatcher report records run
-`2026-10-11T13-11-50-030Z`, testing `feature/1809` at
+**Latest recorded run: #1809, 2026-10-14 — 27 executed, 26 passed, 1 failed, 1 skipped;
+the named Luna scenario passed.** The supplied dispatcher report records run
+`2026-10-14T09-16-23-519Z`, testing `feature/1809` at
 `f87ad003c615dce3706995b6522910f9eef5c776` integrated with `origin/main` at
-`dc0ea50aeb85`; the configured real-* suite exited 0 in 4m 52s, with no flaky tests.
-Daemon annotations identify `0.37.0` on 8 of 28 tests; `PYRY_BIN` was `/usr/local/bin/pyry`.
-This is the supplied binary release identity, not a daemon source revision.
-
-The [dispatcher gate comment](https://github.com/pyrycode/pyrycode-desktop/issues/1809#issuecomment-6109424773)
-records an execution floor of 10, advancement to In Documentation and removal of
-`needs-real-claude`. That routing outcome does not establish named Luna acceptance:
-the operator/dispatcher must restore the live requirement until the provisioned scenario passes.
+`c75bc69d46d6`; the configured real-* suite exited 1 in 6m 51s, with no flaky passes.
+Daemon annotations identify `0.39.0` on 9 of 28 tests, including Luna;
+`PYRY_BIN` was `/opt/pyry-test-daemon/pyry`. This is the supplied binary release identity,
+not a daemon source revision.
 
 The named `real-claude-codex-channel.spec.ts` scenario,
-**`real GPT-6 Luna channel replies with Low effort from creation`**, was present but
-**skipped: `real-codex: PYRY_CODEX_CAPTURE_HOME is unset`**. It did not execute or pass,
-and supplies no scenario-specific `daemon-revision` or `published-model-row` attachment.
-The other skip was `real claude picks up a saved channel system prompt at Reset session`,
-with no reason recorded. The named imported regression,
+**`real GPT-6 Luna channel replies with Low effort from creation`**, was collected,
+executed and passed on attempt 1 in 11.6s against daemon `0.39.0`, with both
+`daemon-revision` and `published-model-row` attachments on that passing attempt.
+This named evidence supersedes the October 11 unset-home skip and establishes the
+live Luna reply required by #1809 and #1658 criterion 5. The named imported regression,
 `real-claude-effort-default.spec.ts` →
 `applied effort, confirmed preference, restart, chat recall and channel creation choice`,
-was present, executed and passed on its first attempt in 19.8s, annotated daemon `0.37.0`,
-in this same run (26 executed, 0 failed, 2 skipped).
+was present, executed and passed on attempt 1 in 21.0s against annotated daemon `0.39.0`
+in the same run (27 executed, 1 failed, 1 skipped).
+
+The full suite failed on `real-daemon-history-on-open.spec.ts` →
+`a real daemon lazily fills a served gap after more than 200 entries written while Electron is closed`;
+its same-tree rerun produced no pass. The
+[dispatcher gate comment](https://github.com/pyrycode/pyrycode-desktop/issues/1809#issuecomment-6165150801)
+records that this case also failed on unmerged `origin/main` and is tracked on
+[#1947](https://github.com/pyrycode/pyrycode-desktop/issues/1947). The
+[operator-delegated handoff](https://github.com/pyrycode/pyrycode-desktop/issues/1809#issuecomment-6165241854)
+accepts this ticket's named Luna proof and leaves the shared failure with that follow-up.
+This does not make the full suite green. The single skip was
+`real claude picks up a saved channel system prompt at Reset session`, with no reason recorded.
 
 The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1941#issuecomment-6109372909)
 confirms the normally merged #1658 history includes preserved documentation commit
 `22775f0901d19e606e3055eb365d19d783c56335`. The supplied deterministic browser report
 at `f87ad003c615` records 392 executed, 392 passed, 0 failed, 3 skipped;
-the Luna test did not run in that tier. Neither that report nor the live suite's totals
-establish #1809 AC5 or #1658 criterion 5. **AC5's operator blocker is the unset
-`PYRY_CODEX_CAPTURE_HOME`.** Provision the dedicated sign-in, export it to the dispatcher,
-and rerun `npx playwright test --config playwright.real-claude.config.ts --reporter=json`
-through the configured live gate. Require the named Luna scenario executed and passed,
-retaining both attachments and tested feature/main identities. Keep `needs-real-claude`
-until that evidence exists. The named pass cannot yet be supplied to the downstream handoff.
-After #1809 lands, supply
-that named result and daemon identity to #1658's documentation/PR #1720 handoff;
-reconcile the imported picker there through its normal workflow. Keep the existing causal
-blocker and #1809-first landing order. See [create-channel testing](create-channel-dialog.md#testing).
+the Luna test did not run in that tier. Live acceptance rests on the named result above,
+not these deterministic counts or a suite exit status.
+
+After #1809 lands, the dispatcher supplies the October 14 named Luna pass, daemon
+`0.39.0`, attachments and tested feature/main identities to #1658's documentation/PR #1720
+handoff. That normal workflow reconciles the picker and documentation already imported
+through `22775f09`; keep the existing causal blocker and #1809-first landing order.
+See [create-channel testing](create-channel-dialog.md#testing).
 
 ### Earlier recorded runs
 
@@ -172,6 +177,8 @@ checks its first model/effort settings and sends without changing them. A correl
 completed nonempty real assistant reply and the published Luna footer name before sending
 and after completion are required, never Default. It attaches `daemon-revision` and
 `published-model-row`; injected model lists and direct-wire creation cannot supply this proof.
+The [current gate record](#current-real-claude-gate-state) contains the named live pass and
+its daemon and combined-delivery identities.
 
 On the provisioned gate machine, after the scoped fixture/picker checks and build, use:
 

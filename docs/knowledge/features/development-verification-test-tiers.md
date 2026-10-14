@@ -1,7 +1,7 @@
 # Test tier proofs
 
 Detailed unit, static-render and mounted fake-transport verification guidance and recorded evidence.
-See [development verification](development-verification.md#what-each-test-tier-proves) for the
+See [development verification](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves) for the
 shared tier boundary and received read-mark coverage.
 
 Permission choice coverage at `1cec0874` separates controller/static proofs from native interaction.

@@ -259,7 +259,7 @@ Fake-transport navigation specs open Sidebar menu before selecting the Archive `
 retain their destination/lifecycle assertions. `sidebar-header-menu.spec.ts` proves pointer and
 keyboard navigation at 1280×800 and 800×600; assert `aria-label="Archive screen"` for arrival,
 since Archive text also exists inside the open menu. The shared pairing-arrival helper uses the
-sibling Settings item for Pair another server. See [recorded evidence](development-verification.md#layout-and-input).
+sibling Settings item for Pair another server. See [recorded evidence](development-verification-layout-and-input.md#layout-and-input).
 
 [`e2e/real-daemon-archive-order.spec.ts`](../../../e2e/real-daemon-archive-order.spec.ts) uses the
 Claude-less daemon fixture. It observes the first archive completing before issuing the second,

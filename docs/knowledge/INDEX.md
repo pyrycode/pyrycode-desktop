@@ -5,6 +5,10 @@ that owns the ticket. Search [the catalog](CATALOG.md) when the owner is unclear
 Do not load the whole catalog into every run.
 
 - [Development verification](features/development-verification.md): test boundaries, meaningful evidence, and source checks.
+- [Development verification — what each test tier proves](features/development-verification-what-each-test-tier-proves.md) — Static, mounted and live proof boundaries, with counted regression evidence.
+- [Development verification — evidence that cannot pass too early](features/development-verification-evidence-that-cannot-pass-too-early.md) — Positive processing barriers and nonvacuous absence assertions.
+- [Development verification — layout and input](features/development-verification-layout-and-input.md) — Measured layout, native input, focus and capture verification.
+- [Development verification — live-test diagnosis](features/development-verification-live-test-diagnosis.md) — Executable identity, credential ownership and counted live evidence.
 - [Live test runbook](features/live-e2e-runbook.md): real daemon and Claude test requirements.
 - [Conversation shell](features/conversation-shell.md): the conversation screen.
 - [Channel list](features/channel-list.md): sidebar rows and their state.

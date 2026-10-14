@@ -119,7 +119,7 @@ mismatch cannot authorize resend if the final inspection is unavailable. An ackn
 control with persistent mismatch fails without resend. Permanent inspection loss,
 exhaustion and missing windows fail; unrelated errors and non-`Error` throws propagate
 unchanged. Confirm native state before waiting for
-[renderer geometry to settle](development-verification.md#layout-and-input).
+[renderer geometry to settle](development-verification-layout-and-input.md#layout-and-input).
 
 The [composer diagnosis](https://github.com/pyrycode/pyrycode-desktop/issues/1822#issuecomment-6030141371)
 records the initial resize evaluation failing after 1268ms at `e0b178ce89`, before menu
@@ -137,7 +137,7 @@ execution, final-inconclusive rejection, finite exhaustion and fatal failures. T
 confirms all 17 fault tests present and passed (17 executed, 0 failed, 0 skipped) in
 the unit gate (9,208 executed/passed, 0 failed, 3 skipped). Fault injection proves
 recovery semantics, not reproduction of the upstream trigger. Counted browser
-[repetition and full-suite evidence](development-verification.md#composer-native-setup-verification)
+[repetition and full-suite evidence](development-verification-layout-and-input.md#composer-native-setup-verification)
 preserve the menu proof separately.
 
 `readAuthentication` keeps its own private copy of the same tolerance.

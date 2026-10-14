@@ -115,7 +115,7 @@ wrappers sit at level 1 above the message area's level-0 context containing rows
 pills and drawer. Existing level-2 sheets and later dialog siblings retain modal
 precedence above chrome; Create chat remains level 3. Compare ancestor contexts,
 not just anchor/pill integers. See [chrome ordering](conversation-shell-chrome.md#structure)
-and [verification](development-verification.md#layout-and-input).
+and [verification](development-verification-layout-and-input.md#layout-and-input).
 The old outlined `.conversation__overflow-menu` surface has been removed; the top bar
 uses this same panel.
 
@@ -329,7 +329,7 @@ under a sheet or dialog to prove overlay precedence.
 `e2e/sidebar-header-menu.spec.ts` checks the sidebar consumer at 1280×800 and 800×600:
 geometry, real overlap/hit testing, keyboard paths, both navigation callbacks' destinations,
 and outside dismissal that leaves a host fold and unopened chat untouched until the second
-click. See [interaction and visual evidence](development-verification.md#layout-and-input).
+click. See [interaction and visual evidence](development-verification-layout-and-input.md#layout-and-input).
 
 Code review PASS with one deferred SHOULD FIX: the `switch (outcome.type)` in `handleKeyDown` has no
 `default: return assertNever(outcome)`, the exhaustiveness-guard convention this repo otherwise applies
@@ -402,7 +402,7 @@ windows at 100% and 125% zoom. They measure every rendered text line inside its 
 check multiline height at minimum width, and select via ArrowDown/Enter and an actual
 click on the final wrapped line. Both paths retain focus return to the trigger, and
 the menu's visible overflow preserves the focused row's outline. See
-[recorded evidence](development-verification.md#layout-and-input).
+[recorded evidence](development-verification-layout-and-input.md#layout-and-input).
 
 One e2e lesson worth carrying to any future geometry spec: **`expect.poll(...).toBe(0)` on a rounded
 pixel delta is not safe** — `toBe` is `Object.is`, and `Math.round` of a tiny negative fraction returns

@@ -78,7 +78,7 @@ and input chrome sit at level 1. Menus therefore paint above rows and pills with
 raising chrome above existing level-2 sheets or later dialog siblings; Create chat
 retains level 3. Raising the sheet to level 3 would let it intercept a dialog opened
 from it. Preserve both scrim hit-testing with a menu still mounted and actual dialog
-clicks. See [verification](development-verification.md#layout-and-input) and the
+clicks. See [verification](development-verification-layout-and-input.md#layout-and-input) and the
 [translucent-control design](../../specs/architecture/1733-translucent-thread-controls.md).
 
 `MessageBubble` and `Composer` are **in-file functions** inside `ConversationScreen.tsx` — they are tiny. (`UnpairControl` was a third until [#1061](https://github.com/pyrycode/pyrycode-desktop/issues/1061) deleted it — see [Unpair control](#unpair-control-166-deleted-by-1061) below.) `MessageThread` and `StatusSheet` are also in-file but **exported** ([#69](../codebase/69.md), [#177](../codebase/177.md)), so tests server-render them as pure views — `RepairPrompt` joined them in [#167](../codebase/167.md) and was retired, folded into `ComposerErrorSlot`, by [#963](https://github.com/pyrycode/pyrycode-desktop/issues/963); see [Re-pair control](#re-pair-control-167-folded-into-the-composer-status-rows-error-slot-by-963) below. `PermissionModal`/`PermissionModalView` live in their own file, `PermissionModal.tsx` ([#224](../codebase/224.md)), the same split one level up. `ConversationScreen` is the store-bound container; `MessageThread`/`StatusSheet`/`PermissionModalView` are the props-in/markup-out views — the same container/view split `PairingScreen`/`PairingView` uses ([#55](../codebase/55.md)). The load-bearing contracts are the props/types, not the file boundaries (see Seams).
@@ -156,7 +156,7 @@ opens the menu beneath an existing overlay before checking that the scrim wins t
 test. An ordinary outside click would dismiss the menu and make that check vacuous.
 List-reply refresh checks retain an unsent draft, distinguishing a title update from
 chat reactivation. Static renders prove the named/null/escaped text cases, but cannot
-prove these updates, geometry or dismissal; see [test boundaries](development-verification.md#what-each-test-tier-proves).
+prove these updates, geometry or dismissal; see [test boundaries](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves).
 
 ## Top overlay hover
 
@@ -182,7 +182,7 @@ controls, a dismissible Default usage warning and the Error Re-pair button at
 1280×800 and 800×800. It observes confirmed `:hover` together with computed paint,
 checks bare-layer extents/radius/pointer transparency, compares control, glyph and
 toolbar/header rectangles, retains both pill fills and keyboard outlines, and
-excludes an inert usage notice. See [hover observation](development-verification.md#layout-and-input)
+excludes an inert usage notice. See [hover observation](development-verification-layout-and-input.md#layout-and-input)
 for why a completed pointer move alone cannot establish the hovered state.
 
 The 2026-10-07 dispatcher browser gate at

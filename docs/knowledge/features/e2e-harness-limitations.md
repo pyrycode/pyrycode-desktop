@@ -11,7 +11,7 @@ Fixture typechecking, platform requirements and test-tier boundaries. See the [h
   `localListFailure.ts` despite all its regression tests passing. The explicit
   `readMainProcess<boolean>` preserves the boolean-or-sentinel inspection contract.
   Include changed helpers in focused fixture typechecking; see
-  [test-tier boundaries](development-verification.md#what-each-test-tier-proves).
+  [test-tier boundaries](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves).
 - **No CI today.** Electron e2e on headless Linux will need `xvfb-run`. macOS (current dev env) no longer runs plain headful: since [#1067](https://github.com/pyrycode/pyrycode-desktop/issues/1067) every default-tier launch's window is never shown and its renderer is exempted from occlusion/backgrounding throttling — see [Desktop isolation](e2e-harness-desktop-isolation.md#desktop-isolation-default-tier-launches) above — which is what keeps a `workers: 1` run from being disturbed by the operator using the machine mid-run. The `forbidOnly`/`retries` knobs are CI-gated and harmless until then.
 - **No `e2e:fast` variant.** Re-building on every run is accepted; a build-skipping variant is deferred until iteration pain is actually observed.
 - **Every UI scenario, in order, lives in its own document.** [E2E test harness — scenario history](e2e-harness-scenarios.md) is the chronological log of every scenario and fixture extension built on this harness — #93/#94's first pairing+send drive through [#1091](https://github.com/pyrycode/pyrycode-desktop/issues/1091)'s two-fake-daemon launch — split out because this document sits at `check:docs`'s 50000-byte cap and that log was most of its bulk.

@@ -100,7 +100,7 @@ resize, window resize and modal scroll; cleanup disconnects the observer and lis
 at or below 550px the list stays in flow. The modal keeps `overflow: auto` in both cases: native
 prompt resizing can make even a tall window need scrolling. Changing the whole modal to visible
 overflow when Model opens would strand Cancel/OK below the viewport. See
-[layout verification](development-verification.md#layout-and-input).
+[layout verification](development-verification-layout-and-input.md#layout-and-input).
 
 The workspace plus and disclosure remain sibling controls, so creating does not toggle the
 workspace fold. The shared `WorkspaceCreateControl` bundles a label and callback: two parallel
@@ -264,12 +264,13 @@ settings acknowledgements before or after the first turn. Reusing the old empty-
 assertion for both flows would reject the intended creation behaviour.
 
 The combined #1809 delivery normally merges the reviewed picker and preserved documentation
-history through `22775f0901d19e606e3055eb365d19d783c56335`. Its supplied 2026-10-11 live report
-tests `feature/1809` at `f87ad003c615`, integrated with main `dc0ea50aeb85`:
-26 executed, 26 passed, 0 failed, 2 skipped. The named effort-default case,
+history through `22775f0901d19e606e3055eb365d19d783c56335`. Its supplied 2026-10-14 live report
+(`2026-10-14T09-16-23-519Z`) tests `feature/1809` at `f87ad003c615`, integrated with
+`origin/main` at `c75bc69d46d6`: 27 executed, 26 passed, 1 failed, 1 skipped.
+The named effort-default case,
 `applied effort, confirmed preference, restart, chat recall and channel creation choice`,
-was present, executed and passed on its first attempt in 19.8s against annotated daemon
-`0.37.0`. This supersedes the earlier suite-only evidence for that regression.
+was present, executed and passed on its first attempt in 21.0s against annotated daemon
+`0.39.0`. This is named evidence for that regression, not a full-suite pass.
 
 [`e2e/real-claude-codex-channel.spec.ts`](../../../e2e/real-claude-codex-channel.spec.ts)
 now automates the Luna sequence: confirm Low on seeded Claude, await a fresh target-host
@@ -279,17 +280,19 @@ published Luna footer name before sending and after the reply, never Default. Re
 seeded conversation refreshes its model list; opening the dialog itself would not populate
 the cache. The scenario attaches `daemon-revision` and `published-model-row` when it runs.
 
-**Live Luna acceptance remains blocked:** the named
-`real GPT-6 Luna channel replies with Low effort from creation` was present but skipped in
-that same run (26 executed, 0 failed, 2 skipped), with
-`real-codex: PYRY_CODEX_CAPTURE_HOME is unset`. It supplies no live reply or scenario-specific
-daemon/model-row evidence. Provision the dedicated sign-in and rerun the configured gate;
-the fake picker cannot replace that named pass. See the
+**Live Luna proof is recorded:** the named
+`real GPT-6 Luna channel replies with Low effort from creation` was collected, executed and
+passed on attempt 1 in 11.6s in that same run (27 executed, 1 failed, 1 skipped), against
+daemon `0.39.0`, with `daemon-revision` and `published-model-row` attachments on the passing
+attempt. This supersedes the earlier unset-home skip and supplies #1658 criterion 5's
+real Codex reply. The full suite's history-on-open failure also fails on main and is tracked
+on #1947; the operator-delegated handoff accepts this ticket's Luna result. See the
 [runbook](live-e2e-runbook.md#current-real-claude-gate-state) for counted evidence and
 [Codex prerequisites](live-e2e-runbook.md#dedicated-codex-sign-in-for-the-local-real--tier).
-After #1809 lands, its named Luna pass and executed daemon identity must reach #1658's
-documentation/PR #1720 handoff so that normal workflow can reconcile the implementation
-already imported here. The existing #1658 blocker and #1809-first landing order remain.
+After #1809 lands, the dispatcher supplies this named pass, daemon identity, attachments
+and tested feature/main identities to #1658's documentation/PR #1720 handoff so that its
+normal workflow reconciles the implementation and preserved documentation already imported
+here. The existing #1658 blocker and #1809-first landing order remain.
 
 ## Edge cases and limitations
 

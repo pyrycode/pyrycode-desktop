@@ -23,6 +23,10 @@ Search this catalog for a topic. Start with INDEX.md. The documentation stage ma
 - [Protected local chat history — results](features/chat-history-results.md) — Saved-read notices, result and error classifications, failed-write preservation and confirmed-removal outcomes.
 - [Protected local chat history — testing](features/chat-history-testing.md) — Admission/refusal, restoration, protected persistence, offline reply regressions and durable-contract verification.
 - [Development verification](features/development-verification.md): source checks, test boundaries, layout evidence and live-test diagnosis.
+- [Development verification — what each test tier proves](features/development-verification-what-each-test-tier-proves.md) — Static, mounted and live proof boundaries, with counted regression evidence.
+- [Development verification — evidence that cannot pass too early](features/development-verification-evidence-that-cannot-pass-too-early.md) — Positive processing barriers and nonvacuous absence assertions.
+- [Development verification — layout and input](features/development-verification-layout-and-input.md) — Measured layout, native input, focus and capture verification.
+- [Development verification — live-test diagnosis](features/development-verification-live-test-diagnosis.md) — Executable identity, credential ownership and counted live evidence.
 - [Conversation layout verification evidence](features/development-verification-layout-evidence.md) — Counted translucent conversation/Markdown reader browser gates, revision-matched visual comparisons and original capture paths.
 - [History admission and protected-restoration verification](features/development-verification-history.md) — Served receipts versus display contributions, held-row regressions and counted protected-relaunch tool/reader-anchor evidence.
 - [Test tier proofs](features/development-verification-test-tiers.md) — Detailed permission/session, inline-question interaction and capture evidence, host prompt and message lifecycle verification guidance and counted evidence.

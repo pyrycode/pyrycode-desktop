@@ -57,7 +57,7 @@ immediately, before refreshed metadata arrives; local opening cannot clear daemo
 Incomplete rows keep the persisted local-count fallback. Input-required still outranks working,
 which outranks new messages; only input-required/new-messages count, and archived/muted rows remain
 excluded even with pending input. Linux browser coverage observes `setBadgeCount` delivery, not
-native OS badge rendering; see [verification evidence](development-verification.md#what-each-test-tier-proves).
+native OS badge rendering; see [verification evidence](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves).
 
 `subscribeAppBadge({ subscribe, count, sendCommand })` computes once on subscribe and again on every
 notification from the six source stores (`conversationListStore`, `modalStore`, `questionBatchStore`,

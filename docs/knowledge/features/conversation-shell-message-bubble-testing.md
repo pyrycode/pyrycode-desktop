@@ -81,7 +81,7 @@ present, executed and passed (2 executed, 2 passed, 0 failed, 0 skipped):
 - `protected restoration joins partial pages while retaining an expanded tool and content anchor`
 
 The latter retains join, DOM identity, expansion, content-anchor, cursor and request-count
-checks after [measured demand positioning and settled Home navigation](development-verification.md#layout-and-input).
+checks after [measured demand positioning and settled Home navigation](development-verification-layout-and-input.md#layout-and-input).
 The [final verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1899#issuecomment-6068428336)
 also records independent comparison with Figma `132:4225` and `814:12025`: rest/hover/focus
 captures at 1280×900 and 800×900 show collapsed rest, shared reveal, unchanged metadata
@@ -152,7 +152,7 @@ test passed, with all 13 assistant-whitespace scenarios passing. Equal-ID histor
 skipped in that run; it is now enabled and checks both protected timelines before reopening the
 first host offline and quoting its own reply. All five reply scenarios executed and passed at
 `0b0bfe73` (full gate: 322 executed, 322 passed, 0 failed, 4 skipped; reply spec: 5 executed,
-5 passed, 0 failed, 0 skipped); see [counted evidence](development-verification.md#equal-id-received-history).
+5 passed, 0 failed, 0 skipped); see [counted evidence](development-verification-what-each-test-tier-proves.md#equal-id-received-history).
 Draft isolation and ordinary offline drafting alone do not prove persistence. SVG decoding and
 captures at 1280×800 and 800×800 were accepted against Figma in the earlier review.
 

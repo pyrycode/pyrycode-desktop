@@ -315,9 +315,10 @@ cost are separate concerns. No live-Claude or visual comparison was required or 
 ## Supplied snapshot anchor restoration
 
 The injectable [daemon item view](conversation-shell-timeline-render.md#supplied-daemon-item-presentation)
-calls `useThreadScrollPin(conversationId, 0, false, snapshot.items)`: legacy history
-demand is disabled, and the optional immutable presentation token is the item-list
-reference. A held reader's remembered anchor includes that token. A changed list
+calls `useThreadScrollPin(conversationId, 0, false, visibleItems)`: legacy history
+demand is disabled, and the optional immutable presentation token combines the
+snapshot item list and pending local sends through a memoized array. A held reader's
+remembered anchor includes that token. A changed list
 restores the surviving direct-child row to its measured viewport position before
 paint, covering older-item prepends (including at offset zero) and content revisions
 above the reader. Following readers use the existing bottom pin as rows append/grow.
@@ -328,7 +329,7 @@ older batch may insert rows while the store retains its existing version through
 `Math.max`; same/lower-watermark batches can also revise held content. Requiring an
 increasing watermark would miss those changes and let the viewed row move at zero
 offset, where Chromium suppresses native anchoring. Immutable `snapshot.items`
-identity detects those display changes independently of certification. Legacy callers
+identity invalidates the memoized presentation independently of certification. Legacy callers
 omit the token and retain restoration on increasing `prependedRows`.
 
 The scope-keyed view remount resets its anchor and following state on host,
@@ -352,6 +353,60 @@ Full fake-transport coverage executed 380, passed 379, failed 1, skipped 4, with
 unrelated `history-gaps` failure passing an isolated rerun (1 executed/passed,
 0 failed/skipped). These are injected snapshot/typed-update proofs; production
 selection and combined live acceptance remain with #1908.
+
+The supplied-agent cases establish a stronger held-reader baseline at native
+1280×800 and 800×800. After native End/Home motion settles, a spec-local target
+scroll listener registered after React records processing count and offset. Parking
+row 100 requires a newer processed event at the current offset and 20 consecutive
+unchanged animation-frame samples of offset, content height, viewport height/width,
+row position and processing state. Geometry alone can show the parked row while
+`rememberTop` still holds Home's anchor. The fixture commits child 40's move from
+agent 30 to agent 10 synchronously in the same renderer task after readiness; see
+[listener ordering and commit scheduling](development-verification-layout-and-input.md#layout-and-input).
+
+Before checking preservation, agent 10's `1 tool` and agent 30's `0 tools` certify
+the reparent projection committed. Rendered row 5 certifies the older insertion.
+Each update then settles before comparison with the original row-100 baseline;
+unchanged pre-update geometry cannot satisfy these commit barriers. The cases retain
+the <0.5px position tolerance, distance from bottom greater than 100px, child DOM
+identity, expansion, lifecycle and host/chat/epoch reuse checks. Optional supplied
+read-observer inputs stay disabled; no production scroll behavior changed.
+
+The [diagnosis and commands](../../specs/architecture/1964-agent-reparent-scroll-reliability.md#revisions)
+pin independent main at `bbcd894329a4a4410d0c10cd797e4f1bb05634d8`
+(Linux x86_64, Electron 33, isolated Xvfb displays). The
+[verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1968#issuecomment-6179180620)
+checked the retained reports under `/tmp/builder-1964/`:
+
+| Run | Executed | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| Unmodified main, `main.json` | 20 | 20 | 0 | 0 |
+| Forced immediate commit before park processing, `control.json` | 2 | 0 | 2 | 0 |
+| Same commit after park processing, `processed-control.json` | 2 | 2 | 0 | 0 |
+| Shipping regression with park readiness removed, `pre-repair.json` | 2 | 0 | 2 | 0 |
+| Repaired repetitions, `final.json` | 20 | 20 | 0 | 0 |
+| Full supplied-renderer spec, `spec.json` | 10 | 10 | 0 | 0 |
+
+In the instrumented immediate-commit control, both widths parked row 100 at y=0,
+scrollTop 810, but restoration used Home's marker at top 97 before the park's scroll
+event processed. The commit left row 100 at y=720, scrollTop 0. Processing first
+selected row 100 at top 0; reparenting committed at scrollTop 720/y=0 and older
+insertion retained y=0. Removing only shipping park readiness also failed both
+unchanged position assertions after the child counts committed. These interventions
+diagnose a reproduced setup race; the original #1936 event trace was unavailable,
+so they do not establish its exact schedule. The green unmodified runs alone did
+not diagnose the intermittency.
+
+Both exact named tests, `supplied agents repair nesting and retain lifecycle,
+expansion and scroll at 1280` and `supplied agents repair nesting and retain
+lifecycle, expansion and scroll at 800`, were present and passed ten times each in
+`final.json`, with zero retries or flaky results. Both also passed in `spec.json`.
+No sleeps, larger timeouts, relaxed assertions, skipped assertions or baseline
+resets after updates were introduced. Dispatcher verifier gate 6 separately recorded
+395 executed, 394 passed, 1 unrelated failed and 3 skipped; the verdict confirms
+both agent cases executed/passed (2/2, 0 failed/skipped). The supplied gate report
+contains no full verifier-gate pass. This is fake-transport supplied-renderer
+evidence; live Claude was not required.
 
 ## Inline question growth
 

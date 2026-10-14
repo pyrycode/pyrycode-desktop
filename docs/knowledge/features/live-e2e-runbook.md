@@ -114,7 +114,43 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 
 ## Current real-claude gate state
 
-**Latest recorded run: #1809, 2026-10-14 — 27 executed, 26 passed, 1 failed, 1 skipped;
+**Latest recorded run: #1947, 2026-10-14 — 27 executed, 26 passed, 1 failed,
+1 skipped; the repaired history-gap test passed on its first attempt.** The
+supplied dispatcher per-test report records `2026-10-14T10-10-23-470Z`, testing
+`feature/1947` at `fd6598e05c3f099bbb93148ae21af8b9a69a4565` integrated with
+`origin/main` at `d31ee247313b`. The configured full suite exited 1 in 4m 34s;
+none of its 26 passes was flaky. `PYRY_BIN` selected `/opt/pyry-test-daemon/pyry`;
+daemon annotations on 9 of 28 tests identify release `0.39.0`. No source revision
+or binary digest was supplied for this gate executable.
+
+`real-daemon-history-on-open.spec.ts` →
+**`a real daemon lazily fills a served gap after more than 200 entries written while Electron is closed`**
+was present, executed and passed in 5.4s, one attempt: 1 executed, 1 passed,
+0 failed, 0 skipped within the 27-executed, 1-failed, 1-skipped run. This supplies
+the merged-tree named-test acceptance for the repair. The
+[verifier's five serial focused passes](https://github.com/pyrycode/pyrycode-desktop/pull/1948#issuecomment-6165945171)
+at the feature revision above separately record 5 executed, 5 passed, 0 failed,
+0 skipped, one worker, retries zero, each attempt zero. Those builder runs selected
+`/usr/local/bin/pyry`, version 0.39.0, Go module v0.39.0, SHA-256
+`a76a703551edf81a42e5b0b1112bf453ed52f08fab19c7f7cfee6ee296b2b3c8`;
+that digest does not establish the identity of the dispatcher's separate binary.
+See [history diagnosis and preserved recovery assertions](development-verification-history.md#known-gap-recovery-verification).
+
+The full run's sole failure was `real-claude-effort-default.spec.ts` →
+`applied effort, confirmed preference, restart, chat recall and channel creation choice`.
+The dispatcher reran that test on the same integrated tree: 1 executed, 1 passed,
+0 failed, 0 skipped. Its [gate record](https://github.com/pyrycode/pyrycode-desktop/issues/1947)
+accepted the suite after rerun, removed `needs-real-claude` and routed the repair
+to documentation. This does not change the original full-run counts. The single
+skip remained `real claude picks up a saved channel system prompt at Reset session`,
+with no reason recorded. The Luna scenario also executed and passed on its first
+attempt in 10.0s, with release `0.39.0`, `daemon-revision` and `published-model-row`
+annotations. Closure/merge of the repair and any dependent-ticket routing remain
+dispatcher-owned.
+
+### Earlier October 14 Luna acceptance
+
+**Preceding #1809 run, 2026-10-14 — 27 executed, 26 passed, 1 failed, 1 skipped;
 the named Luna scenario passed.** The supplied dispatcher report records run
 `2026-10-14T09-16-23-519Z`, testing `feature/1809` at
 `f87ad003c615dce3706995b6522910f9eef5c776` integrated with `origin/main` at
@@ -134,7 +170,7 @@ live Luna reply required by #1809 and #1658 criterion 5. The named imported regr
 was present, executed and passed on attempt 1 in 21.0s against annotated daemon `0.39.0`
 in the same run (27 executed, 1 failed, 1 skipped).
 
-The full suite failed on `real-daemon-history-on-open.spec.ts` →
+That earlier full suite failed on `real-daemon-history-on-open.spec.ts` →
 `a real daemon lazily fills a served gap after more than 200 entries written while Electron is closed`;
 its same-tree rerun produced no pass. The
 [dispatcher gate comment](https://github.com/pyrycode/pyrycode-desktop/issues/1809#issuecomment-6165150801)
@@ -142,7 +178,7 @@ records that this case also failed on unmerged `origin/main` and is tracked on
 [#1947](https://github.com/pyrycode/pyrycode-desktop/issues/1947). The
 [operator-delegated handoff](https://github.com/pyrycode/pyrycode-desktop/issues/1809#issuecomment-6165241854)
 accepts this ticket's named Luna proof and leaves the shared failure with that follow-up.
-This does not make the full suite green. The single skip was
+That Luna acceptance did not make the earlier full suite green. The single skip was
 `real claude picks up a saved channel system prompt at Reset session`, with no reason recorded.
 
 The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1941#issuecomment-6109372909)
@@ -152,7 +188,7 @@ at `f87ad003c615` records 392 executed, 392 passed, 0 failed, 3 skipped;
 the Luna test did not run in that tier. Live acceptance rests on the named result above,
 not these deterministic counts or a suite exit status.
 
-After #1809 lands, the dispatcher supplies the October 14 named Luna pass, daemon
+The #1809 handoff asks the dispatcher to supply the October 14 named Luna pass, daemon
 `0.39.0`, attachments and tested feature/main identities to #1658's documentation/PR #1720
 handoff. That normal workflow reconciles the picker and documentation already imported
 through `22775f09`; keep the existing causal blocker and #1809-first landing order.

@@ -4,6 +4,7 @@ import { promisify } from 'node:util'
 import { readFile } from 'node:fs/promises'
 import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/realDaemon'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
+import { NOT_YET_AVAILABLE, readMainProcess } from './fixtures/mainProcessRead'
 
 // Channel posts append daemon-owned assistant entries without starting a Claude turn.
 // This acceptance uses real daemon storage and a fully exited, protected desktop profile.
@@ -74,7 +75,19 @@ test('a real daemon lazily fills a served gap after more than 200 entries writte
     const thread = fresh.locator('.conversation__thread')
     await expect(thread).toContainText(closedPosts.at(-1)!, { timeout: 20_000 })
     await expect(thread).toContainText(baseline)
-    const asks = () => reopened.evaluate(() => (globalThis as any).__openingHistoryProof.asks as string[])
+    // Inspection can disappear while Electron remains alive. Poll only this read;
+    // listener installation, posts and trusted input must never be replayed.
+    const asks = async (): Promise<string[]> => {
+      let observed: string[] | undefined
+      await expect.poll(async () => {
+        const value = await readMainProcess(reopened, () => (globalThis as any).__openingHistoryProof.asks as string[])
+        if (value === NOT_YET_AVAILABLE) return false
+        observed = value
+        return true
+      }, { timeout: 5_000, message: 'history request inspection is available' }).toBe(true)
+      if (observed === undefined) throw new Error('history request inspection unavailable')
+      return observed
+    }
     await expect.poll(async () => (await asks()).length).toBe(1)
     expect(await asks()).toEqual([''])
     const gap = thread.locator('[data-history-gap]')

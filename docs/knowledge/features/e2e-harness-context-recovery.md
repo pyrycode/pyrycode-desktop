@@ -33,6 +33,23 @@ retains the successful attempt ID for the foreign/stale-result assertions, avoid
 a second unguarded read. A one-shot injected context-loss error must recover through
 a real Electron read; listener installation, clicks and pushed events are never replayed.
 
+`real-daemon-history-on-open.spec.ts` keeps recovery in its local
+`asks(): Promise<string[]>` reader. A five-second poll returns only when
+`readMainProcess` yields an actual cursor array, retaining that successful value
+for its caller. The unavailable sentinel never becomes an empty array, a count,
+or a successful assertion. Opening-cursor, per-key and settlement checks all use
+this reader; listener installation, 205 posts, protected relaunch and native input
+remain single actions. Polling availability does not wait for a desired count or
+replace the caller's original count assertion.
+
+The [history diagnosis and validation](development-verification-history.md#known-gap-recovery-verification)
+distinguishes a failed post-ArrowUp inspection from a rejected history request.
+Controlled one-shot loss after reading two requests failed the original observer
+while Electron was running; the repaired observer recovered and passed every
+original assertion. That proves read recovery without replay, but neither the
+upstream Electron/Playwright trigger nor the absent original gate report's
+assertion. Changing focus or scroll readiness would address an unproven cause.
+
 **Confirmed control resends.** Recovery needs evidence about the mutation's actual effect;
 an inconclusive read cannot authorize a resend. For renderer event delivery, watch the
 renderer long enough to confirm that the effect has not arrived.
@@ -141,4 +158,3 @@ recovery semantics, not reproduction of the upstream trigger. Counted browser
 preserve the menu proof separately.
 
 `readAuthentication` keeps its own private copy of the same tolerance.
-

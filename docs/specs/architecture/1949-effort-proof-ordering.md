@@ -50,3 +50,11 @@ Write deterministic Vitest regression first and show the old frozen-reading logi
 ## Open Questions
 
 None. If sequence evidence establishes a production defect beyond this observer repair, return its precise contract requirement for refinement.
+
+## Revisions
+
+2026-10-14: The first credentialed run passed and captured the final write acknowledgement followed by saved medium/applied low, then saved medium/applied medium. This is a transitional applied report rather than an incorrect settled product reading. Require the intended applied effort at the final running-channel change, while preserving unavailable applied effort before a first turn. Share the bounded polling function with the deterministic regression, including negative deadline failures. Record deduplicated footer samples with event counts alongside the ordered evidence. Ten regressions pass; the old reply selection failed all six initial cases before implementation.
+
+2026-10-14: Creation proofs also record only the ID from `conversationCreated` and require that ID, rather than inferring it from whichever request was most recent. This preserves the new-channel proof even if an old chat reply arrives during creation. Added the eleventh regression for previous-chat evidence versus the newly created conversation. Final written work remains below 500 lines, with five helper exports.
+
+2026-10-14 validation: Eleven focused regressions and the scoped helper TypeScript check pass. Pre-verify passes all five checks (10,079 unit tests passed, 3 skipped); final build passes on main `d31ee247313b`. The named live case passed three consecutive focused runs, retries disabled: UTC starts 10:37:04.044, 10:38:16.651, 10:39:19.783; test durations 20,937ms, 17,474ms, 22,324ms. Each run: 1 executed, 1 passed, 0 failed, 0 skipped. Executed daemon `/usr/local/bin/pyry` is module/release v0.39.0, module sum `h1:G/dTdPcdztQXiz8fUTq7ubCshd0Lvld7iCpm+ulxkig=`, whose release tag resolves to source `518f296a82207563468cb45cfd2f26865970af32`. Final run 1 records post-restart event indices 20–25: medium write, request, matching acknowledgement, saved medium/applied low reply, follow-up request, saved medium/applied medium reply; footer samples at counts 23 and 26 are low and medium. Dispatcher full live acceptance remains pending.

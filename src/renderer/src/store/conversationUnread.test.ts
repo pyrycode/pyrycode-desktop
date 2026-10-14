@@ -159,6 +159,15 @@ describe('isConversationUnread', () => {
 })
 
 describe('daemon unread authority', () => {
+  it('uses only complete shown metadata on an explicitly selected thread route', () => {
+    for (const [shown, read, unread] of [[0, 0, false], [10, 10, false], [10, 9, true]] as const) {
+      expect(isConversationUnread(null, null, { last_shown_version: shown, read_up_to: read, latest_entry_id: 999 }, true)).toBe(unread)
+    }
+    for (const row of [{}, { read_up_to: 0, latest_entry_id: 99 }, { last_shown_version: 10 }]) {
+      expect(isConversationUnread(timelineWith(4), null, row, true)).toBe(false)
+    }
+    expect(isConversationUnread(null, null, { last_shown_version: 0, read_up_to: 0, latest_entry_id: 99 })).toBe(true)
+  })
   it('works without a timeline, retains zero, and ignores local read counts', () => {
     expect(isConversationUnread(null, null, { read_up_to: 0, latest_entry_id: 1 })).toBe(true)
     expect(isConversationUnread(null, null, { read_up_to: 0, latest_entry_id: 0 })).toBe(false)

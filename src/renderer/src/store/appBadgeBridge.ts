@@ -14,6 +14,7 @@ import type { ConversationSummary } from '@shared/wire/types'
 import type { RendererCommand } from '@shared/ipc/commands'
 import { resolveConversationStatus, type ConversationStatus } from './conversationStatus'
 import { isConversationUnread } from './conversationUnread'
+import { conversationReadRouteStore } from './conversationReadRouteStore'
 import { conversationListStore, selectConversations } from './conversationListStore'
 import { modalStore, selectHasOutstandingFor } from './modalStore'
 import { conversationActivityStore, selectActivityFor } from './conversationActivityStore'
@@ -44,7 +45,7 @@ export function countAttentionConversations<T extends { id: string }>(
  * hooks. Back-to-back synchronous reads, so not a torn read (conversationUnread.ts states why). A pending
  * question batch waits on the operator exactly as a prompt does (#1700), so either one is input-required.
  */
-export function conversationStatusNow(row: Pick<ConversationSummary, 'id' | 'read_up_to' | 'latest_entry_id'>): ConversationStatus {
+export function conversationStatusNow(row: Pick<ConversationSummary, 'id' | 'read_up_to' | 'latest_entry_id' | 'last_shown_version'> & { serverId?: string | null }): ConversationStatus {
   const conversationId = row.id
   return resolveConversationStatus(
     selectHasOutstandingFor(conversationId)(modalStore.getState()) ||
@@ -53,7 +54,8 @@ export function conversationStatusNow(row: Pick<ConversationSummary, 'id' | 'rea
     isConversationUnread(
       selectTimelineFor(conversationId)(conversationTimelineStore.getState()),
       selectLastReadFor(conversationId)(conversationLastReadStore.getState()),
-      row
+      row,
+      conversationReadRouteStore.getState().epochFor(row.serverId, row.id) !== undefined
     )
   )
 }
@@ -72,6 +74,7 @@ export function attentionCountNow(): number {
 export function subscribeToAttentionStores(listener: () => void): () => void {
   const offs = [
     conversationListStore.subscribe(listener),
+    conversationReadRouteStore.subscribe(listener),
     modalStore.subscribe(listener),
     conversationActivityStore.subscribe(listener),
     conversationTimelineStore.subscribe(listener),

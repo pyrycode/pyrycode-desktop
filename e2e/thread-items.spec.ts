@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import { build, loadConfigFromFile, preview } from 'vite'
 import type { ThreadTaskInputs } from '../src/renderer/src/screens/conversation/threadTaskPresentation'
 import type { ThreadItem, ThreadUpdate } from '../src/shared/wire/thread'
+import type { ConversationSummary } from '../src/shared/wire/types'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import { ATTACHMENT_RETRIEVAL_CHANNEL, ATTACHMENT_RETRIEVAL_EVENT_CHANNEL } from '../src/shared/ipc/attachmentRetrieval'
 import { ATTACHMENT_BYTES_CHANNEL, ATTACHMENT_BYTES_EVENT_CHANNEL } from '../src/shared/ipc/attachmentBytes'
@@ -14,11 +15,20 @@ import { capturePairedApp } from './fixtures/capturePairedApp'
 import { test, expect, seedConversationsFrame, SEEDED_ROW, FIRST_SERVER_ID, SECOND_SERVER_ID, SECOND_SEEDED_ROW } from './fixtures/launchPairedApp'
 
 type Fixture = {
+  read: (row: Partial<ConversationSummary>, readerOpen?: boolean) => void
+  readBatch: (items: ThreadItem[], version: number, completion: 'complete' | 'older' | 'incomplete' | 'abandon') => void
+  repair: (version: number) => void
+  probe: () => number[]
+  readTargets: number[]
+  receivedMark: () => number | undefined
+  connected: (host: string) => boolean
+  precommitTargets: number[]
   send: (text: string, deviceId: string | null) => void
   sendConnection: (hostId: string, connected: boolean) => void
   actions: unknown[]
   activeChat: () => string | null
   unavailable: (host: string) => void
+  reconnect: (host: string) => void
   scope: (host: string, chat: string, epoch: string) => void
   batch: (items: ThreadItem[], version: number) => void
   update: (update: ThreadUpdate) => void
@@ -37,11 +47,23 @@ import { sessionStore } from './store/sessionStore';
 import { createThreadItemStore } from './store/threadItemStore';
 import { ThreadItemsTimeline } from './screens/conversation/ConversationScreen';
 import { createThreadSendStore } from './store/threadSendStore';
+import { conversationListStore } from './store/conversationListStore';
+import { conversationReadRouteStore } from './store/conversationReadRouteStore';
+import { useReadPublication, createReadPublisher } from './store/conversationReadPublisher';
 import { submitMessage } from './screens/conversation/composerSend';
 const threadStore = createThreadItemStore();
 const sends = createThreadSendStore(), actions = [];
 const replies = [], paths = [], stops = [], escapes = [];
+const readTargets = [], precommitTargets = [];
+const savedLinks = new Map();
+const readPublisher = createReadPublisher({ rows: () => conversationListStore.getState().conversations ?? [],
+  connected: host => sessionStore.getState().statuses.get(host)?.type === 'connected',
+  epoch: (host, chat) => conversationReadRouteStore.getState().epochFor(host, chat),
+  send: command => { readTargets.push(command.payload.up_to); window.pyry.sendCommand(command); } });
 function ThreadFixture() {
+  useReadPublication(readPublisher);
+  const [readInputs, setReadInputs] = useState(undefined);
+  const [completeThrough, setCompleteThrough] = useState(0);
   const [scope, setScope] = useState(null);
   const [taskInputs, setTaskInputs] = useState({});
   const [turnRunning, setTurnRunning] = useState(false);
@@ -49,6 +71,26 @@ function ThreadFixture() {
   const local = useStore(sends, s => scope ? s.select(scope.host, scope.chat) : null);
   const snapshot = useStore(threadStore, s => scope ? s.snapshot(scope.host, scope.chat) : null);
   window.threadFixture = { replies, paths, stops, escapes, turnRunning: setTurnRunning,
+    readTargets, precommitTargets,
+    connected(host) { return sessionStore.getState().statuses.get(host)?.type === 'connected'; },
+    receivedMark() { return conversationListStore.getState().conversations?.find(r => r.id === scope.chat && r.serverId === scope.host)?.read_up_to; },
+    probe() { window.dispatchEvent(new Event('focus')); document.querySelector('.conversation__thread')?.dispatchEvent(new Event('scroll')); return [...readTargets]; },
+    read(row, readerOpen = false) {
+      const full = { id: scope.chat, serverId: scope.host, read_up_to: 0, ...row };
+      setReadInputs({ row: full, readerOpen, publisher: readPublisher });
+      conversationListStore.getState().setConversations([full], scope.host);
+    },
+    readBatch(items, version, completion) {
+      const s = threadStore.getState(), b = s.beginBatch(scope.host, scope.chat, scope.epoch);
+      b.applyItems(items, version);
+      if (completion === 'complete' || completion === 'older') b.commit({ fromVersion: 0,
+        version, ranges: items.filter(i => i.order > 0).map(i => ({ start: i.order, end: i.order + 1 })) });
+      if (completion === 'complete') setCompleteThrough(version);
+      if (completion === 'abandon') b.abandon();
+      window.dispatchEvent(new Event('focus')); document.querySelector('.conversation__thread')?.dispatchEvent(new Event('scroll'));
+      precommitTargets.push(...readTargets);
+    },
+    repair(version) { threadStore.getState().requireRepair(scope.host, scope.chat, scope.epoch, version); },
     actions,
     sendConnection(hostId, connected) { setConnection({ hostId, status: connected ? { type: 'connected',
       ack: { server_id: hostId, conn_id: 'fixture', protocol_version: '2', capabilities: [] } } : { type: 'disconnected' } }); },
@@ -57,8 +99,11 @@ function ThreadFixture() {
       dispatch() { throw new Error('legacy echo'); }, dispatchFor() { throw new Error('legacy queue'); } }); },
     taskInputs(inputs, callback = true) { setTaskInputs({ ...inputs, onStopTask: callback ? (host, chat, task) => stops.push([host, chat, task]) : undefined }); },
     activeChat() { return activeConversationStore.getState().activeConversation?.id ?? null; },
-    unavailable(host) { sessionStore.setState(s => ({ statuses: new Map(s.statuses).set(host, { type: 'disconnected' }) })); },
-    scope(host, chat, epoch) { threadStore.getState().acceptEpoch(host, chat, epoch); setScope({ host, chat, epoch }); },
+    unavailable(host) { savedLinks.set(host, sessionStore.getState().statuses.get(host));
+      sessionStore.setState(s => ({ statuses: new Map(s.statuses).set(host, { type: 'disconnected' }) })); },
+    reconnect(host) { sessionStore.setState(s => ({ statuses: new Map(s.statuses).set(host, savedLinks.get(host)) })); },
+    scope(host, chat, epoch) { conversationReadRouteStore.getState().select(host, chat, epoch);
+      threadStore.getState().acceptEpoch(host, chat, epoch); setReadInputs(undefined); setCompleteThrough(0); setScope({ host, chat, epoch }); },
     batch(items, version) { const s = threadStore.getState(); const b = s.beginBatch(scope.host, scope.chat, scope.epoch);
       b.applyItems(items, version); b.commit({ fromVersion: 0, version, ranges: [{ start: 0, end: version }] });
       sends.getState().settle(s.snapshot(scope.host, scope.chat)); },
@@ -66,7 +111,7 @@ function ThreadFixture() {
       sends.getState().settle(threadStore.getState().snapshot(scope.host, scope.chat)); }
   };
   return snapshot ? <div className="conversation" onKeyDown={event => { if (event.key === 'Escape') escapes.push('bubble'); }}><div className="conversation__covered">
-    <ThreadItemsTimeline snapshot={snapshot} sendInputs={{ connection, local: { ...local, hostId: scope.host, conversationId: scope.chat },
+    <ThreadItemsTimeline snapshot={snapshot} readInputs={readInputs && { ...readInputs, completeThrough }} sendInputs={{ connection, local: { ...local, hostId: scope.host, conversationId: scope.chat },
       onAction: (host, command) => actions.push([host, command]) }} taskInputs={taskInputs} turnRunning={turnRunning} foldTools onReply={(role, text) => replies.push(role + ':' + text)}
       onOpenMarkdownPath={path => paths.push(path)} />
     <textarea className="composer__input" aria-label="Fixture composer" onKeyDown={event => {
@@ -88,6 +133,147 @@ async function rendererFixture() {
 }
 const item = (id: number, kind: string, content: unknown, fields: Partial<ThreadItem> = {}): ThreadItem => ({
   id, rev: id, kind, order: id, status: 'done', active: false, shown: true, summary: `summary ${id}`, content, ...fields
+})
+
+for (const width of [1280, 800]) test(`publishes only committed visible authoritative read evidence at ${width}`, async ({ launchPairedApp }) => {
+  const server = await rendererFixture(), outbound: number[] = []
+  try {
+    const { page, app } = await launchPairedApp({ buildReplyFrames: bytes => {
+      const e = decodeEnvelope(bytes)
+      if (e.type === 'mark_conversation_read') outbound.push((e.payload as { up_to: number }).up_to)
+      return e.type === 'list_conversations' ? [seedConversationsFrame({ ...SEEDED_ROW, read_up_to: 0, latest_entry_id: 999 })] : []
+    } }, { rendererUrl: server.resolvedUrls!.local[0], secondServer: { buildReplyFrames: bytes =>
+      decodeEnvelope(bytes).type === 'list_conversations' ? [seedConversationsFrame(SECOND_SEEDED_ROW)] : [] } })
+    await page.locator('.channel-list__row-open').first().click()
+    await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled()
+    await expect.poll(() => page.evaluate(host => (window as unknown as { threadFixture: Fixture }).threadFixture.connected(host), SECOND_SERVER_ID)).toBe(true)
+    await app.evaluate(({ BrowserWindow }, width) => { const w = BrowserWindow.getAllWindows()[0]; w.setSize(width, 800); w.show(); w.focus() }, width)
+    const settle = () => page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+    const targets = () => page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.readTargets)
+    const read = async (shown: number | undefined, readerOpen = false, readUpTo = 0) => {
+      await page.evaluate(({ shown, readerOpen, readUpTo }) => (window as unknown as { threadFixture: Fixture }).threadFixture.read({
+        last_shown_version: shown, read_up_to: readUpTo, latest_entry_id: 999 }, readerOpen), { shown, readerOpen, readUpTo })
+      await settle()
+    }
+    const batch = async (items: ThreadItem[], version: number, completion: Parameters<Fixture['readBatch']>[2] = 'complete') => {
+      await page.evaluate(({ items, version, completion }) => (window as unknown as { threadFixture: Fixture }).threadFixture.readBatch(items, version, completion), { items, version, completion })
+      await settle()
+    }
+    const scope = async (host = FIRST_SERVER_ID, epoch = 'read') => {
+      await page.evaluate(({ host, chat, epoch }) => (window as unknown as { threadFixture: Fixture }).threadFixture.scope(host, chat, epoch), { host, chat: SEEDED_ROW.id, epoch })
+      await settle()
+    }
+    const focus = async (focused: boolean) => {
+      await page.evaluate(focused => { Object.defineProperty(document, 'hasFocus', { configurable: true, value: () => focused });
+        window.dispatchEvent(new Event(focused ? 'focus' : 'blur')) }, focused)
+      await settle()
+    }
+    const row = (id: number) => page.locator(`[data-read-row="${id}"]`)
+    await scope()
+    await read(undefined)
+    const queued = item(500, 'user_message', { text: 'Unordered queue' }, { order: 0, status: 'queued' })
+    await batch([item(7, 'assistant_message', { text: 'Committed reply' }), queued], 10)
+    await expect(row(7)).toContainText('Committed reply')
+    expect(await targets()).toEqual([])
+    await read(0); expect(await targets()).toEqual([])
+    await read(10)
+    expect(await targets()).toEqual([])
+    await batch([{ ...queued, rev: 501, shown: false }], 10)
+    await expect.poll(targets).toEqual([10])
+    await expect.poll(() => outbound).toEqual([10])
+    expect(await page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.receivedMark())).toBe(0)
+    // Sending alone leaves the received mark untouched; only an owning-daemon receipt confirms it.
+    expect(await page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.probe())).toEqual([10])
+    await page.evaluate(() => { const f = (window as unknown as { threadFixture: Fixture }).threadFixture;
+      f.read({ last_shown_version: 11, read_up_to: 0 });
+      f.readBatch([{ id: 7, rev: 11, kind: 'assistant_message', order: 7, shown: true, status: 'done', active: false,
+        summary: 'reply', content: { text: 'Committed reply appended' } }], 11, 'complete');
+      if (document.querySelector('[data-read-row="7"]')?.textContent?.includes('appended')) throw new Error('probe ran after commit');
+      f.probe();
+      if (f.readTargets.includes(11)) throw new Error('uncommitted target escaped');
+    })
+    await expect(row(7)).toContainText('appended')
+    await expect.poll(targets).toEqual([10, 11])
+    expect(await page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.precommitTargets)).not.toContain(11)
+
+    await focus(false); await read(12)
+    await batch([item(7, 'assistant_message', { text: 'Blurred append' }, { rev: 12 })], 12)
+    await expect(row(7)).toContainText('Blurred append')
+    expect(await targets()).toEqual([10, 11])
+    await focus(true); await expect.poll(targets).toEqual([10, 11, 12])
+    await read(13, true)
+    await batch([item(7, 'assistant_message', { text: 'Reader-covered append' }, { rev: 13 })], 13)
+    await expect(row(7)).toContainText('Reader-covered append')
+    expect(await targets()).toEqual([10, 11, 12])
+    await read(13); await expect.poll(targets).toEqual([10, 11, 12, 13])
+
+    // Large shown rows require their own uncovered trailing edge, even with a hidden trailing item.
+    await read(14, true)
+    await batch([item(8, 'assistant_message', { text: 'Long reply. '.repeat(3000) }),
+      item(999, 'turn_end', { stop_reason: 'end_turn' }, { order: 1000, shown: false })], 14)
+    const thread = page.getByLabel('Conversation history')
+    await thread.focus(); await thread.press('Home')
+    await expect.poll(() => thread.evaluate(el => el.scrollTop)).toBe(0)
+    await read(14)
+    expect(await targets()).not.toContain(14)
+    await thread.evaluate(el => { el.scrollTop = el.scrollHeight })
+    await expect.poll(targets).toContain(14)
+    await expect(row(999)).toHaveCount(0)
+
+    // A bottom chrome rectangle covers the row even though the scroller itself contains it.
+    await read(15, true)
+    await batch([item(9, 'assistant_message', { text: 'Obscured newest row' })], 15)
+    await thread.evaluate(el => { el.scrollTop = el.scrollHeight;
+      const cover = document.createElement('div'); cover.className = 'conversation__input-chrome'; cover.id = 'read-cover';
+      cover.style.cssText = 'position:fixed;inset:0;z-index:100;pointer-events:none'; el.closest('.conversation__covered')!.append(cover) })
+    await read(15); expect(await targets()).not.toContain(15)
+    await page.evaluate(() => { document.getElementById('read-cover')!.remove(); (window as unknown as { threadFixture: Fixture }).threadFixture.probe() })
+    await expect.poll(targets).toContain(15)
+
+    // Full older pages and unfinished/abandoned catch-up never supply newest completion authority.
+    await read(16)
+    await batch([item(9, 'assistant_message', { text: 'Incomplete text' }, { rev: 16 })], 16, 'incomplete')
+    await expect(row(9)).toContainText('Incomplete text'); expect(await targets()).not.toContain(16)
+    await batch([item(9, 'assistant_message', { text: 'Abandoned text' }, { rev: 17 })], 17, 'abandon')
+    await expect(row(9)).toContainText('Abandoned text'); expect(await targets()).not.toContain(16)
+    await batch([item(1, 'user_message', { text: 'Older page' })], 20, 'older')
+    await expect(row(1)).toContainText('Older page'); expect(await targets()).not.toContain(16)
+    await page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.repair(22))
+    await read(22); expect(await targets()).not.toContain(22)
+    await batch([item(9, 'assistant_message', { text: 'Repaired complete text' }, { rev: 22 })], 22)
+    await thread.evaluate(el => { el.scrollTop = el.scrollHeight })
+    await expect.poll(targets).toContain(22)
+    await read(22, false, 4) // Clamped acknowledgement cannot retire target 22.
+    await page.evaluate(host => (window as unknown as { threadFixture: Fixture }).threadFixture.unavailable(host), FIRST_SERVER_ID)
+    await read(23, true)
+    await batch([item(10, 'assistant_message', { text: 'Not evidenced while reader open' })], 23)
+    await page.evaluate(host => { // Link recovery retries the old evidence without upgrading to summary 23.
+      (window as unknown as { threadFixture: Fixture }).threadFixture.reconnect(host)
+    }, FIRST_SERVER_ID)
+    await expect.poll(targets).toEqual([10, 11, 12, 13, 14, 15, 22, 22])
+    await scope(FIRST_SERVER_ID, 'replacement')
+    await read(23)
+    expect(await targets()).not.toContain(23)
+    await batch([item(10, 'assistant_message', { text: 'Replacement epoch' })], 23)
+    await expect.poll(targets).toContain(23)
+    await capturePairedApp(app, page, `/tmp/builder-1936/read-${width}.png`)
+
+    // A nested newest row is excluded while its actual ancestor is collapsed.
+    await read(24, true)
+    await batch([item(20, 'agent', { name: 'Agent', tool_use_id: 'parent', input_summary: 'Parent', input: {},
+      result: { is_error: false, result_summary: 'launched' } }, { status: 'finished' }),
+      item(21, 'assistant_message', { text: 'Nested newest content' }, { parent: 20 })], 24)
+    await expect(row(21)).toBeHidden()
+    await read(24); expect(await targets()).not.toContain(24)
+    await row(20).getByRole('button').first().click()
+    await expect(row(21)).toBeVisible()
+    await thread.evaluate(el => { el.scrollTop = el.scrollHeight })
+    await expect.poll(targets).toContain(24)
+    await scope(SECOND_SERVER_ID)
+    await read(25); await batch([item(21, 'assistant_message', { text: 'Other host' })], 25)
+    await expect(row(21)).toContainText('Other host')
+    expect(await targets()).toContain(25)
+  } finally { await new Promise<void>((resolve, reject) => server.httpServer.close(e => e ? reject(e) : resolve())) }
 })
 
 test('settles sends and targets genuine queue handles through authoritative terminal revisions', async ({ launchPairedApp }) => {

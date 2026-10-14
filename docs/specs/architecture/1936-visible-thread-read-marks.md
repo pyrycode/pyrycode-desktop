@@ -64,3 +64,7 @@ None. Completion metadata is consumed as supplied; catch-up requests belong to #
 **Reviewer:** builder (self-review per `builder/security-review.md`). **Date:** 2026-10-14.
 
 Sizing: ~760 written lines (280 production, 400 tests/fixture, 80 plan), ≤5 new exports, 7 existing consumer updates, 5 observable acceptance criteria, no new protocol state machine. Recounted before committing.
+
+## Revisions
+2026-10-14: Reading `threadQueryCoordinator.receive` established that page certificates can also advance `checkpoint`, and incremental catch-up/live updates need not widen saved order ranges. `ThreadReadInputs.completeThrough` therefore explicitly supplies completed newest-window/catch-up progress represented by the rendered snapshot; older pages never advance it. Targets are bounded by both it and checkpoint/repair. Certified nonempty ranges establish the loaded baseline, including its live suffix, rather than treating a held maximum order as proof. The mounted fixture supplies this separate completion watermark. Publisher injection on the supplied seam records attempts independently of real bridge delivery.
+2026-10-15: A shown unordered/queued source makes a new target unavailable because ordered-row visibility cannot certify that content; a hidden queue source grants no evidence and does not block an earlier shown target. The mounted fixture also waits for both real fake-transport links before replacing App, and uses keyboard Home to establish user scroll intent.

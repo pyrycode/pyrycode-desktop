@@ -14,6 +14,21 @@ import { conversationActivityStore } from './conversationActivityStore'
 import { conversationTimelineStore } from './conversationTimelineStore'
 import { conversationLastReadStore } from './conversationLastReadStore'
 import { questionBatchStore } from './questionBatchStore'
+import { conversationReadRouteStore } from './conversationReadRouteStore'
+
+it('composes shown-version unread with existing attention ranking and host-owned routes', () => {
+  const route = conversationReadRouteStore.getState(), id = 'thread-attention'
+  route.select('host-a', id, 'e')
+  const row = { id, serverId: 'host-a', last_shown_version: 10, read_up_to: 10, latest_entry_id: 99 }
+  try {
+    expect(conversationStatusNow(row)).toBe('idle')
+    expect(conversationStatusNow({ ...row, read_up_to: 9 })).toBe('new-messages')
+    expect(conversationStatusNow({ ...row, last_shown_version: undefined })).toBe('idle')
+    expect(conversationStatusNow({ ...row, serverId: 'host-b' })).toBe('new-messages')
+    showBatch(id)
+    expect(conversationStatusNow(row)).toBe('input-required')
+  } finally { route.select('host-a', id, null); dismissBatch(id) }
+})
 
 // One pending question batch for `conversationId`; its id is derived from, never equal to, the conversation id.
 const showBatch = (conversationId: string): void =>

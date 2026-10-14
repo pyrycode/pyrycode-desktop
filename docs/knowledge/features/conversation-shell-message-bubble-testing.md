@@ -91,6 +91,57 @@ copies were retained under `/tmp/verifier-1899/metadata-{rest,hover,focus}-{1280
 and `/tmp/verifier-1899/metadata-scroll-{rest,focus}-{1280,800}.png`; these are scratch
 evidence paths. This is fake-transport acceptance; no live-Claude run was required or performed.
 
+### Metadata wheel ordering verification
+
+The [diagnosis](https://github.com/pyrycode/pyrycode-desktop/issues/1955#issuecomment-6176137377)
+distinguishes input/layout ordering from fixture readiness. At `9fddff32`, all 42 rows
+were rendered; a controlled wheel began at offset 0, content height 3109 and viewport
+760, then exchanged hovered rows before scroll delivery. Collapsing the old metadata
+anchored upward by 28px while the new reveal replaced that height: offset 2321,
+unchanged height 3109, bottom distance 28px. Following never resumed, so resize delivery
+could not pin. Twenty stable pre-input frames did not prevent the failure.
+
+Geometry reads can force layout during input delivery. Strengthened setup without
+diagnostic reads passed 20/20 on unchanged production (20 executed/passed, 0 failed,
+0 skipped, four configured/actual workers, zero retries). A one-shot native wheel
+listener reading only `scrollHeight` reproduced the first-clearance 28px failure:
+3 executed, 0 passed, 3 failed, 0 skipped before repair; the same control executed/passed
+3, with 0 failed/skipped after repair. It neither assigns scroll position nor cancels
+input. These are controlled interventions; the original gate's exact event schedule
+was not recorded.
+
+The original `3bba3878fc` gate used four configured/actual workers and zero retries:
+395 executed, 394 passed, 1 failed, 3 skipped. The named test failed attempt 0 at its
+first clearance, remaining 28px short throughout the 5000ms poll. Its same-worktree
+focused rerun used four configured / one actual worker: 1 executed/passed,
+0 failed/skipped, attempt 0. Green repetitions alone therefore did not prove coverage
+of the ordering gap. The retained layout read makes that ordering deterministic.
+
+`repeated metadata reveal preserves bottom clearance and held reader position` now
+confirms completed history and more than 1500px overflow, settles pointer/focus and
+scroll/content/viewport geometry over 20 consecutive frames, and uses trusted upward
+input to reach history start. At both 1280×800 and 800×800 Playwright viewports it
+retains downward wheel navigation, repeated tail hover/focus reveal/collapse and
+≤1px bottom/input clearance. Held setup proves over 1000px upward movement and bottom
+distance with positive offset. A 40px downward nudge must move without snapping to
+bottom. The test positively checks the focused row is above the viewport and details
+appear/disappear before comparing one immutable reference position through
+`preventScroll` focus/reveal/collapse with the original `toBeCloseTo(top, 0)` tolerance.
+
+The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1956#issuecomment-6176558529)
+confirms counted evidence at `bf1973fce0f57527110c0ad3584fdc2819ef636c` on
+2026-10-14, Linux x64/Xvfb with shown Electron windows. Both runs configured and used
+four workers, with retries disabled; every named-test result was attempt 0:
+
+- Focused repetitions: 20 executed, 20 passed, 0 failed, 0 skipped; the named test
+  was present and passed all 20 executions, each exercising both widths.
+- Dispatcher full default fake-transport gate 6: 395 executed, 395 passed, 0 failed,
+  3 skipped. The named test separately executed/passed 1, with 0 failed/skipped.
+  Skips were two app-badge cases and window-reopen convergence.
+
+The focused report was `/tmp/builder-1955/final-complete.json`; full-gate evidence was
+`verifier-gate_#1955_6.log`. No macOS/Windows execution or live-Claude proof is claimed.
+
 ### Action sizing regression
 
 `e2e/message-side-actions.spec.ts` compares bubble heights, row heights and gaps from the

@@ -23,7 +23,8 @@ At zero, input leaves following unchanged unless connected history demand delibe
 releases it; see [User demand and prepend position](#user-demand-and-prepend-position).
 
 The 4px bottom tolerance allows rounding while already following. A released reader
-resumes only on downward movement into that band, rather than merely being inside it:
+resumes on downward movement into that band or trusted downward wheel bottom intent
+as described below, rather than merely being inside it:
 even a 1px upward wheel must remain released through subsequent streaming growth.
 The DOM-local `scrollOffset` ref snapshots the offset at upward input and refreshes on
 every scroll before the echo/resize guards, so those events cannot leave stale direction
@@ -124,15 +125,23 @@ still releases following synchronously, so the geometry guard cannot reclaim a h
 Held readers retain native anchoring. This covers metadata reflow, narrowing, widening
 and 100%/125% zoom without another follow state machine or async task.
 
-Chromium can reach the bottom before delivering a trusted downward wheel callback,
-then change hovered-row heights before the scroll callback. The wheel handler measures
-the actual bottom and resumes following there; subsequent downward scrolls retain an
-already-following reader's intent even if metadata moved the endpoint. The existing pin
-write restores clearance only when outside the tolerance or clearing temporary padding.
-An immediate predictive wheel pin would interrupt small native movements; movements
-inside the tolerance remain unsnapped. Upward input still takes precedence. See
-[metadata-collapse design](../../specs/architecture/1898-collapse-message-metadata.md)
-and [counted browser evidence](conversation-shell-message-bubble-testing.md#metadata-collapse-verification).
+Chromium can deliver a trusted downward wheel before or after native movement.
+The wheel handler resumes following when already in the bottom band, or when positive
+pixel-mode input (`deltaMode === 0`) covers the measured remaining range
+(`scrollHeight - clientHeight - scrollTop`). The latter expresses bottom intent before
+movement: layout can exchange hovered metadata rows, collapsing one by 28px and revealing
+another by the same height. Native anchoring can leave the endpoint 28px short with
+unchanged total height, so geometry stability or a measured-bottom-only guard misses it.
+
+The wheel handler sets the existing intent ref without an immediate scroll write.
+Existing scroll/resize paths restore clearance; subsequent downward scrolls retain an
+already-following reader's intent even if metadata moved the endpoint. The pin writes
+only when outside the tolerance or clearing temporary padding. Short downward gestures
+that do not reach the band or cover the remaining range keep a released reader held;
+non-pixel input retains the measured-bottom guard. Trusted upward input still releases
+following synchronously. See [metadata-collapse design](../../specs/architecture/1898-collapse-message-metadata.md),
+[wheel-ordering repair](../../specs/architecture/1955-metadata-scroll-reliability.md#revisions)
+and [counted browser evidence](conversation-shell-message-bubble-testing.md#metadata-wheel-ordering-verification).
 
 `pinnedOffset` protects the pin's own scroll-event echo. It records the exact offset
 read back after a write that actually moved the thread, and is cleared on every scroll

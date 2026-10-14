@@ -80,7 +80,7 @@ async function refresh(page: Page, proof: Awaited<ReturnType<typeof observe>>): 
   return showFresh(page, proof, before)
 }
 
-test('applied effort, confirmed preference, restart and recall in chats and channels', async ({ relay, daemon }, testInfo) => {
+test('applied effort, confirmed preference, restart, chat recall and channel creation choice', async ({ relay, daemon }, testInfo) => {
   test.setTimeout(480_000)
   // Read the actual binary's revision or release version; never claim an unversioned daemon passed.
   const { stdout } = await promisify(execFile)(process.env.PYRY_BIN || 'pyry', ['version'], { timeout: 10_000 })
@@ -216,6 +216,7 @@ test('applied effort, confirmed preference, restart and recall in chats and chan
     for (const kind of ['chat', 'channel'] as const) {
       const before = proof.readings.length
       const ackBefore = proof.confirmations()
+      const expectedRecallWrites = kind === 'chat' ? 1 : 0
       if (kind === 'chat') {
         await confirmCreateChat(page)
       } else {
@@ -228,20 +229,27 @@ test('applied effort, confirmed preference, restart and recall in chats and chan
       const opening = proof.readings[before]
       expect(opening.conversationId).not.toBe(originalId)
       expect(opening.conversationId).not.toBe(inherited.conversationId)
-      expect(opening.effort, 'recall requires an empty saved choice at opening').toBe('')
-      await expect.poll(proof.confirmations, { timeout: ROUNDTRIP }).toBeGreaterThan(ackBefore)
+      if (kind === 'chat') {
+        expect(opening.effort, 'chat recall requires an empty saved choice at opening').toBe('')
+        await expect.poll(proof.confirmations, { timeout: ROUNDTRIP }).toBeGreaterThan(ackBefore)
+      } else {
+        // Compatible remembered effort travels in create_conversation, including on Default.
+        // The first daemon settings read must already hold it; no recall write is needed.
+        expect(opening.effort, 'channel effort must be saved at creation').toBe(picked)
+        expect(['', 'default']).toContain(opening.model)
+      }
       await expect.poll(() => proof.readings.slice(before).some(r => r.effort === picked), { timeout: ROUNDTRIP }).toBe(true)
       const recalled = await showFresh(page, proof, before)
       expect(recalled.conversationId).not.toBe(originalId)
       expect(recalled.effort).toBe(picked)
       expect(recalled.effectiveEffort).toBeUndefined()
       await expect(page.locator('.composer__effort-label')).toHaveText(picked)
-      expect(proof.confirmations()).toBe(ackBefore + 1)
+      expect(proof.confirmations()).toBe(ackBefore + expectedRecallWrites)
       await turn(page, kind === 'chat' ? 3 : 4)
       const applied = await refresh(page, proof)
       expect(applied.effectiveEffort).toBe(picked)
       expect(applied.effort).toBe(picked)
-      expect(proof.confirmations()).toBe(ackBefore + 1)
+      expect(proof.confirmations()).toBe(ackBefore + expectedRecallWrites)
       await expect(page.locator('[data-thread-role="user"]')).not.toContainText('/effort')
     }
 

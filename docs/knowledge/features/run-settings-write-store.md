@@ -415,7 +415,7 @@ but cannot clear the successor pane's writes, including equal conversation IDs o
 It covers both directions and equal raw models, pending/confirmed/error invalidation across model,
 effort, permission mode and YOLO, late settlement and preference isolation, new writes, navigation,
 empty-overlay generation notification and a prior outgoing replacement guard. Mounted proof and
-counted results are recorded in [verification guidance](development-verification.md#agent-switch-settings-verification).
+counted results are recorded in [verification guidance](development-verification-what-each-test-tier-proves.md#agent-switch-settings-verification).
 
 ## Edge cases and limitations
 

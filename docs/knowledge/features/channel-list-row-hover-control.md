@@ -115,7 +115,7 @@ The [controlled observation and verifier review](https://github.com/pyrycode/pyr
 confirm unchanged row CSS, recovery after an outside-row pointer move, and failure
 with confirmed hover when the hover-background declaration is removed from a scratch
 built renderer. The synchronization therefore still catches a missing hover fill.
-See [Layout and input](development-verification.md#layout-and-input) for the method.
+See [Layout and input](development-verification-layout-and-input.md#layout-and-input) for the method.
 
 Recorded acceptance for
 `a Chats row is the desktop 24px row: no time, body-small label, 6px corner, 4px pitch`

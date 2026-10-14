@@ -58,7 +58,7 @@ Initialization errors propagate unchanged after cleanup. Close failures add only
 
 ## Documentation handoff
 
-Satisfied in [Desktop isolation](../../knowledge/features/e2e-harness.md#desktop-isolation-default-tier-launches) and its [owning topic](../../knowledge/features/e2e-harness-desktop-isolation.md): confirmed input and launch failure boundaries, platform/window presentation, controlled evidence and limitations, final diagnostic lessons, exact repetition/full-suite counts and retained result locations. Welcome readiness remains separate under #1842. [Launch-fate diagnostics](../../knowledge/features/e2e-harness-launch-fate.md#initialization-ownership) records acquisition cleanup; [Layout and input](../../knowledge/features/development-verification.md#layout-and-input) records the independent-process regression boundary.
+Satisfied in [Desktop isolation](../../knowledge/features/e2e-harness.md#desktop-isolation-default-tier-launches) and its [owning topic](../../knowledge/features/e2e-harness-desktop-isolation.md): confirmed input and launch failure boundaries, platform/window presentation, controlled evidence and limitations, final diagnostic lessons, exact repetition/full-suite counts and retained result locations. Welcome readiness remains separate under #1842. [Launch-fate diagnostics](../../knowledge/features/e2e-harness-launch-fate.md#initialization-ownership) records acquisition cleanup; [Layout and input](../../knowledge/features/development-verification-layout-and-input.md#layout-and-input) records the independent-process regression boundary.
 
 ## Revisions
 

@@ -20,9 +20,20 @@ Each opening starts with an empty, focused **Channel name** field. The shared `M
 centered Cancel/OK actions. The filled input uses the existing theme tokens; short windows scroll
 the panel. OK requires a nonblank trimmed name.
 
+When the target host has a nonempty cached model list, **Model** sits between Channel name and
+Channel system prompt. It offers every published row in daemon order as one flat list, including
+Default, with `composerModelRowLabel` supplying the same agent-aware labels as the footer. Each
+opening resets to the inherited Claude `default` row; this draft is never remembered. Mouse clicks
+and the shared menu's wrapping Up/Down, Enter/Space and Escape interaction select a row and return
+focus to the trigger. Home/End have no custom handling. A missing or empty target-host cache omits
+the field and all optional `agent`, `model` and `effort` create fields. Another host's cache is never
+used, and opening this dialog requests no model list. [Save as channel](save-as-channel-dialog.md)
+keeps its name and prompt fields without a model choice.
+
 Since #1428 this dialog also renders an optional **Channel system prompt** filled text area under
-the name field, restating the name input's fill, corner and type — since #1429
-[Save as channel](save-as-channel-dialog.md) renders the same field too, on its own container.
+the model field when present, otherwise under the name, restating the name input's fill, corner
+and type — since #1429 [Save as channel](save-as-channel-dialog.md) renders the same field too,
+on its own container.
 Leaving it empty or holding only whitespace creates the channel exactly as before. Typed text is
 bounded at `MAX_SYSTEM_PROMPT_BYTES`, counted the way the channel info sheet's system-prompt
 section counts it — UTF-8 bytes, not UTF-16 code units — and going over disables OK with a
@@ -36,27 +47,60 @@ Opening the dialog sends no create. Confirmation sends one named, promoted reque
 target even when another host has the same workspace path; no folder selector or override is
 offered. A non-blank prompt is written in a second step described in § Requests and replies below.
 
-While the request is pending, name and OK are disabled. Cancel and header close remain available.
-Channel rejection shows “Could not create that channel”, restores editing and permits an explicit
-retry. A same-host create confirmation dismisses the dialog, and the existing navigation bridge opens
+The selected model implies the agent: Codex sends `agent: codex` and the row's exact `value` as
+`model`; an explicit Claude model sends only `model`; inherited Claude Default sends neither.
+An absent row agent tag means Claude. At submission the dialog reads the profile-wide
+[remembered effort](last-effort-store.md#what-it-does) and includes it only when it exactly matches
+one of the selected row's `effort_levels`, including Default. An absent or unsupported remembered
+value means no effort field. These choices travel in the create request, so the channel starts with
+them without a later model/effort settings write.
+
+While the request is pending, name, prompt, Model and OK are disabled, and any model menu is
+unmounted. Cancel and header close remain available. Channel rejection shows “Could not create
+that channel”, restores editing and retains the chosen model for an explicit retry. A same-host
+create confirmation dismisses the dialog, and the existing navigation bridge opens
 the confirmed channel. There is no optimistic row or immediate close on submission.
 
 ## How it works
 
 `ChannelList` retains only `serverId` as the draft target and mounts `CreateChannelDialog`
-only for a connected host. The container owns transient name, busy and error state; unmounting
-discards the draft. Its pure `CreateChannelDialogView` receives presentation state and callbacks,
+only for a connected host. The container owns transient name, prompt, model, busy and error state;
+unmounting discards the draft. Its pure `CreateChannelDialogView` receives presentation state and callbacks,
 with no workspace path prop or transport access. Operator input is rendered through React's
-escaped input value. Both views render `ChannelForm` inside `Modal`; only the name field is
-shared, while submission stays in each container.
+escaped input value. Both create and Save-as-channel views render `ChannelForm` inside `Modal`;
+name and prompt fields are shared, while submission stays in each container.
 
 `ChannelForm` takes the system prompt as one optional bundled `prompt` prop (`value`, `overLimit`,
 `onChange`) rather than three parallel optional props — a value with no over-limit state, or a
 handler with no accessible name, is what parallel optionals would permit. Omitted entirely, the
-form renders name-only, exactly as it did before #1428 — the shape `ChannelForm` still has no idea
-which dialog it is inside. Since #1429 [Save as channel](save-as-channel-dialog.md) passes the prop
+form without a model prop renders name-only, exactly as it did before #1428 — `ChannelForm` has
+no idea which dialog it is inside. Since #1429 [Save as channel](save-as-channel-dialog.md) passes the prop
 too, so today both containers render the field; the omitted case remains reachable for any future
 consumer of `ChannelForm` with no need for the prompt.
+
+Only Create supplies the optional bundled `model` prop (`rows`, `selected`, `onChange`).
+`cachedChannelModels` scans `selectConversationsFor(serverId)` in order, skips uncached conversations
+and returns the first cached model array by reference. A cached empty
+array stops the search; it does not fall through to a later list. The selectors subscribe to
+target-host membership and cache changes without inspecting the currently open conversation.
+The draft is a row or `null`: null resolves to the published Claude `default` row; a pick resolves
+by exact value and normalized agent. Equal values on different agents remain distinct. The shared
+`ComposerOptionsMenu` receives client-generated index identities, with daemon labels reaching only
+escaped visible text. Busy state replaces that menu with a disabled trigger, cleaning up its menu
+listeners and focus state.
+
+The exported chevron SVG is imported as raw local asset text and given a lifecycle-owned blob URL
+only while the model field exists; cleanup revokes it. Vite's usual small-SVG data URL would be
+rejected by the renderer CSP. CSS uses the SVG as an alpha mask and `--color-primary` as the visible
+colour, so the asset's embedded fill does not freeze the theme colour. No CSP exception is needed.
+
+At ordinary window heights only the model list is fixed-positioned beyond the modal scrollport.
+`ChannelForm` measures the trigger's viewport bounds and updates its CSS anchor on modal/field
+resize, window resize and modal scroll; cleanup disconnects the observer and listeners. At heights
+at or below 550px the list stays in flow. The modal keeps `overflow: auto` in both cases: native
+prompt resizing can make even a tall window need scrolling. Changing the whole modal to visible
+overflow when Model opens would strand Cancel/OK below the viewport. See
+[layout verification](development-verification-layout-and-input.md#layout-and-input).
 
 The workspace plus and disclosure remain sibling controls, so creating does not toggle the
 workspace fold. The shared `WorkspaceCreateControl` bundles a label and callback: two parallel
@@ -71,8 +115,12 @@ no test catching it, since no static test reads computed style.
 
 ### Requests and replies
 
-Submission calls `requestNewChannel(sendCommand, trimmedName, null, serverId)`. That helper sends
-`createConversation` with `is_promoted: true`, the trimmed name and explicit `cwd: null`. The host
+Submission calls `requestNewChannel(sendCommand, trimmedName, null, serverId, choice)`, with
+`choice` from `channelCreateChoice(selectedModel, selectLastEffort(lastEffortStore.getState()))`.
+The preference is read at submission, not captured when the modal opens. With no selected row
+the helper returns no choice; with a row it constructs only the compatible agent/model/effort
+fields described above. `requestNewChannel` sends `createConversation` with `is_promoted: true`,
+the trimmed name and explicit `cwd: null`. The host
 routing key is a top-level IPC field, outside the wire payload. There is no folder command in
 this flow, and no client-side path or slug construction: `channelsParent` and `slugForChannel`
 went with the withdrawn dedicated branch (#1436). The daemon resolves its default folder and
@@ -148,6 +196,11 @@ the globally mounted `useConversationCreatedNav`, even after the dialog was dism
 
 ## Testing
 
+`channelCreateChoice.test.ts` covers inherited/explicit/untagged Claude and Codex, including a
+Codex row whose value is `default`, exact effort membership on every agent and Default, unsupported
+or absent preferences and no selected row. Host-cache cases cover a later cached conversation,
+cross-host isolation and an empty first cached list that must not fall through.
+
 `CreateChannelDialog.test.tsx` checks shared markup, labels, blank validation, busy controls and
 accessible errors, plus escaped input. `autoFocus` renders as `autofocus=""` in static markup,
 but actual focus and keyboard behavior require the interaction tier. Escaping assertions check
@@ -159,6 +212,8 @@ empty, at the bound, one byte over, and on a multi-byte value whose UTF-8 length
 code-unit length; `confirmsPending` is checked on a match with a daemon-resolved path, a name mismatch,
 `is_promoted: false`, and `idle`. Since #1429 `SaveAsChannelDialog.test.tsx` covers the same field
 on its own container — see [Save as channel § Testing](save-as-channel-dialog.md#testing).
+Model assertions check field order, shared Codex labels, omitted model props and the disabled
+pending trigger with no menu. Static rendering does not execute the blob URL or observer effects.
 
 `e2e/sidebar-create-channel.spec.ts` holds real fake-transport replies to cover the request,
 rejection/retry, frozen controls, duplicate prevention, dismissal, reopening and disconnect
@@ -176,6 +231,24 @@ own id and the typed text verbatim and untrimmed; an empty or whitespace-only bo
 `confirmsPending` each send nothing (the foreign-host case also does not dismiss, the mismatched
 same-host case dismisses exactly as it always did); text over the bound disables OK.
 
+The same spec drives Codex selection by keyboard, Default reset on reopening, equal-value
+cross-agent mouse picks, target-host cache isolation, missing/empty-cache omission and a preference
+confirmed after the dialog opened. It inspects the Codex create frame and correlates a settings
+refusal through main's real reply path, then retries with the retained selection. Confirmed model
+and effort footers plus settings-write counts check that creation needs no follow-up write; a
+separate Default scenario checks the effort-only create payload. Theme assertions change
+`--color-primary` and load the blob mask image. The resize regression drags the native prompt
+handle, opens Model, wheels the modal, reaches both footer controls and cancels without creating.
+
+The [final verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1720#issuecomment-6023110097)
+records all ten create-channel scenarios as executed and passed across the 2026-10-06 full gate
+and its focused rerun at revision `6e1910ff3c2df90abf132b2c67567863c5e25e9c`. The full browser run
+had 294 executed, 293 passed, 1 failed and 4 skipped. The named resize case, **“a resized prompt
+stays scrollable with Model open and footer controls remain reachable”**, executed and passed in
+the focused rerun: 1 executed, 1 passed, 0 failed, 0 skipped. The verdict confirms the Codex,
+Default, host-isolation and missing/empty-cache scenarios passed in the full run. This is
+fake-transport evidence.
+
 Independent `conversationStateFake` instances both generate `created-1`. Keep successful
 cross-host navigation assertions in separate launches so artificial ID collisions do not hide
 or imitate a routing failure. Use a resolved reply path different from the clicked workspace to
@@ -183,6 +256,43 @@ detect an accidental path comparison in the prompt gate. The fake proves client 
 continuation behavior;
 [`real-daemon-create-channel.spec.ts`](real-daemon-credential-light-e2e.md) separately exercises
 the daemon's promoted-create branch and reads its stored fields back.
+
+`real-claude-effort-default.spec.ts` keeps chat recall separate from channel creation: chats open
+with empty saved effort and require one recall acknowledgement; Default channels must already
+have compatible remembered effort in their first settings reply and receive zero subsequent
+settings acknowledgements before or after the first turn. Reusing the old empty-effort opening
+assertion for both flows would reject the intended creation behaviour.
+
+The combined #1809 delivery normally merges the reviewed picker and preserved documentation
+history through `22775f0901d19e606e3055eb365d19d783c56335`. Its supplied 2026-10-14 live report
+(`2026-10-14T09-16-23-519Z`) tests `feature/1809` at `f87ad003c615`, integrated with
+`origin/main` at `c75bc69d46d6`: 27 executed, 26 passed, 1 failed, 1 skipped.
+The named effort-default case,
+`applied effort, confirmed preference, restart, chat recall and channel creation choice`,
+was present, executed and passed on its first attempt in 21.0s against annotated daemon
+`0.39.0`. This is named evidence for that regression, not a full-suite pass.
+
+[`e2e/real-claude-codex-channel.spec.ts`](../../../e2e/real-claude-codex-channel.spec.ts)
+now automates the Luna sequence: confirm Low on seeded Claude, await a fresh target-host
+published Codex row, select it in Create channel and send without changing the new channel's
+settings. It checks the initial model/effort, correlated completed nonempty Codex reply and
+published Luna footer name before sending and after the reply, never Default. Reopening the
+seeded conversation refreshes its model list; opening the dialog itself would not populate
+the cache. The scenario attaches `daemon-revision` and `published-model-row` when it runs.
+
+**Live Luna proof is recorded:** the named
+`real GPT-6 Luna channel replies with Low effort from creation` was collected, executed and
+passed on attempt 1 in 11.6s in that same run (27 executed, 1 failed, 1 skipped), against
+daemon `0.39.0`, with `daemon-revision` and `published-model-row` attachments on the passing
+attempt. This supersedes the earlier unset-home skip and supplies #1658 criterion 5's
+real Codex reply. The full suite's history-on-open failure also fails on main and is tracked
+on #1947; the operator-delegated handoff accepts this ticket's Luna result. See the
+[runbook](live-e2e-runbook.md#current-real-claude-gate-state) for counted evidence and
+[Codex prerequisites](live-e2e-runbook.md#dedicated-codex-sign-in-for-the-local-real--tier).
+After #1809 lands, the dispatcher supplies this named pass, daemon identity, attachments
+and tested feature/main identities to #1658's documentation/PR #1720 handoff so that its
+normal workflow reconciles the implementation and preserved documentation already imported
+here. The existing #1658 blocker and #1809-first landing order remain.
 
 ## Edge cases and limitations
 
@@ -215,6 +325,9 @@ the daemon's promoted-create branch and reads its stored fields back.
   tri-state contract (`null` clears, `''` stores empty, text is verbatim), and the known limitation
   that two writes in flight on one conversation are indistinguishable, which this dialog's
   one-write-per-create design never reaches.
+- [Last-effort store](last-effort-store.md) — profile-wide confirmed preference read at submission.
+- [Create channel model choice spec](../../specs/architecture/1658-create-channel-model-choice.md)
+  — target-host cache selection, create choices and visual revisions.
 - [Daemon connection — correlation](daemon-connection-correlation.md) — the posture this dialog's
   `confirmsPending` gate inherits: state a reply's residual ambiguity rather than engineer around it.
 - [Drop the folder choice spec](../../specs/architecture/1436-drop-channel-folder-choice.md)

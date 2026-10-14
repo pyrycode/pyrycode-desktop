@@ -97,7 +97,7 @@ and listener teardown. Wrap array-valued `it.each` cases in objects: positional
 argument expansion can silently supply an undefined task array and let a direct-link
 regression pass without exercising the damaged case. Static markup cannot prove
 those effects or clicks; see
-[test boundaries](development-verification.md#what-each-test-tier-proves).
+[test boundaries](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves).
 
 **Legacy roster presentation.** An openable surface listing the tasks claude has running in the background for the open conversation
 — the first reader of [`backgroundTaskRosterStore`](background-task-roster-store.md), shipped and
@@ -386,7 +386,7 @@ container test in `backgroundTaskStop.test.ts` supplies populated roster and ses
 spies on **`getInitialState`**: Zustand's server render reads that snapshot, so setting only a singleton's
 current state does not seed the render. Keep the positive visible-button case alongside negative host
 gates; an empty roster would otherwise make every hidden-button assertion pass without proving gating.
-Static renders do not run click handlers or effects; see [test boundaries](development-verification.md#what-each-test-tier-proves).
+Static renders do not run click handlers or effects; see [test boundaries](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves).
 
 `e2e/fixtures/conversationStateFake.ts` records stop payloads in arrival order through
 `backgroundTaskStopRequests()`. Silence is the default; `setBackgroundTaskStopAnswer` configures an exact
@@ -427,7 +427,7 @@ renders, including prefix handling and empty values. Each case renders a frozen 
 entry with its pre-render clone, and checks task identity and the raw type. A markup-shaped unknown
 type checks escaping and absence from attributes; separate assertions retain command-versus-agent
 description styling. Computing expected labels with the same transformation would let a wrong mapping
-pass on both sides; these tests pin the rendered span instead. See [renderer test boundaries](development-verification.md#what-each-test-tier-proves).
+pass on both sides; these tests pin the rendered span instead. See [renderer test boundaries](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves).
 
 ## Status tag and summary (#1639)
 
@@ -481,7 +481,7 @@ never draws one, since the `finished` guard is checked first. Neither draws a su
 - Empty summaries show neither a summary nor its cut chip, with empty or non-empty descriptions.
 
 These tests assert markup from the actual pure view; they do not exercise effects or interaction. See
-[renderer test boundaries](development-verification.md#what-each-test-tier-proves). The
+[renderer test boundaries](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves). The
 [visual review](https://github.com/pyrycode/pyrycode-desktop/pull/1760#issuecomment-5992148664) compared
 static captures of `BackgroundTaskPanelView` at revision `29ce8d38256c576160f98582f2212089bcb0315a`
 with [Figma node 564:2230](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG?node-id=564-2230)

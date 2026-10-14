@@ -185,7 +185,7 @@ must schedule no save, while a later received list must still record.
 [`received-read-marks.spec.ts`](../../../e2e/received-read-marks.spec.ts) separates immediate mounted
 dot/badge clearing from persistence: after host A's push, saved host marks remain the received
 list values `[0, 2]`. A store update alone cannot prove a saved mark. See
-[counted verifier evidence](development-verification.md#what-each-test-tier-proves).
+[counted verifier evidence](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves).
 
 ## Browser persistence and lifecycle
 
@@ -197,7 +197,7 @@ the first host, then reopens its saved chat offline and quotes only its original
 reply into that host's draft. Both saved timelines remain independent afterward.
 Draft isolation and ordinary saved/offline reply tests remain enabled: either
 could pass while received persistence is broken, so neither substitutes for this
-regression. See [counted fake-transport evidence](development-verification.md#equal-id-received-history).
+regression. See [counted fake-transport evidence](development-verification-what-each-test-tier-proves.md#equal-id-received-history).
 
 [`chat-history-recording.spec.ts`](../../../e2e/chat-history-recording.spec.ts)
 exercises the mounted production observer and handler, real composer cancellation,

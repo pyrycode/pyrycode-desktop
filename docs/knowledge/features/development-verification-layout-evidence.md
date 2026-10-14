@@ -1,7 +1,7 @@
 # Conversation layout verification evidence
 
 Counted browser results and reviewed captures for the translucent conversation and
-Markdown reader layouts. See [Development verification](development-verification.md#layout-and-input)
+Markdown reader layouts. See [Development verification](development-verification-layout-and-input.md#layout-and-input)
 for layout/input test guidance and [scroll pin](conversation-shell-scroll-pin.md#thread-scroll-pin)
 for current metadata-reflow behavior. These runs record the layout at their reviewed revisions.
 

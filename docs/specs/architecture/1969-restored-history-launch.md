@@ -24,3 +24,12 @@ One deliverable, approximately 180 written lines including this plan and diagnos
 
 ## Open Questions
 Confirm the startup failure mechanism for both variants with fresh evidence. If the hypothesis is disproved, append the actual diagnosis and adjusted contract in Revisions before handoff.
+
+## Revisions
+2026-10-14: confirmed startup-registration race, not a lost window event. Both new hook-readiness assertions failed against the original fixture with zero discovered windows; their launch-fate attachments reported a running process, exit code 0 after cleanup and no teardown failures. The repaired fixture passed all eight queued-settlement cases, including both original restored-identity variants (1.6s and 1.9s).
+
+A separate diagnostic launched the same built app with isolated user data, hidden-window presentation and the existing throttling switches, then immediately performed the original handler capture/remove/install sequence. With no injected delay or retry, attempt 4 observed `originalHandlerPresent=false` and zero native windows. Application startup subsequently rejected its own history registration as a second handler, leaving no window. This is the race shared by the two variants: neither uses `historyFirst` until after launch and restoration.
+
+An explicit promise barrier around application readiness also forced the same ordering for each variant: installation found no original handler and no window; releasing startup produced the duplicate-registration error and the unchanged 30000ms `firstWindow` timeout with zero native windows. This isolates the registration failure from Playwright page discovery. Diagnostic scripts and logs are under `/tmp/builder-1969/`; no diagnostic preload or startup control ships in the test suite.
+
+The final contract is unchanged from Change: first-window readiness precedes the hook; hook completion precedes pairing/activation. Original-handler presence is checked before any removal, restored-answer visibility precedes expansion, and every original identity/expanded-state/child-result assertion and positive live/prepend receipt barrier remains. The Open Question is resolved; no production, protocol, timeout, retry or sandbox change is needed.

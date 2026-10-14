@@ -221,6 +221,20 @@ and save failures at the IPC handler seam so layout proof invokes neither OS app
 Downloads writes. Draft/thread-position checks and an upload completing while the reader
 is open distinguish a hidden covered conversation from one accidentally unmounted.
 
+Reader reopen input needs geometry stability after focus changes, too. Playwright's
+pre-click stability check can precede hover revealing `.bubble__meta--details`;
+bottom pinning then moves the link before pointer delivery. In
+[`markdown-reader-menu.spec.ts`](../../../e2e/markdown-reader-menu.spec.ts),
+`settledThreadPosition` requires 20 consecutive equal frame comparisons of thread
+offset, content/viewport height and link x/y/width/height, rejecting after 120 sampled
+frames. Focus Back before the first preservation baseline and focus the link before
+the final pointer click. Keep the exact Back position assertion before this new
+focus/settlement so preparation cannot overwrite the preservation proof. Retain
+fresh-content and request-count assertions, diagnostic attachments and keyboard Back;
+there is no click retry, fixed sleep or timeout increase. The
+[controlled failure and repaired input](development-verification-layout-evidence.md#reader-reopen-input-verification)
+establish the setup race; unchanged green repetitions alone cannot establish its cause.
+
 Stacking levels are relative to ancestor contexts. The message area's level 0
 contains rows, pills and drawer; sharp top/input chrome at level 1 keeps controls
 and their menus above them. Existing level-2 sheets and later dialog siblings retain

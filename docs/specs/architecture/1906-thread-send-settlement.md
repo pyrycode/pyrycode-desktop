@@ -38,6 +38,7 @@ No production subscriptions or async jobs are introduced. The owner supplies sna
 | Peer equal ID, damaged identities, other host/chat snapshot | `threadSendStore.test.ts`: strict scoped identity |
 | Live or catch-up first queued/delivered/hidden/lost item; repeated snapshot | `threadSendStore.test.ts`: settlement and terminal first observations |
 | Later transport feedback or synchronous bridge failure after acceptance | `threadSendStore.test.ts`: acceptance owns display and late feedback |
+| Strict queued ownership re-established in a new epoch, followed by unavailable identities and delivery | `threadSendStore.test.ts`: re-establishes queued ownership across epochs before identities become unavailable (same or different item ID) |
 | Queued delivery, drop, loss, historical queue handle reused | `thread-items.spec.ts`: queue lifecycle actions; `threadItems.test.tsx`: eligibility and authority |
 | Cleanup and same scope reopened | `threadSendStore.test.ts`: scoped retirement and owner disposal |
 
@@ -55,3 +56,10 @@ Sizing: one settlement deliverable, approximately 650 written lines including pl
 ## Revisions
 2026-10-14: The existing `nest` lane comparator owns agent placement and overrides a pre-sort. Apply unordered-user tail placement and first-arrival tie breaking inside that comparator, preserving its agent branches. Queued presentation is independent of action eligibility: disconnected or handle-less accepted rows keep the existing dimming without inventing a handle or drawing actions.
 Once strict settlement establishes ownership, newest-send feedback follows that scoped item ID within its epoch, including later revisions with unavailable content identities. An epoch change must establish ownership again by both identities; a reused item ID cannot retain queue feedback. Covered by `threadSendStore.test.ts` “follows an accepted item after identity fields become unavailable and fences epoch reuse.”
+
+2026-10-14 (verifier finding 1): `createThreadSendStore.settle` must compute next accepted ownership before its no-change guard and compare both epoch and item ID. Strict re-establishment in a new epoch publishes ownership even when pending inventory and queued feedback are unchanged. The regression “re-establishes queued ownership across epochs before identities become unavailable” covers reused and changed item IDs, unavailable identities immediately afterward, repeated snapshots and terminal delivery. Both cases failed at retained queued feedback before the fix.
+
+## Documentation handoff
+- Pending documentation stage: `docs/knowledge/features/composer-send.md`, “Data flow”: injectable pending-send inventory, per-send trusted identity, strict scoped settlement, epoch-bound accepted ownership, cleanup and newest-send feedback.
+- Pending documentation stage: `docs/knowledge/features/conversation-shell.md`, “What it does”: daemon text/attachment authority, unordered tail placement, genuine queue-handle eligibility and terminal action removal.
+- Pending documentation stage: `docs/knowledge/features/composer-send.md`, “How it works”: this adapter remains inactive until #1908; preserve the independent session/read adapters from #1935 and #1936 during integration.

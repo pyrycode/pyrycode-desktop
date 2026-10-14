@@ -78,6 +78,24 @@ describe('scoped daemon send settlement', () => {
     expect(state().localSendPending).toBeNull(); expect(state().pending).toHaveLength(0)
   })
 
+  it.each([100, 101])('re-establishes queued ownership across epochs before identities become unavailable (item %s)', id => {
+    const { store, send, state } = setup(); send(); store.getState().settle(snapshot())
+    store.getState().settle({ ...snapshot([row(id)]), epoch: 'new-epoch' })
+    expect(state().pending).toHaveLength(0)
+    expect(state().localSendPending).toEqual({ messageId: 'm', queued: true })
+
+    const unavailable = { ...row(id), content: { ...row(id).content, device_id: null, message_id: null } }
+    const revision = { ...snapshot([unavailable]), epoch: 'new-epoch' }
+    store.getState().settle(revision)
+    expect(state().pending).toHaveLength(0)
+    expect(state().localSendPending).toEqual({ messageId: 'm', queued: true })
+    const settled = state()
+    store.getState().settle(revision); expect(state()).toBe(settled)
+
+    store.getState().settle({ ...snapshot([{ ...unavailable, active: false, status: 'delivered' }]), epoch: 'new-epoch' })
+    expect(state().pending).toHaveLength(0); expect(state().localSendPending).toBeNull()
+  })
+
   it('settles older pending sends without changing the newest feedback', () => {
     const { store, deps, send, state } = setup(); send()
     submitMessage('newest', 'chat', { ...deps, newMessageId: () => 'new' })

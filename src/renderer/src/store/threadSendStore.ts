@@ -92,9 +92,10 @@ export function createThreadSendStore(log?: (event: { event: string; code: strin
         const localSendPending = accepted ? accepted.shown === true && accepted.active === true && accepted.status === 'queued'
           ? { messageId: before.newest?.messageId ?? '', queued: true } : null
           : owned && owned.epoch !== snapshot.epoch ? null : before.localSendPending
-        if (pending.length === before.pending.length && localSendPending?.queued === before.localSendPending?.queued &&
-            (localSendPending === null) === (before.localSendPending === null)) return
         const newest = accepted && before.newest ? { ...before.newest, accepted: { epoch: snapshot.epoch, id: accepted.id } } : before.newest
+        if (pending.length === before.pending.length && localSendPending?.queued === before.localSendPending?.queued &&
+            (localSendPending === null) === (before.localSendPending === null) &&
+            newest?.accepted?.epoch === owned?.epoch && newest?.accepted?.id === owned?.id) return
         publish(snapshot.hostId, snapshot.conversationId, { ...before, pending, localSendPending, newest })
         observe(accepted?.status === 'queued' ? 'accepted-queued' : 'settled')
       },

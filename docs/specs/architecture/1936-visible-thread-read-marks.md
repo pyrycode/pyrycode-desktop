@@ -68,3 +68,12 @@ Sizing: ~760 written lines (280 production, 400 tests/fixture, 80 plan), ≤5 ne
 ## Revisions
 2026-10-14: Reading `threadQueryCoordinator.receive` established that page certificates can also advance `checkpoint`, and incremental catch-up/live updates need not widen saved order ranges. `ThreadReadInputs.completeThrough` therefore explicitly supplies completed newest-window/catch-up progress represented by the rendered snapshot; older pages never advance it. Targets are bounded by both it and checkpoint/repair. Certified nonempty ranges establish the loaded baseline, including its live suffix, rather than treating a held maximum order as proof. The mounted fixture supplies this separate completion watermark. Publisher injection on the supplied seam records attempts independently of real bridge delivery.
 2026-10-15: A shown unordered/queued source makes a new target unavailable because ordered-row visibility cannot certify that content; a hidden queue source grants no evidence and does not block an earlier shown target. The mounted fixture also waits for both real fake-transport links before replacing App, and uses keyboard Home to establish user scroll intent.
+2026-10-15 (verifier finding 1): Keep `ConversationListData` mounted in the supplied item view.
+Fake-daemon `conversation_updated` replies correlate with recorded wire request IDs; unsolicited
+late marks also pass through transport. Committed receipt/list output fences absence assertions.
+Cover below-target clamps, confirmation retirement, late receipts after pending-epoch replacement
+and host switches, and deletion/owner loss with the observer still mounted. Capture publisher
+commands as host/conversation/target separately from wire delivery: duplicate IDs received from
+both daemons remain refused by main's existing ambiguous-owner guard. No production contract changes.
+#1964 overlaps this file's separate agent-scroll test; edits remain local to read evidence.
+Recount: about 590 written lines overall, no new exports or production consumers in this repair.

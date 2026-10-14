@@ -20,7 +20,9 @@ type Fixture = {
   repair: (version: number) => void
   probe: () => number[]
   readTargets: number[]
+  readAttempts: { host: string; chat: string; target: number }[]
   receivedMark: () => number | undefined
+  loseOwner: (host: string) => void
   connected: (host: string) => boolean
   precommitTargets: number[]
   send: (text: string, deviceId: string | null) => void
@@ -40,7 +42,7 @@ type Fixture = {
   paths: string[]
 }
 const fixtureSource = `
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useStore } from 'zustand';
 import { activeConversationStore } from './store/activeConversationStore';
 import { sessionStore } from './store/sessionStore';
@@ -48,18 +50,22 @@ import { createThreadItemStore } from './store/threadItemStore';
 import { ThreadItemsTimeline } from './screens/conversation/ConversationScreen';
 import { createThreadSendStore } from './store/threadSendStore';
 import { conversationListStore } from './store/conversationListStore';
+import { ConversationListData } from './store/conversationListBridge';
 import { conversationReadRouteStore } from './store/conversationReadRouteStore';
+import { isConversationUnread } from './store/conversationUnread';
 import { useReadPublication, createReadPublisher } from './store/conversationReadPublisher';
 import { submitMessage } from './screens/conversation/composerSend';
 const threadStore = createThreadItemStore();
 const sends = createThreadSendStore(), actions = [];
 const replies = [], paths = [], stops = [], escapes = [];
-const readTargets = [], precommitTargets = [];
+const readTargets = [], readAttempts = [], precommitTargets = [];
 const savedLinks = new Map();
 const readPublisher = createReadPublisher({ rows: () => conversationListStore.getState().conversations ?? [],
   connected: host => sessionStore.getState().statuses.get(host)?.type === 'connected',
   epoch: (host, chat) => conversationReadRouteStore.getState().epochFor(host, chat),
-  send: command => { readTargets.push(command.payload.up_to); window.pyry.sendCommand(command); } });
+  send: command => { readTargets.push(command.payload.up_to);
+    readAttempts.push({ host: command.serverId, chat: command.payload.conversation_id, target: command.payload.up_to });
+    window.pyry.sendCommand(command); } });
 function ThreadFixture() {
   useReadPublication(readPublisher);
   const [readInputs, setReadInputs] = useState(undefined);
@@ -68,12 +74,19 @@ function ThreadFixture() {
   const [taskInputs, setTaskInputs] = useState({});
   const [turnRunning, setTurnRunning] = useState(false);
   const [connection, setConnection] = useState(undefined);
+  const [receipts, setReceipts] = useState([]);
+  const rows = useStore(conversationListStore, s => s.conversations);
+  useEffect(() => window.pyry.onDaemonEvent(event => {
+    if (['conversationUpdated', 'conversationDeleted', 'conversationsReceived'].includes(event.type))
+      setReceipts(held => [...held, [event.type, event.serverId]]);
+  }), []);
   const local = useStore(sends, s => scope ? s.select(scope.host, scope.chat) : null);
   const snapshot = useStore(threadStore, s => scope ? s.snapshot(scope.host, scope.chat) : null);
   window.threadFixture = { replies, paths, stops, escapes, turnRunning: setTurnRunning,
-    readTargets, precommitTargets,
+    readTargets, readAttempts, precommitTargets,
     connected(host) { return sessionStore.getState().statuses.get(host)?.type === 'connected'; },
     receivedMark() { return conversationListStore.getState().conversations?.find(r => r.id === scope.chat && r.serverId === scope.host)?.read_up_to; },
+    loseOwner(host) { conversationListStore.getState().clearConversationsFor(host); },
     probe() { window.dispatchEvent(new Event('focus')); document.querySelector('.conversation__thread')?.dispatchEvent(new Event('scroll')); return [...readTargets]; },
     read(row, readerOpen = false) {
       const full = { id: scope.chat, serverId: scope.host, read_up_to: 0, ...row };
@@ -111,6 +124,10 @@ function ThreadFixture() {
       sends.getState().settle(threadStore.getState().snapshot(scope.host, scope.chat)); }
   };
   return snapshot ? <div className="conversation" onKeyDown={event => { if (event.key === 'Escape') escapes.push('bubble'); }}><div className="conversation__covered">
+    <ConversationListData />
+    <output hidden data-testid="read-state">{JSON.stringify({ receipts, scope,
+      marks: (rows ?? []).map(row => [row.serverId, row.id, row.read_up_to,
+        isConversationUnread(null, null, row, conversationReadRouteStore.getState().epochFor(row.serverId, row.id) !== undefined)]) })}</output>
     <ThreadItemsTimeline snapshot={snapshot} readInputs={readInputs && { ...readInputs, completeThrough }} sendInputs={{ connection, local: { ...local, hostId: scope.host, conversationId: scope.chat },
       onAction: (host, command) => actions.push([host, command]) }} taskInputs={taskInputs} turnRunning={turnRunning} foldTools onReply={(role, text) => replies.push(role + ':' + text)}
       onOpenMarkdownPath={path => paths.push(path)} />
@@ -136,20 +153,51 @@ const item = (id: number, kind: string, content: unknown, fields: Partial<Thread
 })
 
 for (const width of [1280, 800]) test(`publishes only committed visible authoritative read evidence at ${width}`, async ({ launchPairedApp }) => {
-  const server = await rendererFixture(), outbound: number[] = []
+  const server = await rendererFixture(), outbound: { host: string; chat: string; target: number; request: number }[] = []
+  let replyLists = true
+  const reply = (host: string, seed: ConversationSummary) => (bytes: Uint8Array) => {
+    const e = decodeEnvelope(bytes)
+    if (e.type === 'mark_conversation_read') {
+      const p = e.payload as { conversation_id: string; up_to: number }
+      outbound.push({ host, chat: p.conversation_id, target: p.up_to, request: e.id })
+    }
+    return replyLists && e.type === 'list_conversations' ? [seedConversationsFrame(seed)] : []
+  }
   try {
-    const { page, app } = await launchPairedApp({ buildReplyFrames: bytes => {
-      const e = decodeEnvelope(bytes)
-      if (e.type === 'mark_conversation_read') outbound.push((e.payload as { up_to: number }).up_to)
-      return e.type === 'list_conversations' ? [seedConversationsFrame({ ...SEEDED_ROW, read_up_to: 0, latest_entry_id: 999 })] : []
-    } }, { rendererUrl: server.resolvedUrls!.local[0], secondServer: { buildReplyFrames: bytes =>
-      decodeEnvelope(bytes).type === 'list_conversations' ? [seedConversationsFrame(SECOND_SEEDED_ROW)] : [] } })
+    const { page, app, servers } = await launchPairedApp({ buildReplyFrames:
+      reply(FIRST_SERVER_ID, { ...SEEDED_ROW, read_up_to: 0, latest_entry_id: 999 })
+    }, { rendererUrl: server.resolvedUrls!.local[0], secondServer: { buildReplyFrames:
+      reply(SECOND_SERVER_ID, { ...SECOND_SEEDED_ROW, read_up_to: 0 }) } })
     await page.locator('.channel-list__row-open').first().click()
     await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled()
     await expect.poll(() => page.evaluate(host => (window as unknown as { threadFixture: Fixture }).threadFixture.connected(host), SECOND_SERVER_ID)).toBe(true)
+    replyLists = false // Hold refreshes so acknowledgements, rather than list replacement, prove confirmation.
     await app.evaluate(({ BrowserWindow }, width) => { const w = BrowserWindow.getAllWindows()[0]; w.setSize(width, 800); w.show(); w.focus() }, width)
     const settle = () => page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
     const targets = () => page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.readTargets)
+    const state = async () => JSON.parse(await page.getByTestId('read-state').textContent() ?? '{}') as {
+      receipts: [string, string][]; marks: [string, string, number, boolean][] }
+    const mark = async (host: string) => (await state()).marks.find(r => r[0] === host && r[1] === SEEDED_ROW.id)
+    let frameId = 100
+    const receive = async (host: string, type: 'conversation_updated' | 'conversation_deleted' | 'conversations', payload: unknown, request?: number) => {
+      const before = (await state()).receipts.length
+      servers.find(s => s.serverId === host)!.daemon.pushFrame(encodeEnvelope({
+        id: ++frameId, type, ts: '2026-10-15T12:00:00Z', payload, in_reply_to: request }))
+      const event = { conversation_updated: 'conversationUpdated', conversation_deleted: 'conversationDeleted', conversations: 'conversationsReceived' }[type]
+      await expect.poll(async () => (await state()).receipts.slice(before)).toEqual([[event, host]])
+      await settle() // Receipt state and list-derived read state have both committed before absence checks.
+    }
+    const acknowledge = (host: string, target: number, request?: number) => receive(host, 'conversation_updated', {
+      id: SEEDED_ROW.id, name: SEEDED_ROW.name, cwd: SEEDED_ROW.cwd, is_promoted: false,
+      last_used_at: SEEDED_ROW.last_used_at, workspace_label: null, read_up_to: target }, request)
+    const attempts = () => page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.readAttempts)
+    const delivered = () => outbound.map(({ host, chat, target }) => ({ host, chat, target }))
+    const expected = (host: string, target: number) => ({ host, chat: SEEDED_ROW.id, target })
+    const reconnect = async (host: string) => {
+      await page.evaluate(host => { const f = (window as unknown as { threadFixture: Fixture }).threadFixture;
+        f.unavailable(host); f.reconnect(host); f.probe() }, host)
+      await settle()
+    }
     const read = async (shown: number | undefined, readerOpen = false, readUpTo = 0) => {
       await page.evaluate(({ shown, readerOpen, readUpTo }) => (window as unknown as { threadFixture: Fixture }).threadFixture.read({
         last_shown_version: shown, read_up_to: readUpTo, latest_entry_id: 999 }, readerOpen), { shown, readerOpen, readUpTo })
@@ -180,7 +228,8 @@ for (const width of [1280, 800]) test(`publishes only committed visible authorit
     expect(await targets()).toEqual([])
     await batch([{ ...queued, rev: 501, shown: false }], 10)
     await expect.poll(targets).toEqual([10])
-    await expect.poll(() => outbound).toEqual([10])
+    await expect.poll(attempts).toEqual([expected(FIRST_SERVER_ID, 10)])
+    await expect.poll(delivered).toEqual([expected(FIRST_SERVER_ID, 10)])
     expect(await page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.receivedMark())).toBe(0)
     // Sending alone leaves the received mark untouched; only an owning-daemon receipt confirms it.
     expect(await page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.probe())).toEqual([10])
@@ -243,7 +292,9 @@ for (const width of [1280, 800]) test(`publishes only committed visible authorit
     await batch([item(9, 'assistant_message', { text: 'Repaired complete text' }, { rev: 22 })], 22)
     await thread.evaluate(el => { el.scrollTop = el.scrollHeight })
     await expect.poll(targets).toContain(22)
-    await read(22, false, 4) // Clamped acknowledgement cannot retire target 22.
+    await expect.poll(() => delivered().at(-1)).toEqual(expected(FIRST_SERVER_ID, 22))
+    await acknowledge(FIRST_SERVER_ID, 4, outbound.at(-1)!.request)
+    expect(await mark(FIRST_SERVER_ID)).toEqual([FIRST_SERVER_ID, SEEDED_ROW.id, 4, true])
     await page.evaluate(host => (window as unknown as { threadFixture: Fixture }).threadFixture.unavailable(host), FIRST_SERVER_ID)
     await read(23, true)
     await batch([item(10, 'assistant_message', { text: 'Not evidenced while reader open' })], 23)
@@ -251,28 +302,81 @@ for (const width of [1280, 800]) test(`publishes only committed visible authorit
       (window as unknown as { threadFixture: Fixture }).threadFixture.reconnect(host)
     }, FIRST_SERVER_ID)
     await expect.poll(targets).toEqual([10, 11, 12, 13, 14, 15, 22, 22])
-    await scope(FIRST_SERVER_ID, 'replacement')
+    await expect.poll(attempts).toEqual([10, 11, 12, 13, 14, 15, 22, 22].map(t => expected(FIRST_SERVER_ID, t)))
+    await expect.poll(delivered).toEqual(await attempts())
+    await acknowledge(FIRST_SERVER_ID, 22, outbound.at(-1)!.request)
+    expect(await mark(FIRST_SERVER_ID)).toEqual([FIRST_SERVER_ID, SEEDED_ROW.id, 22, true])
+    const confirmed = await attempts()
+    await reconnect(FIRST_SERVER_ID)
+    expect(await attempts()).toEqual(confirmed) // A confirming receipt retires 22; hidden summary 23 cannot replace it.
     await read(23)
-    expect(await targets()).not.toContain(23)
-    await batch([item(10, 'assistant_message', { text: 'Replacement epoch' })], 23)
-    await expect.poll(targets).toContain(23)
+    await expect.poll(() => delivered().at(-1)).toEqual(expected(FIRST_SERVER_ID, 23))
+    const priorEpoch = await attempts(), priorEpochRequest = outbound.at(-1)!.request
+    await scope(FIRST_SERVER_ID, 'replacement')
+    await read(24, true)
+    await batch([item(10, 'assistant_message', { text: 'Replacement epoch' })], 24)
+    await expect(row(10)).toContainText('Replacement epoch')
+    await acknowledge(FIRST_SERVER_ID, 23, priorEpochRequest) // Late receipt from the discarded pending epoch.
+    expect(await mark(FIRST_SERVER_ID)).toEqual([FIRST_SERVER_ID, SEEDED_ROW.id, 23, true])
+    await reconnect(FIRST_SERVER_ID)
+    expect(await attempts()).toEqual(priorEpoch)
+    expect(await targets()).not.toContain(24)
+    await read(24)
+    await expect.poll(targets).toContain(24)
     await capturePairedApp(app, page, `/tmp/builder-1936/read-${width}.png`)
 
     // A nested newest row is excluded while its actual ancestor is collapsed.
-    await read(24, true)
+    await read(25, true)
     await batch([item(20, 'agent', { name: 'Agent', tool_use_id: 'parent', input_summary: 'Parent', input: {},
       result: { is_error: false, result_summary: 'launched' } }, { status: 'finished' }),
-      item(21, 'assistant_message', { text: 'Nested newest content' }, { parent: 20 })], 24)
+      item(21, 'assistant_message', { text: 'Nested newest content' }, { parent: 20 })], 25)
     await expect(row(21)).toBeHidden()
-    await read(24); expect(await targets()).not.toContain(24)
+    await read(25); expect(await targets()).not.toContain(25)
     await row(20).getByRole('button').first().click()
     await expect(row(21)).toBeVisible()
     await thread.evaluate(el => { el.scrollTop = el.scrollHeight })
-    await expect.poll(targets).toContain(24)
+    await expect.poll(targets).toContain(25)
+    await expect.poll(() => delivered().at(-1)).toEqual(expected(FIRST_SERVER_ID, 25))
+    const oldHostRequest = outbound.at(-1)!.request
+    await receive(SECOND_SERVER_ID, 'conversations', { conversations: [{ ...SECOND_SEEDED_ROW,
+      id: SEEDED_ROW.id, last_shown_version: 25, read_up_to: 0 }] })
     await scope(SECOND_SERVER_ID)
     await read(25); await batch([item(21, 'assistant_message', { text: 'Other host' })], 25)
     await expect(row(21)).toContainText('Other host')
-    expect(await targets()).toContain(25)
+    await expect.poll(async () => (await attempts()).at(-1)).toEqual(expected(SECOND_SERVER_ID, 25))
+    await acknowledge(FIRST_SERVER_ID, 25, oldHostRequest) // Same ID and target, different owning daemon.
+    expect(await mark(FIRST_SERVER_ID)).toEqual([FIRST_SERVER_ID, SEEDED_ROW.id, 25, false])
+    expect(await mark(SECOND_SERVER_ID)).toEqual([SECOND_SERVER_ID, SEEDED_ROW.id, 0, true])
+    await reconnect(SECOND_SERVER_ID)
+    await expect.poll(async () => (await attempts()).slice(-2)).toEqual([expected(SECOND_SERVER_ID, 25), expected(SECOND_SERVER_ID, 25)])
+    expect(delivered().filter(a => a.host === SECOND_SERVER_ID)).toEqual([]) // Main retains its ambiguous-owner refusal.
+
+    // Deletion and owner loss invalidate claims while their committed content and observer stay mounted.
+    await page.evaluate(host => (window as unknown as { threadFixture: Fixture }).threadFixture.unavailable(host), SECOND_SERVER_ID)
+    await receive(SECOND_SERVER_ID, 'conversation_deleted', { id: SEEDED_ROW.id })
+    await receive(SECOND_SERVER_ID, 'conversations', { conversations: [] })
+    const deleted = await attempts()
+    await acknowledge(SECOND_SERVER_ID, 25)
+    expect(await mark(SECOND_SERVER_ID)).toBeUndefined()
+    await expect(row(21)).toContainText('Other host')
+    await page.evaluate(host => { const f = (window as unknown as { threadFixture: Fixture }).threadFixture; f.reconnect(host); f.probe() }, SECOND_SERVER_ID)
+    await settle(); expect(await attempts()).toEqual(deleted)
+    expect(await mark(FIRST_SERVER_ID)).toEqual([FIRST_SERVER_ID, SEEDED_ROW.id, 25, false])
+
+    await scope(SECOND_SERVER_ID, 'owner-loss')
+    await receive(SECOND_SERVER_ID, 'conversations', { conversations: [{ ...SECOND_SEEDED_ROW,
+      id: SEEDED_ROW.id, last_shown_version: 26, read_up_to: 0 }] })
+    await read(26); await batch([item(21, 'assistant_message', { text: 'Owner-loss content' }, { rev: 26 })], 26)
+    await expect(row(21)).toContainText('Owner-loss content')
+    await expect.poll(async () => (await attempts()).at(-1)).toEqual(expected(SECOND_SERVER_ID, 26))
+    const ownerLost = await attempts()
+    await page.evaluate(host => (window as unknown as { threadFixture: Fixture }).threadFixture.loseOwner(host), SECOND_SERVER_ID)
+    await expect.poll(() => mark(SECOND_SERVER_ID)).toBeUndefined() // Committed list removal, not a timer-only absence.
+    await acknowledge(SECOND_SERVER_ID, 26)
+    await reconnect(SECOND_SERVER_ID)
+    await expect(row(21)).toContainText('Owner-loss content')
+    expect(await attempts()).toEqual(ownerLost)
+    expect(await mark(FIRST_SERVER_ID)).toEqual([FIRST_SERVER_ID, SEEDED_ROW.id, 25, false])
   } finally { await new Promise<void>((resolve, reject) => server.httpServer.close(e => e ? reject(e) : resolve())) }
 })
 

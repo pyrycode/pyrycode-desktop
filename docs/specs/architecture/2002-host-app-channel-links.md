@@ -79,3 +79,11 @@ None. A simpler shape is to reuse the existing select IPC rather than add URL IP
 ## Revisions
 
 2026-10-15: The shared launch fixture's host IDs are legacy non-UUID names. The focused spec uses its `skipPairing` entry and existing pairing drivers with spec-local canonical identities; no shared fixture migration. Markdown source validation is a narrowing-only remark plugin over link/definition nodes, preserving reference links while rejecting entity/backslash normalization. Production still reuses the existing selection IPC without changing main or preload policy. Recovery scenarios follow the existing initial-selection automatic-open versus retired-pane Reopen behavior; no viewer state machine changes.
+
+2026-10-15 (verifier finding 1): `remarkHostedLinks` validates the literal destination token independently of the Markdown title, whose syntax is already validated by the Markdown parser. Locate inline destinations after the parsed label so title punctuation cannot move the boundary. Canonical bare/angle destinations with escaped titles remain actionable; entity/backslash-normalized destinations remain inert. Static regressions cover inline/reference links in settled and streaming renderers, including frozen units and pending tails. No IPC, viewer lifecycle or link-attribute policy changes; the security review remains PASS.
+
+## Documentation handoff
+
+- Pending documentation stage: `docs/knowledge/features/assistant-markdown-renderer.md` — exact canonical app destinations, opt-in conversation navigation, streaming support and inert unrelated readers/clipboard HTML.
+- Pending documentation stage: `docs/knowledge/features/paired-shell-routing.md` — named-host link routing, manual pairing without deferred app intent, and conversation/draft restoration.
+- Pending documentation stage: `docs/knowledge/features/daemon-connection-hosted-resource-views.md` and `docs/knowledge/features/development-verification.md` — discovery authority/recovery reuse and fake-transport link scenarios.

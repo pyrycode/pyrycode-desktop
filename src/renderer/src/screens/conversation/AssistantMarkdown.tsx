@@ -122,10 +122,12 @@ function remarkHostedLinks() {
     const visit = (node: Nodes): void => {
       if ((node.type === 'link' || node.type === 'definition') && parseHostedAppLink(node.url)) {
         const raw = source.slice(node.position?.start.offset, node.position?.end.offset)
-        const start = node.type === 'definition' ? raw.indexOf(']:') : raw.lastIndexOf('](')
+        const labelEnd = node.type === 'link' ? node.children[node.children.length - 1]?.position?.end.offset : undefined
+        const start = node.type === 'definition' ? raw.indexOf(']:')
+          : raw.indexOf('](', labelEnd === undefined ? 0 : labelEnd - (node.position?.start.offset ?? 0))
         const destination = start < 0 ? raw : raw.slice(start + 2).trimStart()
-        const end = node.type === 'definition' ? '' : '\\)'
-        const literal = new RegExp(`^(?:${node.url}|<${node.url}>)(?:\\s+(?:"[^"\\\\]*"|'[^'\\\\]*'|\\([^()\\\\]*\\)))?\\s*${end}$`)
+        // The parser already validated the title. Check only the original destination token.
+        const literal = new RegExp(`^(?:${node.url}|<${node.url}>)(?=\\s|\\)|$)`)
         if (raw !== `<${node.url}>` && !literal.test(destination)) node.url = ''
       }
       if ('children' in node) node.children.forEach(visit)

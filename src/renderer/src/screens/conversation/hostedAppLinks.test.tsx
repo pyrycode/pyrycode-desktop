@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { AssistantMarkdown } from './AssistantMarkdown'
-import { StreamingAssistantMarkdown } from './StreamingAssistantMarkdown'
+import { partitionMarkdown, StreamingAssistantMarkdown } from './StreamingAssistantMarkdown'
 
 const link = 'pyrycode://hosts/11111111-1111-4111-8111-111111111111/apps/22222222-2222-4222-8222-222222222222'
 describe('conversation hosted links', () => {
@@ -12,11 +12,39 @@ describe('conversation hosted links', () => {
     expect(html).toBe('<p><button type="button" class="markdown-link">Open app</button></p>')
     expect(open).not.toHaveBeenCalled()
   })
+  it.each(['inline', 'reference'])('accepts escaped titles independently of %s destinations', style => {
+    const open = vi.fn()
+    for (const destination of [link, `<${link}>`]) {
+      for (const title of [String.raw`"The \"dashboard\""`, String.raw`'The \'dashboard\''`,
+        String.raw`(The \(dashboard\))`, '"title with ]( punctuation"']) {
+        const text = style === 'inline' ? `[Open](${destination} ${title})`
+          : `[Open][app]\n\n[app]: ${destination} ${title}`
+        for (const Renderer of [AssistantMarkdown, StreamingAssistantMarkdown]) {
+          expect(renderToStaticMarkup(<Renderer text={text} onOpenHostedApp={open} />), text)
+            .toBe('<p><button type="button" class="markdown-link">Open</button></p>')
+          expect(renderToStaticMarkup(<Renderer text={text} />), text).toBe('<p>Open</p>')
+        }
+        if (style === 'inline') {
+          const streaming = `${text}\n\nparagraph\nline\n\n${text}`
+          expect(partitionMarkdown(streaming).frozen[0]?.text).toContain(text)
+          const html = renderToStaticMarkup(<StreamingAssistantMarkdown text={streaming} onOpenHostedApp={open} />)
+          expect(html.match(/class="markdown-link"/g), streaming).toHaveLength(2)
+        }
+      }
+    }
+    expect(open).not.toHaveBeenCalled()
+  })
   it('rejects escaped and normalized destinations while retaining visible labels', () => {
     for (const target of [link + '/', link + '?x=1', link + '#x', link.replace(':', '\\:'),
       link.replace(':', '&#58;'), link.replace('hosts', '%68osts'), link.replace('/apps/', '/a/../apps/')]) {
-      const html = renderToStaticMarkup(<AssistantMarkdown text={`[Visible](${target})`} onOpenHostedApp={() => {}} />)
-      expect(html, target).toBe('<p>Visible</p>')
+      for (const text of [`[Visible](${target})`, String.raw`[Visible](${target} "The \"dashboard\"")`,
+        `[Visible](${target} "decoy ](${link})")`,
+        String.raw`[Visible][app]` + '\n\n' + String.raw`[app]: ${target} "The \"dashboard\""`]) {
+        for (const Renderer of [AssistantMarkdown, StreamingAssistantMarkdown]) {
+          const html = renderToStaticMarkup(<Renderer text={text} onOpenHostedApp={() => {}} />)
+          expect(html, text).toBe('<p>Visible</p>')
+        }
+      }
     }
   })
   it('forwards activation to both frozen units and pending streaming tail', () => {

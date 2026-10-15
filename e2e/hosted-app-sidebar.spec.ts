@@ -112,7 +112,7 @@ test('discovery, lifecycle and navigation', async ({ launchPairedApp }) => {
 
 test('paging and retry', async ({ launchPairedApp }) => {
   const s = scenario(); s.update(); s.paged()
-  const { page, daemon } = await launchPairedApp(s.options)
+  const { page, app, daemon } = await launchPairedApp(s.options)
   await expect.poll(() => s.pending.length).toBe(1)
   await expect(host(page)).toContainText('Loading apps…'); await committed(page)
   await expect(row(page, '<App & first>running')).toHaveCount(0)
@@ -121,6 +121,13 @@ test('paging and retry', async ({ launchPairedApp }) => {
   s.fail(); s.hold(false)
   await page.evaluate(server => window.pyry.refreshHostedApps(server), FIRST_SERVER_ID)
   await expect(host(page)).toContainText('Could not load apps')
+  for (const width of [1280, 800]) {
+    await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setContentSize(width, 800), width)
+    await expect.poll(() => page.evaluate(() => innerWidth)).toBe(width)
+    await committed(page); mkdirSync('/tmp/builder-2001', { recursive: true })
+    await page.screenshot({ path: `/tmp/builder-2001/sidebar-failed-${width}.png`, animations: 'disabled' })
+  }
+  await expect(host(page).getByRole('button', { name: 'Retry', exact: true })).toHaveCSS('font-size', '12px')
   s.fail(false); s.hold()
   await host(page).getByRole('button', { name: 'Retry', exact: true }).click()
   await expect.poll(() => s.pending.length).toBe(1)
@@ -158,8 +165,8 @@ test('unsupported and unauthorized', async ({ launchPairedApp }) => {
 })
 
 test('stale delivery and remount', async ({ launchPairedApp }) => {
-  const s = scenario()
-  const { page, app, daemon } = await launchPairedApp(s.options)
+  const s = scenario(), survivor = scenario(true)
+  const { page, app, daemon, servers } = await launchPairedApp(s.options, { secondServer: survivor.options })
   daemon.pushFrame(s.update())
   await expect(row(page, '<App & first>running')).toBeVisible()
   s.hold()
@@ -194,10 +201,24 @@ test('stale delivery and remount', async ({ launchPairedApp }) => {
   await expect(row(page, 'Render barrier')).toBeVisible(); await committed(page)
   await expect(row(page, 'After remountrunning')).toBeVisible()
   await expect(row(page, 'Before remountrunning')).toHaveCount(0)
-  expect((await page.evaluate(server => window.pyry.unpairServer(server), FIRST_SERVER_ID)).result).toBe('ok')
+  // Use the normal in-sidebar removal so the mounted host-list subscriber cleans up.
+  await page.locator('.channel-list__host-edit').first().click()
+  const dialog = page.getByRole('dialog', { name: 'Edit host', exact: true })
+  await dialog.getByRole('button', { name: 'Unpair host', exact: true }).click()
+  await dialog.getByRole('button', { name: 'Confirm', exact: true }).click()
+  await expect(page.locator('.channel-list__host-content')).toHaveCount(1)
   // A privileged snapshot/refresh refusal proves main has processed removal before stale publication.
   await expect.poll(() => page.evaluate(server => window.pyry.refreshHostedApps(server), FIRST_SERVER_ID)).toEqual({ ok: false, error: 'refused' })
   await app.evaluate(({ BrowserWindow }, old) => BrowserWindow.getAllWindows()[0].webContents.send('pyry:hosted-apps-display', old), old)
-  await page.reload(); await expect(page.locator('.channel-list__host-content')).toHaveCount(0); await committed(page)
+  servers[1].daemon.pushFrame(survivor.update('running', 'Surviving host barrier'))
+  await expect(row(page, 'Surviving host barrierrunning')).toBeVisible(); await committed(page)
+  await expect(row(page, 'After remountrunning')).toHaveCount(0)
   await expect(page.getByText('Before remount', { exact: true })).toHaveCount(0)
+  await expect(page.locator('.channel-list__host-content')).toHaveCount(1)
+  // Reload is separate evidence; the mounted unpair fence has already been asserted.
+  s.hold(false)
+  await page.reload()
+  await expect(row(page, 'Surviving host barrierrunning')).toBeVisible(); await committed(page)
+  await expect(page.locator('.channel-list__host-content')).toHaveCount(1)
+  await expect(row(page, 'After remountrunning')).toHaveCount(0)
 })

@@ -2253,7 +2253,7 @@ function appRows(serverId: string, state: HostedAppsDisplayState | undefined, pa
   const copy = { loading: 'Loading apps…', ready: 'No apps', failed: 'Could not load apps',
     unavailable: 'Apps disconnected', unsupported: 'Apps unsupported' }
   return [<div key="status" className="channel-list__app-status" role="status">{copy[state?.type ?? 'loading']}
-    {state?.type === 'failed' && <button type="button" onClick={() => refresh?.(serverId)}>Retry</button>}
+    {state?.type === 'failed' && <button type="button" className="channel-list__app-retry" onClick={() => refresh?.(serverId)}>Retry</button>}
   </div>]
 }
 

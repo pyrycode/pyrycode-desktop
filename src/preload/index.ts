@@ -80,13 +80,15 @@ const api = {
     ipcRenderer.invoke(HOSTED_APPS_DISPLAY_CHANNEL, { type: 'refresh', serverId, token: 0 }),
   onHostedApps: (serverId: string, listener: (state: HostedAppsDisplayState) => void): (() => void) => {
     const token = ++hostedAppsToken
-    let active = true
+    let active = true, received = false
     const handler = (_event: IpcRendererEvent, value: { token: number; state: HostedAppsDisplayState }): void => {
-      if (active && value.token === token && value.state.serverId === serverId) listener(value.state)
+      if (active && value.token === token && value.state.serverId === serverId) { received = true; listener(value.state) }
     }
     ipcRenderer.on(HOSTED_APPS_DISPLAY_CHANNEL, handler)
-    void ipcRenderer.invoke(HOSTED_APPS_DISPLAY_CHANNEL, { type: 'watch', serverId, token }).catch(() => {
-      if (active) listener({ serverId, type: 'failed' })
+    void ipcRenderer.invoke(HOSTED_APPS_DISPLAY_CHANNEL, { type: 'watch', serverId, token }).then(result => {
+      if (active && !received && !result.ok) listener({ serverId, type: 'failed' })
+    }).catch(() => {
+      if (active && !received) listener({ serverId, type: 'failed' })
     }) // Static feedback only; invoke replies never overwrite streamed snapshots.
     return () => {
       active = false; ipcRenderer.removeListener(HOSTED_APPS_DISPLAY_CHANNEL, handler)

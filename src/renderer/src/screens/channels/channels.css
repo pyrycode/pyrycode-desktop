@@ -1052,6 +1052,22 @@
   font-size: var(--text-body-small-size);
   line-height: var(--text-body-small-line);
 }
+.channel-list__app-retry {
+  margin-left: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-primary);
+  font: inherit;
+  letter-spacing: var(--text-body-small-tracking);
+  cursor: pointer;
+}
+.channel-list__app-retry:hover { background: var(--color-state-hover); }
+.channel-list__app-retry:focus-visible {
+  outline: 1px solid var(--color-primary);
+  outline-offset: var(--space-1);
+}
 .channel-list__app-state {
   margin-left: var(--space-2);
   color: var(--color-on-surface);

@@ -75,6 +75,8 @@ export interface ConnectionRegistry {
    * `reconnect()` does today.
    */
   reconcile(): void
+  /** Wait for already-queued storage reconciliation without refreshing any discovery. */
+  settled(): Promise<void>
   /** Re-dial exactly one held server; unknown ids and the not-paired stand-in are no-ops. */
   reconnect(serverId: string): void
   /** The stable stand-in the root binds once; see `ActiveConnection`. */
@@ -394,6 +396,7 @@ export function createConnectionRegistry(deps: ConnectionRegistryDeps): Connecti
     reconcile(): void {
       void enqueue()
     },
+    async settled(): Promise<void> { await queue },
     reconnect(serverId: string): void {
       // Exact scan like connectionFor: the id is never an object key, and null cannot match.
       const held = entries.find((entry) => entry.serverId === serverId)

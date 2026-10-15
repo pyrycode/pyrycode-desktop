@@ -4,15 +4,23 @@ Part of [Turn status surfaces](conversation-shell-turn-status.md).
 
 ## Structured-stream timeline render (#203)
 
-`Timeline` is the conversation's production thread surface, fed by the open conversation's
-[held timeline](conversation-timeline-holder.md). Its exported view accepts `ThreadItem[]`
-and can be server-rendered from injected items. `TimelineRow` switches exhaustively
-on each item's `kind`; wire-to-render translation belongs to the bridge.
+`ThreadItemsTimeline` is the production thread surface, fed by the
+[thread runtime](thread-runtime.md). Its inner `ThreadItemsView` adapts supplied daemon
+items into the surviving shared row views. Exported `TimelineRow` switches on the
+shared `ThreadItem.kind`; that type's home in `threadTimeline.ts` does not make the
+legacy reducer the source of displayed content. Tests can render this row directly
+without reconstructing a timeline from events.
+
+The legacy `Timeline`, client numeric presentation-key/arrival bookkeeping,
+provisional Agent placement and queue-row folding were removed in
+[#2023](https://github.com/pyrycode/pyrycode-desktop/issues/2023). Reducer, roster,
+bridge and history producers remain until the separate #2024 cleanup. Their retained
+APIs and tests do not provide a fallback when a host lacks `thread`.
 
 - `assistantText` → one bubble, carrying `data-thread-role="assistant"` as the test hook
   (`MessageThread`'s `data-message-role` counterpart). Both branches use
   `<div className="bubble__markdown">`; `inProgress` selects their rendering policy:
-  - **In progress** (the tail, still growing): `StreamingAssistantMarkdown` feeds parser-verified
+  - **In progress** (supplied `active === true`): `StreamingAssistantMarkdown` feeds parser-verified
     frozen source units and a stabilized tail through
     [`AssistantMarkdown`](assistant-markdown-renderer.md#configuration-and-usage). Each delta parses
     from the first unfrozen block's line. Units freeze in order only after the following top-level
@@ -30,7 +38,7 @@ on each item's `kind`; wire-to-render translation belongs to the bridge.
     separator establishes a table. Partial separator syntax stays hidden; this layout change is
     accepted. Unclosed fences render as code once the opening line ends, using the parser's raw-source
     behavior, including a closing candidate that grows into backticks followed by `x`.
-  - **Settled** (after `turn_end` or a following tool row): the streaming component unmounts and
+  - **Settled** (supplied activity is no longer true): the streaming component unmounts and
     `AssistantMarkdown` renders the original `item.text` in one pass. Stored source is never modified.
     Without pending inline/header syntax, streaming and settled content match apart from whitespace
     between top-level blocks. Unfinished syntax may correct: streaming `**bold` shows `bold`, but the
@@ -56,30 +64,20 @@ on each item's `kind`; wire-to-render translation belongs to the bridge.
 - `turnBoundary` → a stopped-turn label when eligible (below), otherwise `null`.
 
 **Streaming cursor** (Figma `16:56`, glyph `▎` U+258E): a trailing `<span class="bubble__cursor"
-aria-hidden="true">` inside the in-progress bubble, rendered only on the tail item when
-`item.kind === 'assistantText'` — derived from array position, never from `selectPhase` (which had no
-source at the time; [#214](../codebase/214.md) later wired one up, but this render still doesn't read
-it). CSS blink is guarded by `@media (prefers-reduced-motion: reduce)`.
-Since [#1872](https://github.com/pyrycode/pyrycode-desktop/issues/1872) the open main thread bubble,
-`openBubbleIndex(items)`, also keeps the cursor when a background subagent's tool calls trail it,
-because the reducer keeps growing that bubble behind them.
+aria-hidden="true">` inside an active assistant bubble. Supplied activity controls it
+independently of array position, later tool rows or main-turn state. CSS blink is
+guarded by `@media (prefers-reduced-motion: reduce)`.
 The cursor follows the `.bubble__markdown` container as a sibling, before `BubbleMeta`,
 and disappears on settlement. Its placement follows rendered block layout rather than
 raw trailing newlines. Historically, #607's plain `pre-wrap` tail placed it in the
 source's text run; that newline-driven placement ended with progressive markdown.
 
-**React keys retain logical row identity.** Production uses the timeline's client-owned
-numeric `rowKeys`; without them, the fallback is `firstRowKey + itemIndex`, relative
-to the thread's origin rather than its current display position. History prepends lower
-`firstRowKey` while raising retained source indices, leaving existing fallback keys unchanged.
-Unmatched queued rows use `q<queuedMsgId>`. Confirmed Agent identities retain their
-first key, including `agent-<identity>` when first drawn provisionally; marker and run
-wrappers derive keys from that row identity. These keys survive history prepends,
-queue projection and background-agent regrouping. See
-[timeline identity](thread-timeline-limits.md#edge-cases-and-limitations).
-The original #203 array-index description applied to the initial append-only surface;
-it is no longer the production key policy. A turn-only key still collides when tools
-split a reply, and a text-bearing key remounts the streaming bubble on every delta.
+**React keys retain logical row identity.** Daemon item ids key wrappers inside the
+host/conversation/epoch scope; marker and run keys derive from those ids. Local pending
+sends have a separate pending-key namespace. Revisions, prepends and reparenting retain
+mounted row state within that scope. See [scoped identity](#scoped-identity-expansion-and-attachments).
+A turn-only key collides when tools split a reply, and a text-bearing key remounts the
+streaming bubble on every delta.
 
 **Strangler-Fig coexistence at ship time, not a cutover** — as originally shipped, `Timeline` sat
 directly beside `MessageThread`; the coarse path was completely untouched and stayed the *live* one,
@@ -90,7 +88,8 @@ render path was inert at ship time.
 
 **Reconciled in [#179](../codebase/179.md):** the client hello now advertises `interactive`, the coarse
 `message` fan-out stopped daemon-side, and `MessageThread` was retired rather than left as an empty
-dead region — `Timeline` is now the conversation's single thread surface. See
+dead region. `ThreadItemsTimeline` later replaced that surface, and #2023 deleted
+the retained `Timeline`. See
 [The interactive flip + thread cutover](conversation-shell-conversation-and-modals.md#the-interactive-flip--thread-cutover-179) below and
 [#203 codebase notes](../codebase/203.md) for the original design and code review record.
 
@@ -100,7 +99,8 @@ dead region — `Timeline` is now the conversation's single thread surface. See
 accepts an injected `ThreadSnapshot`, optional `foldTools` (default false), `onReply`
 and `onOpenMarkdownPath`. The owner creates/subscribes to the
 [retained item store](thread-item-store.md) and supplies snapshots; this view adds no
-production subscription. Ordinary `ConversationScreen` still selects legacy `Timeline`.
+production subscription. Ordinary `ConversationScreen` supplies the runtime snapshot
+to this same authoritative route; there is no legacy presentation caller.
 The [presentation adapter](../../../src/renderer/src/screens/conversation/threadItemPresentation.ts)
 narrows held JSON into existing row props without calling `reduceTimeline`, searching
 for an open bubble or using legacy roster/evidence inference. Supplied `parent`,
@@ -231,7 +231,7 @@ snapshots and equal conversation IDs across hosts. Coalescing owns resolved host
 terminals echo requested scope and only matching renderer listeners settle. The two-host production
 variant uses real preload/main, while the renderer-only variant retains its local IPC fake.
 The [thread runtime](thread-runtime.md) selects this production path. The supplied
-tests remain distinct from pending credentialed live acceptance.
+tests establish client behavior with fake transport and do not claim live acceptance.
 
 Local pending settlement and queue actions are supplied through `sendInputs`; see
 [Composer send](composer-send.md#data-flow) and the
@@ -295,30 +295,28 @@ confirms reused row styling at 1280 and 800 widths against Figma
 102:4; the synthetic fixture omits the production shell. No live Claude or production
 thread capability verification was required or performed.
 
-## Legacy row reuse and stopped-turn records
+## Shared row reuse and stopped-turn records
 
 ### Settled row reuse
 
-`TimelineRow` uses ordinary shallow `React.memo`. `appendDelta` replaces the growing
-assistant item while retaining unchanged item references, so settled user and assistant
-rows skip execution when their other inputs stay equal. Metadata, delivery, queue state,
+`TimelineRow` uses ordinary shallow `React.memo`. The presentation adapter retains
+unchanged immutable source presentations, so shared rows can skip execution when
+their other inputs stay equal. Metadata, delivery, queue state,
 action availability and callback changes remain observable. The separately memoized
 [`AssistantMarkdown`](assistant-markdown-renderer.md#how-it-works) also skips parsing
 when a row changes only its metadata or actions and its markdown inputs stay equal.
 
-`ConversationScreen` stabilizes reply, drop and Send now callbacks with `useCallback`
-and host/conversation dependencies (plus store dispatchers for drop). Queue actions
-still receive `undefined` when unavailable and recheck the connected conversation at
-activation. `reader.open` is already stable. Ignoring callback changes in an equality
-shortcut would retain actions for an old pane; fresh `foldQueuedRows` handles and
-unmatched queue items intentionally remain eligible to rerender.
-`Timeline` remounts by conversation key; host dependencies also refresh actions when
-switching between hosts with equal conversation IDs.
+Queue actions come from the shown supplied user item's usable queue handle and the
+owning host's current eligibility. Unavailable actions receive `undefined`.
+`ThreadItemsView` constructs callbacks/handles while rendering, so shallow memoization
+does not promise that every unchanged queued row skips. Ignoring changed callbacks in
+an equality shortcut could retain actions for an old pane. Scope remounting resets row
+state even when another host reuses the same conversation and item ids.
 
 Memoizing exported `ToolRow` directly would still rerender on fresh group/expansion
 objects and toggle closures. Instead, private `TimelineToolRow` compares the original
-item, retained row key, primitive count/background/running/expanded values, and one
-stable keyed toggle. Only an executed wrapper constructs the legacy `group` and
+item, item id, primitive supplied outcome/activity/count/expanded values, and one
+stable keyed toggle. Only an executed wrapper constructs the shared `group` and
 `expansion` objects. The toggle updates the keyed expansion set functionally;
 `ToolRow` retains its standalone `defaultExpanded` state contract.
 
@@ -357,10 +355,12 @@ and skipped 3; build passed. No live-Claude or visual acceptance is required.
 
 ### Stopped-turn records
 
-`stoppedTurnText` suppresses `stopReason: 'cancelled'` first. Otherwise a line draws
-only for `isError: true` or a nonempty outcome other than `success`; success-with-error
-still draws. Legacy and clean-success boundaries remain invisible. A nonempty terminal
-reason other than `completed` wins over the outcome:
+`stoppedTurnText` suppresses `stopReason: 'cancelled'` first. Otherwise it formats
+`isError: true` or a nonempty outcome other than `success`; success-with-error still
+formats. A supplied shown `turn_end` remains visible even when that formatter returns
+null: `TimelineRow.authoritativeSummary` supplies its fallback. Without recorded agent
+attribution it uses that summary rather than assigning the current conversation's
+agent. A nonempty terminal reason other than `completed` wins over the outcome:
 
 | Terminal reason | Label |
 | --- | --- |
@@ -377,7 +377,7 @@ wording, then an unknown outcome uses `Stopped: <value>`. An unknown terminal re
 also uses that form; an error with no detail uses `Stopped: error`. Every nonempty
 category appends `(Claude reported: <value>)` to the chosen label — since
 [#1656](conversation-shell-composer-status.md#claude-stopping-reports), the credited name is the
-conversation's own agent (`(Codex reported: …)` on a Codex conversation), read through an optional
+recorded agent (`(Codex reported: …)` for a Codex item), read through an optional
 second `agent: WireAgent = 'claude'` parameter on `stoppedTurnText`.
 
 The formatter rechecks each report's 256-byte UTF-8 bound, discards overlong strings,
@@ -387,8 +387,8 @@ attributes, URLs, commands or logs. `.stopped-turn` reuses the session-separator
 typography and shadow, with single-line ellipsis inside the thread width at 800px.
 The row survives [recovery clearing and history replay](thread-timeline-internals.md#stopped-turn-state).
 
-Visible stopped records must participate in the [tool-stack join scan](conversation-shell-tool-row-header-groups.md#visible-tool-row-joins).
-Skipping every boundary joined tool cards across the new label; `stoppedTurn.test.tsx`
-pins this with two tools separated by a stopped record. Only undrawn boundaries
-remain skipped. [Fake-transport coverage](e2e-harness.md#stopped-turn-evidence) proves
+Shown stopped records participate in the [tool-stack join scan](conversation-shell-tool-row-header-groups.md#visible-tool-row-joins)
+and end adjacent tool runs. `stoppedTurn.test.tsx` renders the shared row directly;
+`toolRuns.test.tsx` checks supplied shown/hidden boundaries rather than legacy inference.
+[Fake-transport coverage](e2e-harness.md#stopped-turn-evidence) proves
 layout and command dispatch; it does not prove live compaction.

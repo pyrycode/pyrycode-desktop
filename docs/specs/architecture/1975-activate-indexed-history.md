@@ -108,3 +108,26 @@ Both packaged checks reported Electron 33.4.11, embedded Node 20.18.3, better-sq
 Managed macOS task `7b01967c2f64435a03e26e7ac252a366fafe7f968ab0cb672db85a7e08fcd282`, run `2532786a5afb20fa0d00293b1189add4678cb47b34562752b63f71acfa6dc945`, retains complete reports at `/tmp/builder-1975/mac-final-evidence/desktop/` and through the fleet artifact service. `playwright.json` SHA256 is `7331a4a080254677b928aedf3753c975f74a3cfbe3e5d9b47095f5f069eec6b7`. Its native stdout/stderr attachments contain the counted PASS; Mac native scratch is `/var/folders/k0/gc07w9ws319b07n0plnw6y8r0000gn/T/pyry-history-native-DahhZr`. Configuration retains four workers, clipboard/parallel projects and zero retries. The sole skip is the existing never-shown-window pointer case. Returned `fake-daemon-setup.json` is an empty array; the HTTP 501 pre-launch failure therefore has no setup attachment to inspect.
 
 The full macOS gate is not accepted. The managed runner calls `npm ci`, build and the launcher without `rebuild:electron`, leaving the ordinary app with a host-Node SQLite adapter. Saved-history reads consequently fail. A controlled Linux load after the Node rebuild confirms `NODE_MODULE_VERSION` mismatch; explicit Electron rebuild makes all ten final history regressions pass. The isolated packaged smoke rebuilds its own copy and does not prove ordinary app ABI preparation. Open [#2018](https://github.com/pyrycode/pyrycode-desktop/issues/2018), priority low in Backlog, is a recorded blocker for the agents-repository runner repair. The independent pre-Electron HTTP 501 is recorded on existing [#1983](https://github.com/pyrycode/pyrycode-desktop/issues/1983), keeping its priority; the pairing-authentication UI failure needs triage after native preparation rather than attributing every failure to the adapter. No assertion was disabled. Draft PR #2019 remains pending the runner repair and a fresh counted managed rerun.
+
+2026-10-15 — Continuation verification of pushed candidate `7b185d5d1da5dd1b6a918c7c64a737d50aa3a507`, with no production changes. Fresh fetch and merge confirm main `eb0e7f20b1e4d9f8d6927b4a031e6fd136a5387a` is contained. The only overlapping in-flight branch remains #1908, with independent composition-root wiring. #2018 is now closed: dispatcher PR #270 supplies Electron preparation and its ordering/failure regression. Requested complete managed macOS acceptance as task `07486a9e3d69dfa7f4c04f550b579c25458d3dbb90d7cfd87dcd56a56cdcb0c6`; it is queued, so no new macOS acceptance is claimed yet.
+
+| Fresh check | Executed | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| Pre-verify: 5/5 checks, full unit suite | 10,385 | 10,385 | 0 | 3 |
+| Linux `e2e/chat-history-recording.spec.ts` | 10 | 10 | 0 | 0 |
+| Linux `e2e/history-native.spec.ts` | 1 | 1 | 0 | 0 |
+
+Install, build and documentation guard pass. Prepared `rebuild:node` before the final unit gate and `rebuild:electron` before ordinary Electron regressions; the initial unprepared gate was interrupted and is not accepted evidence. No test or assertion changed. Fresh Linux history execution uses the configured clipboard project, zero retries and the following named cases:
+
+- `confirmed deletion removes saved content through restart without waiting for a list refresh`
+- `explicit unpair discards buffered history across restart while same-server repair retains it`
+- `receipt saturation still saves a repeated page and later live content across fresh relaunches`
+- `records received content, drains buffered quit, and reads locally after relaunch`
+- `window close saves accepted deltas before their frame and reopening restores the full reply`
+- `restores a pairing-rejected saved host beside a usable connected host`
+- `pending saved reading survives opening and cancelling host repair`
+- `local list read failures stay beside the saved host`
+- `saved coverage survives offline restart, reconnect, live receipts and connected reopening`
+- `protected restoration joins partial pages while retaining an expanded tool and content anchor`
+
+The packaged case `packaged protected history commits and reopens with production encryption` passes with Electron 33.4.11, embedded Node 20.18.3, better-sqlite3 12.4.1, `gnome_libsecret`, `packaged/asar/unpacked: true`, `stage: complete`, one executed/passed and zero failed/skipped. The runtime proves exact two-format reopen and rejects fixture plaintext in history files. Inspected both native attachments and raw runtime output: Linux stderr contains system-bus/GPU and color warnings, with successful completion. Fresh artifacts: `/tmp/builder-1975/pre-verify-prepared.log`, `build-rerun.log`, `linux-history-rerun.json`, `linux-native-rerun.json`; packaged runtime stdout/stderr are under `/tmp/pyry-history-native-dHzBmI/`.

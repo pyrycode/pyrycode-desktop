@@ -103,7 +103,7 @@ function historyPageFrame(
  *   ''                     -> a full page, `at_start` false   (the opening ask, #1259)
  *   CURSOR_AFTER_OPENING   -> an EMPTY page, `at_start` false  (an empty page is not the end of the log)
  *   CURSOR_AFTER_EMPTY     -> a SHORT page, `at_start` false   (a short page is not the end either)
- *   CURSOR_AFTER_SHORT     -> two entries, `at_start` TRUE     (the only thing that stops a walk)
+ *   CURSOR_AFTER_SHORT     -> one entry, `at_start` TRUE       (the only thing that stops a walk)
  *
  * A page fills exactly at the log's first entry with `at_start` false and a usable cursor, and the daemon
  * re-asks its own log at a smaller size rather than truncating to fit the envelope cap — so both middle
@@ -114,8 +114,10 @@ const PAGES: ReadonlyMap<string, { entries: HistoryPagePayload['entries']; curso
     [
       '',
       {
+        // Durable IDs increase with chronology. Pages are newest-first, and the next nonempty
+        // page continues directly below this one's oldest ID; otherwise the fake invents known gaps.
         entries: Array.from({ length: OPENING_ENTRIES }, (_, i) =>
-          storedMessageEntry(100 + i, openingText(OPENING_ENTRIES - i))
+          storedMessageEntry(OPENING_ENTRIES + 2 - i, openingText(OPENING_ENTRIES - i))
         ),
         cursor: CURSOR_AFTER_OPENING,
         atStart: false
@@ -125,7 +127,7 @@ const PAGES: ReadonlyMap<string, { entries: HistoryPagePayload['entries']; curso
     [
       CURSOR_AFTER_EMPTY,
       {
-        entries: [storedMessageEntry(200, SHORT_PAGE_TEXT)],
+        entries: [storedMessageEntry(2, SHORT_PAGE_TEXT)],
         cursor: CURSOR_AFTER_SHORT,
         atStart: false
       }
@@ -133,7 +135,7 @@ const PAGES: ReadonlyMap<string, { entries: HistoryPagePayload['entries']; curso
     [
       CURSOR_AFTER_SHORT,
       {
-        entries: [storedMessageEntry(300, FINAL_PAGE_TEXT)],
+        entries: [storedMessageEntry(1, FINAL_PAGE_TEXT)],
         // The terminal page's published shape: an empty cursor with `at_start` true. The client must stop
         // on the FLAG — a client that stopped on the empty cursor instead would pass this drive and keep
         // walking against a daemon that still had a position to hand back.
@@ -210,85 +212,87 @@ async function walkBackUntilAskFor(
 
 test('scrolling back walks the thread page by page and stops at the start of the log', async ({
   launchPairedApp
-}) => {
+}, testInfo) => {
   const captured: Envelope[] = []
-  const { page } = await launchPairedApp({ buildReplyFrames: walkingFake(captured) })
+  const { page, app, servers } = await launchPairedApp({ buildReplyFrames: walkingFake(captured) })
 
   const userBubbles = page.locator('.bubble[data-thread-role="user"]')
   const thread = page.locator('.conversation__thread')
-
-  // --- The opening page (#1259), which is this drive's setup rather than its subject. ---
-  await expect(userBubbles).toHaveCount(OPENING_ENTRIES, { timeout: ROUNDTRIP_TIMEOUT_MS })
-  expect(historyAsks(captured)).toHaveLength(1)
-  expect(historyAsks(captured)[0].cursor).toBe('')
-
-  // THE NON-VACUITY GATE FOR EVERY SCROLL BELOW. A thread that does not overflow cannot produce a scroll
-  // event at all, so without this the drive would stall at the first barrier with a misleading failure —
-  // and a walk asserted against a thread that never scrolled would be testing nothing.
-  const { scrollHeight, clientHeight } = await thread.evaluate((el) => ({
-    scrollHeight: el.scrollHeight,
-    clientHeight: el.clientHeight
+  const geometry = () => thread.evaluate(el => ({
+    offset: el.scrollTop, height: el.scrollHeight, viewport: el.clientHeight,
+    focused: document.activeElement === el,
+    gaps: Array.from(el.querySelectorAll<HTMLElement>('[data-history-gap]')).map(node => ({
+      id: node.dataset.historyGap, top: node.getBoundingClientRect().top,
+      bottom: node.getBoundingClientRect().bottom
+    }))
   }))
-  expect(scrollHeight).toBeGreaterThan(clientHeight)
+  // A saved coverage change proves receipt/admission even for an empty page with no DOM mutation.
+  // The main-process round trip then fences commands already sent by that renderer delivery.
+  const received = async (cursor: string, atStart: boolean, count: number) => {
+    await expect.poll(() => page.evaluate(async ({ serverId, conversationId }) => {
+      const saved = await window.pyry.chatHistory({ operation: 'readTimeline', serverId, conversationId })
+      return saved.status === 'stored' && saved.snapshot.kind === 'timeline' ? saved.snapshot.coverage : null
+    }, { serverId: servers[0].serverId, conversationId: SEEDED_ROW.id }), {
+      timeout: ROUNDTRIP_TIMEOUT_MS
+    }).toEqual({ status: 'received', cursor, atStart })
+    await app.evaluate(() => {})
+    expect(historyAsks(captured)).toHaveLength(count)
+  }
 
-  // --- AC1. Scrolling back asks for the page BEFORE the oldest loaded entry, echoing that page's cursor
-  // verbatim. This is the whole loop closing: a DOM scroll event on the real container reached the real
-  // decision, which read the real stored reading and put its cursor on the wire. ---
-  await walkBackUntilAskFor(page, captured, CURSOR_AFTER_OPENING)
-  expect(historyAsks(captured)[1]).toEqual({
-    conversation_id: SEEDED_ROW.id,
-    cursor: CURSOR_AFTER_OPENING,
-    limit: 200
-  } satisfies RequestHistoryPayload)
+  try {
+    await expect(userBubbles).toHaveCount(OPENING_ENTRIES, { timeout: ROUNDTRIP_TIMEOUT_MS })
+    await received(CURSOR_AFTER_OPENING, false, 1)
+    expect(historyAsks(captured)[0].cursor).toBe('')
 
-  // --- AC3, first half: the EMPTY page. It draws nothing, so there is no row count to wait on — the ask
-  // count itself is the observable, and the fact that a THIRD ask goes out at all is the claim: the walk
-  // survived a page with no entries in it, and did so carrying the cursor that empty page handed back. A
-  // client that read an empty `entries` list as the end of the log stalls here. ---
-  await walkBackUntilAskFor(page, captured, CURSOR_AFTER_EMPTY)
+    // Non-vacuity: every row arrived through history, and the opening page alone must overflow.
+    const { scrollHeight, clientHeight } = await thread.evaluate((el) => ({
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight
+    }))
+    expect(scrollHeight).toBeGreaterThan(clientHeight)
 
-  // --- AC3, second half: the SHORT page. One entry against an opening page of fourteen — the shape a
-  // daemon produces when it re-asks its own log at a smaller size to fit the envelope cap. It draws its
-  // row AND leaves the walk running. ---
-  //
-  // Receipt is settled before issuing another qualifying input; a short page never starts one.
-  await expect(page.locator('.bubble[data-thread-role="user"]', { hasText: SHORT_PAGE_TEXT })).toHaveCount(
-    1,
-    { timeout: ROUNDTRIP_TIMEOUT_MS }
-  )
-  expect(historyAsks(captured)).toHaveLength(3)
-  await walkBackUntilAskFor(page, captured, CURSOR_AFTER_SHORT)
+    await walkBackUntilAskFor(page, captured, CURSOR_AFTER_OPENING)
+    // The empty page must settle without automatically asking for the next page.
+    await received(CURSOR_AFTER_EMPTY, false, 2)
+    await walkBackUntilAskFor(page, captured, CURSOR_AFTER_EMPTY)
 
-  // --- AC3, the stop. The final page reports `at_start`, and every later scroll declines. ---
-  //
-  // THE POSITIVE READ IS ORDERED IN FRONT OF THE ABSENCE, and it is the final page's own row: an absence
-  // asserted straight after a scroll passes before the reply it is about has even been processed. Waiting
-  // for the row proves the terminal page was drawn AND that its `at_start` was recorded, because both are
-  // written by the same delivery.
-  await expect(page.locator('.bubble[data-thread-role="user"]', { hasText: FINAL_PAGE_TEXT })).toHaveCount(
-    1,
-    { timeout: ROUNDTRIP_TIMEOUT_MS }
-  )
+    // A short page must commit its row, retain its cursor and wait for fresh input too.
+    await expect(page.locator('.bubble[data-thread-role="user"]', { hasText: SHORT_PAGE_TEXT })).toHaveCount(
+      1, { timeout: ROUNDTRIP_TIMEOUT_MS }
+    )
+    await received(CURSOR_AFTER_SHORT, false, 3)
+    await walkBackUntilAskFor(page, captured, CURSOR_AFTER_SHORT)
 
-  // Several genuine scroll events from the position the walk fires from, and nothing goes out. Repeated
-  // rather than single, because a stop that merely LAGGED by one event would pass a single scroll.
-  for (const offset of [40, 120, 8, 160, 24]) await scrollBack(page, offset)
+    const firstRow = page.locator('.bubble[data-thread-role="user"]', { hasText: FINAL_PAGE_TEXT })
+    await expect(firstRow).toHaveCount(1, { timeout: ROUNDTRIP_TIMEOUT_MS })
+    await received('', true, 4)
 
-  // THE WHOLE WALK, IN ORDER AND WITHOUT DUPLICATES. This one equality carries three claims no barrier
-  // above could make on its own: every ask echoed the previous page's cursor verbatim, no page was ever
-  // asked for twice (the one-ask-in-flight gate, end to end, across dozens of real scroll events), and
-  // the walk stopped on `at_start` rather than on the empty page or the short page before it.
-  expect(historyAsks(captured).map((ask) => ask.cursor)).toEqual([
-    '',
-    CURSOR_AFTER_OPENING,
-    CURSOR_AFTER_EMPTY,
-    CURSOR_AFTER_SHORT
-  ])
+    // Read the beginning row before trying to go further back. With the old fake's increasing page
+    // IDs this exposes an invented gap, whose demand correctly takes priority over oldest-end demand.
+    await firstRow.scrollIntoViewIfNeeded()
+    await thread.focus()
+    await testInfo.attach('history-walk-before-terminal-input', {
+      body: JSON.stringify(await geometry()), contentType: 'application/json'
+    })
+    await page.keyboard.press('ArrowUp')
+    for (const offset of [40, 120, 8, 160, 24]) await scrollBack(page, offset)
+    await app.evaluate(() => {})
 
-  // And the thread holds exactly the whole log and nothing twice — the drawing half of "no page was ever
-  // asked for, or applied, more than once". `prependHistoryFor` is deliberately non-idempotent, so a
-  // duplicate ask would show up here as duplicated rows rather than as a silent no-op.
-  await expect(userBubbles).toHaveCount(OPENING_ENTRIES + 2)
+    // Every request echoes the exact cursor and limit, in order, with no duplicate or continuation.
+    expect(historyAsks(captured)).toEqual([
+      '', CURSOR_AFTER_OPENING, CURSOR_AFTER_EMPTY, CURSOR_AFTER_SHORT
+    ].map(cursor => ({ conversation_id: SEEDED_ROW.id, cursor, limit: 200 } satisfies RequestHistoryPayload)))
+    await expect(userBubbles).toHaveCount(OPENING_ENTRIES + 2)
+    await expect(thread.locator('[data-history-gap]')).toHaveCount(0)
+  } finally {
+    await testInfo.attach('history-walk-state', {
+      body: JSON.stringify({
+        asks: historyAsks(captured),
+        geometry: await geometry()
+      }),
+      contentType: 'application/json'
+    })
+  }
 })
 
 // #1752 — the band's two edges on the real scroll container. The walk above only ever parks well inside

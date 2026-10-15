@@ -372,6 +372,17 @@ local read or pending request is discarded; lifecycle demand defers instead.
 Remaining in the band
 after a response also requires new input. There is no timer or automatic walk.
 
+Oldest-end `atStart` does not close unresolved gaps elsewhere in the held log;
+[visible-gap demand](conversation-shell-scroll-pin.md#user-demand-and-prepend-position)
+still takes priority. History fixtures must respect durable entry chronology:
+IDs increase with time, wire pages are newest-first, and an uninterrupted older
+continuation uses IDs below the preceding page's oldest ID. Serving larger IDs
+as supposedly older rows can invent disjoint spans and make correct gap requests
+look like broken terminal stopping. The
+[`history-walk.spec.ts`](../../../e2e/history-walk.spec.ts) fixture serves 16 through 3,
+then an empty nonterminal page, then 2, then 1. Its terminal-row input exposes this
+trap; see the [controlled regression and counted evidence](development-verification-evidence-that-cannot-pass-too-early.md#history-page-receipt-and-terminal-demand).
+
 Requests and failures retain same-host rows, prepend metadata and successful
 coverage. Pending/failed history retains the requested cursor and purpose (`older`,
 `newest`, `gap` or `gap-newest`), plus the selected gap's client identity. Main clears

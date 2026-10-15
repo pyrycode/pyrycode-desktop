@@ -33,7 +33,7 @@ attach an error to a newer list or a cleared host.
 
 | Result | Meaning |
 | --- | --- |
-| `{ status: 'missing' }` | No matching snapshot exists in a readable or absent collection. |
+| `{ status: 'missing' }` | No matching snapshot exists in readable storage. |
 | `{ status: 'stored', snapshot }` | A snapshot exists, including an explicitly saved empty list or timeline. |
 | `{ status: 'ok' }` | A mutation completed, including an unchanged replacement or repeated removal. |
 | `{ status: 'error', code }` | A static failure classification; no caught exception details. |
@@ -44,18 +44,46 @@ attach an error to a newer list or a cleared host.
 | `unknown-host` | No saved pairing exists, or removal invalidated the request's admission generation. |
 | `membership-unavailable` | The saved-host lookup threw. |
 | `unreadable` | Reading, decryption, UTF-8/JSON decoding or stored-record validation failed. Duplicate snapshot identities are invalid. |
-| `unsupported-version` | The stored collection or a stored snapshot has a safe-integer numeric version other than 1. Malformed version values are `unreadable`. |
-| `encryption-unavailable` | A required protected write raised `EncryptionUnavailableError`, including a removal that must rewrite remaining records. |
+| `unsupported-version` | The stored collection or a stored snapshot has a safe-integer numeric version other than 1, or SQLite schema admission rejects an unfamiliar version/nonempty unversioned database. Malformed snapshot version values are `unreadable`. |
+| `encryption-unavailable` | Protection is unavailable or raises `EncryptionUnavailableError`. The indexed backend checks availability before opening the database, including for reads/removals; collection removal can require encryption to rewrite remaining records. |
 | `write-failed` | A replacement failed for another write/encryption reason. |
 | `remove-failed` | A removal's replacement or deletion failed for another reason. |
 
-Reads never write. Every mutation first reads and validates the entire collection;
+Collection reads never write. Every collection mutation first reads and validates the entire collection;
 an unreadable or unsupported collection is preserved, including on removal. It is
 never treated as an empty default. A failed replacement leaves the previous
 readable ciphertext intact and does not prevent subsequent operations. This
 differs from the [paired-server store](paired-server-store.md)'s deliberate
 malformed-record overwrite during re-pairing: chat history has no such recovery
 exception.
+
+Indexed legacy operations validate only the affected scope(s), as described in
+[the API](chat-history-api.md#api). Rows, encrypted evidence, scope identity and
+schema migration share one SQLite transaction. An insertion/deletion, encryption,
+decryption or validation failure rolls back changes and preserves the last committed
+snapshot; later operations remain usable. Even reads can commit the schema-1 key
+migration, but cannot commit it if reconstruction fails. Unreadable data and
+unsupported schemas are never recreated or overwritten as recovery.
+
+Each indexed `payload` is protected by main-process `SecretEncryption` before it
+reaches SQLite, including header coverage/cursors, rows, attachment metadata, raw
+unknown display text and individual evidence payloads. Production encryption keeps
+the existing Linux `basic_text` rejection. No content payload is SQL plaintext,
+including in journals or temporary files; `temp_store` is `MEMORY`. The reviewed
+unencrypted columns are:
+
+| Location | Columns and allowed values |
+| --- | --- |
+| `legacy_scopes` | `identity`: locally generated UUID; `server`, `conversation`: UTF-16LE BLOBs of admitted bounded ownership strings, compared byte for byte. |
+| `legacy_records` ownership | `scope`: committed-snapshot UUID referencing `legacy_scopes.identity`. |
+| Record selection/order | `kind`: `header`, `row`, `served`, `receipt`, `receipt-id`, `display`, `gap`, `gap-key` or `gap-refused`; `ordinal`, `parent`: nonnegative array positions (zero for unparented records). |
+| Evidence indexes | `entry_id`, `last_id`, `older_id`, `newer_id`: nonnegative safe integers or null; `row_key`: signed safe integer or null. |
+| Schema/index metadata | `user_version`: integer 2 after creation/migration; indexes duplicate only the reviewed ownership and structural columns. |
+
+`payload` is a ciphertext BLOB. Timestamps, join strings, opaque cursors, attachment
+fields, message text and raw unknown objects never become plaintext lookup/order
+columns. Ownership coordinates are intentionally unencrypted structural data, not
+filenames or authorization tokens.
 
 Diagnostics contain only static lifecycle event names and operation/result codes:
 `history-storage-operation`, `history-storage-result`, `history-handler-result`,
@@ -78,4 +106,3 @@ code, unexpected results report `remove-failed`, and thrown IPC failures report
 protected store's prior content and retains stale-save suppression; daemon
 confirmation alone does not prove local cleanup succeeded. There is no automatic
 removal retry, but another confirmed receipt can retry it.
-

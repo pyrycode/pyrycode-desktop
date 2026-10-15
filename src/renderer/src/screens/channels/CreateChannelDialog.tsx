@@ -1,3 +1,6 @@
+import { useStore } from 'zustand'
+import { threadRuntime } from '../../store/threadRuntime'
+import { selectThreadReadings } from '../../store/threadLiveState'
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
 import { agentFromWire, MAX_SYSTEM_PROMPT_BYTES, type ConversationCreatedPayload, type WireModelOption } from '@shared/wire/types'
 import { ChannelForm } from './ChannelForm'
@@ -121,13 +124,13 @@ export function confirmsPending(conversation: ConversationCreatedPayload, pendin
  * confirmed-channel navigation is the existing close signal. One write per create, so the
  * same-conversation ambiguity in `system-prompt-write.md` § Known limitation is never reached.
  */
-function writePrompt(conversation: ConversationCreatedPayload, pending: Pending): void {
+function writePrompt(conversation: ConversationCreatedPayload, pending: Pending, serverId: string): void {
   if (pending.type !== 'channel' || pending.systemPrompt === null) return
   if (!confirmsPending(conversation, pending)) return
   try {
     submitSystemPrompt(
       {
-        sendCommand: window.pyry.sendCommand,
+        sendCommand: command => window.pyry.sendCommand({ ...command, serverId }),
         dispatch: (event) => systemPromptWriteStore.getState().dispatch(event)
       },
       conversation.id,
@@ -154,7 +157,11 @@ export function CreateChannelDialog({ serverId, onDismiss }: {
   const conversations = useConversationListStore(selectHostConversations)
   const selectHostModels = useCallback((state: ModelListState) =>
     cachedChannelModels(conversations, state), [conversations])
-  const models = useModelListStore(selectHostModels)
+  const cachedModels = useModelListStore(selectHostModels)
+  useStore(threadRuntime.state, s => s.liveRevision)
+  const published = conversations?.map(row => selectThreadReadings(threadRuntime.live(serverId, row.id).getState(), 'modelList')[0]?.models)
+    .find(models => models !== undefined)
+  const models = published ?? cachedModels
   const selectedModel = models?.find(row => modelDraft === null
     ? row.value === 'default' && agentFromWire(row.agent) === 'claude'
     : row.value === modelDraft.value && agentFromWire(row.agent) === agentFromWire(modelDraft.agent))
@@ -196,7 +203,7 @@ export function CreateChannelDialog({ serverId, onDismiss }: {
       }
       if (pending.current.type !== 'channel') return
       if (event.type === 'conversationCreated') {
-        writePrompt(event.conversation, pending.current)
+        writePrompt(event.conversation, pending.current, serverId)
         // Unchanged and UNCONDITIONAL: AC2 keeps dismissal behaving exactly as it did before the
         // write existed, so a same-host confirmation this draft did not ask for still dismisses —
         // it just no longer carries the operator's prompt with it.

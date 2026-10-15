@@ -24,7 +24,7 @@ import { createQueueTurnEvidence } from './fixtures/queueTurnEvidence'
 // #2730 (`mid_turn_input`); against an older daemon the Send now control never draws, and the spec fails
 // at that visibility check rather than passing vacuously. Model output is matched only for the marker,
 // a per-run nonce this spec wrote; nothing secret is asserted or attached.
-test.use({ interactiveRunner: 'stream-json' })
+test.use({ interactiveRunner: 'stream-json', requiredCapabilities: ['interactive', 'thread'] })
 const TURN_TIMEOUT = 120_000
 type Evidence = ReturnType<typeof createQueueTurnEvidence>
 type EvidenceWindow = typeof window & { queueTurnEvidence: Pick<Evidence, 'snapshot'> & { stop: () => void } }

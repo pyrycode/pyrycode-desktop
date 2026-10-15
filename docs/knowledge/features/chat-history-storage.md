@@ -14,8 +14,10 @@ Confirmed deletion discards both formats' pending replacements, suppresses later
 captures and invalidates the thread's reads/held state. Successful unpair clears
 every held thread for that host, including off-screen scopes and pending reads;
 failure resumes buffered work. `stop()` detaches this observer and awaits owned
-removal/flush work. Production thread subscriptions and offline/reconnect screen
-proof remain [#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
+removal/flush work. Production composition supplies the runtime item store as
+`threads`; its protected restore and query ownership are described in the
+[thread runtime](thread-runtime.md#restore-recovery-and-cleanup). Local pending
+sends and session prompts are not durable cache content.
 
 The renderer writer coalesces bursts on a 200 ms timer in a per-record pending map.
 Canonical projected values are compared with the latest observed value, so

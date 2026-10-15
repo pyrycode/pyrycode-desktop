@@ -210,7 +210,8 @@ replay advancement and thread assembly. All four exhaustive legacy translators
 return null without producing store actions. Filtering, retained-state clearing
 and unread/read publication belong to [#1907](https://github.com/pyrycode/pyrycode-desktop/issues/1907);
 catch-up/pages remain [#1912](https://github.com/pyrycode/pyrycode-desktop/issues/1912),
-and production activation/combined live proof remain [#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
+and the [thread runtime](thread-runtime.md) supplies production subscriptions.
+Credentialed live acceptance remains separately pending.
 Supplied-frame coverage lives in `src/main/sessionStateMetadata.test.ts`, with
 legacy translator coverage in `src/renderer/src/store/sessionStateMetadata.test.ts`.
 

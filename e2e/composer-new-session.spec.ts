@@ -158,7 +158,7 @@ test('picking Reset session sends one new_session naming the open chat, and noth
   // giving this row the label the message-text row used to wear. Three independent readings of it: no
   // outbound message, no user bubble in the thread, and no text left in the message box.
   expect(messages).toHaveLength(0)
-  await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveCount(0)
+  await expect(page.locator('[data-thread-role="user"]')).toHaveCount(0)
   await expect(page.getByPlaceholder('Message…')).toHaveValue('')
 
   // AC4's FIRST ARM: the never-messaged conversation, where the daemon has no child to rotate and answers
@@ -218,17 +218,14 @@ test('reset labels keep one-line geometry beside the trailing error chip at mini
     { phase: 'wrapping_up', handoff: 'pending', copy: 'Resetting: writing the handoff note…' }
   ]
 
+  const connection = async (type: 'connected' | 'failed') => app.evaluate(({ BrowserWindow }, { channel, type }) => {
+    BrowserWindow.getAllWindows()[0].webContents.send(channel, {
+      type, serverId: 'fake-daemon', ack: { capabilities: ['thread'] },
+      error: { code: 'transport', message: '', retryable: true }
+    })
+  }, { channel: DAEMON_EVENT_CHANNEL, type })
   for (const trailing of [false, true]) {
-    if (trailing) {
-      // Keep the fake transport live so reset frames still use the decoder. Only the connection
-      // failure is injected at the preload boundary, as in stopped-turn.spec.ts.
-      await app.evaluate(({ BrowserWindow }, channel) => {
-        BrowserWindow.getAllWindows()[0].webContents.send(channel, {
-          type: 'failed', serverId: 'fake-daemon',
-          error: { code: 'transport', message: '', retryable: true }
-        })
-      }, DAEMON_EVENT_CHANNEL)
-    }
+    if (trailing) await connection('failed')
     await expect(chip).toHaveCount(trailing ? 1 : 0)
     for (const width of [800, 1280]) {
       await app.evaluate(({ BrowserWindow }, width) => {
@@ -241,8 +238,11 @@ test('reset labels keep one-line geometry beside the trailing error chip at mini
       expect(idleRow?.height).toBe(24)
 
       for (const { phase, handoff, copy } of states) {
+        // A live update is admitted on a connected host, then retained through connection loss.
+        if (trailing) await connection('connected')
         daemon.pushFrame(resettingFrame(true, phase, handoff))
         await expect(label).toHaveText(copy)
+        if (trailing) await connection('failed')
         expect((await row.boundingBox())?.height).toBe(idleRow?.height)
         expect((await composer.boundingBox())?.y).toBe(idleComposer?.y)
         await expect(label).toHaveCSS('white-space', 'nowrap')
@@ -268,8 +268,10 @@ test('reset labels keep one-line geometry beside the trailing error chip at mini
           animations: 'disabled'
         })
       }
+      if (trailing) await connection('connected')
       daemon.pushFrame(resettingFrame(false, '', ''))
       await expect(label).toHaveCount(0)
+      if (trailing) await connection('failed')
       expect((await row.boundingBox())?.height).toBe(idleRow?.height)
       expect((await composer.boundingBox())?.y).toBe(idleComposer?.y)
     }

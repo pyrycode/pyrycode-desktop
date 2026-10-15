@@ -6,16 +6,14 @@ fresh service instance can read saved content without a connection or Noise hand
 saved pairing record's `server` field, so equal conversation ids on different
 hosts remain separate.
 
-The app records received lists, live timeline content, composer echoes and loaded
-history pages automatically. Saved lists restore into the sidebar on launch,
-including unavailable and pairing-rejected hosts. Opening a saved chat restores its
-timeline on demand whether its host is connected or unavailable. Restored rows remain
-readable through reconnect and subsequent same-host receipts continue saving.
-Each actual connected opening and owning-host reconnect requests one newest page
-after owned read/request settlement. Offline opening waits for connection; opening
-never fills the missing range. Served and legacy gaps retain reader-driven markers
-and resume positions; older pages require trusted upward thread input;
-a retryable failed page has a Retry action. Explicit Forget/Unpair removes the host's saved content after credential removal.
+The app records received lists and authoritative daemon-item snapshots automatically.
+Saved lists restore into the sidebar on launch, including unavailable and
+pairing-rejected hosts. Opening a saved chat reads only `daemon-items` on demand.
+It never draws a saved legacy timeline. Offline display grants no network capability.
+Once that host accepts `thread`, opening and reconnect resume from the saved epoch
+and complete checkpoint. Older demand and Retry use the thread query coordinator.
+See [production restore and recovery](thread-runtime.md#restore-recovery-and-cleanup).
+Explicit Forget/Unpair removes the host's saved content after credential removal.
 Confirmed conversation deletion removes both saved conversation formats
 and that host/conversation's list entry.
 Observing, saving, flushing and restoration create no lifecycle demand themselves.
@@ -30,9 +28,10 @@ authorization, removal ordering and supported operations.
 ## Snapshot contract
 
 Every snapshot has `version: 1`, `serverId` and a `kind` of `list`, `timeline` or
-`daemon-items`. Legacy timelines remain readable for the one-release fallback;
-they never become authoritative daemon items. Both conversation formats may coexist
-at the same coordinates and have separate reads.
+`daemon-items`. Legacy timelines remain valid stored records for retained APIs and
+cleanup, but the ordinary app never reads them for display. They never become
+authoritative daemon items. Both formats may coexist at the same coordinates.
+The legacy coverage and receipt contracts below describe that retained format.
 
 Both legacy backends use the unchanged `parseChatHistorySnapshot` admission and
 allowlisted projection for full snapshots. Indexed disk reconstruction preserves

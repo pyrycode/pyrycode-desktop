@@ -1,5 +1,19 @@
 import { describe, it, expect } from 'vitest'
 
+it('validates the explicit owning host on thread prompt and queue actions', () => {
+  const commands = [answerModalCommand({ modal_id: 'modal', option_id: 'deny' }),
+    cancelModalCommand({ modal_id: 'modal' }), refuseQuestionsCommand({ question_batch_id: 'questions' }),
+    answerQuestionsCommand({ question_batch_id: 'questions', answers: [{ question_index: 0, values: ['yes'] }] }),
+    dequeueMessageCommand({ conversation_id: 'chat', queued_msg_id: 7 }),
+    sendQueuedNowCommand({ conversation_id: 'chat', queued_msg_id: 7 }),
+    { type: 'stopBackgroundTask', payload: { conversation_id: 'chat', task_id: 'task' } }]
+  for (const command of commands) {
+    expect(isRendererCommand({ ...command, serverId: 'host' })).toBe(true)
+    for (const serverId of ['', 'x'.repeat(1025), null, 42])
+      expect(isRendererCommand({ ...command, serverId })).toBe(false)
+  }
+})
+
 it('carries a bounded refusal owner outside the send wire payload', () => {
   const payload = { conversation_id: 'conv', message_id: 'message', text: 'text' }
   expect(sendMessageCommand(payload, 'host')).toEqual({ type: 'sendMessage', payload, serverId: 'host' })
@@ -1852,7 +1866,7 @@ describe('the server-scoped commands name their server (#1120)', () => {
     }
   })
 
-  it('leaves every command outside the table unaffected, `notify` included', () => {
+  it('keeps main-local extras inert and validates conversation routing coordinates', () => {
     // `notify` is main-local: fireNotification owns the copy table, no command field supplies text,
     // and no frame results — so a server id on it would be a field nothing reads. A stray one is
     // ignored as any extra field is (structural minimum), NOT validated.
@@ -1860,7 +1874,7 @@ describe('the server-scoped commands name their server (#1120)', () => {
     expect(isRendererCommand(notify)).toBe(true)
     expect(
       isRendererCommand({ type: 'archiveConversation', payload: { conversation_id: 'c-1' }, serverId: 42 })
-    ).toBe(true)
+    ).toBe(false)
   })
 
   it('types the optional field on each of the six members', () => {
@@ -1878,18 +1892,30 @@ describe('the server-scoped commands name their server (#1120)', () => {
     expect(isRendererCommand(bare)).toBe(true)
   })
 
-  it('leaves interrupt out of the set entirely, serverId and all (#1092)', () => {
-    // Not merely "no longer validated": the field is GONE from the member, so a command carrying one
-    // is an ordinary extra field the structural minimum ignores — it reaches no router and no wire.
-    // The named payload is the whole address now.
+  it('keeps bare interrupt compatibility and validates an optional owning host', () => {
     expect(interruptCommand({ conversation_id: 'c-1' })).toEqual({
       type: 'interrupt',
       payload: { conversation_id: 'c-1' }
     })
     expect(
       isRendererCommand({ type: 'interrupt', payload: { conversation_id: 'c-1' }, serverId: 42 })
-    ).toBe(true)
+    ).toBe(false)
   })
+})
+
+it('validates optional owning hosts on conversation reads, writes and session commands', () => {
+  const commands = [
+    { type: 'requestSessionSettings', payload: { conversation_id: 'chat' } },
+    { type: 'requestModelList', payload: { conversation_id: 'chat' } },
+    { type: 'interrupt', payload: { conversation_id: 'chat' } },
+    { type: 'newSession', payload: { conversation_id: 'chat' } },
+    { type: 'setSessionSettings', payload: { session_id: 'session', permission_mode: 'plan' }, changeId: 'change' }
+  ]
+  for (const command of commands) {
+    expect(isRendererCommand(command)).toBe(true)
+    expect(isRendererCommand({ ...command, serverId: 'owner' })).toBe(true)
+    for (const serverId of ['', 'x'.repeat(1025), null, 42]) expect(isRendererCommand({ ...command, serverId })).toBe(false)
+  }
 })
 
 it('bounds optional workspace rename attempt identifiers', () => {

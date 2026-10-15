@@ -2,11 +2,11 @@
 
 `createThreadItemStore` in
 [`threadItemStore.ts`](../../../src/renderer/src/store/threadItemStore.ts) retains
-decoded daemon facts for sync and cache consumers. Its vanilla Zustand factory has
-no production singleton, React hook, transport or subscription. The existing
-[conversation timeline holder](conversation-timeline-holder.md) continues to render
-rows reconstructed through `reduceTimeline`; these retained items never pass through
-that reducer, timestamp matching, receipt reconciliation or roster inference.
+decoded daemon facts for rendering, sync and cache consumers. The vanilla factory
+stays independent of React and transport. The app-lifetime
+[thread runtime](thread-runtime.md) owns its production instance and subscriptions.
+Every paired conversation uses these items rather than reconstructing rows through
+`reduceTimeline`, timestamp matching, receipt reconciliation or roster inference.
 
 The input types are `ThreadItem` and `ThreadUpdate` from `src/shared/wire/thread.ts`;
 [main's thread receiver](inbound-message-decode-limits.md#complete-live-thread-validation)
@@ -76,10 +76,10 @@ readings cannot affect a row. Host/conversation/epoch switches remount the suppl
 view and discard local drawer/expansion state. See
 [Background-task panel](conversation-shell-background-tasks.md#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583)
 for saved-field availability, owning-host Stop gating and raw callback targets.
-Production wiring, capability advertisement and combined live-daemon verification
-remain [#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908); live-input
-admission and reset remain [#1935](https://github.com/pyrycode/pyrycode-desktop/issues/1935).
-The ordinary app retains its legacy roster path.
+The [thread runtime](thread-runtime.md) connects these controls to production
+subscriptions and host-addressed commands. Legacy roster reports cannot establish
+task membership or replace supplied item facts. Credentialed live acceptance is
+tracked separately in the [live runbook](live-e2e-runbook.md#current-real-claude-gate-state).
 
 ## Exact-base changes, appends and inert JSON
 
@@ -248,9 +248,10 @@ scope, including after the same host/conversation/epoch is accepted again.
 
 The [thread query coordinator](#thread-query-coordinator) owns requests, recovery and reply certification;
 [protected disk persistence](chat-history-api.md#api) consumes these snapshots.
-Lifecycle subscriptions, consumer migration and production capability activation remain with
-[#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908). These APIs alone claim
-no production daemon integration or live-Claude validation.
+The [thread runtime](thread-runtime.md#restore-recovery-and-cleanup) supplies production
+lifecycle subscriptions. Deletion and successful unpair retire queries, pending
+reads, local sends, live bindings and read authority as well as these retained items.
+Store-only tests do not establish credentialed live acceptance.
 
 ## Thread query coordinator
 
@@ -291,11 +292,10 @@ handles remain owned by [protected history](chat-history.md#storage-and-concurre
 as established by [#1903](https://github.com/pyrycode/pyrycode-desktop/issues/1903).
 The coordinator never starts/cancels disk reads or replaces cache storage. Hydrated
 repair and unfinished-progress fences retain their store meaning.
-[#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908) owns production
-subscriptions, capability/content-path selection and mapping `onState`/older/retry
-into existing `conversationTimelineStore` presentation and demand seams
-(`activateConversation`, `createNewestHistoryDemand`, `requestOlderHistory`,
-`retryHistoryPage`). The ordinary app still uses those legacy callers.
+The [thread runtime](thread-runtime.md) supplies production subscriptions and maps
+query state, older demand and retry into the existing conversation controls.
+Production navigation opens this coordinator for both existing and newly created
+chats. Legacy newest-history demand and history recovery callers are unhooked.
 [#1931](https://github.com/pyrycode/pyrycode-desktop/issues/1931) owns bounded local
 paging over this network-demand contract.
 

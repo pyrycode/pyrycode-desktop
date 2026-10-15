@@ -303,7 +303,7 @@ export interface FakeDaemonOptions {
    *  precedent; this generalizes it to N frames per inbound. */
   buildReplyFrames?: (inboundPlaintext: Uint8Array) => Uint8Array[]
   /** hello_ack payload overrides. Defaults: protocol_version 'v2', server_id 'fake-daemon',
-   *  conn_id 'conn-1', capabilities []. */
+   *  conn_id 'conn-1', capabilities ['thread'], since the app requires the daemon-built thread (#1908). */
   helloAck?: Partial<HelloAckPayload>
   /** Forwarded to loadNoiseLib as its load deadline; omit for the loader default. */
   loadTimeoutMs?: number
@@ -397,7 +397,7 @@ export async function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeD
     protocol_version: 'v2',
     server_id: 'fake-daemon',
     conn_id: 'conn-1',
-    capabilities: [],
+    capabilities: ['thread'],
     ...options.helloAck
   }
 

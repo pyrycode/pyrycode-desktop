@@ -20,7 +20,7 @@ function scenario(label = 'first', fetchService = false) {
   }
   return { seen, frame, late, discovery, holdDiscovery() { holdDiscovery = true }, update(next: string, state = 'running') { release = next; revision++;
     return frame('app_updated', { ...record(release), state, revision }) },
-  options: { helloAck: { server_id: label === 'second' ? SECOND_SERVER_ID : FIRST_SERVER_ID, capabilities: ['hosted_apps_v1'] }, buildReplyFrames(bytes: Uint8Array) {
+  options: { helloAck: { server_id: label === 'second' ? SECOND_SERVER_ID : FIRST_SERVER_ID, capabilities: ['thread', 'hosted_apps_v1'] }, buildReplyFrames(bytes: Uint8Array) {
     const r = JSON.parse(Buffer.from(bytes).toString()); seen.push(r)
     if (r.type === 'list_conversations') return [seedConversationsFrame(label === 'second' ? SECOND_SEEDED_ROW : undefined)]
     if (r.type === 'list_apps') {

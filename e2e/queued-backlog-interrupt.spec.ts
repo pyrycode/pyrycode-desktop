@@ -242,7 +242,7 @@ test('queued backlog renders distinctly, drops a queued message, and interrupts 
   // including one it answered with nothing. The zero-count gate is the load-bearing half: it is what makes
   // the interrupt leg's indicator assertion measure a MOUNT rather than an element already on screen.
   daemon.pushFrame(turnStateFrame('idle'))
-  await expect(runningIndicator).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(interruptButton).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
 
   // Push the queue snapshot (AFTER launch resolved → past the `connected` backlog reset, fact 2; under
   // SEEDED_ROW.id → selected by the active-conversation backlog, fact 1). The live subscription re-renders.

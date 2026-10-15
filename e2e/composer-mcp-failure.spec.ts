@@ -3,6 +3,9 @@ import { conversationStateFake } from './fixtures/conversationStateFake'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { MCPServerStatus, MCPStatusPayload } from '../src/shared/wire/types'
 
+// Scripted history is published as thread catch-up/pages by the shared fake daemon.
+test.use({ scriptedHistory: true })
+
 // #1494: a failed MCP server raises the status row's trailing slot while the sheet is closed. Pressing the
 // notice opens Channel info exactly as the overflow item does (one status request), acknowledges every
 // failure the report shows, and a repeated report does not raise it again; a new failure does.

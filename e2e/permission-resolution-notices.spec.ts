@@ -73,7 +73,7 @@ test('remote and timeout resolutions use the Default pill, X and four seconds fr
   await page.evaluate(() => {
     Object.assign(window, { resolutionBarrierDelivered: false })
     const off = window.pyry.onDaemonEvent(event => {
-      if (event.type === 'assistantDelta' && event.turnId === 'barrier') {
+      if (event.type === 'threadUpdate' && event.update.type === 'thread_item_added' && event.update.payload.item.kind === 'assistant_message') {
         Object.assign(window, { resolutionBarrierDelivered: true })
         off()
       }

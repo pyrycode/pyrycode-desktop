@@ -1,10 +1,12 @@
+import { createStore } from 'zustand/vanilla'
+import type { StampedDaemonEvent } from '@shared/ipc/events'
 import type { ThreadSnapshot } from '../../store/threadItemStore'
 import type { ConnectionStatus } from '../../store/sessionStore'
 import type { HeldBackgroundTaskProgress } from '../../store/backgroundTaskRosterStore'
 import { backgroundTaskStopSupported, type SuppliedBackgroundTask } from './BackgroundTaskPanel'
 import { taskLinked, usable } from './threadItemPresentation'
 
-type TaskScope = { hostId: string; conversationId: string; epoch: string; session?: string; agent?: string;
+export type TaskScope = { hostId: string; conversationId: string; epoch: string; session?: string; agent?: string;
   taskId: string; creatingItemId?: number }
 export interface ThreadTaskInputs {
   connection?: { hostId: string; status: ConnectionStatus }
@@ -97,4 +99,39 @@ export function threadTaskPresentations(snapshot: ThreadSnapshot, inputs: Thread
     })
   }
   return [...rows.values()]
+}
+
+/** Only the pending Stop control is client-owned. Membership and outcomes remain daemon facts. */
+export function createThreadTaskStops() {
+  return createStore<{ entries: readonly (TaskScope & { pending: boolean })[];
+    begin: (snapshot: ThreadSnapshot, taskId: string) => boolean;
+    settle: (snapshot: ThreadSnapshot) => void;
+    event: (event: StampedDaemonEvent) => void;
+    remove: (host: string, chat?: string) => void }>((set, get) => ({
+    entries: [],
+    begin(snapshot, taskId) {
+      const item = snapshot.items.find(item => item.active === true && item.agent === 'claude' &&
+        taskLinked(item) && record(item.content)?.task_id === taskId)
+      if (!item) return false
+      const scope: TaskScope = { hostId: snapshot.hostId, conversationId: snapshot.conversationId, epoch: snapshot.epoch,
+        taskId, session: attribution(item.session), agent: attribution(item.agent), creatingItemId: item.id }
+      if (get().entries.some(entry => key(entry) === key(scope))) return false
+      set({ entries: [...get().entries, { ...scope, pending: true }] }); return true
+    },
+    settle(snapshot) {
+      const active = new Set(threadTaskPresentations(snapshot).filter(row => row.active).map(row => row.rowKey))
+      const entries = get().entries.filter(entry => entry.hostId !== snapshot.hostId ||
+        entry.conversationId !== snapshot.conversationId || active.has(key(entry)))
+      if (entries.length !== get().entries.length) set({ entries })
+    },
+    event(event) {
+      if (event.type === 'connected') get().remove(event.serverId ?? '')
+      if (event.type === 'backgroundTaskStopRejected') set({ entries: get().entries.filter(entry =>
+        entry.hostId !== event.serverId || entry.conversationId !== event.conversationId || entry.taskId !== event.taskId) })
+    },
+    remove(host, chat) {
+      const entries = get().entries.filter(entry => entry.hostId !== host || chat !== undefined && entry.conversationId !== chat)
+      if (entries.length !== get().entries.length) set({ entries })
+    }
+  }))
 }

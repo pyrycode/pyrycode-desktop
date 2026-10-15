@@ -74,6 +74,7 @@ function ThreadFixture() {
   const [completeThrough, setCompleteThrough] = useState(0);
   const [scope, setScope] = useState(null);
   const [taskInputs, setTaskInputs] = useState({});
+  const [backgroundTasksOpen, setBackgroundTasksOpen] = useState(false);
   const [turnRunning, setTurnRunning] = useState(false);
   const [connection, setConnection] = useState(undefined);
   const [receipts, setReceipts] = useState([]);
@@ -131,7 +132,7 @@ function ThreadFixture() {
     <output hidden data-testid="read-state">{JSON.stringify({ receipts, scope,
       marks: (rows ?? []).map(row => [row.serverId, row.id, row.read_up_to,
         isConversationUnread(null, null, row, conversationReadRouteStore.getState().epochFor(row.serverId, row.id) !== undefined)]) })}</output>
-    <ThreadItemsTimeline snapshot={snapshot} readInputs={readInputs && { ...readInputs, completeThrough }} sendInputs={{ connection, local: { ...local, hostId: scope.host, conversationId: scope.chat },
+    <ThreadItemsTimeline snapshot={snapshot} backgroundTasksOpen={backgroundTasksOpen} onBackgroundTasksOpenChange={setBackgroundTasksOpen} readInputs={readInputs && { ...readInputs, completeThrough }} sendInputs={{ connection, local: { ...local, hostId: scope.host, conversationId: scope.chat },
       onAction: (host, command) => actions.push([host, command]) }} taskInputs={taskInputs} turnRunning={turnRunning} foldTools onReply={(role, text) => replies.push(role + ':' + text)}
       onOpenMarkdownPath={path => paths.push(path)} />
     <textarea className="composer__input" aria-label="Fixture composer" onKeyDown={event => {
@@ -167,9 +168,9 @@ for (const width of [1280, 800]) test(`publishes only committed visible authorit
     return replyLists && e.type === 'list_conversations' ? [seedConversationsFrame(seed)] : []
   }
   try {
-    const { page, app, servers } = await launchPairedApp({ buildReplyFrames:
+    const { page, app, servers } = await launchPairedApp({ threadMode: 'native', buildReplyFrames:
       reply(FIRST_SERVER_ID, { ...SEEDED_ROW, read_up_to: 0, latest_entry_id: 999 })
-    }, { rendererUrl: server.resolvedUrls!.local[0], secondServer: { buildReplyFrames:
+    }, { rendererUrl: server.resolvedUrls!.local[0], secondServer: { threadMode: 'native', buildReplyFrames:
       reply(SECOND_SERVER_ID, { ...SECOND_SEEDED_ROW, read_up_to: 0 }) } })
     await page.locator('.channel-list__row-open').first().click()
     await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled()
@@ -386,7 +387,7 @@ for (const width of [1280, 800]) test(`publishes only committed visible authorit
 test('settles sends and targets genuine queue handles through authoritative terminal revisions', async ({ launchPairedApp }) => {
   const server = await rendererFixture()
   try {
-    const { page, app } = await launchPairedApp({}, { rendererUrl: server.resolvedUrls!.local[0] })
+    const { page, app } = await launchPairedApp({ threadMode: 'native',}, { rendererUrl: server.resolvedUrls!.local[0] })
     await page.locator('.channel-list__row-open').first().click()
     await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled()
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 800))
@@ -458,7 +459,7 @@ for (const width of [1280, 800]) test(`authoritative items retain identity, acti
   const server = await rendererFixture()
   try {
     const asks: unknown[] = []
-    const { page, app } = await launchPairedApp({ buildReplyFrames: bytes => {
+    const { page, app } = await launchPairedApp({ threadMode: 'native', buildReplyFrames: bytes => {
       const e = decodeEnvelope(bytes)
       if (e.type === 'request_attachment') asks.push(e.payload)
       return e.type === 'list_conversations' ? [seedConversationsFrame()] : []
@@ -596,8 +597,8 @@ for (const realRetrieval of [false, true]) test(realRetrieval
       return e.type === 'list_conversations'
         ? [seedConversationsFrame(host === FIRST_SERVER_ID ? SEEDED_ROW : SECOND_SEEDED_ROW)] : []
     }
-    const { page, app } = await launchPairedApp({ buildReplyFrames: replies(FIRST_SERVER_ID) }, {
-      rendererUrl: server.resolvedUrls!.local[0], secondServer: { buildReplyFrames: replies(SECOND_SERVER_ID) }
+    const { page, app } = await launchPairedApp({ threadMode: 'native', buildReplyFrames: replies(FIRST_SERVER_ID) }, {
+      rendererUrl: server.resolvedUrls!.local[0], secondServer: { threadMode: 'native', buildReplyFrames: replies(SECOND_SERVER_ID) }
     })
     await page.locator('.channel-list__row-open').first().click()
     await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled()
@@ -683,8 +684,8 @@ test('a late retrieval disconnect cannot settle a switched thread with reused im
       return e.type === 'list_conversations'
         ? [seedConversationsFrame(host === FIRST_SERVER_ID ? SEEDED_ROW : SECOND_SEEDED_ROW)] : []
     }
-    const { page, servers } = await launchPairedApp({ buildReplyFrames: replies(FIRST_SERVER_ID) }, {
-      rendererUrl: server.resolvedUrls!.local[0], secondServer: { buildReplyFrames: replies(SECOND_SERVER_ID) }
+    const { page, servers } = await launchPairedApp({ threadMode: 'native', buildReplyFrames: replies(FIRST_SERVER_ID) }, {
+      rendererUrl: server.resolvedUrls!.local[0], secondServer: { threadMode: 'native', buildReplyFrames: replies(SECOND_SERVER_ID) }
     })
     await page.locator('.channel-list__row-open').first().click()
     await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled()
@@ -736,7 +737,7 @@ test('a late retrieval disconnect cannot settle a switched thread with reused im
 for (const width of [1280, 800]) test(`supplied agents repair nesting and retain lifecycle, expansion and scroll at ${width}`, async ({ launchPairedApp }) => {
   const server = await rendererFixture()
   try {
-    const { page, app } = await launchPairedApp({ buildReplyFrames: bytes => decodeEnvelope(bytes).type === 'list_conversations'
+    const { page, app } = await launchPairedApp({ threadMode: 'native', buildReplyFrames: bytes => decodeEnvelope(bytes).type === 'list_conversations'
       ? [seedConversationsFrame()] : [] }, { rendererUrl: server.resolvedUrls!.local[0] })
     await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 800), width)
     let version = 1000
@@ -919,7 +920,7 @@ for (const width of [1280, 800]) test(`supplied agents repair nesting and retain
 for (const width of [1280, 800]) test('supplied task controls retain lifecycle and scope at ' + width, async ({ launchPairedApp }) => {
   const server = await rendererFixture()
   try {
-    const { page, app } = await launchPairedApp({ buildReplyFrames: bytes => decodeEnvelope(bytes).type === 'list_conversations'
+    const { page, app } = await launchPairedApp({ threadMode: 'native', buildReplyFrames: bytes => decodeEnvelope(bytes).type === 'list_conversations'
       ? [seedConversationsFrame(SEEDED_ROW)] : [] }, { rendererUrl: server.resolvedUrls!.local[0] })
     await page.locator('.channel-list__row-open').first().click()
     await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled()
@@ -1015,6 +1016,9 @@ for (const width of [1280, 800]) test('supplied task controls retain lifecycle a
     await capturePairedApp(app, page, '/tmp/builder-1938/panel-' + width + '.png')
     await scope(SECOND_SERVER_ID)
     await batch([work])
+    await expect(panel).toContainText('Review races')
+    await expect(panel).not.toContainText('Review complete')
+    await panel.getByRole('button', { name: 'Close', exact: true }).click()
     await expect(panel).toHaveCount(0)
     const escapesBeforeSwitch = await page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.escapes.length)
     await thread.press('Escape')
@@ -1028,17 +1032,24 @@ for (const width of [1280, 800]) test('supplied task controls retain lifecycle a
     expect(await page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.stops))
       .toEqual([[FIRST_SERVER_ID, SEEDED_ROW.id, 'raw-task'], [SECOND_SERVER_ID, SEEDED_ROW.id, 'raw-task']])
     await scope()
+    await expect(panel).toContainText('Review complete')
+    await panel.getByRole('button', { name: 'Close', exact: true }).click()
     await expect(panel).toHaveCount(0)
     await expect(pill).toHaveCount(0)
     await page.getByRole('button', { name: 'Background tasks', exact: true }).click()
     await expect(panel).toContainText('Review complete')
     await scope(FIRST_SERVER_ID, 'another-chat')
     await batch([work])
+    await expect(panel).toContainText('Review races')
+    await panel.getByRole('button', { name: 'Close', exact: true }).click()
     await expect(panel).toHaveCount(0)
     await pill.click()
     await expect(panel).not.toContainText('Wrong host')
     await expect(stop).toHaveCount(0)
     await scope(FIRST_SERVER_ID, SEEDED_ROW.id, 'new-epoch')
+    await expect(panel).toBeVisible()
+    await expect(panel.locator('li')).toHaveCount(0)
+    await panel.getByRole('button', { name: 'Close', exact: true }).click()
     await expect(panel).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Background tasks', exact: true })).toHaveCount(0)
   } finally { await new Promise<void>((resolve, reject) => server.httpServer!.close(error => error ? reject(error) : resolve())) }

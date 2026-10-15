@@ -1,3 +1,4 @@
+import { sendConversationCommand } from './conversationActionAvailability'
 import { useEffect, useRef } from 'react'
 import { connectedConversationHostNow } from './conversationActionAvailability'
 import { activeConversationStore } from '../../store/activeConversationStore'
@@ -44,7 +45,7 @@ export function RunConfigData(): null {
     if (connectedConversationHostNow(activeConversationStore.getState().activeConversation?.id ?? null) === null) return
     requested.current = true
     requestRunConfigSnapshot(
-      window.pyry.sendCommand,
+      sendConversationCommand,
       activeConversationStore.getState().activeConversation?.id ?? null
     )
   }, [])

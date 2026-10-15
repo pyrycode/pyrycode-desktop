@@ -1612,4 +1612,13 @@ describe('#1651 — selectAgentForConversation', () => {
     expect(selectAgentForConversation('missing')(store.getState())).toBe('claude')
     expect(selectAgentForConversation('codex-chat')(store.getState())).toBe('claude')
   })
+
+  it('reads equal conversation IDs from the selected host without borrowing a foreign agent', () => {
+    const store = createConversationListStore()
+    store.getState().setConversations([{ ...summary, id: 'shared', agent: 'codex' }], 'codex-host')
+    store.getState().setConversations([{ ...summary, id: 'shared', agent: 'claude' }], 'claude-host')
+    expect(selectAgentForConversation('shared', 'codex-host')(store.getState())).toBe('codex')
+    expect(selectAgentForConversation('shared', 'claude-host')(store.getState())).toBe('claude')
+    expect(selectAgentForConversation('shared', 'absent-host')(store.getState())).toBe('claude')
+  })
 })

@@ -39,7 +39,10 @@ export function notificationPreviewIn(state: ConversationTimelineState, event: N
   const slice = state.timelines.get(event.conversationId)
   if (slice === undefined) return null
   if (slice.serverId !== undefined && slice.serverId !== event.serverId) return null
-  const items = slice.timeline.items
+  return notificationPreviewFromItems(slice.timeline.items, event)
+}
+
+export function notificationPreviewFromItems(items: readonly ThreadItem[], event: NotifyEvent): string | null {
   switch (event.type) {
     case 'turnEnd': {
       const reply = newest(items, (item) => item.kind === 'assistantText' && item.turnId === event.turnId)

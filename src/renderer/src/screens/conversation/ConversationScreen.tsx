@@ -1,8 +1,17 @@
+import { sendConversationCommand } from './conversationActionAvailability'
 import { createAttachmentImageSources } from './attachmentImageSource'
+import { threadRuntime } from '../../store/threadRuntime'
+import { selectThreadReadings } from '../../store/threadLiveState'
+import { threadLiveInputs } from './threadLiveInputs'
+import { threadComposerReports, type ThreadComposerReports } from './threadComposerReports'
+import { workingIndicatorState as deriveWorkingIndicator, workingIndicatorStateWithLocalSend as deriveLocalIndicator,
+  type ThreadStatus, type WorkingIndicatorState } from './workingIndicatorState'
+export type { ThreadStatus, WorkingIndicatorState } from './workingIndicatorState'
+import { ThreadPromptSlot } from './ThreadPromptSlot'
 import { useReadObservation, type ThreadReadInputs } from '../../store/conversationReadPublisher'
 import type { ThreadSnapshot } from '../../store/threadItemStore'
 import { threadTaskPresentations, type ThreadTaskInputs } from './threadTaskPresentation'
-import { threadItemPresentations, threadQueueHandle, actOnThreadQueue, type ThreadSendInputs } from './threadItemPresentation'
+import { taskLinked, threadItemPresentations, threadQueueHandle, actOnThreadQueue, type ThreadSendInputs } from './threadItemPresentation'
 import { historyGapId } from '@shared/chatHistory'
 import { agentSwitchStore, type AgentSwitchStatus } from '../../store/agentSwitchStore'
 import { useReplySuggestionStore, selectReplySuggestion, visibleReplySuggestion } from '../../store/replySuggestionStore'
@@ -29,7 +38,7 @@ import {
 import './conversation.css'
 import { useStore } from 'zustand'
 import { rememberedModel } from '../../store/rememberedModel'
-import { connectedConversationHostNow, useConversationActionAvailability } from './conversationActionAvailability'
+import { connectedConversationHostNow, conversationHostNow, useConversationHost, useConversationActionAvailability } from './conversationActionAvailability'
 import { AssistantMarkdown } from './AssistantMarkdown'
 import { StreamingAssistantMarkdown } from './StreamingAssistantMarkdown'
 import { MARKDOWN_OPEN_FAILED_NOTICE, MarkdownReaderView, useMarkdownReader } from './MarkdownReader'
@@ -96,6 +105,8 @@ import {
   COMPOSER_RECONNECT_BUTTON_COPY,
   shouldShowBanner,
   CONNECTION_BANNER_COPY,
+  DAEMON_UPDATE_REQUIRED_COPY,
+  isDaemonUpdateRequired,
   COMPOSER_ERROR_CHIP_COPY,
   COMPOSER_MESSAGE_DELIVERY_COPY,
   COMPOSER_ERROR_CHIP_PREFIX_COPY,
@@ -138,13 +149,11 @@ import { changeSetting, isAddressableSessionId } from './runSettingsControls'
 import { isAtBottom, isNearTop } from './threadScrollPosition'
 import { toolHeadlineRuns } from './toolHeadline'
 import { listedInputFields, shellCommandBlock } from './toolBody'
-import { serverIdForOpenConversation } from './unpairAction'
 import { requestRunConfigSnapshot } from './runConfigSnapshot'
 import { composerDraftStore, selectDraft, useComposerDraftStore } from '../../store/composerDraftStore'
 import {
   conversationListStore,
   useConversationListStore,
-  selectConversations,
   selectConversationAgentFor
 } from '../../store/conversationListStore'
 import { dropQueuedMessage } from './dropQueuedMessage'
@@ -182,7 +191,7 @@ import {
 } from '../../store/questionPicksStore'
 import { sessionBoundaryTitle } from './sessionBoundaryViewModel'
 import { compactionBoundaryTitle } from './compactionBoundaryViewModel'
-import { formatSessionCost, latestSessionCostUsd } from './sessionCost'
+import { formatSessionCost, latestSessionCostUsd, latestThreadSessionCostUsd } from './sessionCost'
 import { formatLastActivity, titleFor } from '../channels/channelListViewModel'
 // #1440 renamed this module for its new title. `requestRenameConversation` KEEPS its name: it owns the
 // `renameConversation` wire literal, and renaming the helper would drift it from the verb it sends.
@@ -307,6 +316,27 @@ export function ConversationScreen({
     ? savedTimelineTarget.serverId
     : activeConversation !== null && 'serverId' in activeConversation &&
       typeof activeConversation.serverId === 'string' ? activeConversation.serverId : null
+  const authoritative = threadRuntime.isThread(selectedHost, openConversationId)
+  // A host whose daemon lacks `thread` is update-required (#1908) and draws no rows, saved ones included.
+  const daemonOutdated = useSessionStore(s => selectedHost !== null && isDaemonUpdateRequired(s.statuses.get(selectedHost)))
+  const authoritativeSnapshot = useStore(threadRuntime.items, s => selectedHost === null || openConversationId === null ||
+    daemonOutdated ? null : s.hosts.get(selectedHost)?.get(openConversationId)?.snapshot ?? null)
+  const threadLive = useMemo(() => threadRuntime.live(selectedHost ?? '', openConversationId ?? ''), [selectedHost, openConversationId])
+  const liveState = useStore(threadLive, s => s)
+  const localSend = useStore(threadRuntime.sends, s => selectedHost === null || openConversationId === null
+    ? null : s.select(selectedHost, openConversationId))
+  const liveInput = useMemo(() => threadLiveInputs(liveState, localSend?.localSendPending), [liveState, localSend])
+  const composerReports = useMemo(() => authoritativeSnapshot
+    ? threadComposerReports(authoritativeSnapshot, liveInput.sessionId, localSend?.reportsClearedThrough, liveInput.activity.turnRunning)
+    : null, [authoritativeSnapshot, liveInput.sessionId, liveInput.activity.turnRunning, localSend?.reportsClearedThrough])
+  const taskStops = useStore(threadRuntime.taskStops, s => s.entries)
+  const queryKey = JSON.stringify([selectedHost, openConversationId])
+  const queryState = useStore(threadRuntime.state, s => s.queries.get(queryKey))
+  const complete = useStore(threadRuntime.state, s => s.complete.get(queryKey))
+  const threadRestoring = useStore(threadRuntime.state, s => s.restoring.has(queryKey))
+  const threadConnection = useSessionStore(s => selectedHost === null ? undefined : s.statuses.get(selectedHost))
+  const threadSummary = useConversationListStore(s => authoritative
+    ? s.byServer.get(selectedHost)?.find(row => row.id === openConversationId) : undefined)
   useEffect(() => {
     const dispatch = agentSwitchStore.getState().dispatch
     dispatch({ type: 'paneChanged', pane: selectedHost === null || openConversationId === null
@@ -328,7 +358,8 @@ export function ConversationScreen({
   const backgroundAgents = useBackgroundTaskRosterStore(s => openConversationId === null || ownSlice === undefined
     ? undefined : s.agentTimeline.get(openConversationId))
   const openTimeline = selectedHost !== null && ownSlice === undefined ? null : heldTimeline
-  const localStatus = ownSlice?.localRead ?? (ownSlice === undefined ? 'loading' : 'loaded')
+  const localStatus = authoritative ? threadRestoring ? 'loading' : 'loaded'
+    : ownSlice?.localRead ?? (ownSlice === undefined ? 'loading' : 'loaded')
   const coverage = ownSlice?.coverage ?? (ownSlice?.history?.status === 'loaded'
     ? ownSlice.history : ownSlice?.restored?.coverage)
   const olderSaved = offline && localStatus === 'loaded' &&
@@ -347,7 +378,9 @@ export function ConversationScreen({
   // exactly today's behaviour against an empty flat store. No test can tell the two readings apart at this
   // site, because both render identically; the test that CAN fail is the empty-string-key one in
   // ConversationScreen.test.tsx's `selectOpenTimelineFor` describe.
-  const thread = openTimeline === null ? initialTimelineState : openTimeline
+  const thread = authoritative ? { ...initialTimelineState, ...liveInput.status,
+    thinkingTokens: liveInput.thinkingTokens, localSendPending: localSend?.localSendPending ?? null }
+    : openTimeline === null ? initialTimelineState : openTimeline
   // The seven names below are `TimelineState`'s own seven fields, so every line of JSX under this container
   // is untouched by the cutover. Subscribing to the whole slice rather than to seven narrow selectors is
   // re-render-neutral: each of the six scalars' own comments recorded that it "adds no meaningful
@@ -373,7 +406,7 @@ export function ConversationScreen({
   //                      the reading changes none of that — it only extends the text of one of them.
   const { items, phase, stalled, apiRetry, compacting, localSendPending, thinkingTokens, resetting } =
     thread
-  const openTool = openToolCall(items)
+  const openTool = authoritative ? composerReports?.tool ?? null : openToolCall(items)
   // #1556: hoisted out of the JSX — the `openTool` precedent one line up — because the status row now has
   // TWO consumers of this one answer. The label has always read it; the icon's gate joins it, so deriving
   // it once is what stops the two from ever disagreeing about the same render (they disagreed for a full
@@ -448,14 +481,14 @@ export function ConversationScreen({
     if (openConversationId === null || connectedConversationHostNow(openConversationId) === null) return
     dropQueuedMessage(openConversationId, queuedMsgId, messageId, {
       diagnose: window.pyry.sendDiagnostic,
-      sendCommand: window.pyry.sendCommand,
+      sendCommand: sendConversationCommand,
       dispatch: dispatchTimeline,
       dispatchFor: dispatchTimelineFor
     })
   }, [openConversationId, selectedHost, dispatchTimeline, dispatchTimelineFor])
   const onSendQueuedNow = useCallback((queuedMsgId: number): void => {
     if (openConversationId === null || connectedConversationHostNow(openConversationId) === null) return
-    sendQueuedNow(openConversationId, queuedMsgId, { sendCommand: window.pyry.sendCommand })
+    sendQueuedNow(openConversationId, queuedMsgId, { sendCommand: sendConversationCommand })
   }, [openConversationId, selectedHost])
   // #177: the Run configuration sheet's open/closed state — a single-value screen-local boolean →
   // useState, never the store (ADR 0006). It resets to closed on remount for free, so the sheet
@@ -504,21 +537,25 @@ export function ConversationScreen({
     [openConversationId]
   )
   const prependedRows = useConversationTimelineStore(selectOpenPrependedRows)
-  const { scrollPin, followBottom, paneRef } = useThreadScrollPin(openConversationId, prependedRows)
+  const authoritativeRows = useMemo(() => authoritativeSnapshot
+    ? [...authoritativeSnapshot.items, ...(localSend?.pending ?? [])] : undefined, [authoritativeSnapshot, localSend])
+  const threadPin = useThreadScrollPin(openConversationId, authoritative ? 0 : prependedRows, !authoritative, authoritativeRows,
+    authoritative ? () => { if (selectedHost !== null) threadRuntime.query('older', selectedHost) } : undefined)
+  const { scrollPin, followBottom, paneRef } = threadPin
   // #1579: every open asks for fresh MCP status, from the handler rather than a mount effect so one open
   // is one request. The sheet shows this same `activeConversation`. #1494: the overflow menu's item and the
   // status row's MCP failure notice both call this one closure, so they open the sheet identically.
   const openChannelInfo = (): void => {
     setChannelInfoOpen(true)
-    requestMcpStatus(window.pyry.sendCommand, activeConversation?.id ?? null)
-    requestRunConfigSnapshot(window.pyry.sendCommand, activeConversation?.id ?? null)
+    requestMcpStatus(sendConversationCommand, activeConversation?.id ?? null)
+    requestRunConfigSnapshot(sendConversationCommand, activeConversation?.id ?? null)
   }
   // #1627: an open reader covers the whole pane, composer included; the sidebar is PairedShell's. The
   // thread and the Composer stay MOUNTED beneath it, hidden, never unmounted: the Composer's pending
   // attachments and its upload listener are mount-local, so an early return here would silently drop them
   // on a same-conversation round trip through the reader. Hiding also keeps the thread's scroll position.
   const readerOpen = reader.state.type !== 'closed'
-  useReadObservation(openConversationId, readerOpen, paneRef, scrollPin.ref)
+  useReadObservation(authoritative ? null : openConversationId, readerOpen, paneRef, scrollPin.ref)
   return (
     <div className="conversation">
       {reader.state.type !== 'closed' && (
@@ -567,7 +604,7 @@ export function ConversationScreen({
           read as a fault. What survives is a read that has not settled (loading, failed) and an offline
           host whose read DID return rows — the one case where "Offline. Showing saved messages." is a
           true sentence. The disconnection itself is still announced, by the #279 banner above. */}
-      {selectedHost !== null && (localStatus !== 'loaded' || (offline && items.length > 0)) &&
+      {selectedHost !== null && (localStatus !== 'loaded' || (offline && (authoritative ? authoritativeSnapshot?.items.length : items.length))) &&
         <SavedTimelineNotice status={localStatus} />}
       {/* #1627: a markdown file that could not be opened. One client-owned line, never the path or the
           reason; cleared by the next open, and gone with the screen on a conversation switch. */}
@@ -580,7 +617,7 @@ export function ConversationScreen({
           foldQueuedRows' header — but the two row lists are now joined before they are drawn, so a message
           sent mid-turn draws once. `queuedBacklog` is the same read #1009 hoisted here, unmoved; the drop
           closure below is #1213's, unchanged, only re-hung on this prop.
-          window.pyry.sendCommand stays dereferenced INSIDE the click closure (interaction time, never
+          sendConversationCommand stays dereferenced INSIDE the click closure (interaction time, never
           render), which is what keeps a container smoke render bridge-free; the null-id guard is
           belt-and-braces, since a populated row implies an active id (the daemon queues under real ids).
           The drop's two clocks — the echo leaves at the click (#1213), the queued item leaves on the
@@ -591,7 +628,41 @@ export function ConversationScreen({
           rendered, so the overlay (Re-pair above all) still shows when an offline host leaves the
           Timeline nothing to draw; the region then stays empty rather than missing. */}
       <div className="conversation__message-area">
-      {(!offline || items.length > 0 || visibleQueued.length > 0 || pendingBatch !== undefined || hasPermissionSurface) && <Timeline
+      {authoritative && !daemonOutdated && authoritativeSnapshot === null && queryState?.type === 'loading' && <p role="status">Loading messages…</p>}
+      {authoritative && !daemonOutdated && authoritativeSnapshot === null && queryState?.type === 'failed' && <ComposerHistoryFailure retryable
+        onRetry={() => { if (selectedHost !== null) threadRuntime.query('retry', selectedHost) }} />}
+      {authoritative && authoritativeSnapshot && <ThreadItemsTimeline snapshot={authoritativeSnapshot} pin={threadPin}
+        standaloneStatus={false}
+        backgroundTasksOpen={panelOpen} onBackgroundTasksOpenChange={setPanelOpen}
+        onOlder={() => { if (selectedHost !== null) threadRuntime.query('older', selectedHost) }}
+        readInputs={threadSummary ? { row: threadSummary, readerOpen,
+          completeThrough: complete?.epoch === authoritativeSnapshot.epoch ? complete.version : 0 } : undefined}
+        sendInputs={{ midTurnInput: liveInput.runConfig?.midTurnInput === true, diagnose: window.pyry.sendDiagnostic, local: selectedHost !== null && openConversationId !== null && localSend !== null
+          ? { hostId: selectedHost, conversationId: openConversationId, ...localSend } : undefined,
+          connection: selectedHost !== null && threadConnection ? { hostId: selectedHost, status: threadConnection } : undefined,
+          onAction: (serverId, command) => sendConversationCommand({ ...command, serverId }) }}
+        taskInputs={{ stops: taskStops, progress: liveInput.taskProgress.flatMap(reading => authoritativeSnapshot.items.filter(item =>
+          item.session === reading.envelopeSessionId && item.active === true && typeof item.content === 'object' && item.content !== null && 'task_id' in item.content && item.content.task_id === reading.taskId).map(item => ({
+            hostId: authoritativeSnapshot.hostId, conversationId: authoritativeSnapshot.conversationId, epoch: authoritativeSnapshot.epoch,
+            session: typeof item.session === 'string' ? item.session : undefined,
+            agent: typeof item.agent === 'string' ? item.agent : undefined, taskId: reading.taskId, creatingItemId: item.id, progress: reading
+          }))), connection: selectedHost !== null && threadConnection ? { hostId: selectedHost, status: threadConnection } : undefined,
+          onStopTask: (serverId, conversationId, taskId) => {
+            const snapshot = threadRuntime.items.getState().snapshot(serverId, conversationId)
+            if (!snapshot || !threadRuntime.taskStops.getState().begin(snapshot, taskId)) return
+            try { sendConversationCommand({ type: 'stopBackgroundTask', serverId, payload: { conversation_id: conversationId, task_id: taskId } }) }
+            catch { threadRuntime.taskStops.getState().event({ type: 'backgroundTaskStopRejected', serverId, conversationId, taskId }) }
+          } }}
+        foldTools={collapseToolUses} turnRunning={isTurnRunning(phase)} onReply={replyToMessage} onOpenMarkdownPath={reader.open}
+        onOpenHostedApp={onOpenHostedApp}
+        trailing={<>
+          {queryState?.type === 'loading' && <p role="status">Loading messages…</p>}
+          {queryState?.type === 'failed' && <ComposerHistoryFailure retryable onRetry={() => {
+            if (selectedHost !== null) threadRuntime.query('retry', selectedHost)
+          }} />}
+          <ThreadPromptSlot host={selectedHost} conversationId={openConversationId} />
+        </>} />}
+      {!authoritative && (!offline || items.length > 0 || visibleQueued.length > 0 || pendingBatch !== undefined || hasPermissionSurface) && <Timeline
         key={openConversationId}
         items={items}
         gapState={ownSlice}
@@ -622,14 +693,15 @@ export function ConversationScreen({
         // control is. No timeline write: the message is being delivered, so its echo stays true.
         onSendQueuedNow={actionsAvailable ? onSendQueuedNow : undefined}
       />}
-      <TopOverlayControl onRepairHost={onRepairHost} />
+      {authoritative && !daemonOutdated && authoritativeSnapshot === null && <ThreadPromptSlot host={selectedHost} conversationId={openConversationId} />}
+      <TopOverlayControl onRepairHost={onRepairHost} threadLive={authoritative ? threadLive : undefined} />
       {/* #581: the background-task panel, reading the roster store itself, so only the conversation id goes
           down; with no active conversation the id is null and the panel reads "never observed". It mounts
           no data path — the roster bridge is already app-wide in App.tsx.
           #1634: a non-modal drawer pinned over the right of THIS region (Figma 565:2966 spans exactly the
           message area), the last child so it paints above the Top overlay. `turnRunning` is the stop
           control's own gate, so the drawer yields exactly the Escape the composer will act on. */}
-      {panelOpen && (
+      {!authoritative && panelOpen && (
         <BackgroundTaskPanel
           conversationId={activeConversation?.id ?? null}
           turnRunning={isTurnRunning(phase)}
@@ -708,6 +780,7 @@ export function ConversationScreen({
                  pill opens the SAME overlay the overflow menu's Background-tasks item does. #1634: the pill
                  now TOGGLES it and shows whether it is open; the menu item still only opens. */
               <ComposerErrorSlotControl
+                threadReports={authoritative ? composerReports : undefined}
                 onCommand={sendText}
                 backgroundTasksOpen={panelOpen}
                 onToggleBackgroundTasks={() => setPanelOpen(!panelOpen)}
@@ -758,7 +831,7 @@ export function ConversationScreen({
           conversation={activeConversation}
           now={now}
           // #1567: scanned only while the sheet is mounted; `items` is the open conversation's thread.
-          sessionCostUsd={latestSessionCostUsd(items)}
+          sessionCostUsd={authoritative ? latestThreadSessionCostUsd(authoritativeSnapshot, liveInput.sessionId) : latestSessionCostUsd(items)}
           onClose={() => setChannelInfoOpen(false)}
         />
       )}
@@ -893,7 +966,7 @@ function measureThreadChrome(pane: HTMLElement): void {
  * dependency array it already runs after every render, so "jump to the bottom now" and "stay pinned while
  * the reply streams" are not two behaviours: both are consequences of the flag being `true`.
  */
-function useThreadScrollPin(conversationId: string | null, prependedRows: number, legacyHistory = true, presentation?: object): ThreadPin {
+function useThreadScrollPin(conversationId: string | null, prependedRows: number, legacyHistory = true, presentation?: object, onOlder?: () => void): ThreadPin {
   const ref = useRef<HTMLDivElement>(null)
   const paneRef = useRef<HTMLDivElement>(null)
   const following = useRef(true)
@@ -1149,8 +1222,10 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
 
   const demandHistory = (el: HTMLDivElement): void => {
     if (!legacyHistory) {
+      if (connectedConversationHostNow(conversationId) === null) return
       following.current = false
       rememberTop(el)
+      if (isNearTop({ scrollOffset: el.scrollTop, viewportHeight: el.clientHeight, contentHeight: el.scrollHeight })) onOlder?.()
       return
     }
     // Measure before the input scrolls: crossing into the band needs a new input.
@@ -1175,6 +1250,11 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
       viewportHeight: el.clientHeight, contentHeight: el.scrollHeight })
     if (nearTop) following.current = false
     rememberTop(el)
+    const host = connectedConversationHostNow(conversationId)
+    if (host !== null && threadRuntime.isThread(host, conversationId)) {
+      if (nearTop) threadRuntime.query('older', host)
+      return
+    }
     requestOlderHistory(historyAskDeps, conversationId, nearTop)
   }
 
@@ -1588,6 +1668,12 @@ export function Timeline({
 }
 
 type ThreadItemsProps = {
+  standaloneStatus?: boolean
+  backgroundTasksOpen?: boolean
+  onBackgroundTasksOpenChange?: (open: boolean) => void
+  pin?: ThreadPin
+  onOlder?: () => void
+  trailing?: ReactNode
   onOpenHostedApp?: (serverId: string, appId: string) => void
   snapshot: ThreadSnapshot
   readInputs?: Omit<ThreadReadInputs, 'snapshot'>
@@ -1603,9 +1689,8 @@ export function ThreadItemsTimeline(props: ThreadItemsProps): JSX.Element {
   const s = props.snapshot
   return <ThreadItemsView key={JSON.stringify([s.hostId, s.conversationId, s.epoch])} {...props} />
 }
-function ThreadItemsView({ snapshot, readInputs, sendInputs, taskInputs, turnRunning = false, foldTools = false, onReply, onOpenMarkdownPath, onOpenHostedApp }: ThreadItemsProps): JSX.Element {
+function ThreadItemsView({ pin, snapshot, readInputs, sendInputs, taskInputs, trailing, onOlder, standaloneStatus = true, backgroundTasksOpen = false, onBackgroundTasksOpenChange, turnRunning = false, foldTools = false, onReply, onOpenMarkdownPath, onOpenHostedApp }: ThreadItemsProps): JSX.Element {
   const tasks = useMemo(() => threadTaskPresentations(snapshot, taskInputs), [snapshot, taskInputs])
-  const [tasksOpen, setTasksOpen] = useState(false)
   const activeTaskCount = tasks.filter(task => task.active).length
   const rows = useMemo(() => threadItemPresentations(snapshot), [snapshot])
   const local = sendInputs?.local?.hostId === snapshot.hostId && sendInputs.local.conversationId === snapshot.conversationId
@@ -1629,8 +1714,10 @@ function ThreadItemsView({ snapshot, readInputs, sendInputs, taskInputs, turnRun
   }, [snapshot.hostId, snapshot.conversationId])
   // Completed older pages change the immutable item list without necessarily advancing the watermark.
   const visibleItems = useMemo(() => [...snapshot.items, ...pending], [snapshot.items, pending])
-  const { scrollPin, paneRef } = useThreadScrollPin(snapshot.conversationId, 0, false, visibleItems)
-  useReadObservation(null, false, paneRef, scrollPin.ref, readInputs && { ...readInputs, snapshot })
+  const localPin = useThreadScrollPin(snapshot.conversationId, 0, false, visibleItems, onOlder)
+  const scrollPin = pin?.scrollPin ?? localPin.scrollPin
+  const paneRef = localPin.paneRef
+  useReadObservation(null, false, pin?.paneRef ?? paneRef, scrollPin.ref, readInputs && { ...readInputs, snapshot })
   const [expandedTools, setTools] = useState<ReadonlySet<number>>(() => new Set())
   const [expandedRuns, setRuns] = useState<ReadonlySet<number>>(() => new Set())
   const items: ThreadItem[] = rows.map(row => row.item ?? { kind: 'userText', text: '' })
@@ -1638,7 +1725,7 @@ function ThreadItemsView({ snapshot, readInputs, sendInputs, taskInputs, turnRun
   const projection = rows.map((row, index) => ({ index, depth: row.depth,
     ancestors: row.ancestors.flatMap(id => { const at = positions.get(id); return at === undefined ? [] : [at] }),
     count: row.count, hasChildren: row.hasChildren, marker: row.marker,
-    background: row.source.kind === 'agent', running: row.source.active === true }))
+    background: taskLinked(row.source), running: row.source.active === true }))
   const agentNodes = useRef(new Map<number, HTMLDivElement>())
   const [revealAgent, setRevealAgent] = useState<number | null>(null)
   useThreadLayoutEffect(() => {
@@ -1650,16 +1737,33 @@ function ThreadItemsView({ snapshot, readInputs, sendInputs, taskInputs, turnRun
   const byMember = new Map(runs.flatMap(run => run.members.map(index => [index, run] as const)))
   const byStart = new Map(runs.map(run => [run.index, run]))
   const open = (run: ToolRun) => run.members.some(index => expandedRuns.has(rows[index].source.id))
-  const toggleTool = (id: number) => setTools(previous => {
+  const hiddenAt = (index: number): boolean => {
+    const row = rows[index]
+    const run = byMember.get(index) ?? row.ancestors.map(owner => byMember.get(positions.get(owner) ?? -1)).find(Boolean)
+    return row.ancestors.some(owner => !expandedTools.has(owner)) || (!row.marker && run !== undefined && !open(run))
+  }
+  const visible = rows.flatMap((row, index) => hiddenAt(index) ? [] : [{ row, index }])
+  const joins = new Map(visible.map(({ row, index }, at) => {
+    const previous = visible[at - 1]?.row, next = visible[at + 1]?.row
+    return [index, [
+      (previous?.depth === row.depth && !previous.marker && previous.item?.kind === 'toolCall' || byStart.has(index) && open(byStart.get(index)!)) && 'tool-group-row--joined-above',
+      next?.depth === row.depth && !next.marker && next.item?.kind === 'toolCall' && 'tool-group-row--joined-below'
+    ].filter(Boolean).join(' ')]
+  }))
+  const toggleTool = useCallback((id: number | string) => {
+    if (typeof id !== 'number') return
+    setTools(previous => {
     const next = new Set(previous)
     if (next.has(id)) next.delete(id); else next.add(id)
     return next
-  })
-  return <ThreadAttachmentScopeContext.Provider value={attachmentScope}><div className="conversation__message-area" ref={paneRef}>
+    })
+  }, [])
+  return <ThreadAttachmentScopeContext.Provider value={attachmentScope}><div className="conversation__thread-area" ref={paneRef}>
     <div className="conversation__thread" ref={scrollPin.ref} onScroll={scrollPin.onScroll}
       onWheel={scrollPin.onWheel} onKeyDown={scrollPin.onKeyDown} aria-label="Conversation history" tabIndex={0}>
       {rows.flatMap((row, index) => {
-        const id = row.source.id, item = row.item, run = byMember.get(index), start = byStart.get(index)
+        const id = row.source.id, item = row.item, start = byStart.get(index)
+        const run = byMember.get(index) ?? row.ancestors.map(owner => byMember.get(positions.get(owner) ?? -1)).find(Boolean)
         const handle = threadQueueHandle(snapshot, row.source, sendInputs)
         const collapsedOwner = row.ancestors.some(owner => !expandedTools.has(owner))
         const hidden = collapsedOwner || (run !== undefined && !open(run))
@@ -1676,11 +1780,8 @@ function ThreadItemsView({ snapshot, readInputs, sendInputs, taskInputs, turnRun
             <span className="agent-start-marker__action">Go to agent ↓</span>
           </button>
         </div>
-        const adjacentTool = (at: number) => rows[at]?.item?.kind === 'toolCall' && !rows[at].marker &&
-          rows[at].ancestors.at(-1) === row.ancestors.at(-1)
         const classes = ['tool-group-row', `tool-group-row--depth-${row.depth}`,
-          item?.kind === 'toolCall' && (adjacentTool(index - 1) || (start && open(start))) && 'tool-group-row--joined-above',
-          item?.kind === 'toolCall' && adjacentTool(index + 1) && 'tool-group-row--joined-below'].filter(Boolean).join(' ')
+          item?.kind === 'toolCall' && joins.get(index)].filter(Boolean).join(' ')
         const summary = typeof row.source.summary === 'string' ? row.source.summary.slice(0, 4096) : 'Unsupported item'
         const agent = row.source.agent === 'claude' || row.source.agent === 'codex' ? row.source.agent : undefined
         return [start && <div key={`run-${id}`} hidden={collapsedOwner} className={`tool-group-row tool-run${open(start) ? ' tool-group-row--joined-below' : ''}`}>
@@ -1698,31 +1799,33 @@ function ThreadItemsView({ snapshot, readInputs, sendInputs, taskInputs, turnRun
             ? <button type="button" className="tool-row__chip tool-row__chip--toggle" aria-expanded={expandedTools.has(id)}
                 onClick={() => toggleTool(id)}>{summary}</button>
             : <p className="session-delimiter__title">{summary}</p> : item.kind === 'toolCall'
-            ? <ToolRow item={item} running={row.source.active === true}
-                suppliedOutcome={row.outcome === undefined ? undefined : { label: row.outcome,
-                  failed: row.source.status === 'failed', denied: row.source.status === 'denied' }}
-                group={row.source.kind === 'agent' ? { count: row.count, running: row.source.active === true } : undefined}
-                expansion={{ expanded: expandedTools.has(id), onToggle: () => toggleTool(id) }} />
+            ? <TimelineToolRow item={item} rowKey={id} running={row.source.active === true}
+                active={row.source.active === true} outcome={row.outcome}
+                outcomeFailed={row.source.status === 'failed'} outcomeDenied={row.source.status === 'denied'}
+                count={row.source.kind === 'agent' ? row.count : undefined}
+                expanded={expandedTools.has(id)} onToggle={toggleTool} />
             : <TimelineRow item={item} inProgress={row.source.active === true} authoritativeSummary={summary}
                 queuedPresentation={row.source.kind === 'user_message' && row.source.status === 'queued'}
-                queued={handle === null ? null : { queuedMsgId: handle, messageId: undefined }} midTurnInput
-                onDropQueued={() => actOnThreadQueue(snapshot, row.source, sendInputs, 'drop')}
-                onSendQueuedNow={() => actOnThreadQueue(snapshot, row.source, sendInputs, 'send-now')}
+                queued={handle === null ? null : { queuedMsgId: handle, messageId: undefined }} midTurnInput={sendInputs?.midTurnInput ?? true}
+                onDropQueued={handle === null ? undefined : () => actOnThreadQueue(snapshot, row.source, sendInputs, 'drop')}
+                onSendQueuedNow={handle === null ? undefined : () => actOnThreadQueue(snapshot, row.source, sendInputs, 'send-now')}
                 delivery={row.source.kind === 'user_message' && row.source.status === 'lost' ? 'not-delivered' : undefined}
                 turnStats={row.stats} agent={agent} onReply={onReply} onOpenMarkdownPath={onOpenMarkdownPath} onOpenHostedApp={onOpenHostedApp} />}
         </div>]
       })}
+      {rows.length === 0 && pending.length === 0 && <EmptyThread />}
       {pending.map(row => <TimelineRow key={`pending-${row.key}`} item={row.item} inProgress={false}
         delivery={row.delivery} onReply={onReply} />)}
+      {trailing}
     </div>
-    <ThinkingIndicator state={sendState} toolName={null} retry={null} resetting={null} thinkingTokens={null} />
-    {tasks.length > 0 && <div className="composer-status">
+    {standaloneStatus && <ThinkingIndicator state={sendState} toolName={null} retry={null} resetting={null} thinkingTokens={null} />}
+    {standaloneStatus && tasks.length > 0 && <div className="composer-status">
       <span className="composer-status__activity" aria-hidden="true" />
-      <ComposerTaskCount count={activeTaskCount} open={tasksOpen} onToggle={() => setTasksOpen(open => !open)} />
+      <ComposerTaskCount count={activeTaskCount} open={backgroundTasksOpen} onToggle={() => onBackgroundTasksOpenChange?.(!backgroundTasksOpen)} />
     {tasks.length > 0 && activeTaskCount === 0 && <button type="button" className="composer-status__tasks"
-      aria-expanded={tasksOpen} onClick={() => setTasksOpen(open => !open)}>Background tasks</button>}
+      aria-expanded={backgroundTasksOpen} onClick={() => onBackgroundTasksOpenChange?.(!backgroundTasksOpen)}>Background tasks</button>}
     </div>}
-    {tasksOpen && <BackgroundTaskPanelView entry={null} suppliedTasks={tasks} turnRunning={turnRunning} onClose={() => setTasksOpen(false)}
+    {backgroundTasksOpen && <BackgroundTaskPanelView entry={null} suppliedTasks={tasks} turnRunning={turnRunning} onClose={() => onBackgroundTasksOpenChange?.(false)}
       onStopTask={taskId => taskInputs?.onStopTask?.(snapshot.hostId, snapshot.conversationId, taskId)} />}
   </div></ThreadAttachmentScopeContext.Provider>
 }
@@ -2490,7 +2593,7 @@ function ToolFailedIcon(): JSX.Element {
 // Compare primitive group state and the existing row identity. Legacy ToolRow props are
 // constructed only when something this row consumes changes, including its toggle handler.
 const TimelineToolRow = memo(function TimelineToolRow({
-  item, rowKey, count, background, running, expanded, onToggle
+  item, rowKey, count, background, running, expanded, onToggle, active, outcome, outcomeFailed, outcomeDenied
 }: {
   item: Extract<ThreadItem, { kind: 'toolCall' }>
   rowKey: number | string
@@ -2499,8 +2602,13 @@ const TimelineToolRow = memo(function TimelineToolRow({
   running: boolean
   expanded: boolean
   onToggle: (key: number | string) => void
+  active?: boolean
+  outcome?: string
+  outcomeFailed?: boolean
+  outcomeDenied?: boolean
 }): JSX.Element {
-  return <ToolRow item={item}
+  return <ToolRow item={item} running={active}
+    suppliedOutcome={outcome === undefined ? undefined : { label: outcome, failed: outcomeFailed === true, denied: outcomeDenied === true }}
     group={count === undefined ? undefined : { count, background, running }}
     expansion={{ expanded, onToggle: () => onToggle(rowKey) }} />
 })
@@ -3005,16 +3113,6 @@ export const STALL_COPY = 'The turn seems to have stalled…'
 // CLIENT-OWNED literal, so the label choice stays a closed set of this file's own constants. The reset's
 // two decoded tokens ride their own separately-typed prop (`resetting`), the third of the daemon's
 // contributions to this label and the first whose fields are closed unions rather than free values.
-export type WorkingIndicatorState =
-  | 'thinking'
-  | 'working'
-  | 'retrying'
-  | 'compacting'
-  | 'stalled'
-  | 'resetting'
-  // #1725: the local send window's two stages, which replace its former `'thinking'` answer.
-  | 'sending'
-  | 'waiting'
 
 // #967: the label for each of the five states — a total switch with NO default, so a sixth member is a
 // `tsc` error here rather than a silently unlabelled row. Every arm returns a client-owned constant; only
@@ -3418,13 +3516,6 @@ export function ComposerStatusArea({
 // #1517 IS THE FOURTH, and it takes the field on #967's own terms: required, one more token in every
 // literal, and `tsc` names every site. What is different is where it lands in the order — the TOP, not
 // the middle — for the reason the constants above give.
-export interface ThreadStatus {
-  phase: TurnPhase
-  apiRetry: ApiRetryStatus | null
-  compacting: boolean
-  stalled: boolean
-  resetting: ResettingStatus | null
-}
 
 // #493: whether the generic thinking indicator shows — thinking, and nothing supersedes it (AC5).
 // Retrying against an API error is NOT compatible with "thinking" — claude is not making progress on the
@@ -3499,12 +3590,7 @@ export function shouldShowThinking(status: ThreadStatus): boolean {
 // an unknown-count retry (`{ current: 0, total: 0 }`) picks `'retrying'` exactly like a known one, and the
 // counter's absence is then apiRetryLabel's business, not this function's.
 export function workingIndicatorState(status: ThreadStatus): WorkingIndicatorState | null {
-  if (status.resetting !== null) return 'resetting'
-  if (status.apiRetry !== null) return 'retrying'
-  if (status.compacting) return 'compacting'
-  if (status.stalled) return 'stalled'
-  if (!shouldShowThinking(status)) return null
-  return status.phase === 'thinking' ? 'thinking' : 'working'
+  return deriveWorkingIndicator(status)
 }
 
 // #650: the locally-opened window — the indicator now opens the moment the composer accepts a submit,
@@ -3558,12 +3644,7 @@ export function workingIndicatorStateWithLocalSend(
   status: ThreadStatus,
   localSendPending: LocalSendPending | null
 ): WorkingIndicatorState | null {
-  const daemonState = workingIndicatorState(status)
-  if (daemonState !== null) return daemonState
-  if (localSendPending === null) return null
-  const local = workingIndicatorState({ ...status, phase: 'thinking' })
-  if (local !== 'thinking') return local
-  return localSendPending.queued ? 'waiting' : 'sending'
+  return deriveLocalIndicator(status, localSendPending)
 }
 
 // #649: the `name` of the most recently started still-open main-thread tool call, or null if none is open.
@@ -4055,16 +4136,8 @@ function ChannelInfoSheet({
   // on the sheet's unmount (it only mounts while open). `window.pyry` is dereferenced only inside the
   // interaction callbacks below, never during render, so the pure view stays server-renderable.
   const available = useConversationActionAvailability(conversation?.id ?? null)
-  // #1431: the open chat's owning host, resolved at render time — `useSessionSettingsConnected`'s two
-  // lines, with both imports already in this file. `EditChannelDialog` needs the id as a prop (it gates
-  // its own daemon subscription on `event.serverId`), and `available` above answers only whether that
-  // host is connected, not which one it is. `selectConversations` is a bare field read, so this
-  // subscription re-renders the sheet only when the list itself changes — and the sheet is mounted only
-  // while it is open.
-  const serverId = serverIdForOpenConversation(
-    useConversationListStore(selectConversations),
-    conversation?.id ?? null
-  )
+  // The edit dialog retains the selected host even when another host reuses this conversation ID.
+  const serverId = useConversationHost(conversation?.id ?? null)
   const sessionFacts = useSessionFactsStore(selectSessionFactsFor(conversation?.id ?? null))
   const agent = useConversationAgent(conversation?.id ?? null)
   // #1655: a session that reports no MCP status (a Codex session) gets no MCP section, rather than one
@@ -4113,7 +4186,7 @@ function ChannelInfoSheet({
             ? undefined
             : () => {
                 if (connectedConversationHostNow(conversation.id) === null) return
-                requestArchiveConversation(window.pyry.sendCommand, conversation.id)
+                requestArchiveConversation(sendConversationCommand, conversation.id)
                 onClose()
               }
         }
@@ -4128,7 +4201,7 @@ function ChannelInfoSheet({
             ? undefined
             : () => {
                 if (connectedConversationHostNow(conversation.id) === null) return
-                requestDeleteConversation(window.pyry.sendCommand, conversation.id)
+                requestDeleteConversation(sendConversationCommand, conversation.id)
                 onClose()
               }
         }
@@ -4184,7 +4257,7 @@ function ChannelInfoSheet({
           onSave={(writePrompt) => {
             if (connectedConversationHostNow(conversation.id) === null) return
             writePrompt()
-            requestRenameConversation(window.pyry.sendCommand, conversation, renameName)
+            requestRenameConversation(sendConversationCommand, conversation, renameName)
             setRenameOpen(false)
           }}
           // #1438 gave this dialog its own put-away button, and a REQUIRED prop — so this sheet is a
@@ -4202,7 +4275,7 @@ function ChannelInfoSheet({
           // `canMutateHost` — the two are not interchangeable and neither is imported across.
           onArchive={() => {
             if (connectedConversationHostNow(conversation.id) === null) return
-            requestArchiveConversation(window.pyry.sendCommand, conversation.id)
+            requestArchiveConversation(sendConversationCommand, conversation.id)
             setRenameOpen(false)
             onClose()
           }}
@@ -4219,7 +4292,7 @@ function ChannelInfoSheet({
           onCancel={() => setRenameOpen(false)}
           onSave={() => {
             if (connectedConversationHostNow(conversation.id) === null) return
-            requestRenameConversation(window.pyry.sendCommand, conversation, renameName)
+            requestRenameConversation(sendConversationCommand, conversation, renameName)
             setRenameOpen(false)
           }}
           // #1440 — the archive arm, the sheet's own `onArchive` sequence verbatim one level down:
@@ -4230,7 +4303,7 @@ function ChannelInfoSheet({
           // existing `useArchivedActiveConversationExit` bridge leaves the thread on the daemon's word.
           onArchive={() => {
             if (connectedConversationHostNow(conversation.id) === null) return
-            requestArchiveConversation(window.pyry.sendCommand, conversation.id)
+            requestArchiveConversation(sendConversationCommand, conversation.id)
             setRenameOpen(false)
             onClose()
           }}
@@ -4434,6 +4507,8 @@ function Composer({
   // rather than a second bridge call of its own, which is what keeps ONE owner of the clear-on-gesture
   // and one outcome surface for both entries. The conversation rides `attach.dropFile` itself (#1205).
   const fileDrop = useComposerFileDrop({ onFile: attach.dropFile })
+  const identityPending = useRef(false)
+  const owningHost = serverId
 
   // #680: the composer's ONE send path, extracted from handleSubmit so the Actions menu's picked command
   // takes the identical route a typed message does rather than a parallel one. The gate, the deps object,
@@ -4444,12 +4519,51 @@ function Composer({
   // It is also the whole of AC4: this first line is the only send gate, and there is no second entry point
   // to forget. The Actions menu holds no `canSend` prop of its own precisely so a drift-capable copy of it
   // cannot exist.
-  const sendText = (value: string): boolean => {
+  const sendText = (value: string, clearDraft = false, accepted?: () => void): boolean => {
     // AC1: the authoritative gate. Return before touching submitMessage so no sendCommand and no
     // optimistic echo fire while not connected — this blocks the Enter path (handleKeyDown) as well
     // as the button. The input is not cleared; nothing was sent.
-    const serverId = connectedConversationHostNow(activeConversationId)
+    const serverId = connectedConversationHostNow(activeConversationId, owningHost ?? undefined)
     if (!canSend || serverId === null || rememberedModel.pending.getState().target === activeConversationId) return false
+    if (activeConversationId !== null && threadRuntime.isThread(serverId, activeConversationId)) {
+      if (value.trim().length === 0 || identityPending.current) return false
+      identityPending.current = true
+      const chat = activeConversationId, claimed = attach.takePendingAttachments()
+      const submittedDrafts = composerDraftStore.getState().drafts.get(serverId)
+      let rolledBack = false
+      const take = { attachments: claimed.attachments, rollback: () => {
+        if (rolledBack) return
+        rolledBack = true; claimed.rollback()
+      } }
+      const connection = sessionStore.getState().statuses.get(serverId)
+      const ownsSubmission = threadRuntime.submissionOwner(serverId, chat)
+      const restore = (): void => {
+        take.rollback()
+        window.pyry.sendDiagnostic({ event: 'thread-send', code: 'identity-or-connection-unavailable' })
+      }
+      // Capture identity from main for this submission, fencing reconnect/downgrade across the invoke.
+      void window.pyry.deviceIdentity().then(identity => {
+        if (!identity.ok || sessionStore.getState().statuses.get(serverId) !== connection ||
+            !threadRuntime.isThread(serverId, chat) || !ownsSubmission()) { restore(); return }
+        const live = threadRuntime.live(serverId, chat)
+        const displayedError = selectThreadReadings(live.getState(), 'sessionError')[0]
+        const sent = submitMessage(value, chat, { serverId, threadSend: { store: threadRuntime.sends, deviceId: identity.deviceId,
+          version: threadRuntime.items.getState().snapshot(serverId, chat)?.version },
+          diagnose: window.pyry.sendDiagnostic, sendCommand: sendConversationCommand,
+          dispatch: () => {}, dispatchFor: () => {}, newMessageId: () => crypto.randomUUID(),
+          now: Date.now, takeAttachments: () => take })
+        if (!sent) return // submitMessage owns attachment rollback; the retained draft remains editable.
+        if (displayedError) live.getState().dispatch({ type: 'consume', displayed: displayedError })
+        const drafts = composerDraftStore.getState()
+        if (clearDraft && drafts.drafts.get(serverId) === submittedDrafts && selectDraft(drafts, serverId, chat) === value) {
+          drafts.setDraft(serverId, chat, '')
+          window.pyry.sendDiagnostic({ event: 'composer-draft-cleared', code: 'local-submit' })
+        }
+        accepted?.()
+        onMessageSent()
+      }).catch(restore).finally(() => { identityPending.current = false }) // The pending submission owns its attachment claim.
+      return false // The continuation clears only the unchanged submitted draft after acceptance.
+    }
     // `window.pyry` is dereferenced only here, at interaction time — never during render — so the
     // server-rendered container smoke test never touches the bridge. Do NOT hoist the deps object out of
     // this function: that would move the dereference into the render path, where `window.pyry` does not
@@ -4457,7 +4571,7 @@ function Composer({
     const sent = submitMessage(value, activeConversationId, {
       serverId,
       diagnose: window.pyry.sendDiagnostic,
-      sendCommand: window.pyry.sendCommand,
+      sendCommand: sendConversationCommand,
       dispatch,
       dispatchFor: (conversationId, event) => {
         if (event.type === 'userText') dispatchLocalEcho(serverId, conversationId, event)
@@ -4481,7 +4595,7 @@ function Composer({
     })
     // Follow the thread only when the bridge accepts the submission. A bridge exception returns false:
     // its echo remains Not sent, the draft and pending attachments survive, and no follow pin is armed.
-    if (sent) onMessageSent()
+    if (sent) { accepted?.(); onMessageSent() }
     return sent
   }
 
@@ -4490,7 +4604,7 @@ function Composer({
   // both calls sit in one discrete handler that React 18 batches, so the render mounting the echo lands
   // after the whole handler either way.
   const handleSubmit = (): void => {
-    if (sendText(text)) {
+    if (sendText(text, true)) {
       setText('')
       window.pyry.sendDiagnostic({ event: 'composer-draft-cleared', code: 'local-submit' })
     }
@@ -4499,7 +4613,7 @@ function Composer({
   // New session uses its own command, with the same current-owner gate as message sends.
   const startNewSession = (): void => {
     if (connectedConversationHostNow(activeConversationId) === null) return
-    sendNewSession(activeConversationId, { sendCommand: window.pyry.sendCommand })
+    sendNewSession(activeConversationId, { sendCommand: sendConversationCommand })
   }
 
   // Completion writes the same retained draft as typing; sending keeps its existing single path.
@@ -4556,9 +4670,9 @@ function Composer({
         !event.metaKey && !event.nativeEvent.isComposing && shownSuggestion !== null) {
       // Tab sends the visible suggestion through the one send path Enter uses, then spends it.
       event.preventDefault()
-      if (sendText(shownSuggestion) && serverId !== null && conversationId !== null) {
-        spendSuggestion(serverId, conversationId)
-      }
+      sendText(shownSuggestion, false, () => {
+        if (serverId !== null && conversationId !== null) spendSuggestion(serverId, conversationId)
+      })
       return
     }
     // ONE record, TWO questions (#1072). `isComposing` is on the DOM event, not React's synthetic one, so
@@ -4583,7 +4697,7 @@ function Composer({
       // which is what stops the three ever naming different chats; `sendInterrupt` refuses a null or
       // empty id and sends nothing.
       if (connectedConversationHostNow(activeConversationId) !== null) {
-        sendInterrupt(activeConversationId, { sendCommand: window.pyry.sendCommand })
+        sendInterrupt(activeConversationId, { sendCommand: sendConversationCommand })
       }
       return
     }
@@ -4660,7 +4774,7 @@ function Composer({
           onSend={handleSubmit}
           onInterrupt={() => {
             if (connectedConversationHostNow(activeConversationId) === null) return
-            sendInterrupt(activeConversationId, { sendCommand: window.pyry.sendCommand })
+            sendInterrupt(activeConversationId, { sendCommand: sendConversationCommand })
           }}
         />
         {/* #940: the panel, last child of its anchor. It is `position: absolute`, so it is not a flex
@@ -4804,7 +4918,7 @@ export function QuestionPanelSlot({ batch }: { batch: QuestionBatch }): JSX.Elem
     if (!isCurrentQuestionBatch(batch) || question === undefined) return null
     return { multiSelect: question.multiSelect, questionBatchId: batch.questionBatchId, questionIndex }
   }
-  const deps = () => ({ sendCommand: window.pyry.sendCommand, dispatchPicks: dispatch,
+  const deps = () => ({ sendCommand: sendConversationCommand, dispatchPicks: dispatch,
     dispatchBatch: questionBatchStore.getState().dispatch })
   return <QuestionPanelView questions={batch.questions} selections={selections}
     responseAvailable={responseAvailable} canAnswer={answers !== null}
@@ -4852,7 +4966,7 @@ export function ConnectionBanner({ status }: { status: ConnectionStatus }): JSX.
     <p className="conversation__banner" role="status">
       {status.type === 'error' && status.error.code === 'pairing-rejected'
         ? 'Your pairing has expired or is no longer valid. Enter a new pairing code to reconnect.'
-        : CONNECTION_BANNER_COPY}
+        : isDaemonUpdateRequired(status) ? DAEMON_UPDATE_REQUIRED_COPY : CONNECTION_BANNER_COPY}
     </p>
   )
 }
@@ -4864,9 +4978,8 @@ export function ConnectionBanner({ status }: { status: ConnectionStatus }): JSX.
 // branches both need `error`, the banner's disconnected branch is a VISIBLE state, so the initial
 // (disconnected) store is enough to server-render the container's shown path.
 function useOpenConnectionStatus(): ConnectionStatus {
-  const openId = useActiveConversationStore(s => s.activeConversation?.id ?? null)
-  const rows = useConversationListStore(selectConversations)
-  const serverId = serverIdForOpenConversation(rows, openId)
+  const open = useActiveConversationStore(s => s.activeConversation)
+  const serverId = useConversationHost(open?.id ?? null)
   return useSessionStore(s => serverId === null ? initialSessionState.status
     : selectStatusFor(serverId)(s) ?? initialSessionState.status)
 }
@@ -5091,11 +5204,13 @@ export function ComposerHistoryFailure({ retryable, onRetry }: {
 // pill opens is the screen's own overlay — the same `setPanelOpen` the More actions item calls, so that
 // entry point and the panel itself are untouched. #1634 adds the open reading the pill's outline needs.
 function ComposerErrorSlotControl({
+  threadReports,
   onCommand,
   backgroundTasksOpen,
   onToggleBackgroundTasks,
   onOpenChannelInfo
 }: {
+  threadReports?: ThreadComposerReports | null
   onCommand: (command: string) => boolean
   backgroundTasksOpen: boolean
   onToggleBackgroundTasks: () => void
@@ -5105,8 +5220,7 @@ function ComposerErrorSlotControl({
   const open = useActiveConversationStore(selectActiveConversation)
   // #1656: the stopping banner's prefix names this conversation's agent.
   const agent = useConversationAgent(open?.id ?? null)
-  const rows = useConversationListStore(selectConversations)
-  const historyHost = serverIdForOpenConversation(rows, open?.id ?? null)
+  const historyHost = useConversationHost(open?.id ?? null)
   const historyFailure = useConversationTimelineStore(s =>
     selectHistoryFailure(open === null ? undefined : s.timelines.get(open.id), historyHost))
   const retryHistory = (): void => {
@@ -5126,9 +5240,10 @@ function ComposerErrorSlotControl({
   // the arithmetic so any other surface counting live tasks cannot disagree with this one. Both "no
   // roster yet" and "nothing alive" read 0 and render no pill, a collapse this surface is entitled to
   // make where the panel is not.
-  const taskCount = useBackgroundTaskRosterStore(
+  const legacyTaskCount = useBackgroundTaskRosterStore(
     open === null ? NO_TASK_COUNT : selectLiveTaskCountFor(open.id)
   )
+  const taskCount = threadReports === undefined ? legacyTaskCount : threadReports?.taskCount ?? 0
   // #1494: the open conversation's first failed MCP server not yet acknowledged, as a primitive — the
   // task-count read's shape, with the same hoisted constant for the no-conversation arm.
   const mcpFailure = useMcpStatusStore(
@@ -5140,12 +5255,14 @@ function ComposerErrorSlotControl({
     if (open !== null) mcpStatusStore.getState().acknowledgeMcpFailures(open.id)
     onOpenChannelInfo()
   }
-  const latest = useConversationTimelineStore((s) =>
+  const legacyLatest = useConversationTimelineStore((s) =>
     open === null ? undefined : s.timelines.get(open.id)?.timeline.latestTurnEnd
   )
-  const stoppingBanner = useConversationTimelineStore((s) =>
+  const legacyBanner = useConversationTimelineStore((s) =>
     open === null ? undefined : s.timelines.get(open.id)?.timeline.stoppingBanner
   )
+  const latest = threadReports === undefined ? legacyLatest : threadReports?.latest
+  const stoppingBanner = threadReports === undefined ? legacyBanner : threadReports?.banner
   const menu = useSlashCommandListStore((s) => open === null ? null : selectSlashCommandListFor(open.id)(s))
   const unavailable = markUnavailableActions(COMPOSER_ACTIONS, menu)
     .find((action) => action.id === '/compact')?.unavailable === true
@@ -5171,7 +5288,13 @@ function ComposerErrorSlotControl({
   const settingsError = useRunSettingsWriteStore(selectError)
   const sessionId = useSessionIdStore(selectSessionId)
   const writes = useRunSettingsWriteStore(s => s)
-  const offer = useConversationTimelineStore(s => open === null ? undefined : s.timelines.get(open.id)?.timeline.refusalOffer)
+  const legacyOffer = useConversationTimelineStore(s => open === null ? undefined : s.timelines.get(open.id)?.timeline.refusalOffer)
+  const source = threadReports?.refusal
+  const action = useStore(threadRuntime.refusals, s => source ? s.entries.get(JSON.stringify([source.host, source.chat])) : undefined)
+  const ownAction = action?.source.epoch === source?.epoch && action?.source.session === source?.session &&
+    action?.source.item === source?.item && action?.source.rev === source?.rev ? action : undefined
+  const offer = threadReports === undefined ? legacyOffer : source && !ownAction?.dismissed
+    ? { report: source.report, changeId: ownAction?.changeId, rejected: ownAction?.rejected } : undefined
   // Navigation clears settings writes; the retained offer still owns an outstanding recovery.
   const modelPending = offer?.changeId !== undefined || [...writes.pending.values()].some(change => change.field === 'model')
   const switchBack = (): void => {
@@ -5179,14 +5302,19 @@ function ComposerErrorSlotControl({
     const currentOffer = currentId === undefined ? undefined : conversationTimelineStore.getState().timelines.get(currentId)?.timeline.refusalOffer
     const currentSession = sessionIdStore.getState().sessionId
     const currentWrites = runSettingsWriteStore.getState()
-    const serverId = serverIdForOpenConversation(selectConversations(conversationListStore.getState()), currentId ?? null)
-    if (currentId === undefined || currentId !== open?.id || !offer || currentOffer !== offer || currentOffer.changeId !== undefined ||
+    const serverId = conversationHostNow(currentId ?? null)
+    const currentItem = source && threadRuntime.items.getState().snapshot(source.host, source.chat)
+    const stillOwn = source && currentItem?.epoch === source.epoch && currentItem.items.some(item => item.id === source.item && item.rev === source.rev)
+    if (currentId === undefined || currentId !== open?.id || !offer ||
+        (source ? !stillOwn || source.host !== serverId || source.session !== currentSession || ownAction?.changeId !== undefined
+          : currentOffer !== offer || currentOffer?.changeId !== undefined) ||
         serverId === null || sessionStore.getState().statuses.get(serverId)?.type !== 'connected' || !isAddressableSessionId(currentSession) ||
         [...currentWrites.pending.values()].some(change => change.field === 'model')) return
-    changeSetting({ sessionId: currentSession, sendCommand: window.pyry.sendCommand,
+    changeSetting({ sessionId: currentSession, sendCommand: sendConversationCommand,
       dispatch: event => {
         if (event.type === 'changeDispatched') {
-          conversationTimelineStore.getState().dispatchFor(currentId, { type: 'refusalWriteStarted', offer, changeId: event.changeId })
+          if (source) threadRuntime.refusals.getState().begin(source, event.changeId)
+          else conversationTimelineStore.getState().dispatchFor(currentId, { type: 'refusalWriteStarted', offer, changeId: event.changeId })
           window.pyry.sendDiagnostic({ event: 'refusal-recovery', code: 'dispatched' })
         }
         currentWrites.dispatch(event)
@@ -5196,10 +5324,7 @@ function ComposerErrorSlotControl({
 
   const handleReconnect = async (): Promise<void> => {
     const open = selectActiveConversation(activeConversationStore.getState())
-    const serverId = serverIdForOpenConversation(
-      selectConversations(conversationListStore.getState()),
-      open === null ? null : open.id
-    )
+    const serverId = conversationHostNow(open?.id ?? null)
     if (serverId === null) return
     try {
       await window.pyry.reconnectServer(serverId)
@@ -5271,10 +5396,14 @@ function ComposerErrorSlotControl({
 //
 // Repair resolves the host from the stores at CLICK time and delegates to the shell, preserving this
 // host's saved credentials and held chats — the slot's former `handleRepair`, moved.
-function TopOverlayControl({ onRepairHost }: {
+function TopOverlayControl({ onRepairHost, threadLive }: {
   onRepairHost?: (serverId: string) => void
+  threadLive?: ReturnType<typeof threadRuntime.live>
 }): JSX.Element | null {
   const status = useOpenConnectionStatus()
+  const live = threadLive ?? threadRuntime.live('', '')
+  const threadError = useStore(live, s => selectThreadReadings(s, 'sessionError')[0])
+  const feedback = threadLive?.getState().modals ?? modalStore
   const open = useActiveConversationStore(selectActiveConversation)
   const nowSeconds = Math.floor(Date.now() / 1000)
   const usageLimit = useUsageLimitStore(
@@ -5293,22 +5422,23 @@ function TopOverlayControl({ onRepairHost }: {
       // StrictMode immediately sets up the same effect again. Consume only after a real departure.
       queueMicrotask(() => {
         if (mountedConversation.current !== conversationId) {
-          conversationTimelineStore.getState().dispatchFor(conversationId, { type: 'sessionErrorCleared' })
+          if (threadLive && threadError) threadLive.getState().dispatch({ type: 'consume', displayed: threadError })
+          else conversationTimelineStore.getState().dispatchFor(conversationId, { type: 'sessionErrorCleared' })
         }
       })
     }
-  }, [conversationId])
-  const resolution = useModalStore(s =>
+  }, [conversationId, threadLive, threadError])
+  const resolution = useStore(feedback, s =>
     open === null ? null : s.resolutions.find(r => r.conversationId === open.id) ?? null)
   useEffect(() => {
     if (resolution?.phase === 'pending') {
-      modalStore.getState().dispatch({ type: 'resolutionDisplayed', resolution })
+      feedback.getState().dispatch({ type: 'resolutionDisplayed', resolution })
     }
-  }, [resolution])
+  }, [resolution, feedback])
   useEffect(() => {
     if (resolution?.phase !== 'displayed') return
     const dismiss = (): void => {
-      modalStore.getState().dispatch({ type: 'resolutionDismissed', resolution })
+      feedback.getState().dispatch({ type: 'resolutionDismissed', resolution })
     }
     const timer = setTimeout(dismiss, 4000)
     return () => {
@@ -5316,21 +5446,18 @@ function TopOverlayControl({ onRepairHost }: {
       // Leaving a chat consumes its displayed feedback. Identity guards replacement and reset.
       dismiss()
     }
-  }, [resolution])
+  }, [resolution, feedback])
   const handleRepair = (): void => {
     const current = selectActiveConversation(activeConversationStore.getState())
-    const serverId = serverIdForOpenConversation(
-      selectConversations(conversationListStore.getState()),
-      current === null ? null : current.id
-    )
+    const serverId = conversationHostNow(current?.id ?? null)
     if (serverId !== null) onRepairHost?.(serverId)
   }
   return (
     <TopOverlay
-      sessionError={sessionError?.code}
+      sessionError={threadLive ? threadError?.code : sessionError?.code}
       resolution={resolution?.phase === 'displayed' ? resolution.kind : null}
       onDismissResolution={() => {
-        if (resolution !== null) modalStore.getState().dispatch({ type: 'resolutionDismissed', resolution })
+        if (resolution !== null) feedback.getState().dispatch({ type: 'resolutionDismissed', resolution })
       }}
       reading={usageLimit}
       nowSeconds={nowSeconds}
@@ -5560,7 +5687,7 @@ export function daemonLeg(status: ConnectionStatus): ConnectionLeg {
       return { category: 'down', label: 'Pyrycode Offline' }
     case 'error':
       return { category: 'down', label: status.error.code === 'pairing-rejected'
-        ? 'Pyrycode Pairing rejected' : 'Pyrycode Offline' }
+        ? 'Pyrycode Pairing rejected' : isDaemonUpdateRequired(status) ? 'Pyrycode Daemon update needed' : 'Pyrycode Offline' }
   }
 }
 

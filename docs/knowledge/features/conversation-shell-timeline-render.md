@@ -230,19 +230,17 @@ now resolves explicit paired hosts independently of the conversation index, incl
 snapshots and equal conversation IDs across hosts. Coalescing owns resolved host/conversation/attachment;
 terminals echo requested scope and only matching renderer listeners settle. The two-host production
 variant uses real preload/main, while the renderer-only variant retains its local IPC fake.
-Production thread path selection and combined live acceptance still belong to
-[#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
+The [thread runtime](thread-runtime.md) selects this production path. The supplied
+tests remain distinct from pending credentialed live acceptance.
 
 Local pending settlement and queue actions are supplied through `sendInputs`; see
 [Composer send](composer-send.md#data-flow) and the
 [queue authority contract](conversation-shell.md#what-it-does).
-Task panel/count/stop controls remain [#1938](https://github.com/pyrycode/pyrycode-desktop/issues/1938),
-server paging/recovery remains #1902 and
-live-state admission remains #1935. Production path selection, subscriptions, capability
-advertisement, command connection and combined live verification remain #1908; this
-injected route is still inactive in production, and ordinary/non-thread connections
-retain the legacy roster path. Supplied older batches are presentation inputs here,
-not a server paging implementation. See
+Production connects task controls, server paging/recovery and session-scoped live
+admission through the [thread runtime](thread-runtime.md). A host without `thread`
+shows daemon update-required and draws no content. Legacy roster events cannot
+add rows or tasks. Supplied older batches remain presentation inputs in isolated
+tests; production older demand invokes the thread query coordinator. See
 [watermark-independent scroll restoration](conversation-shell-scroll-pin.md#supplied-snapshot-anchor-restoration)
 and the designs for [item presentation](../../specs/architecture/1904-daemon-item-presentation.md)
 and [supplied agent cards](../../specs/architecture/1937-supplied-agent-cards.md).

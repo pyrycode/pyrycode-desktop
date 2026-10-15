@@ -192,4 +192,36 @@ describe('supplied thread live state', () => {
     f.emit({ type: 'connected', serverId: 'one', ack: {} as Extract<DaemonEvent, { type: 'connected' }>['ack'] })
     expect(f.inputs().permissions).toHaveLength(1)
   })
+  it('retains prompt choices across pane lifetime and consumes only the displayed reading', () => {
+    const f = fixture(), q = question(), p = permission()
+    f.emit(q); f.emit(p)
+    const state = f.store.getState()
+    state.questions.getState().dispatch({ type: 'optionPicked', questionBatchId: 'question', questionIndex: 0, optionIndex: 0 })
+    expect(state.modals.getState().outstanding).toHaveLength(1)
+    f.emit({ type: 'modalDismissed', modalId: 'permission', outcome: 'allow', source: 'remote', serverId: 'one', envelopeSessionId: 'A' })
+    expect(state.modals.getState().resolutions[0]?.kind).toBe('remote')
+    const old = { type: 'sessionError' as const, code: 'session.blocked', conversationId: 'chat', serverId: 'one', envelopeSessionId: 'A' }
+    const replacement = { ...old, code: 'session.child_crashing' }
+    f.emit(old); f.emit(replacement)
+    f.store.getState().dispatch({ type: 'consume', displayed: old })
+    expect(f.inputs().sessionError).toBe(replacement)
+    f.store.getState().dispatch({ type: 'consume', displayed: replacement })
+    expect(f.inputs().sessionError).toBeNull()
+    f.emit({ type: 'compacting', conversationId: 'chat', active: true, serverId: 'one', envelopeSessionId: 'A' })
+    f.emit({ type: 'connected', serverId: 'one', ack: {} as Extract<DaemonEvent, { type: 'connected' }>['ack'] })
+    expect(f.inputs().status.compacting).toBe(false)
+    expect(state.modals.getState().outstanding).toEqual([])
+    expect(state.modals.getState().resolutions).toEqual([])
+  })
+
+  it('preserves owned rejection feedback while reconnect retires old prompt handles', () => {
+    const f = fixture()
+    f.emit(permission())
+    f.emit({ type: 'modalAnswerRejected', modalId: 'permission', serverId: 'one' })
+    expect(f.store.getState().modals.getState().rejections).toEqual(['permission'])
+    f.emit({ type: 'connected', serverId: 'one', ack: {} as Extract<DaemonEvent, { type: 'connected' }>['ack'] })
+    expect(f.store.getState().modals.getState().rejections).toEqual(['permission'])
+    expect(f.store.getState().modals.getState().outstanding).toEqual([])
+  })
+
 })

@@ -24,7 +24,7 @@ const badge = (app: ElectronApplication) => app.evaluate(() =>
   (globalThis as any).__receivedBadgeCounts.at(-1))
 
 test('remote marks clear mounted attention before refresh and survive stale lists and local opening', async ({ launchPairedApp }) => {
-  const row = { ...SEEDED_ROW, read_up_to: 0, latest_entry_id: 10 }
+  const row = { ...SEEDED_ROW, read_up_to: 0, last_shown_version: 10 }
   let asks = 0
   const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
     if (decodeEnvelope(bytes).type !== 'list_conversations') return []
@@ -47,7 +47,7 @@ test('remote marks clear mounted attention before refresh and survive stale list
   await expect(dot).toHaveClass(/--idle/)
   daemon.pushFrame(update(row, 1, 8))
   daemon.pushFrame(update(row))
-  daemon.pushFrame(list({ ...row, read_up_to: 10, latest_entry_id: 11, name: 'New entry' }))
+  daemon.pushFrame(list({ ...row, read_up_to: 10, last_shown_version: 11, name: 'New entry' }))
   await expect(page.locator('.channel-list__row-open')).toContainText('New entry')
   await expect(dot).toHaveClass(/--new-messages/)
   await page.locator('.channel-list__row-open').click()
@@ -63,8 +63,8 @@ test('remote marks clear mounted attention before refresh and survive stale list
 })
 
 test('two hosts sharing an ID retain independent read state, dots and badge contribution', async ({ launchPairedApp }) => {
-  const first = { ...SEEDED_ROW, read_up_to: 0, latest_entry_id: 10 }
-  const second = { ...SECOND_SEEDED_ROW, id: first.id, read_up_to: 2, latest_entry_id: 10 }
+  const first = { ...SEEDED_ROW, read_up_to: 0, last_shown_version: 10 }
+  const second = { ...SECOND_SEEDED_ROW, id: first.id, read_up_to: 2, last_shown_version: 10 }
   let firstAsks = 0
   let secondAsks = 0
   const { page, app, servers } = await launchPairedApp({ buildReplyFrames: bytes =>

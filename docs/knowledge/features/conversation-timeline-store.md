@@ -2,13 +2,15 @@
 
 The renderer timeline store and bridge fold typed daemon events and local sends into
 conversation timelines. The [keyed holder](conversation-timeline-holder.md) retains
-each conversation's rows and transient state; it is the chat pane's render source.
-The legacy flat store remains dual-written.
+each conversation's rows and transient state. This is retained legacy machinery;
+paired-host events and production history demand are unhooked. Its internal
+dual-write behavior remains for isolated callers and tests.
 
 The separate [retained daemon item store](thread-item-store.md) holds decoded items
 by host/conversation/epoch and daemon id/revision for sync/cache consumers. Its
 exact-base updates and certified checkpoints do not use this event reconstruction
-or its receipt/history joins; production consumer migration remains with #1908.
+or its receipt/history joins. The [thread runtime](thread-runtime.md) supplies
+the production render source, local pending sends and current-session controls.
 
 ## Where the detail lives
 

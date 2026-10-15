@@ -56,7 +56,11 @@ work intact. Resetting only when replacing a driver would miss automatic
 re-handshake: it reuses the same driver/connection object. Existing generation
 fences reject replaced-driver callbacks, while receiver reset prevents old
 fragments or timers from completing in the successor session. Production hello
-capability requests are unchanged; activation/live proof belong to #1908.
+advertises `thread` alongside `interactive`. Each accepted handshake must include
+`thread`; otherwise only that host emits daemon update-required and no connected
+event. Its parked driver retains reconnect supervision while content and outbound
+requests remain blocked. A later accepted thread handshake restores the host.
+See [runtime capability routing](thread-runtime.md#accepted-capability-and-host-routing).
 
 ### Pairing rejection lifetime
 

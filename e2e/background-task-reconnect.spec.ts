@@ -7,6 +7,9 @@ import type {
   EnvelopeType
 } from '../src/shared/wire/types'
 
+// Scripted history is published as thread catch-up/pages by the shared fake daemon.
+test.use({ scriptedHistory: true })
+
 // #569: the reconnect reconciliation for background-task rosters, proved through the real transport.
 //
 // The daemon half landed upstream (pyrycode#2077-#2080): on any (re)connection it unicasts one
@@ -148,7 +151,9 @@ const closePanel = async (page: Page): Promise<void> => {
   await expect(panelFor(page)).toHaveCount(0)
 }
 
-test('a reconnect re-asserted roster survives the connected clear and the two silences stay apart', async ({
+// #2020: this case asserts retired roster clearing and inferred empty/unobserved content.
+// Canonical reconnect and durable task lifecycle remain covered by thread-activation and task specs.
+test.skip('a reconnect re-asserted roster survives the connected clear and the two silences stay apart', async ({
   launchPairedApp
 }) => {
   test.setTimeout(90_000)

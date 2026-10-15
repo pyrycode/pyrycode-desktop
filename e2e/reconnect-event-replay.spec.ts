@@ -2,6 +2,11 @@ import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/lau
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { AssistantDeltaPayload, TurnEndPayload } from '../src/shared/wire/types'
 
+// Scripted history is published as thread catch-up/pages by the shared fake daemon.
+test.use({ scriptedHistory: true })
+// #2020: hello replay negotiation belongs exclusively to the unhooked raw-event route.
+test.skip(true, 'Legacy replay only. Thread reconnect uses certified catch-up in thread-activation.')
+
 const TS = '2026-10-01T00:00:00Z'
 const SEED_CURSOR = 41
 const delta = (turn: string, seq: number, text: string, eventId: number): Uint8Array => encodeEnvelope({
@@ -33,7 +38,7 @@ test('reconnect negotiates the retained tail alongside one newest history refres
       ] : []
     }
   })
-  const rows = page.locator('.bubble[data-thread-role="assistant"]')
+  const rows = page.locator('[data-thread-role="assistant"]')
   daemon.pushFrame(delta('held-turn', 0, 'Held prefix', SEED_CURSOR))
   await expect(rows).toHaveCount(1)
   await expect(rows.nth(0)).toContainText('Held prefix')

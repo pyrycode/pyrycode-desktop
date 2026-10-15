@@ -1,12 +1,15 @@
 # Session-id store
 
-The renderer's held copy of the open conversation's **current daemon `session_id`** — a dedicated,
-unidirectional Zustand store fed by the always-arriving `sessionTransition` marker, so the interactive
-[Run configuration](conversation-shell-run-configuration.md#run-configuration-sheet-177) controls ([#257](../codebase/257.md))
-can address a `set_session_settings` write to the session that is actually running.
+The renderer's compatibility store for the open conversation's current daemon
+`session_id`. Production projects the selected host's summary-bound live state into
+it so [run configuration](conversation-shell-run-configuration.md#run-configuration-sheet-177)
+controls address the current session. Historical transition-based writers are
+retained separately.
 
-This is the ordinary app's legacy store. The inactive thread adapter has its own
-[summary authority](#summary-authority-in-the-inactive-thread-adapter).
+Production writes this compatibility store from the selected host's
+[summary-bound thread state](#summary-authority-in-the-thread-runtime).
+Legacy transition writers no longer choose the paired conversation's current session.
+The transition-based mechanism described below remains retained implementation history.
 
 Introduced in [#259](../codebase/259.md), the renderer-side retention half of #183's interactive
 Run-configuration write path, split alongside #254/#255/#256/#257. Consumes the transport
@@ -27,7 +30,9 @@ sheet-open) and `conversationListStore` (#208, requests on the connected-edge).
 
 ## How it works
 
-### Summary authority in the inactive thread adapter
+<a id="summary-authority-in-the-inactive-thread-adapter"></a>
+
+### Summary authority in the thread runtime
 
 `createThreadLiveState` in `src/renderer/src/store/threadLiveState.ts` owns a separate,
 injected store for supplied thread readings. Only the displayed host/conversation
@@ -62,8 +67,11 @@ pending/queued inputs keep their independent lifetimes. Disposal clears the adap
 and rejects subsequent inputs/actions. Diagnostics contain only fixed event/reason
 codes. See [live presentation and lifecycle](conversation-shell-turn-status.md#session-scoped-live-presentation)
 and [prompt routing](modal-store-bridge.md#session-scoped-thread-prompts).
-Production subscriptions, host-bound IPC composition and combined live-daemon proof
-remain with [#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
+The [thread runtime](thread-runtime.md#live-controls-and-read-publication) supplies
+production subscriptions and host-bound commands. It projects only the selected
+host's readings into existing configuration stores. Off-screen hosts retain their
+own session state and cannot overwrite the selected host's model or settings.
+Credentialed live proof remains separately pending in the live runbook.
 
 ### The store (`src/renderer/src/store/sessionIdStore.ts`)
 

@@ -129,7 +129,7 @@ export function QueueData(): null {
     // Nothing can interleave between the read and the write: both stores are written from this one
     // synchronous dispatch, with no await between them.
     return subscribeQueue(
-      window.pyry.onDaemonEvent,
+      onLegacyContentEvent,
       (snapshot) => {
         queueStore.getState().setBacklog(snapshot)
         // #1725: the same snapshot tells the open send window the daemon now holds the message.
@@ -144,3 +144,4 @@ export function QueueData(): null {
 
   return null
 }
+import { onLegacyContentEvent } from './threadRuntime'

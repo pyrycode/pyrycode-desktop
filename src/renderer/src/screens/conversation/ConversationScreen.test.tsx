@@ -5940,69 +5940,24 @@ it('disables the held running-turn interrupt when sending is unavailable', () =>
 })
 
 describe('saved timeline notices', () => {
-  it.each([false, true])('isolates saved rows and suppresses partial working state (connected=%s)', connected => {
-    const reset = stageOpenConnection(connected ? { type: 'connected', ack: { protocol_version: '1', server_id: 'host', conn_id: 'c', capabilities: [] } } : { type: 'disconnected' })
+  // #1908: every selected host draws through the daemon-built item view, so a saved legacy timeline,
+  // its partial reply and its held queue are never drawn, connected or not.
+  it.each([false, true])('never draws a saved legacy timeline for a selected host (connected=%s)', connected => {
+    const reset = stageOpenConnection(connected ? { type: 'connected', ack: { protocol_version: '1', server_id: 'host', conn_id: 'c', capabilities: ['thread'] } } : { type: 'disconnected' })
     const store = createConversationTimelineStore(undefined, () => 'host')
-    const held = vi.spyOn(conversationTimelineStore, 'getInitialState').mockImplementation(() => store.getState())
-    const render = () => renderToStaticMarkup(<ConversationScreen savedTimelineTarget={{ serverId: 'host', conversationId: 'open' }} />)
-    try {
-      store.getState().beginLocalTimelineRead('host', 'open')!.complete({ version: 1, kind: 'timeline',
-        serverId: 'host', conversationId: 'open', items: [{ kind: 'assistantText', turnId: 'partial', text: 'Saved partial' }],
-        prependedRows: 0, coverage: { status: 'unknown' } })
-      const html = render()
-      expect(html).toContain('Saved partial')
-      expect(html).not.toContain('bubble__cursor')
-      expect(html).not.toContain('aria-label="Assistant working"')
-      expect(html.includes('Offline. Showing saved messages.')).toBe(!connected)
-      store.getState().dispatchFor('open', { type: 'assistantDelta', turnId: 'new', seq: 0, text: 'New live reply' })
-      expect(render()).toContain('New live reply')
-      expect(render().includes('bubble__cursor')).toBe(connected)
-      store.getState().beginLocalTimelineRead('other', 'open')!.complete({ version: 1, kind: 'timeline',
-        serverId: 'other', conversationId: 'open', items: [{ kind: 'userText', text: 'Other host secret' }],
-        prependedRows: 0, coverage: { status: 'unknown' } })
-      expect(render()).not.toContain('Other host secret')
-    } finally { held.mockRestore(); reset() }
-  })
-
-  it.each([false, true])('keeps held queues readable offline but excludes them from restored slices (restored=%s)', (restored) => {
-    const reset = stageOpenConnection({ type: 'disconnected' })
-    const store = createConversationTimelineStore(undefined, () => 'a')
-    if (restored) {
-      store.getState().beginLocalTimelineRead('a', 'open')!.complete(null)
-    } else {
-      store.getState().dispatchFor('open', { type: 'assistantDelta', turnId: 't', seq: 0, text: 'Held reply' })
-    }
     const held = vi.spyOn(conversationTimelineStore, 'getInitialState').mockImplementation(() => store.getState())
     const queue = vi.spyOn(queueStore, 'getInitialState').mockReturnValue({
       ...queueStore.getInitialState(), backlogs: new Map([['open', [{ queued_msg_id: 4, text: 'Held queued work', ts: '2026-09-13' }]]])
     })
     try {
-      const html = renderToStaticMarkup(<ConversationScreen savedTimelineTarget={{ serverId: 'a', conversationId: 'open' }} />)
-      expect(html.includes('Held queued work')).toBe(!restored)
-      if (!restored) expect(html).toMatch(/class="queued-row__drop"[^>]*disabled=""/)
+      store.getState().beginLocalTimelineRead('host', 'open')!.complete({ version: 1, kind: 'timeline',
+        serverId: 'host', conversationId: 'open', items: [{ kind: 'assistantText', turnId: 'partial', text: 'Saved partial' }],
+        prependedRows: 0, coverage: { status: 'unknown' } })
+      store.getState().dispatchFor('open', { type: 'assistantDelta', turnId: 'new', seq: 0, text: 'New live reply' })
+      const html = renderToStaticMarkup(<ConversationScreen savedTimelineTarget={{ serverId: 'host', conversationId: 'open' }} />)
+      expect(html).toContain('conversation__message-area')
+      for (const text of ['Saved partial', 'New live reply', 'Held queued work']) expect(html).not.toContain(text)
     } finally { queue.mockRestore(); held.mockRestore(); reset() }
-  })
-  it('keeps explicit saved coordinates after metadata reseeding and rejects another host held under the same id', () => {
-    const reset = stageOpenConnection({ type: 'disconnected' })
-    const store = createConversationTimelineStore()
-    const held = vi.spyOn(conversationTimelineStore, 'getInitialState').mockImplementation(() => store.getState())
-    const render = () => renderToStaticMarkup(<ConversationScreen savedTimelineTarget={{ serverId: 'a', conversationId: 'open' }} />)
-    try {
-      for (const serverId of ['a', 'b']) {
-        store.getState().beginLocalTimelineRead(serverId, 'open')!.complete({ version: 1, kind: 'timeline',
-          serverId, conversationId: 'open', items: [{ kind: 'userText', text: `${serverId} saved copy` }],
-          prependedRows: 0, coverage: { status: 'unknown' } })
-        const html = render()
-        if (serverId === 'a') expect(html).toContain('a saved copy')
-        else {
-          expect(html).not.toContain('b saved copy')
-          // The rejected other-host slice reads as a read still pending, never as a settled result.
-          // Asserted positively since #1447: the settled-empty copy it used to exclude no longer exists,
-          // which would leave a negative assertion passing over any render at all.
-          expect(html).toContain('Loading saved messages…')
-        }
-      }
-    } finally { held.mockRestore(); reset() }
   })
   it('does not render a streaming cursor from an unfinished saved reply', () => {
     const html = renderToStaticMarkup(<Timeline saved items={[{ kind: 'assistantText', turnId: 'partial', text: 'saved' }]} />)

@@ -3,6 +3,11 @@ import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { Envelope, HistoryPagePayload } from '../src/shared/wire/types'
 import type { ElectronApplication, Locator, Page } from '@playwright/test'
 
+// Scripted history is published as thread catch-up/pages by the shared fake daemon.
+test.use({ scriptedHistory: true })
+// #2020: raw-event coverage gaps and opaque cursors have no thread-route reader.
+test.skip(true, 'Legacy timeline gap persistence only. Thread coverage recovery is covered by thread-activation.')
+
 const newestIds = Array.from({ length: 20 }, (_, index) => index + 8)
 const ts = '2026-10-07T12:00:00Z'
 const message = (id: number): HistoryPagePayload['entries'][number] => ({ id, type: 'message', ts,

@@ -197,7 +197,7 @@ test('an image attachment draws as its own bytes, sized live, with the file row 
   }
 
   const bubble = (index: number) =>
-    page.locator('.bubble[data-thread-role="user"]').nth(index)
+    page.locator('[data-thread-role="user"]').nth(index)
 
   /** A drawn image's laid-out box plus the size its own bytes decoded to. `naturalWidth` is the CSP proof:
    *  a source the policy refuses never decodes and reads 0. */

@@ -10,6 +10,7 @@ export interface PendingThreadSend {
   readonly delivery?: 'waiting' | 'not-sent'
 }
 type Scope = { pending: readonly PendingThreadSend[]; localSendPending: LocalSendPending | null;
+  reportsClearedThrough?: number;
   newest?: { deviceId: string | null; messageId: string; accepted?: { epoch: string; id: number } } }
 const empty: Scope = { pending: [], localSendPending: null }
 const record = (value: unknown): value is Record<string, unknown> =>
@@ -47,6 +48,8 @@ export function createThreadSendStore(log?: (event: { event: string; code: strin
     revision: number
     select: (host: string, chat: string) => Scope
     retain: (host: string, chat: string, deviceId: string | null, event: Extract<ThreadEvent, { type: 'userText' }>) => void
+    endFeedback: (host: string, chat: string) => void
+    clearReports: (host: string, chat: string, through: number) => void
     feedback: (host: string, chat: string, event: Extract<ThreadEvent, { type: 'messageDelivery' }>) => void
     settle: (snapshot: ThreadSnapshot) => void
     deleteConversation: (host: string, chat: string) => void
@@ -69,8 +72,15 @@ export function createThreadSendStore(log?: (event: { event: string; code: strin
         const item: PendingThreadSend['item'] = { kind: 'userText', text: event.text, createdAt: event.createdAt,
           attachments: event.attachments, messageId }
         publish(host, chat, { pending: [...before.pending, { key: nextKey++, deviceId, messageId, item }],
-          newest: { deviceId, messageId }, localSendPending: { messageId, queued: false } })
+          newest: { deviceId, messageId }, localSendPending: { messageId, queued: false }, reportsClearedThrough: before.reportsClearedThrough })
         observe('pending')
+      },
+      endFeedback(host: string, chat: string) {
+        const before = select(host, chat)
+        if (!disposed && before.localSendPending) publish(host, chat, { ...before, newest: undefined, localSendPending: null })
+      },
+      clearReports(host: string, chat: string, through: number) {
+        if (!disposed) publish(host, chat, { ...select(host, chat), reportsClearedThrough: through })
       },
       feedback(host: string, chat: string, event: Extract<ThreadEvent, { type: 'messageDelivery' }>) {
         const before = select(host, chat)

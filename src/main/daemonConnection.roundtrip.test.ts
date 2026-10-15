@@ -65,7 +65,7 @@ const EXPECTED_ACK: HelloAckPayload = {
   protocol_version: 'v2',
   server_id: 'roundtrip-srv',
   conn_id: 'roundtrip-conn',
-  capabilities: []
+  capabilities: ['thread']
 }
 
 // Generous per-step bounds: whenReady/connect absorb the one-time wasm compile + the real handshake

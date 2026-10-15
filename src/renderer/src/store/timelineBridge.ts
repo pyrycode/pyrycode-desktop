@@ -886,7 +886,7 @@ export function useTimelineBridge(getOpenConversationId: () => string | null): v
   useEffect(
     () =>
       subscribeTimeline(
-        window.pyry.onDaemonEvent,
+        onLegacyContentEvent,
         (event, conversationId, joinKey, historyEntryId, origin) => {
           if (event.type !== 'messageDelivery' || (conversationId === getOpenConversationId() &&
               (event.serverId === null || conversationTimelineStore.getState().timelines.get(conversationId ?? '')?.serverId === event.serverId))) {
@@ -920,3 +920,4 @@ export function useTimelineBridge(getOpenConversationId: () => string | null): v
     [getOpenConversationId]
   )
 }
+import { onLegacyContentEvent } from './threadRuntime'

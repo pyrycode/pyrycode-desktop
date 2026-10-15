@@ -30,8 +30,9 @@ This is fake transport; no live-Claude run was required or performed.
 
 For repeated pages that change only receipt metadata, restored rows and enabled
 Send cannot prove reply settlement, and thread focus creates no history demand.
-Observe the host/conversation/cursor-specific `historyPageReceived` before polling
-the real protected save. Retain immediate fake replies, the 500 × 200 saturated
+Observe the host/conversation/cursor-specific `historyPageReceived`, then poll a
+small observation of successful real protected replacement before reading the
+whole record once for exact equality. Retain immediate fake replies, the 500 × 200 saturated
 receipts, eviction of `page-0` for `repeat`, unchanged oldest-end coverage, one
 assistant with its original identity, later live content with the next allocated
 key, and whole-snapshot equality after a third fresh Electron launch. See the
@@ -66,6 +67,45 @@ was present, executed and passed in gate 6 on 2026-10-10 at
 3 skipped. The verdict confirms the complete recording spec contributed
 10 executed/passed, 0 failed/skipped, every retry 0. No production behavior changed;
 no visual or live-Claude check applied to this fake-transport synchronization fix.
+
+The [later recovered gate excerpt](https://github.com/pyrycode/pyrycode-desktop/issues/1978#issuecomment-6186764616)
+at `3d527863366852cdfa49d945daa192d16df380ce` identifies second-launch repeated-page
+snapshot equality timing out with the old seed: 395 executed, 394 passed, 1 failed,
+3 skipped; named rerun 1 executed/passed, 0 failed/skipped. That excerpt alone
+does not establish delayed versus skipped replacement. The separate
+[controlled diagnosis](https://github.com/pyrycode/pyrycode-desktop/issues/1978#issuecomment-6188161084),
+with [accounting corrected by review](https://github.com/pyrycode/pyrycode-desktop/pull/1997#issuecomment-6188310409),
+recorded 32 unchanged historical executions, 16 passed, 16 failed, 0 skipped/retried:
+15 later-live saved-text failures and one repeated-page equality failure.
+Instrumented runs recorded 16 executed, 11 passed, 5 failed, 0 skipped/retried.
+Their traces establish an old large read racing a later successful two-item save;
+a diagnostic read then retained keys `[-8, 42]`, next key `43`, 500 receipts and
+cursor `repeat`. This proves an observation race in those later-live failures,
+without proving the original occurrence's timing or a product persistence defect.
+The earlier receipt barrier remained intact.
+
+Poll small successful-save counts separately from typed receipt, then compare the
+complete record; repeatedly transferring 100,000 receipt ids can spend the deadline
+returning a stale snapshot. The corrected held-save control recorded 1 executed,
+0 passed, 1 intentionally failed, 0 skipped/retried: receipt passed while successful
+counts stayed `[1]` and storage retained only the assistant. Releasing the actual
+write saved both rows. This defeats a receipt-only substitute for protected-save
+completion. See the [implemented observation contract](chat-history-testing.md#browser-persistence-and-lifecycle).
+
+At implementation `b6059c79033045f1822941a218664a0674fed75e`, the named saturation
+test passed 20 consecutive executions, followed by the complete recording spec:
+20 executed/passed, then 10 executed/passed; both 0 failed/skipped/retried, no skip
+reasons. Eight-worker repaired contention recorded 16 executed/passed,
+0 failed/skipped/retried. Reports under `/tmp/builder-1978/` are
+`final-named-20.json`, `final-spec.json`, `final-contention.json` and
+`held-save-control-final.json`, each with matching `.stderr` and `-results/` artifacts.
+The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1997#issuecomment-6188310409)
+and supplied dispatcher per-test report confirm the named test was present,
+executed and passed in gate 6 at `f7866f3e7331b5ae99fa3412ba3ecb1131eb2baa`
+on 2026-10-15: 405 executed/passed, 0 failed, 3 skipped, zero retries. Skips were
+two macOS-only badge cases and macOS last-window reopening. No production change
+or live-Claude proof was required. The [plan](../../specs/architecture/1978-saturated-history-save-observation.md)
+records commands and separates the recovered excerpt from instrumented evidence.
 
 ### Known-gap recovery verification
 

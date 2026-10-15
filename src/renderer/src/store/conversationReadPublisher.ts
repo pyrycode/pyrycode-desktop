@@ -3,19 +3,31 @@ import type { RendererCommand } from '@shared/ipc/commands'
 import { conversationListStore } from './conversationListStore'
 import { sessionStore } from './sessionStore'
 import { useConversationTimelineStore, type ConversationSlice } from './conversationTimelineStore'
+import type { ThreadSnapshot } from './threadItemStore'
+import { conversationReadRouteStore } from './conversationReadRouteStore'
 
-type ReadRow = { id: string; serverId?: string | null; read_up_to?: number; latest_entry_id?: number }
+const useReadLayoutEffect = typeof document === 'undefined' ? useEffect : useLayoutEffect
+
+type ReadRow = { id: string; serverId?: string | null; read_up_to?: number; latest_entry_id?: number; last_shown_version?: number }
 type ReadCommand = Extract<RendererCommand, { type: 'markConversationRead' }>
+export type ThreadReadInputs = { snapshot: ThreadSnapshot; row: ReadRow; readerOpen?: boolean;
+  /** Completed newest-window/catch-up progress represented by this immutable snapshot, never a page. */
+  completeThrough: number;
+  publisher?: ReturnType<typeof createReadPublisher> }
 
 export function createReadPublisher(deps: {
   rows: () => readonly ReadRow[]; connected: (host: string) => boolean; send: (command: ReadCommand) => void
+  epoch?: (host: string, id: string) => string | undefined
 }) {
-  const pending = new Map<string, Map<string, { target: number; attempted?: number; generation?: number }>>()
+  const pending = new Map<string, Map<string, { target: number; epoch?: string; attempted?: number; generation?: number }>>()
   const links = new Map<string, { connected: boolean; generation: number }>()
-  const owner = (host: string, id: string) => {
-    const matches = deps.rows().filter(r => r.id === id)
+  const owner = (host: string, id: string, epoch?: string) => {
+    if (deps.epoch?.(host, id) !== epoch) return undefined
+    const matches = deps.rows().filter(r => r.id === id && (epoch === undefined || r.serverId === host))
     return matches.length === 1 && matches[0].serverId === host ? matches[0] : undefined
   }
+  const eligible = (row: ReadRow | undefined, epoch?: string) => row?.read_up_to !== undefined &&
+    (epoch === undefined ? row.latest_entry_id !== undefined : row.last_shown_version !== undefined)
   const sync = () => {
     for (const host of new Set([...deps.rows().flatMap(r => typeof r.serverId === 'string' ? [r.serverId] : []), ...links.keys()])) {
       const connected = deps.connected(host)
@@ -23,8 +35,8 @@ export function createReadPublisher(deps: {
       links.set(host, { connected, generation: (prior?.generation ?? 0) + (connected && !prior?.connected ? 1 : 0) })
     }
     for (const [host, conversations] of pending) for (const [id, mark] of conversations) {
-      const row = owner(host, id)
-      if (row === undefined || row.read_up_to === undefined || row.latest_entry_id === undefined || row.read_up_to >= mark.target) {
+      const row = owner(host, id, mark.epoch)
+      if (!eligible(row, mark.epoch) || row?.read_up_to === undefined || row.read_up_to >= mark.target) {
         conversations.delete(id); continue
       }
       const link = links.get(host)
@@ -38,13 +50,13 @@ export function createReadPublisher(deps: {
   }
   return {
     sync,
-    observe(host: string, id: string, target: number) {
+    observe(host: string, id: string, target: number, epoch?: string) {
       if (!Number.isSafeInteger(target) || target < 0) return
-      const row = owner(host, id)
-      if (row?.read_up_to === undefined || row.latest_entry_id === undefined || row.read_up_to >= target) return
+      const row = owner(host, id, epoch)
+      if (!eligible(row, epoch) || row?.read_up_to === undefined || row.read_up_to >= target) return
       const records = pending.get(host) ?? new Map()
       const held = records.get(id)
-      if (held === undefined) records.set(id, { target })
+      if (held === undefined || held.epoch !== epoch) records.set(id, { target, epoch })
       else held.target = Math.max(held.target, target)
       pending.set(host, records); sync()
     },
@@ -60,7 +72,22 @@ function newestReadRowKey(slice: ConversationSlice): number | undefined {
   return undefined
 }
 
-export function readTargetFor(slice: ConversationSlice | undefined): number | undefined {
+function newestShown(snapshot: ThreadSnapshot) {
+  return snapshot.items.filter(i => i.shown === true && i.status !== 'queued' &&
+    typeof i.order === 'number' && i.order > 0).at(-1)
+}
+
+export function readTargetFor(slice: ConversationSlice | undefined, thread?: ThreadReadInputs): number | undefined {
+  if (thread) {
+    const { snapshot: s, row } = thread, target = row.last_shown_version, tail = newestShown(s), order = tail?.order
+    if (s.hostId !== row.serverId || s.conversationId !== row.id || row.read_up_to === undefined ||
+      target === undefined || !Number.isSafeInteger(target) || target < 0 || target > s.checkpoint ||
+      !Number.isSafeInteger(thread.completeThrough) || target > thread.completeThrough ||
+      s.repair && target > s.repair.fromVersion || !tail || typeof order !== 'number' ||
+      !s.ranges.some(r => r.start <= order && r.start < r.end)) return undefined
+    if (s.items.some(i => i.shown === true && (i.status === 'queued' || typeof i.order !== 'number' || i.order <= 0))) return undefined
+    return target
+  }
   if (slice === undefined) return undefined
   const key = newestReadRowKey(slice)
   if (key === undefined) return undefined
@@ -73,34 +100,37 @@ export function readTargetFor(slice: ConversationSlice | undefined): number | un
 }
 
 const publisher = createReadPublisher({
+  epoch: (host, id) => conversationReadRouteStore.getState().epochFor(host, id),
   rows: () => conversationListStore.getState().conversations ?? [],
   connected: host => sessionStore.getState().statuses.get(host)?.type === 'connected',
   send: command => window.pyry.sendCommand(command)
 })
 
-export function useReadPublication(): void {
+export function useReadPublication(selected = publisher): void {
   useEffect(() => {
-    const offList = conversationListStore.subscribe(publisher.sync)
-    const offLink = sessionStore.subscribe(publisher.sync)
+    const offList = conversationListStore.subscribe(selected.sync)
+    const offRoute = conversationReadRouteStore.subscribe(selected.sync)
+    const offLink = sessionStore.subscribe(selected.sync)
     const offEvent = window.pyry.onDaemonEvent(event => {
       if (event.type === 'conversationDeleted' && 'serverId' in event && typeof event.serverId === 'string') {
-        publisher.forget(event.serverId, event.id)
+        selected.forget(event.serverId, event.id)
       }
     })
-    publisher.sync()
-    return () => { offList(); offLink(); offEvent() }
-  }, [])
+    selected.sync()
+    return () => { offList(); offRoute(); offLink(); offEvent() }
+  }, [selected])
 }
 
 export function useReadObservation(id: string | null, readerOpen: boolean,
-  pane: RefObject<HTMLDivElement>, thread: RefObject<HTMLDivElement>): void {
-  const slice = useConversationTimelineStore(s => id === null ? undefined : s.timelines.get(id))
+  pane: RefObject<HTMLDivElement>, thread: RefObject<HTMLDivElement>, authoritative?: ThreadReadInputs): void {
+  useThreadReadObservation(authoritative, pane, thread)
+  const slice = useConversationTimelineStore(s => id === null || authoritative ? undefined : s.timelines.get(id))
   const committed = useRef<{ slice: ConversationSlice | undefined; target: number | undefined }>({ slice: undefined, target: undefined })
   const setup = useRef<{
     id: string; key: number; region: HTMLDivElement; covered: HTMLDivElement; tail: HTMLElement
     observe: () => void; dispose: () => void
   }>()
-  useLayoutEffect(() => {
+  useReadLayoutEffect(() => {
     // Callbacks may run on list receipt before React commits a newer timeline.
     // Only this layout effect advances their displayed identity and target.
     committed.current = { slice, target: readTargetFor(slice) }
@@ -130,7 +160,8 @@ export function useReadObservation(id: string | null, readerOpen: boolean,
       if (rect.height <= 0 || rect.bottom <= top || rect.bottom > bottom) return
       const matches = conversationListStore.getState().conversations?.filter(r => r.id === id) ?? []
       const host = matches.length === 1 ? matches[0].serverId : undefined
-      if (typeof host === 'string' && displayed.serverId === host) publisher.observe(host, id, target)
+      if (typeof host === 'string' && displayed.serverId === host &&
+        conversationReadRouteStore.getState().epochFor(host, id) === undefined) publisher.observe(host, id, target)
     }
     const resize = new ResizeObserver(observe)
     resize.observe(region); resize.observe(covered); resize.observe(tail)
@@ -142,5 +173,37 @@ export function useReadObservation(id: string | null, readerOpen: boolean,
       dispose: () => { offList(); resize.disconnect(); region.removeEventListener('scroll', observe); window.removeEventListener('focus', observe) } }
     observe()
   })
-  useLayoutEffect(() => () => { setup.current?.dispose(); setup.current = undefined }, [])
+  useReadLayoutEffect(() => () => { setup.current?.dispose(); setup.current = undefined }, [])
+}
+
+function useThreadReadObservation(inputs: ThreadReadInputs | undefined,
+  pane: RefObject<HTMLDivElement>, thread: RefObject<HTMLDivElement>): void {
+  useReadLayoutEffect(() => {
+    const region = thread.current, covered = pane.current
+    if (!inputs || inputs.readerOpen || !region || !covered) return
+    const { snapshot: s } = inputs, target = readTargetFor(undefined, inputs), newest = newestShown(s)
+    if (target === undefined || !newest) return
+    const tail = region.querySelector<HTMLElement>(`[data-read-row="${newest.id}"]`)
+    if (!tail) return
+    const observe = () => {
+      if (conversationReadRouteStore.getState().epochFor(s.hostId, s.conversationId) !== s.epoch ||
+        !document.hasFocus() || document.visibilityState !== 'visible' || !tail.isConnected || tail.closest('[hidden]')) return
+      const viewport = region.getBoundingClientRect(), rect = tail.getBoundingClientRect()
+      const shell = covered.closest('.conversation__covered') ?? covered
+      const top = Math.max(viewport.top, shell.querySelector('.conversation__top-chrome')?.getBoundingClientRect().bottom ?? viewport.top)
+      const bottom = Math.min(viewport.bottom, shell.querySelector('.conversation__input-chrome')?.getBoundingClientRect().top ?? viewport.bottom)
+      if (rect.height <= 0 || rect.bottom <= top || rect.bottom > bottom) return
+      const sink = inputs.publisher ?? publisher
+      sink.observe(s.hostId, s.conversationId, target, s.epoch)
+    }
+    const resize = new ResizeObserver(observe)
+    resize.observe(region); resize.observe(covered); resize.observe(tail)
+    for (const chrome of (covered.closest('.conversation__covered') ?? covered).querySelectorAll('.conversation__top-chrome, .conversation__input-chrome')) resize.observe(chrome)
+    region.addEventListener('scroll', observe); window.addEventListener('focus', observe)
+    document.addEventListener('visibilitychange', observe)
+    const off = conversationListStore.subscribe(observe)
+    observe()
+    return () => { off(); resize.disconnect(); region.removeEventListener('scroll', observe)
+      window.removeEventListener('focus', observe); document.removeEventListener('visibilitychange', observe) }
+  })
 }

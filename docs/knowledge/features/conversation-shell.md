@@ -176,6 +176,56 @@ This screen is large enough that its surfaces live in their own documents. Each 
 
 The seams this screen exposes are in [Seams](conversation-shell-seams.md).
 
+### Authoritative thread read publication
+
+`ThreadItemsTimeline.readInputs` supplies a received summary `row`, `completeThrough`,
+`readerOpen` and optionally an injected publisher. The view pairs them with its immutable
+`snapshot`; select the same host/conversation/epoch in `conversationReadRouteStore`.
+This is a supplied seam, with production activation and combined live-daemon proof owned by
+[#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908). Thread content does not pass
+through `reduceTimeline` or legacy row-key/history evidence.
+
+`readTargetFor(undefined, inputs)` takes the received `last_shown_version`, never maximum
+item IDs, revisions or held `version`. Admission requires matching snapshot/summary scope,
+present shown/read metadata, a non-negative safe target, and a newest ordered shown source
+row. The target must be at most both `snapshot.checkpoint` and supplied `completeThrough`,
+and at most `repair.fromVersion` while repair is pending. A nonempty certified range must
+establish a loaded baseline at or before that row's order; completed live suffixes need not
+widen the saved range's end.
+
+`completeThrough` certifies completed newest-window/catch-up progress represented by this
+render, never an older page. Checkpoint alone is insufficient because older-page certificates
+can advance it. Unfinished/abandoned batches retain uncertified progress in
+`uncommittedVersion`, fencing checkpoint advancement by later live updates. Neither held
+content nor an older page grants a newer read target. Any shown queued/unordered item makes
+a new target unavailable; an item with `shown: false` neither raises the target nor prevents
+an earlier completely reflected shown version from being published.
+
+`useReadObservation` installs authoritative evidence only in a layout effect after React
+commits. Focus, scroll, resize, visibility and list callbacks can recheck the committed
+target's eligibility, but cannot upgrade it from the latest summary. With version 10 committed,
+a same-row append and summary 11 received before commit cannot publish 11 through those
+callbacks. The complete new content and its paired inputs must first commit.
+
+The document must be focused and visible, the reader closed, and the actual newest shown
+source row's trailing edge inside the thread viewport between measured top/input chrome.
+Scrolling above it, chrome overlap, a collapsed ancestor or a folded tool run excludes the
+claim. A visible header/proxy cannot stand for its hidden descendant. Numeric source identity
+locates that row independently of nested presentation; host/conversation/epoch view keys
+replace DOM evidence on scope changes. Observer cleanup removes subscriptions and listeners.
+
+`createReadPublisher` reuses host-bound `markConversationRead` and coalesces evidenced targets.
+Sending is an attempt, without changing unread or received marks. Only the owning daemon's
+received `read_up_to` reaching the pending target confirms it; a lower clamp leaves it pending.
+Each reconnect may retry that evidenced target once, even while blurred, without adopting a
+newer summary. A higher target needs a new committed visible observation. Epoch replacement,
+deletion, owner loss or unavailable metadata discards pending authority; a scope change alone
+creates none. Late receipts cannot confirm another host's pending claim. Thread publisher
+ownership is host-qualified; legacy publication still requires unambiguous ID ownership, and
+main retains its independent ambiguous-connected-owner refusal. Thus a recorded renderer
+attempt is not proof of wire delivery. See [mounted evidence](development-verification.md#authoritative-thread-read-evidence)
+and [legacy publication](conversation-last-read-store.md#how-it-works).
+
 ### Permission resolution notices
 
 `TopOverlay.tsx` is the pure view; `TopOverlayControl` in `ConversationScreen.tsx` selects the open

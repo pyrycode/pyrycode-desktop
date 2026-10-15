@@ -291,6 +291,34 @@ or a pending question batch, shows the gold `input-required` dot. Idle stays an 
 half opacity even on hovered/open rows; working is solid primary blue and blinks; new messages is solid
 success green. See [the dot's paint contract](conversation-status-dot.md).
 
+#### Thread-route unread and attention
+
+`ConversationStatusDotControl` and the badge's `conversationStatusNow(row)` select read mode
+from `conversationReadRouteStore.epochFor(row.serverId, row.id)`. Selection is explicit and
+host/conversation scoped, with an epoch value; optional summary fields alone never select it.
+The store starts empty. The supplied authoritative view remains inactive in production until
+[#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
+
+On a selected thread route, unread means received `last_shown_version > read_up_to`, even
+without a held timeline. Zero is present and equality is read. Missing either field makes
+thread unread unavailable (the predicate returns false); history IDs, local counts and local
+marks cannot fill that gap. Hidden trailing items and live-state counters cannot raise this
+comparison. Sending a read command never clears it; only the owning daemon's received mark
+can confirm reading. See [committed thread read publication](conversation-shell.md#authoritative-thread-read-publication).
+
+Both local stamp paths use `stampLastReadFor`. Any explicitly selected thread with the same
+conversation ID suppresses stamping, including when its metadata is missing: local marks
+are ID-keyed, so choosing only one host's matching row would leave another path to a stamp.
+Non-thread routes retain received `latest_entry_id > read_up_to` when both fields exist,
+otherwise the existing nullable timeline/local-count fallback and stamps.
+
+The actual host-stamped row supplies read fields and mode. Attention still ranks pending
+permission/trust/questions above working, then new messages, then idle. Archived rows stay
+outside the active sidebar; the badge excludes archived and muted rows and counts only
+input-required/new-messages, once per eligible conversation. Muting does not hide its dot.
+Route changes also wake the badge subscription. See [unread](conversation-unread.md) and
+[badge composition](app-badge.md).
+
 ### CSS (`channels.css`)
 
 `.channel-list__tree` scrolls inside the padded card; the top bar, its rule and the app-wide

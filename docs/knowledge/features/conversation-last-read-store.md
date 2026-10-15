@@ -2,7 +2,8 @@
 
 The renderer's held mark of how far the operator has read into **each** conversation — a count of
 [thread timeline](thread-timeline.md) items seen, keyed by `conversationId`. This is the legacy
-fallback for rows without both daemon read fields. Complete rows use received durable history IDs
+fallback for non-thread rows without both daemon history/read fields. Complete non-thread rows use
+received durable history IDs; explicitly selected thread routes use received shown/read versions
 through [conversation unread](conversation-unread.md), independently of this local count.
 
 Introduced in [#775](../codebase/775.md), split from #677. Shipped dormant — the holder and its read
@@ -27,7 +28,13 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
 
 ## How it works
 
-- **Daemon publication observes a committed display.** `useReadObservation`, mounted in
+- **Authoritative thread publication uses separate supplied evidence.**
+  [Thread read publication](conversation-shell.md#authoritative-thread-read-publication) pairs
+  immutable committed `readInputs` with completed newest-window/catch-up progress and scoped
+  checkpoint/repair/coverage fences. It observes the actual newest shown source row, excluding
+  hidden descendants and proxies. It does not use the legacy display IDs below. Route epochs
+  invalidate prior pending evidence; reconnect retries only already evidenced targets.
+- **Legacy daemon publication observes a committed display.** `useReadObservation`, mounted in
   `ConversationScreen`, updates a ref with the rendered slice and derived durable target only in a
   layout effect. Stable callbacks read that ref, never an initial captured slice or an uncommitted
   timeline-store snapshot; current list state supplies ownership and read eligibility only. Each
@@ -64,8 +71,9 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
   and exactly `{ conversation_id, up_to }`, with a nonempty conversation ID and non-negative safe
   integer target, including zero. Main validates IPC, resolves the sole current connected claim and
   requires it to match the observed host before sending a fresh allowlisted `mark_conversation_read`
-  payload through that connection. Duplicate renderer ownership sends nothing; main refuses ambiguous
-  connected claims. See [routing](daemon-connection-conversation-routing.md#host-bound-read-routing).
+  payload through that connection. Legacy duplicate renderer ownership sends nothing. Thread
+  publisher ownership is host-qualified, but main still refuses ambiguous connected claims.
+  See [routing](daemon-connection-conversation-routing.md#host-bound-read-routing).
 - **Sending does not acknowledge reading.** Only that host/conversation's received daemon mark
   confirms the target. The daemon stores `max(held, min(up_to, latest))`; a clamped reply below the
   target leaves it unconfirmed. Neither command delivery nor a send result clears attention.
@@ -77,9 +85,12 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
   Confirmation settles it; deletion, host/pairing removal, loss of the read contract or ambiguous/changed
   ownership discards it. A later owner never inherits another host's pending mark. Pending commands
   are never persisted; the local count store below remains the legacy path.
-- **Complete daemon rows suppress local stamping.** Both activation and timeline-driven writes call
+- **Selected thread routes and complete daemon rows suppress local stamping.** Both activation
+  and timeline-driven writes call
   `stampLastReadFor`, whose production `isDaemonBacked(id)` dependency reads the current list at
-  invocation time. Any matching row with both `read_up_to` and `latest_entry_id` (including zero)
+  invocation time, alongside explicit thread-route selections. Any selected thread with that ID
+  suppresses stamping even with missing metadata. Any matching non-thread row with both
+  `read_up_to` and `latest_entry_id` (including zero)
   suppresses the write. The local map is ID-keyed, so a duplicate ID with a complete row on any host
   also suppresses stamping for its legacy peer; selecting only the first match would make protection
   depend on host order. Daemon unread still compares each actual row independently. The store's direct
@@ -214,8 +225,9 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
   the id-change gate — a legacy re-open re-stamps — and
   `useConversationLastRead()`, mounted in `PairedShell`, re-stamps the **open** conversation on every
   `conversationTimelineStore` emission so content landing while it stays open never pushes its count past
-  its own local mark. Complete daemon rows skip both writes, including opening without a held
-  timeline; incomplete rows retain the old behavior. Persistence under `pyry.conversationLastRead`
+  its own local mark. Selected thread routes and complete daemon rows skip both writes, including
+  opening without a held timeline; incomplete non-thread rows retain the old behavior.
+  Persistence under `pyry.conversationLastRead`
   and both pairing/per-server clears remain in place. See [Paired shell § The last-read
   stamp](paired-shell-conversation-exits.md#the-last-read-stamp-conversationlastreadbridgets-777) for the write path,
   including a reachable, deliberately unfixed edge case where the pairing- and conversation-teardown

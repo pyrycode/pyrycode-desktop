@@ -17,8 +17,11 @@ export function hasDaemonReadState(row: Pick<ConversationSummary, 'read_up_to' |
 export function isConversationUnread(
   timeline: TimelineState | null,
   lastRead: LastReadMark | null,
-  row?: Pick<ConversationSummary, 'read_up_to' | 'latest_entry_id'>
+  row?: Pick<ConversationSummary, 'read_up_to' | 'latest_entry_id' | 'last_shown_version'>,
+  threadMode = false
 ): boolean {
+  if (threadMode) return row?.last_shown_version !== undefined && row.read_up_to !== undefined &&
+    row.last_shown_version > row.read_up_to
   if (hasDaemonReadState(row)) return row.latest_entry_id > row.read_up_to
   if (timeline === null) return false
   if (lastRead === null) return true

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   stampLastReadFor,
+  conversationLastReadDeps,
   subscribeConversationLastRead,
   type ConversationLastReadDeps
 } from './conversationLastReadBridge'
@@ -14,6 +15,7 @@ import { createConversationTimelineStore, selectTimelineFor } from './conversati
 import { createActiveConversationStore, selectActiveConversation } from './activeConversationStore'
 import { initialTimelineState, type ThreadItem, type TimelineState } from './threadTimeline'
 import type { ConversationCreatedPayload } from '@shared/wire/types'
+import { conversationReadRouteStore } from './conversationReadRouteStore'
 
 // The write path feeding conversationLastReadStore (#777). Both halves are React-free with injected
 // effects — the conversationActivityBridge idiom — so the whole decision surface is exercised here with
@@ -353,6 +355,16 @@ describe('conversationLastReadBridge over real stores', () => {
 })
 
 describe('daemon-backed local stamp guard', () => {
+  it('suppresses stamping on a supplied thread route with no received read metadata', () => {
+    const store = conversationReadRouteStore.getState()
+    store.select('host', 'thread-unavailable', 'epoch')
+    try {
+      const recordLastRead = vi.fn(), getTimelineFor = vi.fn(() => sliceHolding(4))
+      stampLastReadFor({ ...conversationLastReadDeps, recordLastRead, getTimelineFor }, 'thread-unavailable')
+      expect(getTimelineFor).not.toHaveBeenCalled()
+      expect(recordLastRead).not.toHaveBeenCalled()
+    } finally { store.select('host', 'thread-unavailable', null) }
+  })
   it('guards both explicit activation and timeline-driven stamps, then retains legacy behavior', () => {
     const recordLastRead = vi.fn()
     let daemonBacked = true

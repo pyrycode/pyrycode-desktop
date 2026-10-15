@@ -319,12 +319,16 @@ test('current thread prompts remain answerable during pending and failed initial
     const request = decodeEnvelope(bytes); foreignRequests.push(request)
     return request.type === 'list_conversations' ? [seedConversationsFrame(SECOND_SEEDED_ROW)] : []
   } } })
+  const beforeOpen = requests.filter(r => r.type === 'thread_catch_up').length
+  // Pairing the second host leaves the original abandoned query holding its serial host slot.
+  for (const request of requests.filter(r => r.type === 'thread_catch_up'))
+    daemon.pushFrame(frame('error', { code: 'thread.unavailable', message: 'Unavailable' }, request.id))
   await page.getByText(SEEDED_ROW.name!, { exact: true }).first().click()
-  await expect.poll(() => requests.some(r => r.type === 'thread_catch_up')).toBe(true)
+  await expect.poll(() => requests.filter(r => r.type === 'thread_catch_up').length).toBeGreaterThan(beforeOpen)
+  const initialRecovery = requests.filter(r => r.type === 'thread_catch_up').at(-1)!
   for (const phase of ['pending', 'failed']) {
     if (phase === 'failed') {
-      const request = requests.find(r => r.type === 'thread_catch_up')!
-      daemon.pushFrame(frame('error', { code: 'thread.unavailable', message: 'Unavailable' }, request.id))
+      daemon.pushFrame(frame('error', { code: 'thread.unavailable', message: 'Unavailable' }, initialRecovery.id))
       await expect(page.getByRole('button', { name: /Retry/ })).toBeVisible()
     }
     daemon.pushFrame(frame('modal_shown', { conversation_id: SEEDED_ROW.id, modal_id: phase, class: 'permission',

@@ -640,6 +640,7 @@ export function ConversationScreen({
           {queryState?.type === 'failed' && <ComposerHistoryFailure retryable onRetry={() => {
             if (selectedHost !== null) threadRuntime.query('retry', selectedHost)
           }} />}
+          <ThreadPromptSlot host={selectedHost} conversationId={openConversationId} />
         </>} />}
       {!authoritative && (!offline || items.length > 0 || visibleQueued.length > 0 || pendingBatch !== undefined || hasPermissionSurface) && <Timeline
         key={openConversationId}
@@ -672,7 +673,7 @@ export function ConversationScreen({
         // control is. No timeline write: the message is being delivered, so its echo stays true.
         onSendQueuedNow={actionsAvailable ? onSendQueuedNow : undefined}
       />}
-      {authoritative && <ThreadPromptSlot host={selectedHost} conversationId={openConversationId} />}
+      {authoritative && authoritativeSnapshot === null && <ThreadPromptSlot host={selectedHost} conversationId={openConversationId} />}
       <TopOverlayControl onRepairHost={onRepairHost} threadError={authoritative ? liveInput.sessionError?.code ?? null : undefined} />
       {/* #581: the background-task panel, reading the roster store itself, so only the conversation id goes
           down; with no active conversation the id is null and the panel reads "never observed". It mounts

@@ -20,3 +20,15 @@ Remote overlap inspection found #1983 adding independent setup diagnostics to `l
 
 ## Revisions
 2026-10-15: Linux control on base `cba798763b1ca788fee07409c5dd6eb1fe9f54cc` plus the local regression barrier and only the old initial selector restored: 1 executed, 0 passed, 1 failed, 0 skipped, retry 0 (`control-old-selector-run.json`). The handler completed before `locator.click` rejected two targets, “Seeded discussion” and “Example running”, in `launchPairedApp`; no hosted open or reconnect ran. Restoring the merged selector with the identical barrier passed: 1 executed/passed, 0 failed/skipped, retry 0 (`repaired-selector.json`). This confirms a reproducible launch setup race, not a reconnect failure; the original incident's missing stack remains unattributed. An earlier anchored grep selected zero tests and is excluded from evidence. No design change was needed.
+
+Final Linux x86_64 evidence at pushed candidate `bfa5aa04199c5496e52c514d59d618115675d79b`, after final merge of `origin/main` (`cba79876`), 2026-10-15:
+
+| Check | Executed | Passed | Failed | Skipped | Retries |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Ten independent named-test invocations | 10 | 10 | 0 | 0 | 0 |
+| Complete hosted-view spec, named case included | 23 | 23 | 0 | 0 | 0 |
+| Full unit suite, 413 passing files | 10331 | 10331 | 0 | 3 | 0 |
+
+Commands: ten separate `npx playwright test e2e/hosted-app-view.spec.ts --grep 'Fetch reconnect reconciles committed uncertain writes without replay$' --retries=0 --reporter=json`; complete spec uses the same command without `--grep`. Original config retained: three configured workers on this machine, one effective worker for this serial file, clipboard/parallel projects, repeatEach 1. All result entries were inspected, including the named case and retry values. No e2e skips or global errors. Pre-verify passed all five checks, final `npm run build` and `npm run check:docs` passed. The three unit skips are existing tests; no test was disabled here.
+
+Reports/stderr are `/tmp/builder-2008/linux-independent-1.json` through `linux-independent-10.json`, `hosted-app-view-full.json`, and matching `.stderr` files; checks are `pre-verify.log`, `build-final.log`, `docs-check.log`. `SHA256SUMS` records the raw artifacts; complete-spec JSON SHA-256 is `34168d95e6cc4976dc6123c1036b7222ff9aba1c2606751a537c4f6bbf067650`. This final revision adds evidence only; the tested spec and production tree remain identical to the candidate. Dispatcher owns the subsequent complete fake suite gate; no live-daemon proof is claimed.

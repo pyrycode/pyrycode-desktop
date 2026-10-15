@@ -115,6 +115,15 @@ export function remarkGfmSubset(this: Processor): undefined {
   return undefined
 }
 
+/** Parsed definition labels can contain escaped brackets, including literal `]:` text. */
+function definitionDelimiter(raw: string): number {
+  for (let i = 1; i < raw.length; i++) {
+    if (raw[i] === '\\') i++
+    else if (raw[i] === ']' && raw[i + 1] === ':') return i
+  }
+  return -1
+}
+
 /** Reject destinations made canonical only by Markdown entity/backslash normalization. */
 function remarkHostedLinks() {
   return (tree: Root, file: { value: unknown }): void => {
@@ -123,7 +132,7 @@ function remarkHostedLinks() {
       if ((node.type === 'link' || node.type === 'definition') && parseHostedAppLink(node.url)) {
         const raw = source.slice(node.position?.start.offset, node.position?.end.offset)
         const labelEnd = node.type === 'link' ? node.children[node.children.length - 1]?.position?.end.offset : undefined
-        const start = node.type === 'definition' ? raw.indexOf(']:')
+        const start = node.type === 'definition' ? definitionDelimiter(raw)
           : raw.indexOf('](', labelEnd === undefined ? 0 : labelEnd - (node.position?.start.offset ?? 0))
         const destination = start < 0 ? raw : raw.slice(start + 2).trimStart()
         // The parser already validated the title. Check only the original destination token.

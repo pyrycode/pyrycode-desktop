@@ -34,11 +34,27 @@ describe('conversation hosted links', () => {
     }
     expect(open).not.toHaveBeenCalled()
   })
+  it.each([String.raw`a\]:b`, String.raw`a\]:b\]:c`, String.raw`a\\\]:b`, String.raw`a\\`,
+    String.raw`a\[:b`])('accepts canonical destinations after escaped reference label %s', label => {
+    const open = vi.fn()
+    for (const destination of [link, `<${link}>`]) {
+      for (const title of ['', String.raw` "The \"dashboard\" with ]: punctuation"`]) {
+        const text = `[Open][${label}]\n\n[${label}]: ${destination}${title}`
+        for (const Renderer of [AssistantMarkdown, StreamingAssistantMarkdown]) {
+          expect(renderToStaticMarkup(<Renderer text={text} onOpenHostedApp={open} />), text)
+            .toBe('<p><button type="button" class="markdown-link">Open</button></p>')
+          expect(renderToStaticMarkup(<Renderer text={text} />), text).toBe('<p>Open</p>')
+        }
+      }
+    }
+    expect(open).not.toHaveBeenCalled()
+  })
   it('rejects escaped and normalized destinations while retaining visible labels', () => {
     for (const target of [link + '/', link + '?x=1', link + '#x', link.replace(':', '\\:'),
       link.replace(':', '&#58;'), link.replace('hosts', '%68osts'), link.replace('/apps/', '/a/../apps/')]) {
       for (const text of [`[Visible](${target})`, String.raw`[Visible](${target} "The \"dashboard\"")`,
         `[Visible](${target} "decoy ](${link})")`,
+        String.raw`[Visible][a\]:b]` + '\n\n' + String.raw`[a\]:b]: ${target} "decoy ]: ${link}"`,
         String.raw`[Visible][app]` + '\n\n' + String.raw`[app]: ${target} "The \"dashboard\""`]) {
         for (const Renderer of [AssistantMarkdown, StreamingAssistantMarkdown]) {
           const html = renderToStaticMarkup(<Renderer text={text} onOpenHostedApp={() => {}} />)

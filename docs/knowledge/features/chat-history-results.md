@@ -5,10 +5,10 @@ Result states, local failure presentation and preservation rules for
 
 ## Results and failure preservation
 
-Timeline reading shows “Loading saved messages…” while pending in either connection
+Saved-thread reading shows “Loading saved messages…” while pending in either connection
 state. Nonempty restored content shows “Offline. Showing saved messages.” only while
 the selected host is unavailable; connected opening and reconnect show no offline
-notice. Both `missing` and a stored empty timeline succeed and draw no notice at
+notice. Both `missing` and a stored empty daemon thread succeed and draw no notice at
 all — a loaded, empty local read reads as the ordinary state of a chat opened for
 the first time on this machine, not a fault (\#1447). Errors, rejected
 IPC, invalid snapshots, unexpected result statuses and wrong host/conversation/kind

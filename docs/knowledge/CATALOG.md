@@ -19,7 +19,7 @@ Search this catalog for a topic. Start with INDEX.md. The documentation stage ma
 
 ## Features
 
-- [Protected local chat history](features/chat-history.md) — Versioned saved-host snapshots, guarded protected storage, received-state recording and echo cancellation, durable coverage, host ownership, coalescing, close/quit flushing and saved-list and on-demand offline timeline restoration, stale-read admission, restored ownership and local read failures.
+- [Protected local chat history](features/chat-history.md) — Versioned saved-host snapshots, guarded protected storage, received-list/daemon-item recording, host ownership, coalescing, ordered removal and generation fences, close/quit draining and readThread-only offline restoration; retained legacy format contracts.
 - [Protected local chat history — storage and lifecycle](features/chat-history-storage.md) — Buffered replacements, protected collection ordering and graceful window/app shutdown; links to the indexed legacy foundation.
 - [Protected chat history — API and operations](features/chat-history-api.md) — Fixed IPC, saved-host authorization, callable indexed legacy/authoritative operations, partial held-order pages, protected continuations, atomic schema-4 migration and family-scoped removal contracts.
 - [Protected local chat history — results](features/chat-history-results.md) — Saved-read notices, static failures, rollback, reviewed SQLite plaintext columns and protected payload boundaries.

@@ -28,15 +28,56 @@ function harness(write = async (_request: ChatHistoryRequest): Promise<ChatHisto
   const threads = createThreadItemStore(), lists = createConversationListStore(), timelines = createConversationTimelineStore()
   let listener: (event: StampedDaemonEvent) => void = () => {}
   const save = vi.fn(write), log = vi.fn()
-  const writer = createChatHistoryWriter({ threads, lists, timelines, write: save, log, receipt: () => null,
+  const writer = createChatHistoryWriter({ threads, lists, write: save, log,
+    receipt: () => ({ type: 'assistantDelta', serverId: 'a' }),
     subscribeEvents: on => { listener = on; return () => { listener = () => {} } }, schedule: () => () => {} })
   const writes = () => save.mock.calls.map(([r]) => r).filter(r => r.operation === 'replaceThread')
-  return { threads, writer, save, log, writes, event: (event: StampedDaemonEvent) => listener(event) }
+  return { threads, timelines, writer, save, log, writes, event: (event: StampedDaemonEvent) => listener(event) }
 }
 const read = (threads: ReturnType<typeof createThreadItemStore>, response: Promise<ChatHistoryResult>) =>
   readSavedTimeline({ threads, read: () => response, log: () => {} }, 'a', 'c')
 
 describe('daemon item cache ownership', () => {
+  it.each(['matching', 'missing', 'error', 'reject', 'host', 'conversation', 'timeline', 'list', 'ok'] as const)(
+    'requests only readThread and admits matching daemon items: %s', async outcome => {
+      const source = createThreadItemStore(), target = createThreadItemStore()
+      live(source)
+      const snapshot = saved(source.getState().snapshot('a', 'c')!)
+      const response: ChatHistoryResult = outcome === 'missing' ? { status: 'missing' }
+        : outcome === 'error' ? { status: 'error', code: 'unreadable' }
+        : outcome === 'ok' ? { status: 'ok' }
+        : { status: 'stored', snapshot: outcome === 'host' ? { ...snapshot, serverId: 'b' }
+          : outcome === 'conversation' ? { ...snapshot, conversationId: 'other' }
+          : outcome === 'timeline' ? { version: 1, kind: 'timeline', serverId: 'a', conversationId: 'c',
+            items: [], prependedRows: 0, coverage: { status: 'unknown' } }
+          : outcome === 'list' ? { version: 1, kind: 'list', serverId: 'a', conversations: [] } : snapshot }
+      const log = vi.fn(), read = vi.fn(async () => {
+        if (outcome === 'reject') throw Error('private detail')
+        return response
+      })
+      await readSavedTimeline({ threads: target, read, log }, 'a', 'c').done
+      expect(read.mock.calls).toEqual([[{ operation: 'readThread', serverId: 'a', conversationId: 'c' }]])
+      expect(target.getState().snapshot('a', 'c')).toEqual(outcome === 'matching' ? snapshot.thread : null)
+      if (outcome === 'matching') {
+        await readSavedTimeline({ threads: target, read, log }, 'a', 'c').done
+        expect(read).toHaveBeenCalledOnce()
+      } else if (outcome !== 'missing') {
+        expect(log).toHaveBeenCalledWith({ event: 'history-timeline-restore',
+          code: outcome === 'error' ? 'unreadable' : outcome === 'reject' ? 'ipc-failed' : 'invalid-result' })
+      }
+      expect(JSON.stringify(log.mock.calls)).not.toContain('private')
+    })
+  it('ignores legacy timeline rows, receipts, identities and echoes', async () => {
+    const h = harness()
+    h.timelines.getState().dispatchLocalEcho('a', 'c', { type: 'userText', text: 'local', messageId: 'echo' })
+    h.timelines.getState().dispatchFor('c', { type: 'assistantDelta', turnId: 't', seq: 0, text: 'legacy' }, undefined, 1, 'a')
+    h.timelines.getState().recordHistoryPage('c', 'cursor', true, [1])
+    await h.writer.flush()
+    expect(h.save).not.toHaveBeenCalled()
+    live(h.threads)
+    await h.writer.stop()
+    expect(h.save.mock.calls.map(([request]) => request.operation)).toEqual(['replaceThread'])
+  })
   it('retains exact unfinished and repair fences after offline hydration', async () => {
     const source = createThreadItemStore(); live(source, 100)
     source.getState().requireRepair('a', 'c', 'e', 150)
@@ -133,6 +174,20 @@ describe('daemon item cache ownership', () => {
     expect(h.writes().filter(r => r.serverId === 'a')).toHaveLength(1)
     expect(h.save.mock.calls.map(([r]) => r.operation)).toEqual(['replaceThread', 'replaceThread', 'removeConversation'])
     expect(h.threads.getState().snapshot('b', 'c')?.version).toBe(30)
+    await h.writer.stop()
+  })
+  it('does not deduplicate fresh identical items against a pre-unpair in-flight save', async () => {
+    const wait = held<ChatHistoryResult>(), started = held<void>()
+    let first = true
+    const h = harness(async () => { if (first) { first = false; started.resolve(); return wait.promise } return { status: 'ok' } })
+    live(h.threads)
+    const flushing = h.writer.flush(); await started.promise
+    const settle = beginChatHistoryRemoval('a')
+    settle(true)
+    live(h.threads)
+    wait.resolve({ status: 'ok' }); await flushing
+    expect(h.writes()).toHaveLength(2)
+    expect(h.writes()[1]).toEqual(h.writes()[0])
     await h.writer.stop()
   })
   it.each([true, false])('unpair invalidates old work and preserves another host: success=%s', async removed => {

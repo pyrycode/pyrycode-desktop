@@ -39,12 +39,10 @@ and canceled callbacks cannot apply it again or settle a newer burst. Cleanup
 unsubscribes, settles accepted work once and removes boundary listeners; stale
 callbacks cannot mutate state after unsubscribe or restore cleared state.
 
-Rendering publication and received-state persistence use separate observations.
-The mounted history writer observes every staged fold with its captured host,
-rather than waiting for the final publication after the preload receipt expires.
-Window-close shutdown calls `flushTimeline` while that observer remains attached,
-then detaches and drains protected storage before preload acknowledges shutdown.
-See [store and binding internals](conversation-timeline-store-internals.md#the-store-srcrenderersrcstoretimelinestorets).
+This diagram describes the retained legacy producers. Protected history observes
+received lists and authoritative item snapshots through a separate path; it has
+no legacy per-fold observer or timeline-frame shutdown hook. See
+[the writer contract](chat-history.md#received-state-admission-and-ownership).
 
 ```
 daemon frame ─(#199/#214/#217/#229/#315/#492/#495 transport, snake→camel)→
@@ -53,7 +51,7 @@ daemon frame ─(#199/#214/#217/#229/#315/#492/#495 transport, snake→camel)→
    → subscribeTimeline listener → translateTimelineEvent + capture attribution/sidecars
    → assistantDelta: FIFO until next animation frame or ordering boundary; other owned arms: immediate
    → flat dispatch + keyed dispatchFor → individual reducer/display folds
-        → subscribeTimelineWrites: per-fold received-state capture for protected history
+        → subscribeTimelineWrites: retained per-fold observation primitive
         → batchTimeline: one rendering publication per store for the delta-only burst
    → TimelineState / conversation-keyed slice
    → selectItems / selectPhase / selectStalled / selectApiRetry / selectCompacting

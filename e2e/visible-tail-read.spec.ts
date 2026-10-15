@@ -331,8 +331,18 @@ test('committed folded tails require focus, uncovered viewport and a closed read
     return s.tailBottom !== undefined && s.viewportBottom !== undefined &&
       s.tailBottom <= s.viewportBottom && s.tailBottom > s.bottom
   }).toBe(true)
-  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  const contextAsks = commands.filter(c => c.type === 'request_context_usage').length
+  await page.evaluate(conversationId => {
+    window.dispatchEvent(new Event('focus'))
+    // The focus observer publishes synchronously. This later command crosses
+    // the same ordered IPC/transport path, so its daemon receipt drains any mark.
+    window.pyry.sendCommand({ type: 'requestContextUsage', payload: { conversation_id: conversationId } })
+  }, row.id)
+  await expect.poll(() => commands.filter(c => c.type === 'request_context_usage').length).toBe(contextAsks + 1)
   expect(targets(commands).at(-1)).toBe(35)
+  await test.info().attach('chrome-excluded-after-drain', { body: JSON.stringify({
+    ...await readState(page, commands), barrier: commands.at(-1)
+  }), contentType: 'application/json' })
   await input.evaluate(el => { (el as HTMLElement).style.removeProperty('transform') })
   // A CSS transform does not resize the observed chrome: drive the callback
   // explicitly after restoring it, just as in the covered measurement above.

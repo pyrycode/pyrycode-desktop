@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import type { Envelope, HostedAppRecord } from '../../shared/wire/types'
 import { createHostedResources } from './hostedResources'
 import { createHostedApps } from './hostedApps'
+import { createHash } from 'node:crypto'
 
 const app = '22222222-2222-4222-8222-222222222222', other = '33333333-3333-4333-8333-333333333333'
 const ts = '2026-10-10T18:00:03Z'
@@ -77,6 +78,54 @@ it('applies contiguous whole records and retires only affected bindings', async 
   h.apps.reset(); h.resources.reset()
   expect(vi.getTimerCount()).toBe(0)
 })
+
+it.each(['release', 'removal', 'non-running', 'refresh', 'gap', 'invalid', 'reset'] as const)(
+  'retires affected bindings before queue promotion: %s', async kind => {
+    const h = setup(), peer = setup()
+    h.page([record(), record(other)]); peer.page([record()])
+    const a = h.apps.openView(app), b = h.apps.openView(app), c = h.apps.openView(other), remote = peer.apps.openView(app)
+    if (!a.ok || !b.ok || !c.ok || !remote.ok) throw new Error('expected bindings')
+    const reads = Array.from({ length: 8 }, () => a.view.request(asset))
+    const mutation = b.view.request({ type: 'app_api_request', payload: { path: '/api/preferences', method: 'POST', headers: {}, body: '' } })
+    const unrelated = c.view.request(asset), remoteRead = remote.view.request(asset)
+    expect(h.sent.filter(e => e.type === 'app_asset_request')).toHaveLength(8)
+    expect(h.sent.some(e => e.type === 'app_api_request')).toBe(false)
+    switch (kind) {
+      case 'release': h.receive('app_updated', record(app, 2, { active_release: '2.0.0' })); break
+      case 'removal': h.receive('app_removed', { app_id: app, revision: 2 }); break
+      case 'non-running': h.receive('app_updated', record(app, 2, { state: 'stopped', active_release: null })); break
+      case 'refresh': h.apps.refresh(); break
+      case 'gap': h.receive('app_updated', record(app, 3)); break
+      case 'invalid': h.receive('app_updated', {}); break
+      case 'reset': h.apps.reset(); break
+    }
+    expect(await mutation).toEqual({ ok: false, error: 'retired', uncertain: false })
+    expect(h.sent.some(e => e.type === 'app_api_request')).toBe(false)
+    expect((await Promise.all(reads)).every(r => !r.ok && r.error === 'retired')).toBe(true)
+    expect(await a.view.request(asset)).toMatchObject({ error: 'retired' })
+    expect(await b.view.request(asset)).toMatchObject({ error: 'retired' })
+    const complete = (host: ReturnType<typeof setup>, appId: string): void => {
+      const request = host.sent.at(-1)!
+      expect(request.type).toBe('app_asset_request')
+      const envelope = { id: 101, ts, type: 'app_response', in_reply_to: request.id, payload: {
+        app_id: appId, release_version: '1.0.0', status: 200, headers: {}, size_bytes: 0,
+        total_chunks: 0, sha256: createHash('sha256').update('').digest('hex') } }
+      expect(host.resources.receive(Buffer.from(JSON.stringify(envelope)), envelope)).toBe(true)
+    }
+    if (['release', 'removal', 'non-running'].includes(kind)) {
+      // Successful promotion/completion is a positive barrier for unaffected local work.
+      expect(h.sent.filter(e => e.type === 'app_asset_request')).toHaveLength(9)
+      complete(h, other); expect(await unrelated).toMatchObject({ ok: true })
+    } else {
+      expect(h.sent.filter(e => e.type === 'app_asset_request')).toHaveLength(8)
+      expect(await unrelated).toEqual({ ok: false, error: 'retired', uncertain: false })
+    }
+    complete(peer, app); expect(await remoteRead).toMatchObject({ ok: true })
+    const nextRemote = remote.view.request(asset)
+    complete(peer, app); expect(await nextRemote).toMatchObject({ ok: true })
+    h.apps.reset(); h.resources.reset(); peer.apps.reset(); peer.resources.reset()
+    expect(vi.getTimerCount()).toBe(0)
+  })
 
 it.each(['expired', 'drift', 'order', 'gap'])('restarts invalid walks with exact independent cancellation: %s', kind => {
   const h = setup(), first = h.list()
@@ -176,25 +225,51 @@ it('does not extend inactivity for restart errors or unrelated notifications', (
   vi.advanceTimersByTime(5000); expect(vi.getTimerCount()).toBe(0)
 })
 
-it('shares sixteen control slots with resources and releases independent cancellation acknowledgements', () => {
+it('fails discovery when shared control admission is exhausted', () => {
   const h = setup(), releases: (() => void)[] = []
   for (let i = 0; i < 15; i++) releases.push(h.resources.reserveControl()!)
   expect(h.resources.reserveControl()).toBeUndefined() // list owns the sixteenth
   h.receive('error', { code: 'apps.changed', message: 'changed', retryable: true }, h.list())
-  const cancel = h.sent.at(-1)!
   vi.advanceTimersByTime(0)
   expect(h.apps.read()).toMatchObject({ type: 'failed', error: 'limit' })
-  h.receive('app_cancelled', { request_id: (cancel.payload as { request_id: number }).request_id + 1 }, cancel.id)
-  expect(h.resources.reserveControl()).toBeTypeOf('function')
+  expect(h.sent.some(e => e.type === 'app_cancel')).toBe(false)
+  const released = h.resources.reserveControl()
+  expect(released).toBeTypeOf('function')
+  expect(h.resources.reserveControl()).toBeUndefined()
+  released?.()
   releases.forEach(release => release())
-  h.apps.reset(); h.resources.reset(true); h.apps.reset(true)
-  h.receive('error', { code: 'apps.changed', message: 'changed', retryable: true }, h.list())
-  const c = h.sent.at(-1)!
-  h.receive('app_cancelled', c.payload, c.id)
-  vi.advanceTimersByTime(0); h.page([])
-  expect(h.apps.read()).toMatchObject({ type: 'ready', items: [] })
-  expect(vi.getTimerCount()).toBe(0)
+  h.apps.reset(); h.resources.reset(); expect(vi.getTimerCount()).toBe(0)
 })
+
+it.each(['wrong-target', 'malformed', 'app-scoped'])(
+  'shares sixteen control slots with resources and releases independent cancellation acknowledgements: %s', kind => {
+    const h = setup(), target = h.list()
+    h.receive('apps', {}, target)
+    const cancel = h.sent.at(-1)!
+    expect(cancel).toMatchObject({ type: 'app_cancel', payload: { request_id: target } })
+    const releases = Array.from({ length: 15 }, () => h.resources.reserveControl())
+    expect(releases.every(Boolean)).toBe(true)
+    expect(h.resources.reserveControl()).toBeUndefined() // Actual cancellation owns the sixteenth.
+    const payload = kind === 'wrong-target' ? { request_id: target + 1 }
+      : kind === 'malformed' ? {} : { request_id: target, app_id: app }
+    expect(h.receive('app_cancelled', payload, cancel.id)).toBe(true)
+    const released = h.resources.reserveControl()
+    expect(released).toBeTypeOf('function')
+    expect(h.resources.reserveControl()).toBeUndefined()
+    h.page([record()], 1, null, target)
+    h.receive('app_cancelled', { request_id: target }, cancel.id)
+    expect(h.apps.read()).toEqual({ type: 'failed', error: 'invalid' })
+    expect(vi.getTimerCount()).toBe(0)
+    released?.(); releases.forEach(release => release?.())
+    h.apps.reset(); h.resources.reset(true); h.apps.reset(true)
+    h.receive('error', { code: 'apps.changed', message: 'changed', retryable: true }, h.list())
+    const c = h.sent.at(-1)!
+    expect(c.type).toBe('app_cancel')
+    h.receive('app_cancelled', c.payload, c.id)
+    vi.advanceTimersByTime(0); h.page([])
+    expect(h.apps.read()).toMatchObject({ type: 'ready', items: [] })
+    expect(vi.getTimerCount()).toBe(0)
+  })
 
 it('rejects malformed owned envelopes, stale generations and bridge errors without consuming resource replies', () => {
   const h = setup(), old = h.list()

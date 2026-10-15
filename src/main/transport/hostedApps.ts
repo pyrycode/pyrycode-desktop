@@ -29,7 +29,7 @@ export function createHostedApps(deps: {
     for (const listener of [...observers]) { try { listener() } catch { /* Observers cannot change dispatch. */ } }
   }
   function invalidate(): void {
-    for (const binding of [...bindings.values()]) binding.retire()
+    deps.resources.retireViews([...bindings.values()])
   }
   function forgetCancel(id: number): void {
     const c = cancels.get(id)
@@ -128,10 +128,10 @@ export function createHostedApps(deps: {
         const next = apply(state.items, state.revision, [reply])
         if (!next) { refresh(); return true }
         state = { type: 'ready', ...next }
-        for (const b of [...bindings.values()]) {
+        deps.resources.retireViews([...bindings.values()].filter(b => {
           const record = next.items.find(item => item.app_id === b.app)
-          if (record?.state !== 'running' || record.active_release !== b.release) b.retire()
-        }
+          return record?.state !== 'running' || record.active_release !== b.release
+        }))
         notify()
       }
       return true

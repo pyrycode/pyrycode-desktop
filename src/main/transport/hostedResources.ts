@@ -110,6 +110,13 @@ export function createHostedResources(deps: {
       }
     } finally { pumping = false }
   }
+  function retireViews(views: Iterable<{ retire(): void }>): void {
+    const wasPumping = pumping
+    // No queued request may start until every affected scope has been retired.
+    pumping = true
+    try { for (const view of views) view.retire() }
+    finally { pumping = wasPumping; pump() }
+  }
   function reset(supported = false, cancellation = false): void {
     // Remove the queue before callbacks can promote old work during teardown.
     const old = [...pending.values()]
@@ -210,5 +217,5 @@ export function createHostedResources(deps: {
       }
     }
   }
-  return { openView, receive, reset, reserveControl, sendControl, retire: (): void => reset(enabled, true) }
+  return { openView, receive, reset, reserveControl, sendControl, retireViews, retire: (): void => reset(enabled, true) }
 }

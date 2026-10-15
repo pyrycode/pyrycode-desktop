@@ -203,11 +203,14 @@ for (const encoding of ['Blob', 'FormData']) {
       expect(await evaluate(app, 'bodyFinished')).toBe(false)
       await evaluate(app, 'releaseBody();undefined')
       await expect.poll(() => evaluate(app, 'bodyFinished')).toBe(true)
-      // Ordered native replies also fence the adapter continuation after body completion.
-      expect(await evaluate(app, cause === 'signal'
-        ? "fetch('/api/read?barrier=serialization').then(r=>r.status)"
-        : "hostedFetch.request({url:location.origin+'/api/read',method:'GET',headers:{},body:new Uint8Array()}).result.then(r=>r.error)"))
-        .toBe(cause === 'signal' ? 200 : 'network')
+      // A complete native read fences request/reply processing after body completion.
+      expect(cause === 'signal'
+        ? await evaluate(app, "fetch('/api/read?barrier=serialization').then(r=>r.status)")
+        : await app.evaluate(async () => {
+          const r = await (globalThis as any).hosted.request({ type: 'app_api_request',
+            payload: { path: '/api/read', query: 'barrier=serialization', method: 'GET', headers: {}, body: '' } })
+          return r.ok ? r.metadata.status : 0
+        })).toBe(200)
       expect(await evaluate(app, 'bodySettlements')).toEqual(['AbortError'])
       expect(s.seen.filter(r => r.type === 'app_api_request' && r.payload.method === 'POST')).toEqual([])
     })

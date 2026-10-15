@@ -22,8 +22,7 @@ const render = (s: ThreadSnapshot, live = inputs) => renderToStaticMarkup(create
 describe('supplied task controls', () => {
   it('draws only supplied tasks, including the empty body, without a roster projection', () => {
     const html = renderToStaticMarkup(createElement(BackgroundTaskPanelView, {
-      suppliedTasks: [], onClose() {},
-      ...{ entry: { tasks: new Map(), droppedTasks: 3 } }
+      suppliedTasks: [], onClose() {}
     }))
     expect(html).toContain('background-task-panel__groups')
     expect(html).not.toContain('Partial list')

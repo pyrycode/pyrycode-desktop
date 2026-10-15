@@ -56,3 +56,14 @@ None.
 ## Revisions
 
 2026-10-15: The scroll hook's two surviving callers both use supplied items. Remove its legacy gap-demand branch and numeric prepend bookkeeping, retaining the identical supplied-item demand and immutable-presentation anchor comparison. Shared attachment, timestamp, copy/reply, delimiter and markdown-link suites render the surviving row view directly; tool-run assertions use supplied snapshots. The drawer's private summary/status inputs are now required supplied facts, so its legacy duplicate-summary suppression and label fallback are also removed.
+
+## Validation evidence
+
+- Plan committed first as `f2eb1407`; implementation/runtime candidate `221b9b8b`, containing main `ac44f55c`. Final fixture cleanup changes only two unit specs and this record.
+- Test-first regression: the supplied empty drawer fixture with an extra legacy roster reported `Partial list`, failing the new exclusion before removal. The final fixture uses only the narrowed supplied-task contract.
+- Pre-verify: all five checks passed; 416 unit files, 10,245 passed and 30 existing skips. Build and documentation guard passed. Final two-spec fixture cleanup: 40 executed, 40 passed.
+- Complete configured Linux fake suite: `npx playwright test --reporter=json`, 2026-10-15, four actual workers, clipboard and parallel projects, zero configured retries. **432 executed, 432 passed, 0 failed, 0 flaky, 0 retries, 19 skipped**, duration 243.46 seconds.
+- Required active files: `thread-activation.spec.ts` 15/15; `thread-items.spec.ts` 12/12; `timeline-frame-deltas.spec.ts` 1/1; `tool-groups.spec.ts` 4/4. No active case removed or newly skipped.
+- Inspected all 19 skips: 16 retained legacy cases owned by #2024 (nine recording, two gaps, one history-open, two own-settlement, one replay and one read-tail); three platform skips (two macOS badge cases and one macOS window-reopen). No unexpected failure or retry result.
+- Full JSON: `/tmp/builder-2023-fake-suite.json`, SHA256 `5b786d5054c69063c367b011a7fcd3b58c7e0a68445fc7ab71bb05abb0e98007`; stderr `/tmp/builder-2023-fake-suite.stderr`. Pre-verify/build logs: `/tmp/builder-2023-preverify.log`, `/tmp/builder-2023-final-build.log`. Scratch artifacts remain outside the worktree.
+- Final scope: four production files, one existing row component newly exported, no new state/reject branch/dependency. Written work remains below 800 lines; deleted lines are separate. No live specs changed, no live Claude proof required, no documentation handoff requirements.

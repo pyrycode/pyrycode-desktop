@@ -9,11 +9,9 @@ import { createConversationTimelineStore } from '../../store/conversationTimelin
 const end = { type: 'turnEnd' as const, turnId: 't', stopReason: 'end_turn', outcome: 'success', isError: true, terminalReason: 'prompt_too_long' }
 const boundary = { kind: 'turnBoundary' as const, turnId: 't', stopReason: 'end_turn', isError: true }
 describe('stopped turn presentation', () => {
-  it('separates tool stacks with a visible stopped record', () => {
-    const tool = { kind: 'toolCall' as const, turnId: 't', toolUseId: 'u', name: 'Read', inputSummary: '', result: null }
+  it('renders a visible stopped record', () => {
     const html = renderToStaticMarkup(<TimelineRow inProgress={false} item={boundary} />)
     expect(html).toContain('Stopped: error')
-    expect(html).not.toContain('tool-group-row--joined-')
   })
   it.each([
     ['max_turns', 'Stopped: turn limit reached'], ['budget_exhausted', 'Stopped: budget exhausted'],

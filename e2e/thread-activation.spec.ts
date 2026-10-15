@@ -45,9 +45,18 @@ test('ordinary app selects a thread host beside a complete legacy host and resum
   expect(requests.some(r => r.type === 'thread_catch_up')).toBe(true)
   // Commit a later authoritative row after deliberately supplied legacy traffic, then check exclusions.
   daemon.pushFrame(frame('assistant_delta', { conversation_id: row.id, turn_id: 'raw', seq: 1, text: 'Legacy duplicate' }))
+  row.last_shown_version = 21
+  daemon.pushFrame(seedConversationsFrame(row))
   daemon.pushFrame(frame('thread_item_added', { conversation_id: row.id, epoch: 'epoch', version: 21, item: item(11, 'Thread processing barrier') }))
   await expect(page.getByText('Thread processing barrier', { exact: true })).toBeVisible()
   await expect(page.getByText('Legacy duplicate', { exact: true })).toHaveCount(0)
+  await expect.poll(() => requests.some(request => request.type === 'mark_conversation_read' && request.payload.up_to === 21)).toBe(true)
+  // The protected list writer captures received list replies, independently of publishing the command.
+  await expect.poll(() => page.evaluate(async id => {
+    const result = await window.pyry.chatHistory({ operation: 'readList', serverId: 'fake-daemon' })
+    return result.status === 'stored' && result.snapshot.kind === 'list'
+      ? result.snapshot.conversations.find(row => row.id === id)?.read_up_to : undefined
+  }, row.id)).toBe(21)
   await page.locator('.conversation__thread').press('Home')
   await expect.poll(() => requests.filter(r => r.type === 'thread_page').length).toBeGreaterThan(0)
   expect(requests.filter(r => r.type === 'request_history')).toHaveLength(0)

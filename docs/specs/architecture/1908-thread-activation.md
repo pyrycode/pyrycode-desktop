@@ -84,6 +84,8 @@ Resolved: identity is lowercase hexadecimal public key, matching daemon `connSen
 
 ## Revisions
 
+2026-10-15: The integrated command/received-cache acknowledgement assertion exposed that navigation metadata omits read watermarks. `ConversationScreen` now supplies the owning host's received conversation-list summary to `readInputs`, rather than its navigation payload. The mounted test requires target 21 on the wire and then read-up-to 21 in a protected list captured from received replies.
+
 2026-10-15: Composition needs more local bridge edits than the fourteen-file forecast: existing metadata/footer readers must reject foreign-session events and clear invalidated authoritative projections. `onCurrentSessionEvent` retains legacy admission unchanged and checks thread readings against their host/conversation summary binding. `connectThreadLiveProjection` supplies the selected session to the existing footer and sheets. The runtime subscribes in a layout effect before passive legacy consumers. No existing exported signature requires a simultaneous consumer migration.
 
 2026-10-15: Prompt and queue/task commands gain optional validated owning-host coordinates; main uses that paired connection explicitly while retaining legacy correlation routing when absent. The identity accessor returns only the daemon-compatible public identifier. Correlated settings/MCP clears can carry main's retained request conversation; an unsolicited clear remains unattributed. Security recheck: PASS, explicit hosts are nonempty bounded strings and no renderer value supplies authenticated device identity.

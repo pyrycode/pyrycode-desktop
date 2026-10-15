@@ -321,6 +321,7 @@ export function ConversationScreen({
   const complete = useStore(threadRuntime.state, s => s.complete.get(queryKey))
   const threadRestoring = useStore(threadRuntime.state, s => s.restoring.has(queryKey))
   const threadConnection = useSessionStore(s => selectedHost === null ? undefined : s.statuses.get(selectedHost))
+  const threadSummary = useConversationListStore(s => s.byServer.get(selectedHost)?.find(row => row.id === openConversationId))
   useEffect(() => {
     const dispatch = agentSwitchStore.getState().dispatch
     dispatch({ type: 'paneChanged', pane: selectedHost === null || openConversationId === null
@@ -613,7 +614,7 @@ export function ConversationScreen({
         onRetry={() => { if (selectedHost !== null) threadRuntime.query('retry', selectedHost) }} />}
       {authoritative && authoritativeSnapshot && <ThreadItemsTimeline snapshot={authoritativeSnapshot}
         onOlder={() => { if (selectedHost !== null) threadRuntime.query('older', selectedHost) }}
-        readInputs={activeConversation ? { row: { ...activeConversation, serverId: selectedHost }, readerOpen,
+        readInputs={threadSummary ? { row: threadSummary, readerOpen,
           completeThrough: complete?.epoch === authoritativeSnapshot.epoch ? complete.version : 0 } : undefined}
         sendInputs={{ local: selectedHost !== null && openConversationId !== null && localSend !== null
           ? { hostId: selectedHost, conversationId: openConversationId, ...localSend } : undefined,

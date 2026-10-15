@@ -113,6 +113,16 @@ trusted keys, sleeps, test retries or larger timeouts. See
 [the gap testing contract](chat-history-testing.md#demand-and-snapshot-contracts)
 and [controlled failure evidence](development-verification-history.md#known-gap-recovery-verification).
 
+Retry focus can also reset the thread to scrollTop 0 after a marker was parked.
+Re-park the loading marker after retry focus/layout settles, then take the
+immutable anchor baseline. Otherwise a named row below the viewport's top can
+move when older rows arrive while the actual visible top anchor correctly stays
+put. Retain exact cursor/request counts and the <2px preservation assertion. The
+[native-view recovery plan](../../specs/architecture/1991-native-hosted-view.md#revisions)
+records controlled focus-time movement and retry geometry; the
+[counted full-suite evidence](daemon-connection-hosted-resource-views.md#native-viewer-verification)
+does not establish the cause of the separate unrecovered history-walk failure.
+
 Protected-restoration joins need an explicit pre-input history-demand position. After
 restored tool expansion and settled focus/hover, park at half the measured
 `HISTORY_ASK_BAND_VIEWPORTS * clientHeight` band and assert positioning itself sends no

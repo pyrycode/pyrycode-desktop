@@ -32,12 +32,15 @@ overlay — a red disc with a white count, `9+` above nine, cleared at zero.
 
 ## The renderer half: reusing the dot's own composition, not restating it
 
-`conversationStatusNow(row)` takes the actual row's `id`, `read_up_to` and `latest_entry_id`, and
+`conversationStatusNow(row)` takes the actual row's `id`, host stamp, `read_up_to`,
+`latest_entry_id` and `last_shown_version`, and
 repeats the dot control's five-source read over `getState()` —
 `selectHasOutstandingFor`, `selectBatchFor`, `selectActivityFor`, `selectTimelineFor`, `selectLastReadFor`.
 The input-required fact is `selectHasOutstandingFor(id)(modalStore.getState()) ||
 selectBatchFor(id)(questionBatchStore.getState()) !== undefined`, fed into
-`resolveConversationStatus(…, isConversationUnread(timeline, lastRead, row))` with the activity and unread facts. Keep this
+`resolveConversationStatus(…, isConversationUnread(timeline, lastRead, row, threadMode))` with
+the activity and unread facts. `threadMode` comes from that host/conversation's explicit epoch
+selection in `conversationReadRouteStore`, never optional fields. Keep this
 composition aligned with the row control when adding an attention source.
 `attentionCountNow()` applies the same
 `!is_archived` filter the [Channel List view model](channel-list.md) applies to its active list,
@@ -49,18 +52,23 @@ change to the counting rule itself. `countAttentionConversations` stays one rule
 it is handed; it passes each **row**, rather than only its ID, to `statusOf(row)` and does not know
 what "muted" or "archived" mean.
 
-Complete daemon rows count as new messages when `latest_entry_id > read_up_to`, including before
+Selected thread routes compare received `last_shown_version > read_up_to`, including zero and
+without a timeline. Missing either field is unavailable, with no local-count/history fallback.
+Hidden trailing items and live counters do not affect this comparison. See
+[thread-route attention](channel-list.md#thread-route-unread-and-attention).
+Non-thread complete daemon rows count as new messages when `latest_entry_id > read_up_to`, including before
 any local timeline is loaded. Each host's row supplies its own read state: two hosts advertising
 the same ID can contribute twice, and reading one clears only its contribution. An ID-only status
 callback or first-match lookup would lose that isolation. Read advances notify the list subscription
 immediately, before refreshed metadata arrives; local opening cannot clear daemon unread.
-Incomplete rows keep the persisted local-count fallback. Input-required still outranks working,
+Incomplete non-thread rows keep the persisted local-count fallback. Input-required still outranks working,
 which outranks new messages; only input-required/new-messages count, and archived/muted rows remain
 excluded even with pending input. Linux browser coverage observes `setBadgeCount` delivery, not
 native OS badge rendering; see [verification evidence](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves).
 
 `subscribeAppBadge({ subscribe, count, sendCommand })` computes once on subscribe and again on every
-notification from the six source stores (`conversationListStore`, `modalStore`, `questionBatchStore`,
+notification from the seven source stores (`conversationListStore`, `conversationReadRouteStore`,
+`modalStore`, `questionBatchStore`,
 `conversationActivityStore`, `conversationTimelineStore`, `conversationLastReadStore`, fanned out by
 `subscribeToAttentionStores`), and sends `{ type: 'setBadgeCount', payload: { count } }` only when
 the count differs from the last one sent. The last-sent value starts `null`, so the very first
@@ -78,7 +86,7 @@ The question-batch subscription makes both arrival and dismissal recompute the c
 still count if it becomes `new-messages`. Reading the question store without subscribing to it would
 leave a correct direct status calculation but a stale badge. `appBadgeBridge.test.ts` checks both:
 question-only status returns to idle on dismissal, question-only and prompt-plus-question rows each
-count once, and writes to every source wake the listener until teardown removes all six subscriptions.
+count once, and writes to every source wake the listener until teardown removes all seven subscriptions.
 
 The three closures (`attentionCountNow`, `subscribeToAttentionStores`, `subscribeAppBadge`) are
 exported and unit-tested directly, rather than only through `useAppBadge`, because the renderer test

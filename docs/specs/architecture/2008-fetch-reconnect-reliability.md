@@ -4,7 +4,7 @@
 - `e2e/hosted-app-view.spec.ts` → `scenario`, reconnect case: commits the held POST before reconnect, then reconciles by GET without replay.
 - `e2e/fixtures/launchPairedApp.ts` → `test`: merged #2001 repair excludes app rows from strict conversation selection; Send-enabled remains the handshake gate.
 - `docs/knowledge/features/daemon-connection-hosted-resource-views.md` → Hosted Fetch, Connection reset and dispatch, Fetch verification: fresh authority/origin and no automatic mutation replay.
-- `docs/knowledge/decisions/0012-disposable-native-hosted-views.md` → native isolation and discovery contract.
+- `docs/knowledge/decisions/0012-hosted-app-native-isolation.md` → native isolation and discovery contract.
 - `docs/knowledge/features/development-verification.md` and `development-verification-evidence-that-cannot-pass-too-early.md` → positive barriers and counted evidence; the older unfiltered-selector description predates the merged repair.
 - Root `CLAUDE.md`, knowledge index and #2008 refinement: test boundaries and original failure evidence limits.
 
@@ -17,3 +17,6 @@ Remote overlap inspection found #1983 adding independent setup diagnostics to `l
 - Install and build, then run the named case with the pre-repair initial locator temporarily restored. Expect a strict-mode launch failure naming both the conversation and app rows, before hosted open/reconnect. Restore the merged selector with an explicit patch and rerun the same regression.
 - On Linux run ten separate Playwright invocations selecting the named case, `--retries=0`, then the complete `hosted-app-view.spec.ts` with zero retries. Record exact revision, configuration and executed/passed/failed/skipped counts in Revisions and the issue evidence comment.
 - After final merge of main run pre-verify and `npm run build`. Keep raw JSON/stderr in `/tmp/builder-2008/`; commit concise counted evidence here. The truncated original #2001 report cannot establish this occurrence's exact assertion; distinguish the controlled reproduction from original-trace attribution.
+
+## Revisions
+2026-10-15: Linux control on base `cba798763b1ca788fee07409c5dd6eb1fe9f54cc` plus the local regression barrier and only the old initial selector restored: 1 executed, 0 passed, 1 failed, 0 skipped, retry 0 (`control-old-selector-run.json`). The handler completed before `locator.click` rejected two targets, “Seeded discussion” and “Example running”, in `launchPairedApp`; no hosted open or reconnect ran. Restoring the merged selector with the identical barrier passed: 1 executed/passed, 0 failed/skipped, retry 0 (`repaired-selector.json`). This confirms a reproducible launch setup race, not a reconnect failure; the original incident's missing stack remains unattributed. An earlier anchored grep selected zero tests and is excluded from evidence. No design change was needed.

@@ -51,6 +51,8 @@ Invalid requests/limits/continuations use `invalid-request`; malformed saved met
 None. Protected per-record envelopes are the smallest way to verify index associations without decoding unrelated records; header counts eliminate the continuation probe.
 
 ## Revisions
+2026-10-15: Merge of main resequences authoritative tables to schema 4 after main's schema-3 legacy receipt-start index. Both migrations remain additive and transactional; existing schema-3 databases from either branch retain their records. Historical-schema tests now expect version 4 after successful migration.
+
 2026-10-15: Adversarial implementation review found that selecting ranges only by mutable numeric indexes could silently omit damaged evidence. Each item now also binds its nullable containing-range ordinal inside its protected envelope and reviewed structural columns. Pages select those exact memberships plus the newest anchor and verify containment; missing evidence is unreadable. This simplifies the query and preserves bounded work. Security re-review: PASS; range membership reveals only the already reviewed numeric coverage association. Legacy historical-schema fixtures remove the new tables before down-versioning and use an actually unsupported future version. Existing #1903 store regressions remain in the full suite; main-process tests do not import the renderer.
 
 2026-10-15: A failing schema-2 regression demonstrated that returning a stale-continuation result inside the transaction committed migration despite rejection. Stale admission now throws a private static sentinel through the transaction, then maps it to `invalid-request` outside, preserving database bytes and schema on failure. No caller-visible contract changed.

@@ -1,0 +1,105 @@
+# Host app discovery in the sidebar
+
+## Files read
+
+- `src/main/transport/hostedApps.ts` → `createHostedApps`: complete bounded snapshots, contiguous updates, refresh coalescing and readiness authority.
+- `src/main/connectionRegistry.ts` → `runReconcile`, `connectionFor`: named connection ownership; accessors return fresh wrappers, so compare discovery service identity.
+- `src/main/hostedPane.ts` → `registerHostedPane`: attached privileged windows, exact main-frame validation and generation-fenced opening.
+- `src/main/index.ts` → registry construction, `openWindow`: bridge composition and window teardown.
+- `src/preload/index.ts` → `onHostedPane`: stripped event objects and race-safe subscription ordering.
+- `src/renderer/src/screens/channels/ChannelList.tsx` → `ChannelList`, `HostSection`, `renderBody`: paired host enumeration and preserved independent folds.
+- `src/renderer/src/screens/channels/channels.css` → section and row rules: existing token geometry and selected treatment.
+- `src/renderer/src/PairedShell.tsx` → `PairedShell`: stream-owned pane selection; conversation activation closes hosted content without changing drafts.
+- `e2e/hosted-content-pane.spec.ts` → spec-local scenario: real preload/IPC with fake discovery/resource frames.
+- `docs/knowledge/features/daemon-connection-hosted-resource-views.md` → Discovery and bound resources: refresh invalidates all bindings; never refresh on ordinary opening.
+- `docs/knowledge/features/paired-shell-routing.md` → Hosted app selection and trusted chrome: preserve active chat identity and use streamed pane state.
+- `docs/knowledge/features/channel-list.md` → host grouping and folds: enumerate paired hosts even with no conversations; keep hidden sections mounted.
+- `docs/knowledge/features/development-verification.md` and linked evidence guidance: positive processing barriers precede absence assertions.
+- Approved daemon contract at revision `964c5c4b`, Registration/Capability sections: display observed state, ordered discovery, no implicit starts or release authority.
+
+## Design source
+
+**Figma:** https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG?node-id=132-3902 (Apps child `590:4015` read and screenshot inspected).
+Reuse `HostSection` after Chats, folder/chevron and existing 28px header/24px row geometry, title-small/body-small typography, on-surface and selected-row theme tokens. Show readable observed state beside escaped title. No creation plus: creation stays conversational as the ticket specifies.
+
+## Context
+
+One deliverable: return to a discovered app from its paired host sidebar. Main already owns paging, reconnect and opening; this adds only display projection and navigation. No ADR needed. No overlapping remote feature branches touch the planned existing files.
+Size: approximately 280 production + 390 test/helper + 90 plan lines (760 total), 2 new exported types, 6 production consumers, 5 observable acceptance groups, at most 8 refusal categories. The #1992 analogue added 656 lines including its plan and tests; this bridge adds lifecycle coverage while reusing that viewer.
+
+## Design
+
+`src/shared/ipc/hostedAppsDisplay.ts` defines a host-stamped display union (discovery status; ready items contain only app ID, bounded title and observed state) and a strict command union for watch/unwatch/refresh with host and subscription token. No revision, release, errors, resource bytes or authority enters the renderer.
+`registerHostedAppsDisplay` in main attaches only composition-root windows. Each client has one watch per host, holding its token and captured discovery service. Watch installs observation then synchronously publishes a copied snapshot on the event stream; invoke replies carry success/refusal only, preventing late initial replies from overwriting events. Registry reconciliation rebinds changed discovery services and publishes unavailable for removed hosts. An optional registry dependency callback avoids changing every registry consumer.
+Preload's `onHostedApps(serverId, listener)` allocates a monotonic token, installs its filtered event listener before watch, and returns cleanup that removes it and unwatches that exact token. `refreshHostedApps(serverId)` asks only the named paired host. Fixed channels, no raw Electron objects.
+`ChannelList` owns a mount-local Zustand Map of host display states; its effect subscribes for current paired hosts and clears/guards callbacks on cleanup. `ChannelListView` accepts injectable display/pane state, refresh/select callbacks. `renderBody` adds Apps under every paired host using existing fold components. Selection calls the existing `hostedPane(select)` and ignores command-result state; `hostedPaneStore` supplies current host/app highlight. Any open pane suppresses conversation highlights. Existing chat activation and composer keys stay intact.
+
+## State + concurrency model
+
+Discovery remains exclusively in main's existing state machine. The bridge holds only client/host watch identity, unsubscribe handles and copied display state; no network jobs or timers. Compare captured `hostedApps` identity against the registry before publication. Rebind after reconciliation; retired callbacks check watch and service identity. Window loading/close/dispose clear watches. Preload tokens fence old deliveries after remount; renderer callbacks also hold an active flag. Refresh delegates to main's existing coalescing and unavailable/unsupported checks.
+
+## State transitions and identity reuse
+
+| Event | Coverage in `e2e/hosted-app-sidebar.spec.ts` |
+| --- | --- |
+| Initial snapshot, held pages, post-publish update/removal | `discovery, lifecycle and navigation` / `paging and retry` |
+| Equal IDs across hosts, switching pending opens, folding sections/host | `discovery, lifecycle and navigation` |
+| Failed retry coalescing, unsupported/disconnected | `paging and retry` / `unsupported and unauthorized` |
+| Reconnect, retired connection delivery | `stale delivery and remount` |
+| Subscription replacement, unpair, remount and late snapshot | `stale delivery and remount` |
+| Navigate app → original chat with draft | `discovery, lifecycle and navigation` |
+
+Every stale/absence assertion follows a positive current-service update or command acknowledgement plus a renderer animation-frame commit barrier. Existing viewer tests retain native isolation/Fetch proof.
+
+## Error handling
+
+Malformed shape/token/host, unattached client or non-main frame returns typed `{ ok: false, error: 'refused' }` without dispatch. Allowed calls return `{ ok: true }`. Discovery failure displays static copy and host Retry; unavailable maps to disconnected. Ready empty differs from loading. IPC exceptions are consumed with static failed display or teardown no-op, never rendered exception text. Logs use static event/code only.
+
+## Testing strategy
+
+Test first: strict IPC validation unit tests and pure sidebar markup assertions for escaped titles, all states and selection. Fake-transport Playwright clicks production rows, scripts authoritative pages/events and validates routing, lifecycle, stale delivery, folds and drafts. Capture integrated sidebar at 1280×800 and 800×800; compare with Figma. Run focused unit/spec, final main merge, pre-verify and build. #1929 owns real publishing/relay/SQL acceptance; no live test changed here.
+
+## Open Questions
+
+None. Main's existing discovery service and viewer remain the only authority; ordinary opens never refresh.
+
+## Security review
+
+**Verdict:** PASS
+
+- Trust boundaries: display projection is explicit in `registerHostedAppsDisplay`; parsed daemon records become copied display-only items. Text renders through React escaping, never attributes, URLs, logs or raw markup.
+- Tokens/secrets: subscription tokens are public correlation only. No credentials introduced; existing safeStorage and main-only keys remain authoritative.
+- Files/storage: no persistence or path construction; display state is memory only.
+- Electron: exact attached WebContents/main frame and strict command keys, bounded paired host and safe integer token validated before dispatch. No new hosted-page bridge or changed sandbox policy.
+- Cryptography: no cryptographic changes; existing Noise variant and key lifecycle unchanged.
+- Network/I/O: existing discovery bounds (256 apps, bounded titles), timeouts, coalescing, capability and connection checks retained. Sidebar starts no resources except existing trusted select flow.
+- Errors/logs: static refusal/failure codes only; no title, app content, token, key or decrypted byte logging.
+- Concurrency: MUST FIX addressed in design: service/watch identity and preload tokens fence old callbacks and cleanup; streamed initial snapshots avoid an invoke-result race. Reconciliation explicitly handles connection removal/replacement.
+- Threat model: relay delay/reorder and hostile records remain bounded by discovery codec/state machine; compromised renderer gains only display/refresh for paired hosts. Opening still independently validates current main authority. Token-at-rest and native-page isolation retain existing owners; live relay proof belongs to #1929.
+
+**Reviewer:** builder (self-review per `builder/security-review.md`)
+**Date:** 2026-10-15
+
+## Revisions
+
+2026-10-15: existing geometry/order specs assumed two sections per host; update their counts and host-section stride for Apps and run all three changed specs. App dots reuse existing static status styles alongside readable state text. The main unit `copies display only and fences replacement, unpair, retired watches and reload` explicitly covers changed service identity and retired callbacks; the Electron stale-delivery case covers reconnect, remount token fencing and unpair through production IPC. No authority or lifecycle contract changed.
+
+2026-10-15, verifier rework: `ConnectionRegistry.settled(): Promise<void>` waits for queued storage reconciliation without starting discovery. A watch missing its connection waits once, then validates the named host again; unknown hosts still refuse. Pending watch identity is canceled on unwatch, replacement, reload and disposal. The held-reconciliation unit publishes the storage host list before connection construction and proves delivery without remount; three cancellation cases cover that new async seam. Preload handles resolved refusal with static failure only before any streamed snapshot. Security recheck: PASS; exact privileged client/frame validation still precedes dispatch, queued work cannot survive teardown, and no new authority or data reaches the renderer.
+
+Retry uses token-based typography, border, colour, spacing and radius, with failed-state captures at both required widths. Conversation-only fixture locators exclude app-state rows; host-fold counts include three sections. The pill test scrolls the real chat control to the scrollport edge and retains the overflow precondition and mirrored-placement proof. The stale-delivery test removes a host through Edit host, delivers the retired event while the sidebar remains mounted, then fences absence with a surviving host update and render commit before separate reload evidence.
+
+Rework validation: the unpair delivery uses the current mount's captured subscription token, asserted different from the pre-remount token, so remount fencing cannot satisfy the unpair check. In-flight #1908 adds unrelated preload/device routing and #1983 adds fixture setup diagnostics; both overlaps are in separate blocks and require no design dependency.
+
+## Documentation handoff
+
+- Pending documentation stage: `docs/knowledge/features/channel-list.md`, host sections and folds — host-specific Apps states, Retry, independent folding and exact app selection.
+- Pending documentation stage: `docs/knowledge/features/paired-shell-routing.md`, Hosted app selection and trusted chrome — preserve conversation identity/drafts and restore them when leaving the hosted pane.
+- Pending documentation stage: `docs/knowledge/features/daemon-connection-hosted-resource-views.md`, Discovery and bound resources — display-only IPC projection, privileged main-frame checks, subscription tokens, queued reconciliation/replacement fencing and teardown; opening retains main-only readiness authority and does not refresh. Sidebar discovery is this ticket, channel links remain #2002, and live publishing/relay/SQL remains #1929.
+
+## Rework verification evidence
+
+- Final code/test candidate: `d2c80ba5f7e28023f17c2eb118cf9a53c1dea628`. After merging main, pre-verify passed all five checks (10,314 unit tests passed, 3 existing skips), build and docs guard passed. Affected Electron specs reported 35 executed/35 passed; the strengthened final sidebar spec executed/passed 4/4.
+- Complete managed Mac run of production-fix candidate `6398cf3869fda49f0212dd78e2b4593b918dab3d`: task `91fdce5c1472a0f7c0274d36af2faa42f6d024d3ade7691d2a96548b9c296cd8`, run `343f4079a37b5cf6eede8f41605df606805b2da4d4127dec410fc10d274cbfbb`; 434 executed, 434 passed, 0 failed, 1 skipped, 0 retries, no report errors. Original `playwright.config.ts` matches byte-for-byte: 4 workers, clipboard/parallel projects, 0 retries. Configuration SHA256: `f2868e97d72733c286ff8c3098f09adc62e2e8bfa3ad9393e000eebf9a429d5a`.
+- The sole skip is `desktop-isolation.spec.ts` / `an independent input-enabled cover preserves isolated hover`: “a never-shown window receives no pointer from the display”. The fake-daemon setup attachment inventory is empty, with no setup failure. Retrieved and inspected capture, JSON/list reports, execution log and attachment inventory under `/tmp/builder-2001/native-first/desktop`; capture SHA256 `adabb6859a91f9950c6b68b3b976b638720f880ec0ed1b32e3b77a1c4103cd95`.
+- Complete managed Mac run of final candidate `d2c80ba5f7e28023f17c2eb118cf9a53c1dea628`: task `067e1ae3d335d1b4ef8014b67501e5e5fcdf3faa5db420834011fdd0b5b9e752`, run `f611fe95c9f0ff9e59887844d42b0ce9f77f9f6c479ae0cc3be9bab591158a17`; 434 executed, 434 passed, 0 failed, 1 existing display-related skip (same test/reason above), 0 retries, no report errors. Configuration matches the original byte-for-byte with the same workers/projects/retries. Full capture, JSON/list reports, execution log and empty setup attachment inventory retrieved and inspected under `/tmp/builder-2001/native-final/desktop`; capture SHA256 `d842a2bf31efa7baa324760c0f70930007360f474486eac2ffbcc2eae7904821`. Later commits record evidence/documentation only; code and tests remain this candidate.
+- Ready and failed sidebar captures at 1280×800 and 800×800 are `/tmp/builder-2001/sidebar-{1280,800}.png` and `/tmp/builder-2001/sidebar-failed-{1280,800}.png`, captured from the final candidate and visually compared with Apps `590:4015`. Failed-state Retry uses the shared small text, primary outline, spacing and radius tokens.

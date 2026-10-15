@@ -42,14 +42,20 @@ with `createChatHistoryHandler` when application binding lands.
 
 [`createHistoryDatabase({ userDataPath })`](../../../src/main/historyDatabase.ts)
 owns the connection and exposes synchronous `transaction(run)` plus `close()`.
-An empty schema-version-0 database receives schema 2 transactionally; an unversioned
+An empty schema-version-0 database initializes the base schema 2 transactionally;
+its first operation migrates to schema 3. An unversioned
 database containing tables or an unfamiliar version is rejected without recreation.
 Schema 1 migrates TEXT ownership keys to UTF-16LE BLOBs inside the calling operation's
-transaction, retaining ciphertext and committed-snapshot UUIDs. A later validation
-or decryption failure rolls back the migration and version change too, allowing
-retry. Migration preserves strings already stored in schema 1; it cannot recover
-surrogate distinctions lost during earlier TEXT binding. Future schema additions
-require explicit versioned migrations; snapshot `version: 1` is unchanged.
+transaction, then chains through schema 2 to 3, retaining ciphertext and
+committed-snapshot UUIDs. Schema 3 adds only the partial `legacy_receipt_start`
+index on `(scope, entry_id, parent)` where `kind = 'receipt-id' AND ordinal = 0`.
+It lets adjacent-cursor selection skip non-start memberships in spanning receipts;
+indexing all memberships would still allow that lookup's work to grow with older
+history. No plaintext columns or allowed values change. A later validation or
+decryption failure rolls back the migrations, index and version changes too,
+allowing retry. Migration preserves strings already stored in schema 1; it cannot
+recover surrogate distinctions lost during earlier TEXT binding. Future schema
+additions require explicit versioned migrations; snapshot `version: 1` is unchanged.
 
 Full reads reconstruct and validate one committed snapshot through
 `parseChatHistorySnapshot`, then compare canonical records with stored payloads
@@ -57,6 +63,55 @@ and indexes to reject missing/orphan records or inconsistent indexes. Replacemen
 and conversation removal validate the existing addressed snapshot before mutation;
 host removal validates every legacy scope for that exact host. Other hosts and
 peer conversations remain independent. See [rollback and protection](chat-history-results.md#results-and-failure-preservation).
+
+### Main-only bounded legacy pages
+
+The indexed backend also exposes `newestPage(unknown)` and `beforePage(unknown)`,
+each returning `Promise<LegacyHistoryPageResult>`. Their request objects have no
+`operation` field:
+
+| Method | Request fields | Successful result |
+| --- | --- | --- |
+| `newestPage` | `serverId`, `conversationId`, `limit` | `status: 'newest-page'`, selecting the final saved rows. |
+| `beforePage` | The same fields plus `continuation` | `status: 'before-page'`, selecting rows strictly before its held-order boundary. |
+
+Both admit only numeric integer limits 1–200 and exact bounded ownership strings;
+unknown request keys reject before database access. Results contain at most that
+many `items` with aligned `rowKeys`, preserving supplied held order, content and
+multiplicity independently of timestamps. Without saved `rowIdentity`, keys use
+the original whole-snapshot ordinal minus saved `prependedRows`, never a page-local
+index. A missing newest scope returns `missing`; a saved-empty scope returns
+`newest-page` with empty items/keys and `continuation: null`.
+
+Successful pages also contain `savedCoverage`, optional saved `newestCursor`,
+[selected partial evidence](chat-history.md#bounded-local-page-evidence) and
+`continuation`. A non-null `LegacyHistoryContinuation` has exactly
+`{ format: 'legacy-v1', serverId, conversationId, snapshotId, before }`.
+`snapshotId` identifies the committed UUID; `before` is the exclusive, positive
+safe-integer ordinal of an existing held row. It is a local structural position,
+separate from every opaque daemon cursor. Admission checks exact coordinates,
+format, committed identity and boundary existence. Reopening a fresh database
+owner preserves a continuation while that snapshot is unchanged. Every replacement,
+including identical content, rotates the UUID; deletion and delete/recreate also
+invalidate earlier continuations. Following returned continuations traverses the
+unchanged held rows backwards once, with each page internally in held order.
+Null means local exhaustion and certifies no daemon completeness.
+
+One synchronous transaction selects the header, rows and relevant evidence from
+one committed snapshot. Paging never calls the full reader or loads whole receipt
+or gap membership arrays to discover its window. Only before-boundary admission
+needs one additional order-only row read; contiguous replacement ordinals determine
+local exhaustion without another payload decode. The shared `legacyHistoryCodec`
+reuses record checks and validates selected row/contribution bindings and payload/index
+associations. A page is never submitted as a shortened snapshot to
+`parseChatHistorySnapshot`: complete receipt-union and whole-held-row validation
+remain required for full snapshots. See [page failures](chat-history-results.md#bounded-page-results).
+
+These methods add no IPC, preload or renderer capability. Application binding and
+collection import remain #1975; page IPC, renderer activation and partial writers
+remain #1931. The application-bound API continues below.
+
+### Application-bound operations
 
 [`src/main/index.ts`](../../../src/main/index.ts) registers one handler over one
 store for the app lifetime, sharing the existing secure store and paired-server

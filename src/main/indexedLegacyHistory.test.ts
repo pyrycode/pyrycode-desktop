@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -47,6 +47,260 @@ function setup() {
 function protectedBytes(root: string): Buffer {
   return Buffer.concat(readdirSync(join(root, 'history')).map(name => readFileSync(join(root, 'history', name))))
 }
+
+const pageRequest = (limit = 200, serverId = 'Host', conversationId = 'Chat') => ({ serverId, conversationId, limit })
+const plain = (count: number) => ({ version: 1, kind: 'timeline', serverId: 'Host', conversationId: 'Chat',
+  items: Array.from({ length: count }, (_, i) => ({ kind: 'userText', text: `row-${i % 3}`, createdAt: i % 2 })),
+  prependedRows: 7, coverage: { status: 'unknown' } })
+
+it('traverses held order with ties and fallback identity across fresh instances in 200-row windows', async () => {
+  const h = setup(); const s = plain(603)
+  expect(await h.store.execute(replace(s))).toEqual({ status: 'ok' })
+  let current = { database: h.database, store: h.store }
+  let result = await current.store.newestPage(pageRequest())
+  const keys: number[] = []; const items: unknown[] = []
+  for (;;) {
+    expect(['newest-page', 'before-page']).toContain(result.status)
+    if (result.status !== 'newest-page' && result.status !== 'before-page') throw new Error('expected page')
+    expect(result.items.length).toBeLessThanOrEqual(200)
+    expect(result.savedCoverage).toEqual({ status: 'unknown' })
+    keys.unshift(...result.rowKeys); items.unshift(...result.items)
+    if (result.continuation === null) break
+    const continuation = result.continuation
+    current.database.close(); current = h.fresh()
+    result = await current.store.beforePage({ ...pageRequest(), continuation })
+  }
+  expect(keys).toEqual(s.items.map((_, i) => i - 7))
+  expect(items).toEqual(expect.arrayContaining(s.items))
+  const normalized = parseChatHistorySnapshot(s)
+  expect(items).toEqual(normalized.kind === 'timeline' ? normalized.items : [])
+  expect(await current.store.execute(read())).toEqual({ status: 'stored', snapshot: normalized })
+})
+
+it('distinguishes missing and saved-empty pages without claiming completeness', async () => {
+  const h = setup()
+  expect(await h.store.newestPage(pageRequest())).toEqual({ status: 'missing' })
+  await h.store.execute(replace(plain(0))); h.database.close()
+  expect(await h.fresh().store.newestPage(pageRequest())).toMatchObject({ status: 'newest-page',
+    items: [], rowKeys: [], continuation: null, savedCoverage: { status: 'unknown' } })
+})
+
+it('projects fragmented evidence with shared numeric boundaries and bounded receipt memberships', async () => {
+  const h = setup(); const s = { ...snapshot(), gaps: [{ olderId: 0, newerId: 3 }, { olderId: 3, newerId: 7 },
+    { legacyRowKeys: [-2, 5], newerId: 10 }] }
+  await h.store.execute(replace(s)); h.database.close()
+  const fresh = h.fresh()
+  const result = await fresh.store.newestPage(pageRequest(1))
+  expect(result).toMatchObject({ status: 'newest-page', rowKeys: [5],
+    savedCoverage: s.coverage, newestCursor: s.newestCursor, servedIds: [3],
+    receipts: [{ identity: 0, partial: true, ids: [3], cursor: 'RECEIPT-SENTINEL-1979' },
+      { identity: 1, partial: true, ids: [3], cursor: '' }],
+    gaps: [{ identity: 0, partial: true, olderId: 0, newerId: 3 },
+      { identity: 1, partial: true, olderId: 3, newerId: 7 },
+      { identity: 2, partial: true, legacyRowKeys: [5], newerId: 10 }] })
+  if (result.status !== 'newest-page') throw new Error('expected page')
+  expect(result.display).toEqual([parseChatHistorySnapshot(s).kind === 'timeline' &&
+    expect.objectContaining({ id: 3, rowKey: 5, kind: 'suppressed' })])
+  expect(await fresh.store.execute(read())).toEqual({ status: 'stored', snapshot: parseChatHistorySnapshot(s) })
+})
+
+it('rejects invalid and stale local continuations including identical replacement and delete/recreate', async () => {
+  const h = setup(); const s = plain(3)
+  await h.store.execute(replace(s))
+  const page = await h.store.newestPage(pageRequest(1))
+  if (page.status !== 'newest-page' || !page.continuation) throw new Error('expected continuation')
+  const invalid = { status: 'error', code: 'invalid-request' }
+  for (const limit of [0, -1, 201, 1.5, NaN, Infinity, '1', null, undefined])
+    expect(await h.store.newestPage({ ...pageRequest(), limit })).toEqual(invalid)
+  for (const continuation of ['', null, {}, { ...page.continuation, format: 'daemon-items' },
+    { ...page.continuation, before: 999 }, { ...page.continuation, before: -1 },
+    { ...page.continuation, before: 1.5 }, { ...page.continuation, extra: true },
+    { ...page.continuation, serverId: 'host' }, { ...page.continuation, conversationId: 'peer' }])
+    expect(await h.store.beforePage({ ...pageRequest(), continuation })).toEqual(invalid)
+  const next = { ...pageRequest(), continuation: page.continuation }
+  await h.store.execute(replace(s)); expect(await h.store.beforePage(next)).toEqual(invalid)
+  await h.store.execute({ operation: 'removeConversation', serverId: 'Host', conversationId: 'Chat' })
+  expect(await h.store.beforePage(next)).toEqual(invalid)
+  await h.store.execute(replace(s)); expect(await h.store.beforePage(next)).toEqual(invalid)
+})
+
+it.each(['serverId', 'conversationId'] as const)('pages exact UTF-16 %s without owner aliasing', async coordinate => {
+  const h = setup(); const variants = ['\ud800', '\ud801', '\ufffd', '\udc00', '\ud83d\ude00']
+  for (const [i, owner] of variants.entries()) {
+    const s = { ...plain(3), [coordinate]: owner, prependedRows: i }
+    await h.store.execute(replace(s, s.serverId, s.conversationId))
+  }
+  h.database.close(); const fresh = h.fresh()
+  for (const [i, owner] of variants.entries()) {
+    const request = { ...pageRequest(1), [coordinate]: owner }
+    const page = await fresh.store.newestPage(request)
+    expect(page).toMatchObject({ status: 'newest-page', rowKeys: [2 - i] })
+    if (page.status !== 'newest-page') throw new Error('expected page')
+    expect(await fresh.store.beforePage({ ...request, continuation: page.continuation })).toMatchObject({ rowKeys: [1 - i] })
+    expect(await fresh.store.beforePage({ ...request, [coordinate]: variants[(i + 1) % variants.length],
+      continuation: page.continuation })).toEqual({ status: 'error', code: 'invalid-request' })
+  }
+})
+
+it.each([
+  "UPDATE legacy_records SET payload = x'00' WHERE kind = 'row' AND ordinal = 1",
+  "UPDATE legacy_records SET row_key = 6 WHERE kind = 'row' AND ordinal = 1",
+  "UPDATE legacy_records SET entry_id = 4 WHERE kind = 'display' AND ordinal = 1",
+  "UPDATE legacy_records SET entry_id = 1 WHERE kind = 'receipt-id' AND parent = 0 AND ordinal = 1",
+  "UPDATE legacy_records SET row_key = -2 WHERE kind = 'gap-key' AND ordinal = 1"
+])('rejects corrupted selected associations without changing saved data: %s', async sql => {
+  const h = setup(); await h.store.execute(replace(snapshot()))
+  h.database.transaction(db => db.exec(sql)); h.database.close()
+  const before = protectedBytes(h.root)
+  expect(await h.fresh().store.newestPage(pageRequest(2))).toEqual({ status: 'error', code: 'unreadable' })
+  expect(protectedBytes(h.root)).toEqual(before)
+})
+
+it('bounds record reads, decodes and decrypts despite a receipt spanning unrelated older history', async () => {
+  const h = setup()
+  const measure = async (older: number) => {
+    const items = Array.from({ length: older + 200 }, (_, i) => ({ kind: 'assistantText', turnId: `${i}`, text: 'x' }))
+    const ids = items.map((_, i) => i)
+    const s = { ...plain(0), items, prependedRows: 0, rowIdentity: { rowKeys: ids, nextRowKey: ids.length },
+      coverage: { status: 'received', cursor: '', atStart: false },
+      served: { ids, highestId: ids.at(-1), receipts: [
+        { ids, cursor: 'spanning', atStart: false },
+        ...ids.slice(0, older).map(id => ({ ids: [id], cursor: `unrelated-${id}`, atStart: false }))] },
+      display: items.map((item, i) => ({ id: i, rowKey: i, kind: 'row', item })),
+      gaps: Array.from({ length: Math.floor(older / 3) }, (_, i) => ({ olderId: i * 3, newerId: i * 3 + 2,
+        refusedCursors: [`old-${i}`, `older-${i}`] })) }
+    await h.store.execute(replace(s))
+    const decrypt = vi.spyOn(h.encryption, 'decrypt'); const decode = vi.spyOn(JSON, 'parse')
+    const reads = { row: 0, evidence: 0, order: 0 }
+    let result: ReturnType<typeof h.store.newestPage> | undefined
+    h.database.transaction(db => {
+      const prepare = db.prepare.bind(db)
+      const spy = vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+        const statement = prepare(sql)
+        for (const method of ['all', 'get'] as const) {
+          const original = statement[method].bind(statement)
+          vi.spyOn(statement, method).mockImplementation((...args: unknown[]) => {
+            const value = original(...args)
+            if (sql.includes('legacy_records')) for (const row of Array.isArray(value) ? value : value ? [value] : []) {
+              if ('payload' in row) row.kind === 'row' ? reads.row++ : reads.evidence++
+              else reads.order++
+            }
+            return value
+          })
+        }
+        return statement
+      })
+      // Methods perform synchronous transactions before their promise resolves.
+      result = h.store.newestPage(pageRequest())
+      spy.mockRestore()
+    })
+    expect(await result).toMatchObject({ status: 'newest-page', items: expect.arrayContaining(items.slice(-200)) })
+    const counts = { ...reads, decrypt: decrypt.mock.calls.length, decode: decode.mock.calls.length }
+    decrypt.mockRestore(); decode.mockRestore()
+    expect(reads.row).toBe(200); expect(reads.order).toBeLessThanOrEqual(1)
+    expect(counts.decrypt).toBe(reads.row + reads.evidence); expect(counts.decode).toBe(counts.decrypt)
+    return counts
+  }
+  expect(await measure(600)).toEqual(await measure(2000))
+})
+
+it('selects contribution ranges and only the necessary adjacent cursor anchor', async () => {
+  const h = setup(); const item = { kind: 'assistantText', turnId: 't', text: 'committed whole' }
+  const s = { ...plain(0), items: [item], rowIdentity: { rowKeys: [9], nextRowKey: 10 },
+    coverage: { status: 'received', cursor: 'scope', atStart: true },
+    display: [{ kind: 'row', id: 100, lastId: 102, rowKey: 9, item: { ...item, text: 'selected fragment' } }],
+    served: { ids: [100, 101, 102, 110, 120], highestId: 120, receipts: [
+      { ids: [100, 101, 102], cursor: 'range', atStart: false },
+      { ids: [110], cursor: 'adjacent', atStart: false }, { ids: [120], cursor: 'unrelated', atStart: true }] },
+    gaps: [{ olderId: 102, newerId: 110, refusedCursors: ['not-selected'] }] }
+  expect(await h.store.execute(replace(s))).toEqual({ status: 'ok' }); h.database.close()
+  const fresh = h.fresh(); const decrypt = vi.spyOn(h.encryption, 'decrypt')
+  const result = await fresh.store.newestPage(pageRequest(1))
+  expect(result).toMatchObject({ status: 'newest-page', items: [item], servedIds: [100, 101, 102],
+    receipts: [{ identity: 0, partial: true, ids: [100, 101, 102], cursor: 'range' }],
+    cursorAnchors: [{ receiptIdentity: 1, id: 110, cursor: 'adjacent' }],
+    display: [{ id: 100, lastId: 102, item: { text: 'selected fragment' } }],
+    gaps: [{ identity: 0, partial: true, olderId: 102, newerId: 110 }] })
+  expect(decrypt).toHaveBeenCalledTimes(13); decrypt.mockRestore()
+  expect(JSON.stringify(result)).not.toContain('unrelated'); expect(JSON.stringify(result)).not.toContain('not-selected')
+  expect(await fresh.store.execute(read())).toEqual({ status: 'stored', snapshot: parseChatHistorySnapshot(s) })
+  const displayOnly = { ...s, served: undefined, gaps: undefined }
+  await fresh.store.execute(replace(displayOnly))
+  const only = await fresh.store.newestPage(pageRequest())
+  expect(only).toMatchObject({ status: 'newest-page' }); expect(only).not.toHaveProperty('servedIds')
+})
+
+it('reads pre-envelope protected records and classifies selected codec and protection failures', async () => {
+  const h = setup(); const s = snapshot(); await h.store.execute(replace(s))
+  h.database.transaction(db => {
+    const rows = db.prepare('SELECT rowid, payload FROM legacy_records').all() as { rowid: number; payload: Buffer }[]
+    for (const r of rows) {
+      const old = JSON.parse(new TextDecoder().decode(h.encryption.decrypt(r.payload))).record.payload
+      db.prepare('UPDATE legacy_records SET payload = ? WHERE rowid = ?')
+        .run(Buffer.from(h.encryption.encrypt(new TextEncoder().encode(JSON.stringify(old)))), r.rowid)
+    }
+  })
+  h.database.close(); const fresh = h.fresh()
+  expect(await fresh.store.execute(read())).toEqual({ status: 'stored', snapshot: parseChatHistorySnapshot(s) })
+  expect(await fresh.store.newestPage(pageRequest())).toMatchObject({ status: 'newest-page', rowKeys: [-2, 5] })
+  h.encryption.isAvailable = () => false
+  expect(await fresh.store.newestPage(pageRequest())).toEqual({ status: 'error', code: 'encryption-unavailable' })
+  h.encryption.isAvailable = () => true
+  fresh.database.transaction(db => db.pragma('user_version = 999')); fresh.database.close()
+  expect(await h.fresh().store.newestPage(pageRequest())).toEqual({ status: 'error', code: 'unsupported-version' })
+})
+
+it('validates selected row/contribution bindings and keeps unselected unreadable rows untouched', async () => {
+  const h = setup(); await h.store.execute(replace(snapshot()))
+  h.database.transaction(db => db.prepare("UPDATE legacy_records SET payload = x'00' WHERE kind = 'row' AND ordinal = 0").run())
+  expect(await h.store.newestPage(pageRequest(1))).toMatchObject({ status: 'newest-page', rowKeys: [5] })
+  expect(await h.store.execute(read())).toEqual({ status: 'error', code: 'unreadable' })
+  const other = setup(); await other.store.execute(replace(snapshot()))
+  other.database.transaction(db => {
+    const r = db.prepare("SELECT payload FROM legacy_records WHERE kind = 'display' AND ordinal = 0").get() as { payload: Buffer }
+    const value = JSON.parse(new TextDecoder().decode(other.encryption.decrypt(r.payload)))
+    value.record.payload.item.turnId = 'wrong-binding'
+    db.prepare("UPDATE legacy_records SET payload = ? WHERE kind = 'display' AND ordinal = 0")
+      .run(Buffer.from(other.encryption.encrypt(new TextEncoder().encode(JSON.stringify(value)))))
+  })
+  expect(await other.store.newestPage(pageRequest())).toEqual({ status: 'error', code: 'unreadable' })
+})
+
+it('adds the receipt-start index atomically and uses it without walking receipt memberships', async () => {
+  const h = setup(); await h.store.execute(replace(snapshot()))
+  const identity = h.database.transaction(db => {
+    db.exec('DROP INDEX legacy_receipt_start; PRAGMA user_version = 2')
+    return db.prepare('SELECT identity FROM legacy_scopes').get()
+  })
+  h.database.close(); const before = protectedBytes(h.root)
+  const decrypt = h.encryption.decrypt
+  h.encryption.decrypt = () => { throw new Error('injected') }
+  expect(await h.fresh().store.newestPage(pageRequest())).toEqual({ status: 'error', code: 'unreadable' })
+  expect(protectedBytes(h.root)).toEqual(before)
+  h.encryption.decrypt = decrypt; const fresh = h.fresh()
+  expect(await fresh.store.newestPage(pageRequest())).toMatchObject({ status: 'newest-page' })
+  fresh.database.transaction(db => {
+    expect(db.pragma('user_version', { simple: true })).toBe(4)
+    expect(db.prepare('SELECT identity FROM legacy_scopes').get()).toEqual(identity)
+    const plan = db.prepare("EXPLAIN QUERY PLAN SELECT payload FROM legacy_records WHERE scope = ? AND kind = 'receipt-id' AND ordinal = 0 AND entry_id >= ? ORDER BY entry_id, parent LIMIT 1").all('scope', 0)
+    expect(JSON.stringify(plan)).toContain('legacy_receipt_start')
+  })
+  expect(await fresh.store.execute(read())).toEqual({ status: 'stored', snapshot: parseChatHistorySnapshot(snapshot()) })
+})
+
+it('pages a heavily fragmented held row without exceeding SQLite expression limits', async () => {
+  const h = setup(); const item = { kind: 'assistantText', turnId: 't', text: 'whole' }
+  const ids = Array.from({ length: 1200 }, (_, i) => i * 2)
+  const s = { ...plain(0), items: [item], rowIdentity: { rowKeys: [9], nextRowKey: 10 },
+    coverage: { status: 'received', cursor: '', atStart: false },
+    display: ids.map(id => ({ kind: 'row', id, rowKey: 9, item: { ...item, text: 'fragment' } })),
+    served: { ids, highestId: ids.at(-1), receipts: [{ ids, cursor: '', atStart: false }] } }
+  expect(await h.store.execute(replace(s))).toEqual({ status: 'ok' }); h.database.close()
+  const result = await h.fresh().store.newestPage(pageRequest(1))
+  expect(result).toMatchObject({ status: 'newest-page', servedIds: ids, receipts: [{ ids, partial: true }] })
+  if (result.status !== 'newest-page') throw new Error('expected page')
+  expect(result.display).toHaveLength(1200)
+})
 
 it('exact fragmented round trip across close/reopen, with separate indexed memberships', async () => {
   const h = setup(); const s = snapshot()
@@ -145,7 +399,7 @@ it('migrates version-1 ownership keys atomically without changing payloads or sn
   h.encryption.decrypt = decrypt
   expect(await fresh.store.execute(read())).toEqual({ status: 'stored', snapshot: parseChatHistorySnapshot(snapshot()) })
   fresh.database.transaction(db => {
-    expect(db.pragma('user_version', { simple: true })).toBe(3)
+    expect(db.pragma('user_version', { simple: true })).toBe(4)
     expect(db.prepare('SELECT identity FROM legacy_scopes').get()).toEqual(original)
     expect(db.prepare('SELECT typeof(server) AS server, typeof(conversation) AS conversation FROM legacy_scopes').get())
       .toEqual({ server: 'blob', conversation: 'blob' })

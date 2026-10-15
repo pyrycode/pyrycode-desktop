@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import type { ReactNode } from 'react'
+import type { ReactNode, ComponentProps } from 'react'
 import type { SessionState, ConnectionStatus } from '../../store/sessionStore'
 import { initialSessionState } from '../../store/sessionStore'
 import type { ConversationSummary } from '@shared/wire/types'
@@ -149,10 +149,12 @@ const render = (
   conversations: readonly SidebarRow[] | null,
   openConversationId: string | null = null,
   serverIds: readonly string[] = [DEFAULT_SERVER],
-  statuses: SessionState['statuses'] = new Map(serverIds.map(id => [id, { type: 'connected', ack: {} } as ConnectionStatus]))
+  statuses: SessionState['statuses'] = new Map(serverIds.map(id => [id, { type: 'connected', ack: {} } as ConnectionStatus])),
+  apps: Pick<ComponentProps<typeof ChannelListView>, 'apps' | 'pane'> = {}
 ): string =>
   renderToStaticMarkup(
     <ChannelListView
+      {...apps}
       conversations={conversations}
       serverIds={serverIds}
       statuses={statuses}
@@ -178,6 +180,24 @@ const render = (
   )
 
 describe('host-first sidebar', () => {
+  it('renders escaped app titles, observed states and only the exact hosted selection', () => {
+    const items = (['starting', 'running', 'stopped', 'failed'] as const).map(state => ({ appId: state, title: `<img> & ${state}`, state }))
+    const html = render([row({ id: 'chat' })], 'chat', [DEFAULT_SERVER, SECOND_SERVER], new Map(), {
+      apps: new Map([DEFAULT_SERVER, SECOND_SERVER].map(serverId => [serverId, { serverId, type: 'ready' as const, items }])),
+      pane: { type: 'loading', generation: 1, serverId: SECOND_SERVER, appId: 'running', appLabel: 'App', hostLabel: 'Host' }
+    })
+    expect(html).toContain('&lt;img&gt; &amp; running')
+    expect(html).not.toContain('<img>')
+    expect(countOf(html, 'aria-current="true"')).toBe(1)
+    for (const state of ['starting', 'running', 'stopped', 'failed']) expect(html).toContain(`class="channel-list__app-state">${state}</span>`)
+  })
+  it('distinguishes initial, empty, failed, disconnected and unsupported discovery', () => {
+    for (const [type, copy] of [['ready', 'No apps'], ['failed', 'Could not load apps'], ['unavailable', 'Apps disconnected'], ['unsupported', 'Apps unsupported'], ['loading', 'Loading apps…']] as const) {
+      const html = render([], null, [DEFAULT_SERVER], new Map(), { apps: new Map([[DEFAULT_SERVER, { serverId: DEFAULT_SERVER, type, items: [] }]]) })
+      expect(html).toContain(copy)
+      expect(html.includes('>Retry</button>')).toBe(type === 'failed')
+    }
+  })
   it('sorts each host section and fallback independently on successive list snapshots', () => {
     const rows = [
       row({ id: 'bc-z', name: 'Z second channel', serverId: SECOND_SERVER, is_promoted: true }),
@@ -202,13 +222,15 @@ describe('host-first sidebar', () => {
     for (const [index, snapshot] of snapshots.entries()) {
       const html = render(snapshot, 'ad-z', [DEFAULT_SERVER, SECOND_SERVER])
       const sections = html.split('class="channel-list__section"').slice(1)
-      expect(sections).toHaveLength(6)
+      expect(sections).toHaveLength(8)
       expect(sections.map(titles)).toEqual([
         ['A first channel', 'Z first channel'],
         index === 0 ? ['A first chat', 'Untitled', 'Z first chat']
           : ['0 renamed chat', 'A first chat', 'B auto-named chat'],
+        [],
         ['A second channel', 'Z second channel'],
         ['A second chat', 'Z second chat'],
+        [],
         ['A fallback channel', 'Z fallback channel'],
         ['A fallback chat', 'Z fallback chat']
       ])
@@ -224,7 +246,7 @@ describe('host-first sidebar', () => {
   it('draws each saved host once with its own open sections and no workspace row', () => {
     const html = render([row({ id: 'channel', is_promoted: true }), row({ id: 'chat' })], null, [DEFAULT_SERVER, SECOND_SERVER])
     expect(html.match(/class="channel-list__host"/g)).toHaveLength(2)
-    expect(html.match(/class="channel-list__section"/g)).toHaveLength(4)
+    expect(html.match(/class="channel-list__section"/g)).toHaveLength(6)
     expect(html).not.toContain('class="channel-list__workspace"')
     expect(html).not.toContain('class="channel-list__divider"')
   })
@@ -252,7 +274,7 @@ describe('host-first sidebar', () => {
     const connected = render([])
     expect(countOf(connected, CREATE_CHANNEL_MARKER)).toBe(1)
     expect(countOf(connected, CREATE_CHAT_MARKER)).toBe(1)
-    expect(countOf(connected, 'class="channel-list__section-disclosure" aria-expanded="true"')).toBe(2)
+    expect(countOf(connected, 'class="channel-list__section-disclosure" aria-expanded="true"')).toBe(3)
     const offline = new Map<string, ConnectionStatus>([[DEFAULT_SERVER, { type: 'disconnected' }]])
     expect(render([], null, [DEFAULT_SERVER], offline)).not.toContain('channel-list__section-create')
     expect(render([row({ serverId: null })], null, [], new Map())).not.toContain('channel-list__section-create')
@@ -1496,7 +1518,7 @@ describe('the open chat’s row (#1098)', () => {
 it('renders every saved host once before the first list', () => {
   const markup = render(null, null, [DEFAULT_SERVER, SECOND_SERVER])
   expect(markup.split('class="channel-list__host"').length - 1).toBe(2)
-  expect(countOf(markup, 'class="channel-list__section"')).toBe(4)
+  expect(countOf(markup, 'class="channel-list__section"')).toBe(6)
   expect(markup).not.toContain('channel-list__row-open')
 })
 

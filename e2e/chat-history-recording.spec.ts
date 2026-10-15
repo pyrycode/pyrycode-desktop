@@ -227,7 +227,30 @@ test('receipt saturation still saves a repeated page and later live content acro
   expect(await first.page.evaluate(snapshot => window.pyry.chatHistory({ operation: 'replaceTimeline',
     serverId: snapshot.serverId, conversationId: snapshot.conversationId, snapshot }), snapshot)).toEqual({ status: 'ok' })
   await first.app.close()
-  const second = await launchPairedApp({}, { reuseUserDataDir: first.userDataDir })
+  const second = await launchPairedApp({}, { reuseUserDataDir: first.userDataDir, onLaunched: async app => {
+    // Observe real protected completion without repeatedly transferring 100,000 receipt ids.
+    await app.evaluate(({ ipcMain }, { serverId, conversationId }) => {
+      const original = (ipcMain as any)._invokeHandlers.get('pyry:chat-history')
+      if (!original) throw new Error('Missing chat history handler')
+      const savedItemCounts: number[] = []
+      ipcMain.removeHandler('pyry:chat-history')
+      ipcMain.handle('pyry:chat-history', async (event, request) => {
+        const result = await original(event, request)
+        if (request.operation === 'replaceTimeline' && request.serverId === serverId &&
+            request.conversationId === conversationId && result.status === 'ok') {
+          savedItemCounts.push(request.snapshot.items.length)
+        }
+        return result
+      })
+      Object.assign(globalThis, { saturationSaves: { savedItemCounts, stop: () => {
+        ipcMain.removeHandler('pyry:chat-history')
+        ipcMain.handle('pyry:chat-history', original)
+        delete (globalThis as any).saturationSaves
+      } } })
+    }, { serverId, conversationId: SEEDED_ROW.id })
+  } })
+  const savedItemCounts = () => readMainProcess(second.app, () =>
+    (globalThis as any).saturationSaves.savedItemCounts as number[])
   const commands = await observeCommands(second)
   await second.page.evaluate(({ serverId, conversationId }) => {
     Object.assign(window, { repeatPageDelivered: false })
@@ -251,14 +274,30 @@ test('receipt saturation still saves a repeated page and later live content acro
   ])
   const expected = { ...snapshot, coverage: snapshot.coverage, gaps: [], newestCursor: 'repeat',
     served: { ids, highestId: 199, receipts: [...receipts.slice(1), { ids, cursor: 'repeat', atStart: false }] } }
-  await expect.poll(() => read(second.page)).toEqual({ status: 'stored', snapshot: expected })
+  await expect.poll(savedItemCounts, { timeout: 5_000 }).toContain(1)
+  expect(await read(second.page)).toEqual({ status: 'stored', snapshot: expected })
   await expect(second.page.locator('.bubble[data-thread-role="assistant"]')).toHaveCount(1)
+  await second.page.evaluate(({ serverId, conversationId }) => {
+    Object.assign(window, { laterLiveDelivered: false })
+    const off = window.pyry.onDaemonEvent(event => {
+      if (event.type === 'messageReceived' && event.serverId === serverId &&
+          event.message.conversation_id === conversationId && event.message.message_id === 'later-live') {
+        Object.assign(window, { laterLiveDelivered: true })
+        off()
+      }
+    })
+  }, { serverId, conversationId: SEEDED_ROW.id })
   await first.daemon.pushFrame(frame('message', { conversation_id: SEEDED_ROW.id,
     message_id: 'later-live', role: 'user', text: 'later live content' }))
-  await expect.poll(async () => snapshotText(await read(second.page))).toBe('retained assistant|later live content')
+  await expect.poll(() => second.page.evaluate(() => (window as typeof window & {
+    laterLiveDelivered: boolean
+  }).laterLiveDelivered)).toBe(true)
+  await expect.poll(savedItemCounts, { timeout: 5_000 }).toContain(2)
   const saved = await read(second.page)
+  expect(snapshotText(saved)).toBe('retained assistant|later live content')
   expect(saved).toMatchObject({ status: 'stored', snapshot: {
     served: expected.served, rowIdentity: { rowKeys: [-8, 42], nextRowKey: 43 } } })
+  await second.app.evaluate(() => (globalThis as any).saturationSaves.stop())
   await second.app.close()
   const third = await launchPairedApp({}, { reuseUserDataDir: first.userDataDir })
   await third.page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()

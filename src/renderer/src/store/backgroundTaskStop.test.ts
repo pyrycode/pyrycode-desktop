@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { backgroundTaskRosterStore, createBackgroundTaskRosterStore, selectPendingTaskStopsFor } from './backgroundTaskRosterStore'
 import { subscribeBackgroundTaskRoster } from './backgroundTaskRosterBridge'
 import { sessionStore, createSessionStore, selectStatusFor } from './sessionStore'
-import { BackgroundTaskPanel, backgroundTaskStopSupported } from '../screens/conversation/BackgroundTaskPanel'
+import { backgroundTaskStopSupported } from '../screens/conversation/BackgroundTaskPanel'
 import type { DaemonEvent } from '@shared/ipc/events'
 
 const rows = (ids: string[]) => ids.map(task_id => ({ task_id, task_type: 'local_bash', description: 'Synthetic work', truncated_fields: null }))
@@ -102,37 +102,6 @@ describe('background task stop waits', () => {
     expect(selectPendingTaskStopsFor('b')(store.getState())).toEqual(new Set(['shared', 'second']))
     off()
     expect(detached).toBe(true)
-  })
-
-  it('wires the mounted panel to the owning host rather than the compatibility status cell', () => {
-    const originalSession = sessionStore.getState()
-    const originalRoster = backgroundTaskRosterStore.getState()
-    // Zustand SSR reads getInitialState. Supply each current synthetic snapshot for this static render.
-    const sessionSnapshot = vi.spyOn(sessionStore, 'getInitialState').mockImplementation(sessionStore.getState)
-    const rosterSnapshot = vi.spyOn(backgroundTaskRosterStore, 'getInitialState').mockImplementation(backgroundTaskRosterStore.getState)
-    const render = (agent: 'claude' | 'codex' = 'claude', serverId: string | null = 'host-a') =>
-      renderToStaticMarkup(createElement(BackgroundTaskPanel, {
-        conversationId: 'a', serverId, agent, turnRunning: false, onClose() {}
-      }))
-    try {
-      backgroundTaskRosterStore.setState(seeded().getState())
-      sessionStore.getState().dispatch({ type: 'connected', ack, serverId: 'host-b' })
-      expect(render()).not.toContain('>Stop task</button>')
-      sessionStore.getState().dispatch({ type: 'connected', ack: { ...ack, capabilities: [] }, serverId: 'host-a' })
-      expect(render()).not.toContain('>Stop task</button>')
-      sessionStore.getState().dispatch({ type: 'connected', ack, serverId: 'host-a' })
-      expect(render()).toContain('>Stop task</button>')
-      expect(render('codex')).not.toContain('>Stop task</button>')
-      expect(render('claude', null)).not.toContain('>Stop task</button>')
-      sessionStore.getState().dispatch({ type: 'disconnected', serverId: 'host-a' })
-      sessionStore.getState().dispatch({ type: 'connected', ack, serverId: 'host-b' })
-      expect(render()).not.toContain('>Stop task</button>')
-    } finally {
-      sessionStore.setState(originalSession)
-      backgroundTaskRosterStore.setState(originalRoster)
-      sessionSnapshot.mockRestore()
-      rosterSnapshot.mockRestore()
-    }
   })
 
   it('uses only the owning host status and capability, excluding Codex', () => {

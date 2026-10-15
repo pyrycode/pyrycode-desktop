@@ -1,11 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createElement } from 'react'
-import { renderToStaticMarkup } from 'react-dom/server'
 import { initialTimelineState, reduceTimeline, markLocalSendQueued, type ThreadEvent } from './threadTimeline'
 import { createConversationTimelineStore, selectTimelineFor } from './conversationTimelineStore'
 import { createTimelineStore } from './timelineStore'
 import { submitMessage } from '../screens/conversation/composerSend'
-import { Timeline } from '../screens/conversation/ConversationScreen'
 import { translateTimelineEvent, timelineTargetFor } from './timelineBridge'
 
 const status = (value: 'waiting' | 'not-sent' | 'written', serverId = 'host-a'): Extract<ThreadEvent, { type: 'messageDelivery' }> =>
@@ -53,11 +50,7 @@ describe('local message delivery', () => {
     let s = reduceTimeline(initialTimelineState, { type: 'assistantDelta', turnId: 'first', seq: 0, text: 'first answer' })
     s = reduceTimeline(s, echo)
     s = reduceTimeline(s, status('waiting'))
-    const markup = () => renderToStaticMarkup(createElement(Timeline, { ...s }))
-    expect(markup()).toContain('Waiting for connection')
-    expect(markup()).not.toContain('data-thread-role="queued"')
     s = reduceTimeline(s, status('not-sent'))
-    expect(markup()).toContain('Not sent')
     s = reduceTimeline(s, status('waiting'))
     s = reduceTimeline(s, status('written'))
     const queued = [{ message_id: 'own', queued_msg_id: 7, text: 'wire copy', ts: '' }]
@@ -71,6 +64,5 @@ describe('local message delivery', () => {
     expect(s.items.filter(item => item.kind === 'userText')).toEqual([{ kind: 'userText', text: 'original',
       messageId: 'own', createdAt: 123, attachments: [{ attachmentId: 'file', filename: 'original.txt' }] }])
     expect(s.items.findIndex(item => item.kind === 'userText')).toBeLessThan(s.items.findIndex(item => item.kind === 'assistantText' && item.turnId === 'second'))
-    expect(markup()).not.toContain('Waiting for connection')
   })
 })

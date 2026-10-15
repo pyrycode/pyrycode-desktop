@@ -52,3 +52,7 @@ No new failures or I/O. Preserve canonical typed action handling, task eligibili
 ## Open Questions
 
 None.
+
+## Revisions
+
+2026-10-15: The scroll hook's two surviving callers both use supplied items. Remove its legacy gap-demand branch and numeric prepend bookkeeping, retaining the identical supplied-item demand and immutable-presentation anchor comparison. Shared attachment, timestamp, copy/reply, delimiter and markdown-link suites render the surviving row view directly; tool-run assertions use supplied snapshots. The drawer's private summary/status inputs are now required supplied facts, so its legacy duplicate-summary suppression and label fallback are also removed.

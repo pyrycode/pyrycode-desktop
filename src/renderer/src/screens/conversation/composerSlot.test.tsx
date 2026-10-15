@@ -39,7 +39,7 @@ vi.mock('../../store/questionPicksStore', async (importActual) => ({
     selector(picksStore.getState())
 }))
 
-import { ComposerSlot, QuestionHistorySlot, Timeline } from './ConversationScreen'
+import { ComposerSlot, QuestionHistorySlot } from './ConversationScreen'
 
 const OPEN = 'conv-open'
 const OTHER = 'conv-other'
@@ -61,7 +61,7 @@ const show = (conversationId: string, questions: readonly Question[]): void => {
 }
 
 const render = (conversationId: string | null): string => renderToStaticMarkup(<>
-  <Timeline items={[]} trailing={<QuestionHistorySlot conversationId={conversationId} />} />
+  <QuestionHistorySlot conversationId={conversationId} />
   <ComposerSlot conversationId={conversationId} phase="idle" onMessageSent={() => {}} />
 </>)
 

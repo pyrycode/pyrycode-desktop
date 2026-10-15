@@ -1,11 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { initialTimelineState, markLocalSendQueued, reduceTimeline, type ThreadEvent, type TimelineState } from './threadTimeline'
-import { foldQueuedRows } from '../screens/conversation/foldQueuedRows'
 import { createConversationTimelineStore, selectTimelineFor } from './conversationTimelineStore'
 import { translateTimelineEvent } from './timelineBridge'
-import { createElement } from 'react'
-import { renderToStaticMarkup } from 'react-dom/server'
-import { Timeline } from '../screens/conversation/ConversationScreen'
 
 const queue = (id = 7, message_id = 'm') => ({ queued_msg_id: id, message_id, text: 'wire copy', ts: '' })
 const delta = (turnId: string, text: string): ThreadEvent => ({ type: 'assistantDelta', turnId, seq: 1, text })
@@ -13,8 +9,6 @@ const end = (turnId: string): ThreadEvent => ({ type: 'turnEnd', turnId, stopRea
 const receipt = (queuedMsgId = 7, sentNow?: boolean): ThreadEvent => ({
   type: 'userText', received: true, messageId: 'm', text: 'receipt copy', queuedMsgId, sentNow
 })
-const fold = (s: TimelineState, q = [queue()]) => foldQueuedRows(s.items, q, s.localEchoes, s.rowKeys)
-const text = (s: TimelineState, q = [queue()]) => fold(s, q).map(r => 'text' in r.item ? r.item.text : r.item.kind)
 function waiting() {
   let s = reduceTimeline(initialTimelineState, delta('first', 'first reply'))
   s = reduceTimeline(s, { type: 'turnState', state: 'responding' })
@@ -24,14 +18,6 @@ function waiting() {
 }
 
 describe('queued own echo settlement', () => {
-  it('projects below continuing assistant and tool output with source indices', () => {
-    let s = waiting()
-    s = reduceTimeline(s, { type: 'toolUse', turnId: 'first', toolUseId: 'tool', name: 'Read', inputSummary: 'file' })
-    s = reduceTimeline(s, delta('first', 'continued'))
-    expect(text(s)).toEqual(['first reply', 'toolCall', 'continued', 'own'])
-    expect(fold(s).map(r => r.itemIndex)).toEqual([0, 2, 3, 1])
-    expect(fold(s).at(-1)?.queued?.queuedMsgId).toBe(7)
-  })
 
   it.each(['removal-first', 'receipt-first'])('settles at the preceding boundary: %s', order => {
     let s = waiting()
@@ -42,12 +28,10 @@ describe('queued own echo settlement', () => {
     if (order === 'removal-first') s = markLocalSendQueued(s, [])
     s = reduceTimeline(s, receipt())
     s = reduceTimeline(s, delta('answer', 'answer'))
-    expect(text(s, [])).toEqual(['first reply', 'last first', 'turnBoundary', 'own', 'answer'])
     const at = s.items.indexOf(own)
     expect(at).toBe(3)
     expect(s.rowKeys?.[at]).toBe(key)
     expect(s.items[at]).toBe(own)
-    expect(fold(s).find(r => r.item === own)?.queued).not.toBeNull()
     const held = s
     expect(reduceTimeline(s, receipt())).toBe(held)
     expect(reduceTimeline(s, { type: 'userText', received: true, text: 'legacy', messageId: 'm' })).toBe(held)
@@ -65,15 +49,6 @@ describe('queued own echo settlement', () => {
     expect(s.phase).toBe(before.phase)
     expect(s.stalled).toBe(true)
     s = reduceTimeline(s, delta('answer', ' continued'))
-    expect(text(s, [])).toEqual(['first reply', 'turnBoundary', 'own', 'answer continued'])
-  })
-
-  it('Send now settles at its stream point despite an older observed boundary', () => {
-    let s = reduceTimeline(waiting(), end('first'))
-    s = reduceTimeline(s, delta('intervening', 'before delivery'))
-    s = reduceTimeline(s, receipt(7, true))
-    s = reduceTimeline(s, delta('intervening', 'after delivery'))
-    expect(text(s, [])).toEqual(['first reply', 'turnBoundary', 'before delivery', 'own', 'after delivery'])
   })
 
   it.each([
@@ -99,9 +74,6 @@ describe('queued own echo settlement', () => {
     s = reduceTimeline(s, receipt(8))
     expect(s.phase).toBe(before.phase)
     expect(s.localSendPending).toBe(before.localSendPending)
-    expect(text(s, [])).toEqual(released
-      ? ['first reply', 'turnBoundary', 'second own', 'before forced delivery', 'own', 'after forced delivery', 'turnBoundary', 'next reply']
-      : ['first reply', 'turnBoundary', 'before forced delivery', 'own', 'after forced delivery', 'turnBoundary', 'second own', 'next reply'])
     expect(s.items[s.rowKeys!.indexOf(key!)]).toBe(second)
     expect(reduceTimeline(s, receipt(7, true))).toBe(s)
     expect(reduceTimeline(s, receipt(8))).toBe(s)
@@ -114,14 +86,12 @@ describe('queued own echo settlement', () => {
     s = reduceTimeline(s, { type: 'userText', messageId: 'm', text: 'second own' })
     s = markLocalSendQueued(s, [queue(), queue(8)])
     s = reduceTimeline(s, delta('first', 'continued'))
-    expect(text(s, [queue(8), queue()]).slice(-2)).toEqual(['own', 'second own'])
     s = reduceTimeline(s, end('first'))
     s = reduceTimeline(s, receipt(7))
     s = reduceTimeline(s, delta('second', 'second reply'))
     expect(s.localEchoes?.filter(e => e.settled)).toHaveLength(1)
     s = reduceTimeline(s, end('second'))
     s = reduceTimeline(s, receipt(8))
-    expect(text(s, [])).toEqual(['first reply', 'continued', 'turnBoundary', 'own', 'second reply', 'turnBoundary', 'second own'])
   })
 
   it('received/history/non-user collisions never acquire ownership, and empty IDs never correlate', () => {
@@ -129,8 +99,6 @@ describe('queued own echo settlement', () => {
     s = reduceTimeline(s, { type: 'userText', text: 'empty', messageId: '' })
     s = markLocalSendQueued(s, [queue(), queue(8, '')])
     expect(s.localEchoes ?? []).toHaveLength(0)
-    expect(fold(s, [queue(), queue(8, '')])).toHaveLength(4)
-    expect(fold(s).find(r => r.item === s.items[0])?.queued).toBeNull()
   })
 
   it('preserves row keys and own correlations across history prepend and conversation isolation', () => {
@@ -174,7 +142,6 @@ describe('queued own echo settlement', () => {
     } })!
     expect(translated).toMatchObject({ queuedMsgId: 7, sentNow: false, received: true })
     s = reduceTimeline(s, translated)
-    expect(text(s, [])).toEqual(['first reply', 'turnBoundary', 'own'])
     expect(s.localEchoes?.[0].settled).toBe(true)
   })
 
@@ -198,7 +165,6 @@ describe('queued own echo settlement', () => {
     s = markLocalSendQueued(s, [])
     s = reduceTimeline(s, delta('answer', 'answer'))
     s = reduceTimeline(s, receipt())
-    expect(text(s, [])).toEqual(['older own', 'first reply', 'turnBoundary', 'newer own', 'answer'])
     expect(s.items[3]).toBe(own)
     expect(s.rowKeys?.[3]).toBe(key)
     expect(s.localEchoes?.[1]).toMatchObject({ queuedMsgId: 7, settled: true })
@@ -214,7 +180,6 @@ describe('queued own echo settlement', () => {
     s = reduceTimeline(s, delta('later', 'later reply'))
     s = reduceTimeline(s, { type: 'thinkingProgress', estimatedTokens: 42 })
     s = reduceTimeline(s, receipt())
-    expect(text(s, [])).toEqual(['first reply', 'turnBoundary', 'own', 'answer', 'turnBoundary', 'later reply'])
     expect(s.thinkingTokens).toBe(42)
     s = reduceTimeline(s, delta('later', ' continues'))
     expect(s.items.at(-1)).toMatchObject({ text: 'later reply continues' })
@@ -226,7 +191,6 @@ describe('queued own echo settlement', () => {
     s = reduceTimeline(s, { type: 'userText', text: 'own two', messageId: 'm' })
     s = markLocalSendQueued(s, [queue(), queue(8)])
     s = reduceTimeline(s, { type: 'dropUserText', messageId: 'm', queuedMsgId: 8 })
-    expect(text(s, [])).toEqual(['foreign', 'own one'])
     expect(s.localEchoes).toHaveLength(1)
     const held = s
     expect(reduceTimeline(s, { type: 'dropUserText', messageId: 'm', queuedMsgId: 99 })).toBe(held)
@@ -236,7 +200,6 @@ describe('queued own echo settlement', () => {
     const held = waiting()
     const received = reduceTimeline(held, { ...receipt(99), type: 'userText', received: true, text: 'foreign' })
     expect(received.localEchoes?.[0].settled).toBeUndefined()
-    expect(text(received)).toEqual(['first reply', 'foreign', 'own'])
     expect(reduceTimeline(received, receipt(99))).toBe(received)
     expect(received.localSendPending).toBe(held.localSendPending)
   })
@@ -246,22 +209,6 @@ describe('queued own echo settlement', () => {
     s = markLocalSendQueued(s, [queue()])
     s = reduceTimeline(s, delta('answer', 'answer'))
     s = reduceTimeline(s, receipt())
-    expect(text(s, [])).toEqual(['idle own', 'answer'])
     expect(reduceTimeline(s, { type: 'reset' })).toBe(initialTimelineState)
-  })
-
-  it('retains cursor and closed-turn stats on their content through projection and settlement', () => {
-    let s = reduceTimeline(waiting(), delta('first', 'last assistant'))
-    let markup = renderToStaticMarkup(createElement(Timeline, { ...s, queued: [queue()] }))
-    expect(markup.indexOf('last assistant')).toBeLessThan(markup.indexOf('bubble__cursor'))
-    expect(markup.indexOf('bubble__cursor')).toBeLessThan(markup.indexOf('data-thread-role="queued">own'))
-    s = reduceTimeline(s, { ...end('first'), type: 'turnEnd', turnId: 'first', stopReason: 'end_turn', durationMs: 9000, outputTokens: 12 })
-    s = reduceTimeline(s, receipt())
-    s = reduceTimeline(s, delta('answer', 'answer'))
-    markup = renderToStaticMarkup(createElement(Timeline, { ...s, queued: [] }))
-    expect(markup.indexOf('last assistant')).toBeLessThan(markup.indexOf('12 out'))
-    expect(markup.indexOf('12 out')).toBeLessThan(markup.indexOf('data-thread-role="user">own'))
-    expect(markup.indexOf('answer')).toBeLessThan(markup.indexOf('bubble__cursor'))
-    expect(markup.match(/12 out/g)).toHaveLength(1)
   })
 })

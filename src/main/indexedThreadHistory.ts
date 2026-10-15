@@ -17,6 +17,7 @@ export type ThreadHistoryResult = ChatHistoryResult | { status: 'page'; page: Th
 type Row = { kind: string; ordinal: number; arrival: number | null; item_order: number | null;
   range_ordinal: number | null; range_start: number | null; range_end: number | null; payload: unknown }
 const columns = 'kind, ordinal, arrival, item_order, range_ordinal, range_start, range_end, payload'
+const INVALID_CONTINUATION = new Error('invalid local history continuation')
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -93,13 +94,13 @@ export function createIndexedThreadHistory(deps: {
   }
   function readPage(db: Database.Database, server: string, conversation: string, limit: number, token: Record<string, unknown> | null): ThreadHistoryResult {
     const identity = scope(db, server, conversation)
-    if (identity === null) return token ? { status: 'error', code: 'invalid-request' } : { status: 'missing' }
+    if (identity === null) { if (token) throw INVALID_CONTINUATION; return { status: 'missing' } }
     const row = db.prepare<[string], Row>(`SELECT ${columns} FROM thread_records WHERE scope = ? AND kind = 'header' AND ordinal = 0`).get(identity)
     if (!row) throw INVALID_CHAT_HISTORY
     const h = header(decode(row, identity), server, conversation)
     if (row.arrival !== null || row.item_order !== null || row.range_ordinal !== null || row.range_start !== null || row.range_end !== null) throw INVALID_CHAT_HISTORY
     if (token && (token.identity !== identity || token.serverId !== server || token.conversationId !== conversation ||
-      token.epoch !== h.metadata.epoch || typeof token.before !== 'number' || token.before > h.itemCount)) return { status: 'error', code: 'invalid-request' }
+      token.epoch !== h.metadata.epoch || typeof token.before !== 'number' || token.before > h.itemCount)) throw INVALID_CONTINUATION
     const end = token ? natural(token.before) : h.itemCount, start = Math.max(0, end - limit)
     const selected = db.prepare<[string, number, number], Row>(`SELECT ${columns} FROM thread_records
       WHERE scope = ? AND kind = 'item' AND ordinal >= ? AND ordinal < ? ORDER BY ordinal`).all(identity, start, end)
@@ -193,7 +194,8 @@ export function createIndexedThreadHistory(deps: {
           return { status: 'ok' }
         }))
       } catch (caught) {
-        return report({ status: 'error', code: caught === UNSUPPORTED_CHAT_HISTORY_VERSION ? 'unsupported-version'
+        return report({ status: 'error', code: caught === INVALID_CONTINUATION ? 'invalid-request'
+          : caught === UNSUPPORTED_CHAT_HISTORY_VERSION ? 'unsupported-version'
           : caught instanceof EncryptionUnavailableError ? 'encryption-unavailable'
           : reading ? 'unreadable' : removing ? 'remove-failed' : 'write-failed' })
       }

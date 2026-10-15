@@ -232,12 +232,15 @@ it('schema-2 additive migration rolls back with failed authoritative writes and 
   const legacy = createIndexedLegacyHistory({ database: h.database, encryption: h.encryption, log: { event: () => {} } })
   const timeline = { version: 1, kind: 'timeline', serverId: 'Host', conversationId: 'Chat', items: [], prependedRows: 0, coverage: { status: 'unknown' } }
   expect(await legacy.execute(ask('replaceTimeline', { snapshot: timeline }))).toEqual({ status: 'ok' })
+  await h.store.execute(put(snapshot())); const token = (await page(h.store)).continuation
   h.database.transaction(db => db.exec('DROP TABLE thread_records; DROP TABLE thread_scopes; PRAGMA user_version = 2'))
   h.database.close()
   const path = join(h.root, 'history/history.sqlite'), before = readFileSync(path), fresh = h.fresh()
+  expect(await fresh.store.execute(ask('beforeThreadPage', { limit: 2, continuation: token }))).toEqual(error('invalid-request'))
+  expect(readFileSync(path).equals(before)).toBe(true)
   vi.spyOn(h.encryption, 'encrypt').mockImplementationOnce(() => { throw new Error('TEXT-SENTINEL-1974') })
   expect(await fresh.store.execute(put(snapshot()))).toEqual(error('write-failed'))
-  expect(readFileSync(path)).toEqual(before)
+  expect(readFileSync(path).equals(before)).toBe(true)
   const disk = new Database(path)
   expect(disk.pragma('user_version', { simple: true })).toBe(2)
   expect(disk.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'thread_%'").all()).toEqual([])
@@ -277,5 +280,5 @@ it('unavailable encryption never opens storage and unsupported schemas are prese
   db.pragma('user_version = 999'); db.close()
   const bytes = readFileSync(path)
   expect(await h.fresh().store.execute(put(snapshot()))).toEqual(error('unsupported-version'))
-  expect(readFileSync(path)).toEqual(bytes)
+  expect(readFileSync(path).equals(bytes)).toBe(true)
 })

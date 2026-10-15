@@ -196,6 +196,8 @@ test('stale delivery and remount', async ({ launchPairedApp }) => {
   await expect(row(page, 'Before remountrunning')).toBeVisible()
   daemon.pushFrame(s.update('running', 'After remount'))
   await expect(row(page, 'After remountrunning')).toBeVisible()
+  const retired = await app.evaluate(() => (globalThis as any).oldDisplay)
+  expect(retired.token).not.toBe(old.token)
   await app.evaluate(({ BrowserWindow }, old) => BrowserWindow.getAllWindows()[0].webContents.send('pyry:hosted-apps-display', old), old)
   daemon.pushFrame(seedConversationsFrame({ ...SEEDED_ROW, name: 'Render barrier' }))
   await expect(row(page, 'Render barrier')).toBeVisible(); await committed(page)
@@ -209,7 +211,7 @@ test('stale delivery and remount', async ({ launchPairedApp }) => {
   await expect(page.locator('.channel-list__host-content')).toHaveCount(1)
   // A privileged snapshot/refresh refusal proves main has processed removal before stale publication.
   await expect.poll(() => page.evaluate(server => window.pyry.refreshHostedApps(server), FIRST_SERVER_ID)).toEqual({ ok: false, error: 'refused' })
-  await app.evaluate(({ BrowserWindow }, old) => BrowserWindow.getAllWindows()[0].webContents.send('pyry:hosted-apps-display', old), old)
+  await app.evaluate(({ BrowserWindow }, retired) => BrowserWindow.getAllWindows()[0].webContents.send('pyry:hosted-apps-display', retired), retired)
   servers[1].daemon.pushFrame(survivor.update('running', 'Surviving host barrier'))
   await expect(row(page, 'Surviving host barrierrunning')).toBeVisible(); await committed(page)
   await expect(row(page, 'After remountrunning')).toHaveCount(0)

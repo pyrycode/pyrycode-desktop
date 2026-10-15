@@ -59,6 +59,38 @@ comparison before implementing. Historical trigger remains unproven without its
 missing attachment. Sizing: one deliverable, four criteria, approximately 360
 written lines, zero new exported API/types or migrated consumers, within limits.
 
+### Revision — controlled mechanism and repair contract (2026-10-15)
+At `cfd0ad90` (app/helpers byte-identical to historical `df4ce98b`), native hiding
+the ordinary Welcome window reproduces the 30000ms `locator.click` timeout at
+"waiting for element to be visible, enabled and stable". No pointerdown/up/click
+arrives. Shown and covered controls deliver one trusted click and reach the form.
+Existing diagnostics record hidden/not-minimized/unfocused, enabled CTA, 0 frames
+and 14 timers over 750ms. Native show and disabling background throttling each
+release the pending ordinary click. Reports: `/tmp/builder-1986/input.json` and
+`recovery-observed.json`, with traces in their corresponding results directories.
+100 normal pre-pairing hooks find native hidden/loading with throttling enabled;
+this state is real startup behavior, although its historical prolonged trigger
+is unknown. 200 named repetitions and 200 reused-worker launches all pass and do
+not establish the historical cause. Earlier `native.json` used an ambiguous
+window lookup and is excluded; `native-exact.json` supplies exact-window sampling.
+
+Repair only `launchPairedApp`: after its existing launch hook, reuse/skip checks,
+and before the ordinary pairing drive, acquire the BrowserWindow for the exact
+Page, disable webContents background throttling and dispose the handle in finally.
+This closes the initial shown-Linux-but-not-yet-mapped interval left by the
+Chromium switches. Keep native show/hide policy and the three-argument shared
+pairing API unchanged; real-tier callers are untouched. Background throttling
+remains disabled for that default-tier window's lifetime, consistent with the
+existing isolation contract. No additional listener, timer or application state.
+Add a regression beside the existing Welcome stall spec: hide the actual native
+pairing window after its normal first show (or retain default hidden presentation),
+then require the entire ordinary pairing drive, one trusted Welcome click,
+hidden native state, responsive frames and no stall attachment. Run it red before
+the fixture edit and green afterward. Retain the original diagnostic regression.
+This resolves the repair mechanism question; no claim recovers the historical
+trigger. Total forecast including plan history stays below 500 written lines,
+zero new exported APIs/types and zero consumer migrations.
+
 ## Files read
 - `e2e/offline-session-settings.spec.ts` → `event`, `connection`, `settings`, `observeCommands` and the pre-opened menu scenario: current synchronization and command observation.
 - `e2e/fixtures/launchPairedApp.ts` → `launchPairedApp`: isolated fake transport and renderer startup.

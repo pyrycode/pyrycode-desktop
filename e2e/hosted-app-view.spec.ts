@@ -173,6 +173,47 @@ test('Fetch cancellation and document replacement fence late completions and for
   expect(s.seen.filter(r=>r.type==='app_api_request').slice(baseline).map(r=>r.payload.path)).toEqual(['/api/read'])
 })
 
+for (const encoding of ['Blob', 'FormData']) {
+  for (const cause of ['signal', 'pagehide']) {
+    test(`Fetch cancels held ${encoding} serialization on ${cause}`, async ({ launchPairedApp }) => {
+      const s = scenario(), { app } = await launchPairedApp(s.options)
+      await open(app)
+      await expect.poll(() => evaluate(app, 'document.body.dataset.loaded')).toBe('first-dynamic')
+      await evaluate(app, `
+        window.controller=new AbortController();window.bodySettlements=[];window.bodyRead=false;window.bodyFinished=false;
+        const original=Blob.prototype.arrayBuffer;
+        Blob.prototype.arrayBuffer=function(){
+          window.bodyRead=true;
+          return new Promise((resolve,reject)=>{window.releaseBody=()=>{
+            Blob.prototype.arrayBuffer=original;
+            original.call(this).then(bytes=>{window.bodyFinished=true;resolve(bytes)},reject);
+          }});
+        };
+        const body=${encoding === 'Blob' ? "new Blob(['held'])" : "new FormData()"};
+        ${encoding === 'FormData' ? "body.append('file',new Blob(['held']),'held.bin');" : ''}
+        window.serializing=fetch('/api/must-not-write',{method:'POST',body,signal:controller.signal})
+          .then(()=>bodySettlements.push('resolved'),e=>bodySettlements.push(e.name));undefined
+      `)
+      await expect.poll(() => evaluate(app, 'bodyRead')).toBe(true)
+      await evaluate(app, cause === 'signal'
+        ? 'controller.abort();controller.abort();undefined'
+        : "dispatchEvent(new PageTransitionEvent('pagehide'));undefined")
+      // Cancellation must settle while the body read is still held.
+      await expect.poll(() => evaluate(app, 'bodySettlements')).toEqual(['AbortError'])
+      expect(await evaluate(app, 'bodyFinished')).toBe(false)
+      await evaluate(app, 'releaseBody();undefined')
+      await expect.poll(() => evaluate(app, 'bodyFinished')).toBe(true)
+      // Ordered native replies also fence the adapter continuation after body completion.
+      expect(await evaluate(app, cause === 'signal'
+        ? "fetch('/api/read?barrier=serialization').then(r=>r.status)"
+        : "hostedFetch.request({url:location.origin+'/api/read',method:'GET',headers:{},body:new Uint8Array()}).result.then(r=>r.error)"))
+        .toBe(cause === 'signal' ? 200 : 'network')
+      expect(await evaluate(app, 'bodySettlements')).toEqual(['AbortError'])
+      expect(s.seen.filter(r => r.type === 'app_api_request' && r.payload.method === 'POST')).toEqual([])
+    })
+  }
+}
+
 for (const cause of ['close', 'view-replacement', 'parent', 'document-bind', 'document-navigation', 'fetch-pagehide', 'preload-pagehide'] as const) {
   test(`Fetch bulk cancellation never promotes a queued mutation on ${cause}`, async ({ launchPairedApp }) => {
     const s = scenario(), { app, daemon } = await launchPairedApp(s.options)
@@ -203,10 +244,11 @@ for (const cause of ['close', 'view-replacement', 'parent', 'document-bind', 'do
     })
     if (cause.endsWith('pagehide')) {
       // A body still serializing at pagehide must never reach the bridge afterwards.
-      await evaluate(app, `window.blob=new Blob(['later']);blob.arrayBuffer=()=>new Promise(r=>window.releaseBody=r);window.serializing=fetch('/api/must-not-write',{method:'POST',body:blob}).catch(e=>e.name);undefined`)
+      await evaluate(app, `window.blob=new Blob(['later']);blob.arrayBuffer=()=>new Promise(r=>window.releaseBody=r);window.serializationResult='pending';window.serializing=fetch('/api/must-not-write',{method:'POST',body:blob}).then(()=>window.serializationResult='resolved',e=>window.serializationResult=e.name);undefined`)
       await evaluate(app, `dispatchEvent(new PageTransitionEvent('pagehide'));undefined`)
       expect(await evaluate(app, 'Promise.all(pending).then(r=>r.length)')).toBe(9)
-      expect(await evaluate(app, `releaseBody(new Uint8Array([1]).buffer);serializing`)).toBe('TypeError')
+      await expect.poll(() => evaluate(app, 'serializationResult')).toBe('AbortError')
+      await evaluate(app, 'releaseBody(new Uint8Array([1]).buffer);undefined')
       expect(await evaluate(app, `hostedFetch.request({url:location.origin+'/api/must-not-write',method:'POST',headers:{},body:new Uint8Array()}).result.then(r=>r.error)`)).toBe('network')
     }
     const held = s.seen.filter(r => r.type === 'app_api_request' && r.payload.path === '/api/held')

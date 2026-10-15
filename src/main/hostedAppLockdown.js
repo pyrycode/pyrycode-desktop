@@ -84,32 +84,36 @@ Object.defineProperty(navigator, 'serviceWorker', { value: undefined, configurab
     const headers = new Headers(init.headers ?? source?.headers)
     const body = init.body
     if ((method === 'GET' || method === 'HEAD') && body != null) throw failure()
-    const bytes = await serialize(body, headers)
-    for (const [name, value] of headers) {
-      if (!['accept','content-type','if-none-match'].includes(name) || value.length > 1024 || text(value).length > 1024 || /[\x00-\x1f\x7f-\x9f]/.test(value)) throw failure()
-    }
-    if (text(JSON.stringify(Object.fromEntries(headers))).length > 4096) throw failure()
-    if (signal?.aborted) throw aborted()
-    if (closed || !bridge || active.size >= 16) throw failure()
+    if (!bridge || active.size >= 16) throw failure()
     return new Promise((resolve, reject) => {
-      let done = false
-      const call = bridge.request({ url: url.href, method, headers: Object.fromEntries(headers), body: bytes })
+      let done = false, id
       const finish = (error, response) => {
         if (done) return
         done = true; signal?.removeEventListener('abort', cancel); active.delete(settleAborted)
         if (error) reject(error); else resolve(response)
       }
       const settleAborted = () => finish(aborted())
-      const cancel = () => { bridge.abort(call.id); settleAborted() }
+      const cancel = () => { if (id !== undefined) bridge.abort(id); settleAborted() }
       active.add(settleAborted); signal?.addEventListener('abort', cancel, { once: true })
-      call.result.then(result => {
-        if (done) return
-        if (result.error) { finish(result.error === 'aborted' ? aborted() : failure()); return }
+      if (closed || signal?.aborted) { settleAborted(); return }
+      async function dispatch() {
         try {
+          const bytes = await serialize(body, headers)
+          if (done) return // Cancellation owns serialization even when the body read cannot stop.
+          for (const [name, value] of headers) {
+            if (!['accept','content-type','if-none-match'].includes(name) || value.length > 1024 || text(value).length > 1024 || /[\x00-\x1f\x7f-\x9f]/.test(value)) throw failure()
+          }
+          if (text(JSON.stringify(Object.fromEntries(headers))).length > 4096) throw failure()
+          const call = bridge.request({ url: url.href, method, headers: Object.fromEntries(headers), body: bytes })
+          id = call.id
+          const result = await call.result
+          if (done) return
+          if (result.error) { finish(result.error === 'aborted' ? aborted() : failure()); return }
           finish(null, new Response(method === 'HEAD' || [204,205,304].includes(result.status) ? null : result.bytes,
             { status: result.status, headers: result.headers }))
         } catch { finish(failure()) }
-      }, () => finish(failure()))
+      }
+      void dispatch() // All failures settle the owned Fetch promise, including late body-read failures.
     })
   }
   Object.defineProperty(globalThis, 'fetch', { value: fetch, writable: false, configurable: false })

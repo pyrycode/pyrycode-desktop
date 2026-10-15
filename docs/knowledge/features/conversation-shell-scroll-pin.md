@@ -451,6 +451,15 @@ rim (widened from a fixed 200px band by [#1752](https://github.com/pyrycode/pyry
 Crossing into it does not queue demand. See [history admission](chat-history.md#received-state-admission-and-ownership)
 for first-page coverage, pending-read gates and retry policy.
 
+Terminal oldest-end coverage does not disable visible-gap demand. A terminal-stop
+fixture must model [durable ID chronology](chat-history.md#received-state-admission-and-ownership)
+without artificial holes. The named page walk in
+[`history-walk.spec.ts`](../../../e2e/history-walk.spec.ts) brings the terminal row
+into view and issues focused trusted ArrowUp before repeating upward inputs.
+That reader position exposes the extra gap request produced by the old fixture
+IDs; a different viewport can miss it. See the
+[receipt barriers and controlled regression](development-verification-evidence-that-cannot-pass-too-early.md#history-page-receipt-and-terminal-demand).
+
 `Timeline` keeps its empty content inside the same focusable scroll region
 (`tabIndex={0}`, client-owned accessible label `Conversation history`). Returning
 `EmptyThread` before mounting that region makes first-page input unreachable.

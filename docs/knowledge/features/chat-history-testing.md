@@ -97,6 +97,54 @@ cursor leakage; the durable-row fixture also checks raw unknown text on disk.
 These fixtures prove the protected persistence
 seam; production OS encryption requires the packaged proof below.
 
+### Bounded legacy page regressions
+
+The same on-disk `indexedLegacyHistory.test.ts` fixture covers callable page reads;
+an in-memory database or same-instance traversal alone would miss durable
+continuation and reopen failures. The 603-row traversal closes and creates fresh
+database owners between 200-row windows, preserving held order, repeated content,
+timestamp ties and ordinal-minus-prepended fallback keys. It compares the full
+snapshot after paging. Missing versus saved-empty and absent optional evidence
+need separate assertions; none establishes daemon completeness.
+
+Fragmented fixtures check selected display ranges, served ids and receipt
+memberships, original receipt identity/order and selected membership order,
+explicit `partial: true`, both gaps at a shared numeric boundary, selected legacy
+gap keys and omitted refused cursors. A separate range/anchor case checks that
+only the nearest receipt start supplies the adjacent cursor and that anchor ids
+stay outside selected served/receipt membership. Rendering the right rows alone
+would miss evidence widening or invented served provenance.
+
+Admission cases reject malformed limits/boundaries, wrong format, cross-owner
+reuse, identical replacement and delete/recreate continuations. Parameterized
+page ownership cases exercise both coordinates with distinct UTF-16 ids,
+including lone surrogates and U+FFFD. Selected corruption cases cover ciphertext,
+indexes, row/contribution bindings and protection errors without changing saved
+data; an unreadable unselected row stays untouched. Original unwrapped records
+remain page-readable. The schema-3 regression removes the receipt-start index,
+stages schema 2, injects selected decryption failure and checks rollback of the
+index/version and preservation of committed identity before successful retry.
+Query-plan inspection must show `legacy_receipt_start` for anchor selection:
+bounded returned payloads alone would miss scanning every non-start membership.
+
+The bounded-work regression instruments SQLite result records, JSON decodes and
+decrypts. Growing unrelated older history from 600 to 2,000 rows, with additional
+receipts/cursors and a single receipt spanning the older history and selected
+window, leaves the measured counts equal. Exactly 200 row payloads are read;
+only selected evidence/necessary anchors are processed, and at most one order-only
+row probe is allowed. Decodes and decrypts each equal the number of row/evidence
+payloads read. This is bounded by selected content and relevant evidence, not a
+promise of constant evidence size for every row: the heavily fragmented-row case
+retains all 1,200 contributions and memberships. Range queries batch at most 100
+predicates so one row cannot exceed SQLite's expression-depth limit.
+
+The [verifier verdict for the paging change](https://github.com/pyrycode/pyrycode-desktop/pull/2012#issuecomment-6190982424)
+records 10,319 unit tests executed/passed, 0 failed and 3 skipped, including all
+26 backend cases, on `de25c375f42755f5da20a4c4003c790e9525522a`. Its fake-transport
+gate recorded 428 executed/passed, 0 failed and 3 skipped. These callable
+main-process operations require no real-Claude or visual acceptance; application
+binding and page consumers remain separate work.
+
 ### Native runtime and packaged proof
 
 Host-Node Vitest and Electron use different native ABIs. `npm run rebuild:node`

@@ -14,7 +14,7 @@ export function createHistoryDatabase({ userDataPath }: { userDataPath: string }
     const db = new Database(path)
     try {
       const version = db.pragma('user_version', { simple: true })
-      if (version !== 0 && version !== 1 && version !== 2) throw UNSUPPORTED_CHAT_HISTORY_VERSION
+      if (version !== 0 && version !== 1 && version !== 2 && version !== 3) throw UNSUPPORTED_CHAT_HISTORY_VERSION
       if (version === 0) {
         const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()
         if (tables.length) throw UNSUPPORTED_CHAT_HISTORY_VERSION
@@ -56,6 +56,12 @@ export function createHistoryDatabase({ userDataPath }: { userDataPath: string }
             update.run(Buffer.from(scope.server, 'utf16le'), Buffer.from(scope.conversation, 'utf16le'), scope.identity)
           }
           db.pragma('user_version = 2')
+        }
+        if (db.pragma('user_version', { simple: true }) === 2) {
+          // Cursor anchors must skip non-start memberships even in a spanning receipt.
+          db.exec(`CREATE INDEX IF NOT EXISTS legacy_receipt_start
+            ON legacy_records(scope, entry_id, parent) WHERE kind = 'receipt-id' AND ordinal = 0`)
+          db.pragma('user_version = 3')
         }
         return run(db)
       })()

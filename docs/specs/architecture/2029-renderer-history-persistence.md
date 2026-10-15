@@ -48,3 +48,8 @@ None. The existing two-kind writer is the simplest shape; no abstraction or back
 
 ## Size check
 One deliverable, four acceptance criteria, two production files, no new exports/state/error branches and at most eight surviving external construction sites. Forecast about 420 inserted lines including plan and adapted regressions, with legacy deletions separate; below all builder limits.
+
+## Revisions
+2026-10-15: Removal queue entries use a distinct `removeConversation` key while cancelling the `daemon-items` snapshot key. Reusing the snapshot key would let a later item-holder clear discard the queued removal. `retains ordered deletion when a late item holder is cleared before draining` covers this invariant. The drain clears authoritative item/list comparisons after removal. `does not deduplicate fresh identical items against a pre-unpair in-flight save` also pins the retained generation fence.
+
+Retired only the nine inventoried recording cases, exclusive writer/injected-reader/frame-persistence cases and their private fixtures. Direct timeline store admission, newest-demand and bridge/frame tests remain. Generic writer and protected removal assertions now use authoritative snapshots; restart/checkpoint tests retain their existing scenarios. Final written scope remains below the forecast and every sizing limit.

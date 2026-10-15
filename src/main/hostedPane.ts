@@ -86,7 +86,9 @@ export function registerHostedPane(views: ReturnType<typeof createHostedAppViews
           const discovery = apps?.hostedApps.read()
           if (!discovery || discovery.type === 'unavailable' || discovery.type === 'unsupported') return true
           retire(); state = { ...state, generation: ++serial }; automatic = true
-          apps?.hostedApps.refresh(); sync(); return true
+          // Refresh invalidates every host binding; reuse complete authority or await the current walk.
+          if (discovery.type === 'failed') apps?.hostedApps.refresh()
+          sync(); return true
         }
         const size = parent.getContentBounds(), b = command.bounds
         if (b.x + b.width > size.width || b.y + b.height > size.height) return false

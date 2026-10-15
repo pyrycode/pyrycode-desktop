@@ -143,12 +143,10 @@ test('loading discovery and recovery', async ({ launchPairedApp }) => {
   await expect(page.locator('.hosted-pane [role=status]')).toHaveText('Disconnected')
   expect(await native(app)).toEqual([])
   await expect(page.locator('.hosted-pane__identity')).toContainText('<App & trusted>')
-  await discoveryDelivered(app, () => { for (const frame of s.replies.splice(0)) daemon.pushFrame(frame) })
-  expect(await native(app)).toEqual([]) // Completed rediscovery alone cannot revive the retired page.
   await page.getByRole('button', { name: 'Reopen app', exact: true }).click()
-  await expect.poll(() => s.replies.length).toBe(1)
   await expect(page.locator('.hosted-pane [role=status]')).toHaveText('Loading app…')
   expect(await native(app)).toEqual([])
+  expect(s.replies).toHaveLength(1) // Reopen waits for the already pending discovery walk.
   for (const frame of s.replies.splice(0)) daemon.pushFrame(frame)
   const reopened = await ready(page, app)
   expect(reopened.id).not.toBe(original.id); expect(reopened.url).not.toBe(original.url)
@@ -233,11 +231,27 @@ test('unsupported and lost discovery retain identity without reviving pages', as
   await expect(page.locator('.hosted-pane__identity')).toContainText('<App & trusted>')
   await discoveryDelivered(app, () => { for (const frame of s.replies.splice(0)) daemon.pushFrame(frame) })
   expect(await native(app)).toEqual([])
+  const companionId = await app.evaluate(({ app, BrowserWindow }, { serverId, appId }) => {
+    const parent = new BrowserWindow({ show: false })
+    const result = app.hostedAppViews!.open(parent, serverId, appId, { x: 0, y: 0, width: 300, height: 200 })
+    if (!result.ok) throw new Error('authoritative companion open refused')
+    ;(globalThis as any).companion = result.view
+    return result.view.content.webContents.id
+  }, { serverId: FIRST_SERVER_ID, appId })
+  await expect.poll(() => app.evaluate(() => (globalThis as any).companion.read().type)).toBe('ready')
+  const walks = s.seen.filter(r => r.type === 'list_apps').length
+  const generation = (await snapshot(page)).generation
   await page.getByRole('button', { name: 'Reopen app', exact: true }).click()
-  await expect.poll(() => s.replies.length).toBe(1)
-  await expect(page.locator('.hosted-pane [role=status]')).toHaveText('Loading app…')
-  for (const frame of s.replies.splice(0)) daemon.pushFrame(frame)
+  await expect.poll(async () => (await snapshot(page)).generation).toBeGreaterThan(generation)
+  // Command completion is the barrier: refresh would synchronously retire this other parent's binding.
+  expect(await app.evaluate(() => (globalThis as any).companion.read().type)).toBe('ready')
   expect((await ready(page, app)).id).not.toBe(initial.id)
+  const result = await app.evaluate(async () => (globalThis as any).companion.request({ type: 'app_api_request',
+    payload: { path: '/api/read', method: 'GET', headers: {}, body: '' } }))
+  expect(result.ok).toBe(true) // A completed read proves the retained binding is usable after reopen.
+  expect(await app.evaluate(({ webContents }, id) => webContents.fromId(id)?.isDestroyed(), companionId)).toBe(false)
+  expect(s.seen.filter(r => r.type === 'list_apps')).toHaveLength(walks)
+  expect(s.replies).toHaveLength(0)
 })
 
 test('pending native load cannot complete into a successor selection', async ({ launchPairedApp }) => {

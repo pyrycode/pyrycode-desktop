@@ -35,3 +35,14 @@ The CDP/main-observer alternating control recorded 12/4 passed/failed with CDP a
 2026-10-15: The typed-receipt contention run passed all 15 cases that installed observation; one observer installation hit Electron's transient inspection-context loss (`repaired-receipt-contention.json`). Install the wrapper in the fixture's existing `onLaunched` hook, immediately after window/handler readiness and before list startup settles. Installation remains single-shot; only small count reads use the existing `readMainProcess` policy. No fixture API change or mutation retry is introduced. The first scratch held-save probe patched an unrelated handler and is excluded (`held-save-control.json`); the corrected control targets the named scenario's wrapper.
 
 2026-10-15: Final eight-worker contention proof: 16 executed/passed, zero failures/skips/retries (`final-contention.json`). Corrected held-save control: one intentional failure at the five-second save counter, zero skips/retries; receipt had passed, successful counts remained `[1]`, protected text remained `retained assistant`, and releasing the real pending write produced `retained assistant|later live content` (`held-save-control-final.json`, inline `held-save-boundary` attachment). This confirms that receipt cannot satisfy protected completion. No production change was needed.
+
+## Final validation
+
+Implementation revision `b6059c79033045f1822941a218664a0674fed75e`, after final integration of main `3af69885191d5166d232bb7a8cb950f67cfe5e4f`. Linux x64 / Node 25.8.0 / Electron 33.4.11 / Playwright 1.61.1. All paths below are under `/tmp/builder-1978/`; each Playwright report has matching `.stderr` and `-results/` artifacts.
+
+| Proof, in execution order | Executed | Passed | Failed | Skipped | Retries | Report |
+| --- | --- | --- | --- | --- | --- | --- |
+| Named case, 20 consecutive executions, one worker | 20 | 20 | 0 | 0 | 0 | `final-named-20.json` |
+| Complete recording spec, one worker | 10 | 10 | 0 | 0 | 0 | `final-spec.json` |
+
+Commands: `xvfb-run -a npx playwright test e2e/chat-history-recording.spec.ts --grep 'receipt saturation still saves' --repeat-each=20 --workers=1 --retries=0 --reporter=json --output=/tmp/builder-1978/final-named-20-results`, then the same command without `--grep` / `--repeat-each` and with output `final-spec-results`. No acceptance skip reasons: no tests skipped. Pre-verify passes all five checks, including 10,274 unit tests passed / three existing skips (`pre-verify.log`). `npm run build` passes (`build-final.log`). The dispatcher owns the pending full fake-transport acceptance gate; diagnostic unchanged full-suite passes above do not replace it. No live-Claude test or documentation handoff is required.

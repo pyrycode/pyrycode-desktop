@@ -70,8 +70,10 @@ native viewer below; no direct HTTP access or body persistence is added.
 
 `src/main/index.ts` publishes `createHostedAppViews(registry, diagnosticLog)` on
 the readonly native `app.hostedAppViews` property. Trusted Fetch/chrome consumers
-call `open(parent, serverId, appId, bounds)`; no production navigation entry or
-renderer IPC is installed. A successful open replaces the previous view under
+call `open(parent, serverId, appId, bounds)`. The production
+[trusted pane bridge](paired-shell-routing.md#hosted-app-selection-and-trusted-chrome)
+uses this API for named-host/app selection over privileged preload/IPC; sidebar/link
+entry points remain #1928. A successful open replaces the previous view under
 that parent. Bounds are Electron rectangles in the parent's content view;
 `resize(bounds)` updates them while live and `close()` is idempotent.
 
@@ -83,6 +85,49 @@ open would retire other bindings on that host. A received discovery request is
 only dispatch evidence: readiness requires the complete response and contiguous
 updates. Wait for authoritative opening, retaining the first successful handle;
 repeated successful opens replace the content being observed.
+
+### Pane recovery and placement
+
+`src/main/hostedPane.ts` observes the named discovery service even without a
+native handle, since a refused open has no view subscription. Initial selection
+stays loading through discovery and document load; complete discovery alone
+cannot mark the pane ready. Missing/stopped/failed apps and lost discovery remove
+ready content while trusted chrome retains its last confirmed identity.
+
+After retirement, reconnection or completed rediscovery alone never revives the
+page. Reopen on unavailable/unsupported discovery leaves recovery feedback in
+place without arming automatic opening. Otherwise an accepted Reopen retires any
+old view, advances the pane generation and uses the following authority:
+
+- `ready`: reuse the complete current snapshot and contiguous updates;
+- `loading`: await the existing discovery walk through its subscription;
+- `failed`: request `refresh()` and await authoritative completion.
+
+Dispatching `list_apps` is not completion. Refresh invalidates **every binding on
+the host**, so unconditional refresh on Reopen would retire another window's
+healthy view or an unrelated native consumer. A selected app still missing or
+non-running remains unavailable until opening can succeed. By contrast, an
+active-release change on a live pane is already authoritative: retire the old
+page and automatically open the current running release in a fresh generation,
+session and origin, without another refresh. Native subscriptions are removed
+before close and stale callbacks/controls cannot alter the successor.
+
+`HostedPane` measures its separate `.hosted-pane__surface` below the trusted
+header with `getBoundingClientRect()`, `ResizeObserver` and window resize. It
+rounds inward to nonnegative integer bounds in parent content coordinates;
+main also rejects bounds outside the parent. Opening waits for initial layout
+and starts hidden until visibility is supplied. This keeps the native surface
+outside the fixed sidebar and below chrome, including when the header wraps.
+
+CSS stacking cannot cover a native child. A `MutationObserver` watches client
+dialog markers (`dialog[open]`, `[role="dialog"]`, `[aria-modal="true"]`), and
+layout commands call native `content.setVisible(false)` while one is present.
+Dismissal restores visibility only through the current selection generation;
+stale measurements cannot expose or move its successor. Close/navigation,
+privileged-page reload and parent teardown release content and subscriptions.
+Capture the privileged `webContents` before teardown: reading
+`parent.webContents` from the destroyed window's `closed` callback can terminate
+the process. Cleanup uses the captured client when removing its owner entry.
 
 ### State and native capability
 
@@ -183,9 +228,8 @@ restore authority. Diagnostics contain static event/code only, without identitie
 URLs, queries, payloads, credentials or caught exception text. See
 [ADR 0012](../decisions/0012-hosted-app-native-isolation.md) for the isolation choice.
 
-Trusted chrome/placement remains
-[#1992](https://github.com/pyrycode/pyrycode-desktop/issues/1992), entry points
-[#1928](https://github.com/pyrycode/pyrycode-desktop/issues/1928), and real
+Trusted chrome/placement uses the [paired shell selection seam](paired-shell-routing.md#hosted-app-selection-and-trusted-chrome).
+Sidebar/link entry points remain [#1928](https://github.com/pyrycode/pyrycode-desktop/issues/1928), and real
 daemon/relay/SQL proof [#1929](https://github.com/pyrycode/pyrycode-desktop/issues/1929).
 
 ## Deadlines and retirement
@@ -321,6 +365,55 @@ no display pointer. Only the plan changed between the tested repair and reviewed
 head `e1085c43`. The dispatcher's later green gate has no per-test counts; the
 named-test evidence above comes from the verifier's inspected recovery artifacts.
 No live-Claude run is claimed; real daemon/relay/SQL proof remains #1929.
+
+### Trusted pane verification
+
+`e2e/hosted-content-pane.spec.ts` uses spec-local fake-daemon replies with
+`launchPairedApp` and selects through the production `window.pyry` preload/IPC
+path. Its six cases are:
+
+- `geometry, dialogs and selection`;
+- `loading discovery and recovery`;
+- `release replacement and unavailable states`;
+- `two hosts and stale controls`;
+- `unsupported and lost discovery retain identity without reviving pages`;
+- `pending native load cannot complete into a successor selection`.
+
+The [verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/1995#issuecomment-6188602014)
+at `7f0afe7c` confirms the same-host recovery repair and added static coverage.
+The dispatcher reports green full gates without per-test counts; the PR/verdict
+give focused-run totals. These do not supply per-test execution evidence, so the
+case list above describes coverage without claiming named-test passes.
+`HostedPane.test.tsx` separately covers escaped retained labels, all lifecycle
+statuses, recovery/close controls, a separate surface and closed output through
+static markup; it cannot establish effects or native composition.
+
+The geometry case compares measured surface and actual native bounds within one
+pixel at 1280, 800 and 1100 content widths, verifies placement below chrome and
+outside the sidebar, and hides/restores the same native child around Pair new
+host. Electron `View` exposes `setVisible` without a visibility getter; observe
+the actual setter calls alongside native bounds rather than treating renderer
+visibility as proof. Parent destruction keeps a second window alive so the test
+can positively observe the hosted `webContents` disappearing.
+
+Held discovery proves loading before completion and Reopen waiting for an
+already pending walk. After a discovery gap, wait for the `hosted-discovery/ready`
+diagnostic before asserting that the retired page stayed absent. The same-host
+companion regression then retains another native consumer, waits for Reopen's
+generation advance, and completes a resource read through that companion without
+another `list_apps`. A successful reopened pane alone would miss host-wide
+invalidation. For stale document completion, deliver held old bytes followed by
+a same-socket authoritative label update before asserting the successor survived.
+
+`BrowserWindow.capturePage()` omits native child views. The focused spec writes
+`/tmp/builder-1992/composed-1100.png` by combining actual client and hosted-content
+captures at measured native bounds, checking content capture size before copying.
+The plan records OS capture failing with “Failed to get sources.” This image is
+layout evidence, not an independent whole-window native capture; bounds and
+`setVisible` assertions establish placement and hide/restore behavior. The verifier
+compared the existing sidebar/inset-pane/chrome structure with Figma node 102:4;
+hosted HTML remains synthetic. No live daemon/relay/SQL result is claimed here;
+that proof remains #1929.
 
 ## Discovery verification
 

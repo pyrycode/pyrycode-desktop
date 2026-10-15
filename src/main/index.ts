@@ -1,5 +1,6 @@
 import { dispatchThreadQuery } from './threadQueryCommand'
 import { createHostedAppViews } from './hostedAppView'
+import { registerHostedPane } from './hostedPane'
 import { createAppUpdateController, registerAppUpdate, createQuitDrain } from './appUpdate'
 import { APP_UPDATE_STATE_CHANNEL } from '../shared/ipc/appUpdate'
 import { createMessageLifecycle } from './messageLifecycle'
@@ -538,7 +539,10 @@ app.whenReady().then(() => {
       }),
     diagnosticLog
   })
-  Object.defineProperty(app, 'hostedAppViews', { value: createHostedAppViews(registry, diagnosticLog) })
+  const hostedAppViews = createHostedAppViews(registry, diagnosticLog)
+  Object.defineProperty(app, 'hostedAppViews', { value: hostedAppViews })
+  const hostedPane = registerHostedPane(hostedAppViews, registry, serverId => hostLabelStore.loadFor(serverId), diagnosticLog)
+  app.on('will-quit', () => hostedPane.dispose())
   // ⭐ THE STAND-IN IS RETIRED (#1129). `const connection = registry.active` stood here from #1117
   // so that call sites written for a single connection kept working while the registry held many;
   // it answered for the most recently PAIRED server, which is not a routing decision at all. Four
@@ -698,6 +702,7 @@ app.whenReady().then(() => {
   })
   const openWindow = (): void => {
     const window = createWindow(windowPresentation)
+    hostedPane.attach(window)
     const windowId = window.webContents.id
     let closeDrained = false
     let closing = false

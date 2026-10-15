@@ -270,7 +270,7 @@ test('receipt saturation still saves a repeated page and later live content acro
     repeatPageDelivered: boolean
   }).repeatPageDelivered), { timeout: 20_000 }).toBe(true)
   expect((await commands()).filter(command => 'type' in command && command.type === 'requestHistory')).toEqual([
-    { type: 'requestHistory', payload: { conversation_id: SEEDED_ROW.id, cursor: '', limit: 200 } }
+    { type: 'requestHistory', serverId, payload: { conversation_id: SEEDED_ROW.id, cursor: '', limit: 200 } }
   ])
   const expected = { ...snapshot, coverage: snapshot.coverage, gaps: [], newestCursor: 'repeat',
     served: { ids, highestId: 199, receipts: [...receipts.slice(1), { ids, cursor: 'repeat', atStart: false }] } }

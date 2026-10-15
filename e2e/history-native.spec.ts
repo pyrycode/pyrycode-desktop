@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 test('packaged protected history commits and reopens with production encryption', async ({}, testInfo) => {
+  test.skip(process.platform !== 'linux' && process.platform !== 'darwin', 'Packaged history native proof supports Linux and macOS only')
   test.setTimeout(300_000)
   const directory = await mkdtemp(join(tmpdir(), 'pyry-history-native-'))
   const result = await promisify(execFile)(process.execPath, ['scripts/history-native-smoke.mjs', directory],

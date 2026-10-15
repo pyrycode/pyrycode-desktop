@@ -2,8 +2,13 @@ import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node
 import { join, resolve, dirname } from 'node:path'
 import { createRequire } from 'node:module'
 import { spawnSync } from 'node:child_process'
-import { build as bundle } from 'vite'
-import builder from 'electron-builder'
+
+if (process.platform !== 'linux' && process.platform !== 'darwin') {
+  console.error('history-native-smoke: unsupported-platform')
+  process.exit(1)
+}
+const { build: bundle } = await import('vite')
+const { default: builder } = await import('electron-builder')
 
 // Packaging evidence only: no Linux/macOS release target or publication is added.
 const root = resolve(process.argv[2] ?? `/tmp/builder-1979/native-${Date.now()}`)

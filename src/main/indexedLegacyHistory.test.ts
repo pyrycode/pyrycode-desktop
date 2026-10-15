@@ -2,6 +2,7 @@ import { afterEach, expect, it } from 'vitest'
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import Database from 'better-sqlite3'
 import { createHistoryDatabase } from './historyDatabase'
 import { createIndexedLegacyHistory } from './indexedLegacyHistory'
 import { parseChatHistorySnapshot } from '../shared/chatHistory'
@@ -79,11 +80,83 @@ it('preserves old optional absence, empty snapshots, supplied order and exact ow
   expect(await h.store.execute({ operation: 'readList', serverId: 'Host' })).toEqual({ status: 'error', code: 'invalid-request' })
 })
 
+it.each(['serverId', 'conversationId'] as const)('isolates every UTF-16 %s across restart, replacement and removal', async coordinate => {
+  const h = setup()
+  let current = { database: h.database, store: h.store }
+  const variants = ['\ud800', '\ud801', '\ufffd', '\udc00', '\ud83d\ude00']
+  const saved = variants.flatMap((id, i) => ['primary', 'peer'].map((peer, j) => {
+    const s = coordinate === 'serverId' ? snapshot(id, peer) : snapshot(peer, id)
+    return { ...s, items: [{ ...s.items[0], text: `owner-${i}-${j}` }, s.items[1]] }
+  }))
+  let expected = [saved[0]]
+  const put = async (s: typeof saved[number]) => {
+    expect(await current.store.execute(replace(s, s.serverId, s.conversationId))).toEqual({ status: 'ok' })
+  }
+  const reopenAndCheck = async () => {
+    current.database.close(); current = h.fresh()
+    for (const s of saved) {
+      const retained = expected.find(e => e.serverId === s.serverId && e.conversationId === s.conversationId)
+      expect(await current.store.execute(read(s.serverId, s.conversationId))).toEqual(retained
+        ? { status: 'stored', snapshot: parseChatHistorySnapshot(retained) } : { status: 'missing' })
+    }
+  }
+  await put(saved[0])
+  await reopenAndCheck() // Distinct absent owners must not alias the one committed scope.
+  for (const s of saved) await put(s)
+  expected = [...saved]
+  await reopenAndCheck()
+  const changed = { ...saved[2], items: [{ ...saved[2].items[0], text: 'replacement' }, saved[2].items[1]] }
+  await put(changed)
+  expected[2] = changed
+  await reopenAndCheck()
+  expect(await current.store.execute({ operation: 'removeConversation', serverId: changed.serverId,
+    conversationId: changed.conversationId })).toEqual({ status: 'ok' })
+  expected = expected.filter(s => s !== changed)
+  await reopenAndCheck()
+  expect(await current.store.execute({ operation: 'removeServer', serverId: saved[0].serverId })).toEqual({ status: 'ok' })
+  expected = expected.filter(s => s.serverId !== saved[0].serverId)
+  await reopenAndCheck()
+  await put(saved[0]); expected.push(saved[0])
+  await reopenAndCheck()
+})
+
+it('migrates version-1 ownership keys atomically without changing payloads or snapshot identities', async () => {
+  const h = setup()
+  expect(await h.store.execute(replace(snapshot()))).toEqual({ status: 'ok' })
+  const original = h.database.transaction(db => db.prepare('SELECT identity FROM legacy_scopes').get())
+  h.database.transaction(db => db.exec(`
+    UPDATE legacy_scopes SET server = 'Host', conversation = 'Chat';
+    PRAGMA user_version = 1;
+    CREATE TRIGGER fail_migration BEFORE UPDATE ON legacy_scopes BEGIN SELECT RAISE(ABORT, 'injected'); END;
+  `))
+  h.database.close()
+  const before = protectedBytes(h.root)
+  expect(await h.fresh().store.execute(read())).toEqual({ status: 'error', code: 'unreadable' })
+  expect(protectedBytes(h.root)).toEqual(before)
+  const disk = new Database(join(h.root, 'history', 'history.sqlite'))
+  disk.exec('DROP TRIGGER fail_migration'); disk.close()
+  const fresh = h.fresh()
+  const beforeRead = protectedBytes(h.root)
+  const decrypt = h.encryption.decrypt
+  h.encryption.decrypt = () => { throw new Error('injected') }
+  expect(await fresh.store.execute(read())).toEqual({ status: 'error', code: 'unreadable' })
+  expect(protectedBytes(h.root)).toEqual(beforeRead)
+  h.encryption.decrypt = decrypt
+  expect(await fresh.store.execute(read())).toEqual({ status: 'stored', snapshot: parseChatHistorySnapshot(snapshot()) })
+  fresh.database.transaction(db => {
+    expect(db.pragma('user_version', { simple: true })).toBe(2)
+    expect(db.prepare('SELECT identity FROM legacy_scopes').get()).toEqual(original)
+    expect(db.prepare('SELECT typeof(server) AS server, typeof(conversation) AS conversation FROM legacy_scopes').get())
+      .toEqual({ server: 'blob', conversation: 'blob' })
+  })
+})
+
 it('rollback and subsequent recovery for replacement and scoped removal; fresh identity after reuse', async () => {
   const h = setup()
   for (const [host, chat] of [['Host', 'Chat'], ['host', 'Chat'], ['Host', 'peer']])
     expect(await h.store.execute(replace(snapshot(host, chat), host, chat))).toEqual({ status: 'ok' })
-  const identity = () => h.database.transaction(db => db.prepare("SELECT identity FROM legacy_scopes WHERE server = 'Host' AND conversation = 'Chat'").get())
+  const identity = () => h.database.transaction(db => db.prepare('SELECT identity FROM legacy_scopes WHERE server = ? AND conversation = ?')
+    .get(Buffer.from('Host', 'utf16le'), Buffer.from('Chat', 'utf16le')))
   const first = identity()
   h.database.transaction(db => db.exec("CREATE TRIGGER fail_insert BEFORE INSERT ON legacy_records BEGIN SELECT RAISE(ABORT, 'injected'); END"))
   expect(await h.store.execute(replace(snapshot()))).toEqual({ status: 'error', code: 'write-failed' })
@@ -121,7 +194,7 @@ it('fails closed for unavailable encryption, corrupt payloads and unsupported sc
     expect(await h.store.execute(request)).toEqual({ status: 'error', code: 'unreadable' })
   expect(protectedBytes(h.root)).toEqual(bytes)
   expect(JSON.stringify(h.lines)).not.toContain('MESSAGE-SENTINEL-1979')
-  h.database.transaction(db => db.pragma('user_version = 2'))
+  h.database.transaction(db => db.pragma('user_version = 3'))
   h.database.close()
   const unsupported = protectedBytes(h.root)
   expect(await h.fresh().store.execute(read())).toEqual({ status: 'error', code: 'unsupported-version' })

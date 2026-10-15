@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3'
 import { chmodSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { UNSUPPORTED_CHAT_HISTORY_VERSION } from '../shared/chatHistory'
+import { INVALID_CHAT_HISTORY, UNSUPPORTED_CHAT_HISTORY_VERSION, parseChatHistoryRequest } from '../shared/chatHistory'
 
 /** Main-process owner. The supplied directory comes from app.getPath('userData'), never IPC. */
 export function createHistoryDatabase({ userDataPath }: { userDataPath: string }) {
@@ -14,14 +14,14 @@ export function createHistoryDatabase({ userDataPath }: { userDataPath: string }
     const db = new Database(path)
     try {
       const version = db.pragma('user_version', { simple: true })
-      if (version !== 0 && version !== 1) throw UNSUPPORTED_CHAT_HISTORY_VERSION
+      if (version !== 0 && version !== 1 && version !== 2) throw UNSUPPORTED_CHAT_HISTORY_VERSION
       if (version === 0) {
         const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()
         if (tables.length) throw UNSUPPORTED_CHAT_HISTORY_VERSION
         db.transaction(() => db.exec(`
           CREATE TABLE legacy_scopes (
-            identity TEXT PRIMARY KEY, server TEXT NOT NULL COLLATE BINARY,
-            conversation TEXT NOT NULL COLLATE BINARY, UNIQUE(server, conversation));
+            identity TEXT PRIMARY KEY, server BLOB NOT NULL,
+            conversation BLOB NOT NULL, UNIQUE(server, conversation));
           CREATE TABLE legacy_records (
             scope TEXT NOT NULL REFERENCES legacy_scopes(identity) ON DELETE CASCADE,
             kind TEXT NOT NULL, ordinal INTEGER NOT NULL, parent INTEGER NOT NULL,
@@ -30,7 +30,7 @@ export function createHistoryDatabase({ userDataPath }: { userDataPath: string }
           CREATE INDEX legacy_entry ON legacy_records(scope, kind, entry_id, last_id);
           CREATE INDEX legacy_row ON legacy_records(scope, kind, row_key);
           CREATE INDEX legacy_gap ON legacy_records(scope, kind, older_id, newer_id);
-          PRAGMA user_version = 1;
+          PRAGMA user_version = 2;
         `))()
       }
       db.pragma('foreign_keys = ON')
@@ -43,7 +43,22 @@ export function createHistoryDatabase({ userDataPath }: { userDataPath: string }
   return {
     transaction<T>(run: (db: Database.Database) => T): T {
       const db = open()
-      return db.transaction(() => run(db))()
+      return db.transaction(() => {
+        if (db.pragma('user_version', { simple: true }) === 1) {
+          const scopes = db.prepare<[], { identity: unknown; server: unknown; conversation: unknown }>(
+            'SELECT identity, server, conversation FROM legacy_scopes').all()
+          const update = db.prepare('UPDATE legacy_scopes SET server = ?, conversation = ? WHERE identity = ?')
+          for (const scope of scopes) {
+            if (typeof scope.identity !== 'string' || typeof scope.server !== 'string' || typeof scope.conversation !== 'string')
+              throw INVALID_CHAT_HISTORY
+            parseChatHistoryRequest({ operation: 'readTimeline', serverId: scope.server, conversationId: scope.conversation })
+            // BLOBs cannot collide with the remaining TEXT keys during this migration.
+            update.run(Buffer.from(scope.server, 'utf16le'), Buffer.from(scope.conversation, 'utf16le'), scope.identity)
+          }
+          db.pragma('user_version = 2')
+        }
+        return run(db)
+      })()
     },
     close(): void { connection?.close(); connection = undefined }
   }

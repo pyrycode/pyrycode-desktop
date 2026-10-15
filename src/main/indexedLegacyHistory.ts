@@ -51,8 +51,9 @@ export function createIndexedLegacyHistory(deps: {
 }) {
   const { database, encryption, log } = deps
   function load(db: Database.Database, serverId: string, conversationId: string): Timeline | null {
-    const scope = db.prepare<[string, string], { identity: string }>(
-      'SELECT identity FROM legacy_scopes WHERE server = ? AND conversation = ?').get(serverId, conversationId)
+    const scope = db.prepare<[Buffer, Buffer], { identity: string }>(
+      'SELECT identity FROM legacy_scopes WHERE server = ? AND conversation = ?')
+      .get(Buffer.from(serverId, 'utf16le'), Buffer.from(conversationId, 'utf16le'))
     if (!scope) return null
     const stored = db.prepare<[string], RecordRow>('SELECT kind, ordinal, parent, entry_id, last_id, row_key, older_id, newer_id, payload FROM legacy_records WHERE scope = ? ORDER BY kind, parent, ordinal').all(scope.identity)
     const decoded = stored.map(row => {
@@ -107,20 +108,25 @@ export function createIndexedLegacyHistory(deps: {
       try {
         if (!encryption.isAvailable()) return report({ status: 'error', code: 'encryption-unavailable' })
         const result = database.transaction((db): ChatHistoryResult => {
+          // SQLite TEXT binding replaces lone surrogates; ownership must retain every JS code unit.
+          const server = Buffer.from(request.serverId, 'utf16le')
           if (request.operation === 'removeServer') {
-            for (const scope of db.prepare<[string], { conversation: string }>('SELECT conversation FROM legacy_scopes WHERE server = ?').all(request.serverId))
-              load(db, request.serverId, scope.conversation)
+            for (const scope of db.prepare<[Buffer], { conversation: unknown }>('SELECT conversation FROM legacy_scopes WHERE server = ?').all(server)) {
+              if (!Buffer.isBuffer(scope.conversation) || scope.conversation.length % 2 !== 0) throw INVALID_CHAT_HISTORY
+              load(db, request.serverId, scope.conversation.toString('utf16le'))
+            }
           } else if ('conversationId' in request) {
             const snapshot = load(db, request.serverId, request.conversationId)
             if (request.operation === 'readTimeline') return snapshot ? { status: 'stored', snapshot } : { status: 'missing' }
           }
           reading = false
-          if (request.operation === 'removeServer') db.prepare('DELETE FROM legacy_scopes WHERE server = ?').run(request.serverId)
+          if (request.operation === 'removeServer') db.prepare('DELETE FROM legacy_scopes WHERE server = ?').run(server)
           else if (request.operation === 'removeConversation' || request.operation === 'replaceTimeline') {
-            db.prepare('DELETE FROM legacy_scopes WHERE server = ? AND conversation = ?').run(request.serverId, request.conversationId)
+            const conversation = Buffer.from(request.conversationId, 'utf16le')
+            db.prepare('DELETE FROM legacy_scopes WHERE server = ? AND conversation = ?').run(server, conversation)
             if (request.operation === 'replaceTimeline') {
               const identity = randomUUID()
-              db.prepare('INSERT INTO legacy_scopes VALUES (?, ?, ?)').run(identity, request.serverId, request.conversationId)
+              db.prepare('INSERT INTO legacy_scopes VALUES (?, ?, ?)').run(identity, server, conversation)
               const insert = db.prepare('INSERT INTO legacy_records VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
               for (const r of records(request.snapshot)) {
                 if (!encryption.isAvailable()) throw new EncryptionUnavailableError()

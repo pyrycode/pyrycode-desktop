@@ -92,17 +92,33 @@ macOS badge cases and the macOS window-reopen case. Retained reports are
 verifier evidence bundle `7e872c636b8d6eb367de8e665f72659b5feea9c4cbce0cf933466bd04cf00a29`
 includes the verdict and report tail, with the full-report pointer in `pointers.json`.
 
-This Linux pass does not establish macOS acceptance. The
-[native validation plan](../../specs/architecture/1998-connect-roster-native-validation.md#validation-evidence)
-tracks managed `desktop-fake-suite` task
-`0234f9aa222747faa60ae91272b3c4c0a8c191f095a48b442728b5adbb6e44ce` for candidate
-`0573bc79d97199427d6eebdf4f36f9d3785f7321`. The last successful task read found it queued;
-no completed native report is present in the inspected ticket bundles. Native acceptance remains
-pending; documentation's managed task read also returned `Unknown task action`. The dispatcher
-must retain the complete configured suite with four workers and zero
-retries, then return reports to the builder to inspect and commit revision, launcher/configuration
-provenance, full-suite and named-case counts, skips and setup attachments. Add those inspected
-results here after that evidence commit; a filtered pass cannot replace the complete gate.
+The [native validation evidence](../../specs/architecture/1998-connect-roster-native-validation.md#validation-evidence)
+now includes inspected managed `desktop-fake-suite` task
+`0234f9aa222747faa60ae91272b3c4c0a8c191f095a48b442728b5adbb6e44ce`, run on the MacBook
+at revision `0573bc79d97199427d6eebdf4f36f9d3785f7321`, 2026-10-15. The complete configured
+suite recorded **429 executed, 429 passed, 0 failed, 1 skipped, 0 flaky**, four actual
+workers and zero retries. The named connect-roster scenario above was present and passed:
+**1 executed, 1 passed, 0 failed, 0 skipped**, retry 0. The sole skip was the independent
+input-enabled-cover hover case because a never-shown window receives no display pointer.
+The named case's `launch-fate` attachment records a running app at outcome, exit 0 and no
+teardown failures; the setup summary is `[]`, with no top-level report errors.
+
+Documentation inspected all six retained artifacts in `/tmp/docs-1998-native-20261015/desktop/`:
+`capture.json`, `playwright.json`, `playwright.list.log`, `execution.log`, returned
+`playwright.config.ts` and `fake-daemon-setup.json`. They remain retrievable through the
+managed task. Its invocation was Playwright `test --config=playwright.config.ts`, without
+file, grep, project or shard filters; all 430 configured cases are accounted for.
+The returned configuration SHA256 is
+`f2868e97d72733c286ff8c3098f09adc62e2e8bfa3ad9393e000eebf9a429d5a`, matching the
+candidate and original failing configuration. The scenario is unchanged in the current
+branch; later main merges changed configuration, so these counts belong to the recorded
+candidate. Reuse the controlled ownership proof above rather than adding another regression
+or replacing the complete configured gate with a filtered pass.
+
+Native execution is verified; acceptance remains pending the builder's required returned-artifact
+inspection and evidence commit, as specified by the PR/verifier handoff. The earlier task-access
+blocker is resolved. This documentation inspection does not stand in for that builder-owned step;
+return the existing task reports to the builder without requesting duplicate execution.
 
 Separate native/macOS evidence for older candidate `ddb9bce8db99546129037f00713b753f603562d9`
 remains unverified and handed to the dispatcher: task

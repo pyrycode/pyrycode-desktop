@@ -54,14 +54,33 @@ identical to the original macOS failure. Scenario-file SHA256:
 `5bcaa01b1d16335b5a97589e2e36a6be79ce44bca85ea4123c600872a8457a32`.
 
 Native task `0234f9aa222747faa60ae91272b3c4c0a8c191f095a48b442728b5adbb6e44ce`
-targets that exact pushed candidate. At the last successful task read it was queued,
-with no assigned machine or executed result. Pending reports: `/tmp/builder-1998/mac-results/desktop/`
-(`playwright.json`, `playwright.list.log`, `capture.json`, `execution.log`, returned
-configuration and setup attachments). Retrieve with `fleet-task.py await <task>
---out /tmp/builder-1998/mac-results`, inspect the full suite and named scenario,
-then commit the counted native result here. No native pass is claimed.
-Last task read: 2026-10-15 09:50 UTC, still queued with no assigned runner/result.
-PR #2000 carries this pending complete-native-gate handoff explicitly.
+completed on the managed MacBook using `desktop-fake-suite` for that exact pushed
+candidate. Documentation retrieved and inspected its full artifacts on 2026-10-15
+at `/tmp/docs-1998-native-20261015/desktop/`: `capture.json`, `playwright.json`,
+`playwright.list.log`, `execution.log`, `playwright.config.ts` and
+`fake-daemon-setup.json`. The managed task retains those six files for retrieval.
+
+The run started at 09:55:05 UTC: **429 executed, 429 passed, 0 failed, 1 skipped,
+0 flaky**, four actual workers, clipboard/parallel projects, zero retries. All
+430 configured cases appear in the report and listing; the command has no file,
+grep, project or shard filter. The named scenario
+`connect roster Agents appear before history and keep identity through live and historical launches`
+was present and passed: **1 executed, 1 passed, 0 failed, 0 skipped**, retry 0,
+2,587 ms. Its `launch-fate` attachment records an app running at outcome, exit
+code 0, no signal and no teardown failures. `fake-daemon-setup.json` is empty
+(`[]`); no setup failure or top-level report error was recorded. The sole skip is
+`an independent input-enabled cover preserves isolated hover`, with reason
+“a never-shown window receives no pointer from the display”.
+
+Launcher provenance is the managed `desktop-fake-suite` recipe on machine
+`macbook`; its recorded invocation is Playwright `test --config=playwright.config.ts`.
+The returned configuration hash matches the recorded candidate hash above and the
+original failing configuration. The scenario file still matches the candidate
+hash in the current branch. Later main merges changed the configuration (clipboard
+partition and Linux display setup), so this native result applies to the exact
+candidate, not to a new full-suite run on the current branch. The existing
+controlled red/green proof explains the original failure without a duplicate
+regression, timeout increase, retry or reduced assertion.
 
 The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2000#issuecomment-6189606015)
 records the complete Linux gate on `1e6cc84ce2117dd6c06a31d11af901f25ac7d6eb`:
@@ -71,17 +90,16 @@ retries. The named connect-roster scenario was present and passed: 1 executed,
 macOS window-reopen case. Reports remain at
 `/work/Projects/pyrycode-desktop-agents/logs/verifier-gate_#1998.pass.json` and
 `verifier-gate_#1998_6.log`, with corresponding stderr logs in that directory.
-Documentation inspected the retained verifier handoff and ticket bundles on
-2026-10-15; none contains a completed native report. Both verifier and documentation
-managed task reads returned `Unknown task action`, leaving the last successful read unchanged.
-The dispatcher must return native reports to the builder for inspection and a
-counted evidence commit here before native acceptance. Linux results do not meet
-the macOS criterion. Ownership/commit-barrier guidance and current evidence are
-recorded in [development verification](../../knowledge/features/development-verification.md#authoritative-thread-read-evidence).
+The earlier verifier/documentation reads could not access the native result;
+that access blocker is resolved by the completed report inspected above.
+Ownership/commit-barrier guidance and counted evidence are recorded in
+[development verification](../../knowledge/features/development-verification.md#authoritative-thread-read-evidence).
 
-Operator blocker: the macOS acceptance criterion still lacks an inspected result
-from the managed `desktop-fake-suite` recipe. The configured verifier command,
-`npx playwright test --reporter=json`, ran on Linux and cannot supply native proof.
-Restore managed task-result access and retrieve the existing native task's reports;
-its current execution status is unverified. Native counts and retained result
-locations can be folded into the guidance only after the builder's evidence commit.
+Acceptance handoff: the inspected native report supplies the macOS criterion's
+counted full-suite and named-scenario evidence. The PR/verifier handoff separately
+requires the builder to inspect the returned artifacts and commit its native
+evidence before native acceptance. No such builder return commit is present;
+this documentation inspection records existing evidence and does not replace that
+builder-owned step. Return this managed task and the retained paths above to the
+builder; no duplicate native run is needed. Native acceptance remains pending that
+required evidence commit, rather than missing or failed macOS execution.

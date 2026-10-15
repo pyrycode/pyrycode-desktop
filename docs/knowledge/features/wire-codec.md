@@ -26,6 +26,8 @@ export function decodeInnerFrame(bytes: Uint8Array): InnerFrameV2
 // Envelope ↔ UTF-8 plaintext bytes (the Noise plaintext / handshake early-data).
 export function encodeEnvelope(envelope: Envelope): Uint8Array
 export function decodeEnvelope(bytes: Uint8Array): Envelope
+// Unvalidated JSON-object routing hints; original bytes still require validation.
+export function parseJsonObject(bytes: Uint8Array): Record<string, unknown>
 
 // The one default-injecting constructor (see Defaults).
 export function makeHelloClientPayload(input: {
@@ -318,19 +320,59 @@ stateless correspondence only, without a pending-operation table or ownership cl
 
 ### Consumer obligations and testing
 
-These functions retain no connection or assembly state. Consumers still own cursor
-authenticity/expiry, connection-lifetime ID uniqueness, matching replies and cancels
-to owned pending work, and host-wide discovery reconciliation, including readiness
-[#1959](https://github.com/pyrycode/pyrycode-desktop/issues/1959).
-Capability activation and production dispatch integration remain unwired:
-`parseInboundMessage` is not migrated, and these validators do not advertise
-`hosted_apps_v1`. Transport
-[#1958](https://github.com/pyrycode/pyrycode-desktop/issues/1958) owns request ownership,
-generation identity, ordering, cumulative bytes/digest completion, credit progression
-and retirement. Viewer
-[#1960](https://github.com/pyrycode/pyrycode-desktop/issues/1960) owns selected-view
-binding and resource assembly delivery. Manifest/build validation and asset-handle
-containment remain daemon-owned.
+These validators retain no connection or assembly state. The main-process consumer,
+`src/main/transport/hostedResources.ts`, now owns admission, correlation, assembly
+and retirement. A trusted caller selects `registry.connectionFor(serverId)`, then
+uses `connection.hostedResources.openView(appId, release).request(input, signal?)`.
+Each view pins the connection, app, release, unique view scope and generation;
+request/credit/cancel IDs come from the connection's existing monotonic allocator.
+Only an authenticated named connection whose current acknowledgement includes
+`hosted_apps_v1` dispatches requests. Other cases settle locally as `unavailable`.
+Completed results contain validated metadata and a `Buffer`, including non-2xx
+HTTP status and empty HEAD/204/205/304 bodies. No bytes cross IPC or the renderer,
+and no direct HTTP path or separate socket/key is introduced.
+
+The consumer permits eight active requests per connection and sixteen pending
+operations per view, including active work. Metadata reserves its declared size
+against a connection-wide 16 MiB allowance before buffer allocation. Contextual
+validation enforces asset 8 MiB/256 chunks, API 1 MiB/32 chunks, and 32768 decoded
+bytes per request body or chunk. Assembly requires exactly one metadata frame,
+feasible chunk counts, consecutive granted indices, exact length/count and SHA-256;
+validated zero-byte metadata completes immediately. The request grants chunk 0
+only. Each consumed nonfinal chunk sends one next credit; queued credits grant
+nothing until `SendOutcome` reports them written.
+
+An operation has a fixed thirty-second deadline from enqueue and a five-second
+active progress timeout. Other traffic cannot extend them. Abort, view `retire()`
+and owner `hostedResources.retire()` settle owned work once; connection lifecycle
+resets invalidate all views and discard partial bytes. Connected cancellation uses
+its own envelope ID, matched independently of the retired target and checked
+against the original request/app. At most sixteen cancel records survive, each
+for five seconds. Late frames cannot revive work. Failed attempted POST/PUT/PATCH/
+DELETE requests report `uncertain: true` and are never replayed. See
+[hosted resource lifecycle](daemon-connection-lifecycle.md#hosted-resource-views)
+for cleanup, failure categories and caller retirement responsibilities.
+
+`onDriverEvent` routes hosted responses before `parseInboundMessage`. Using only
+`decodeEnvelope` for that routing would both erase forbidden fields and reject
+some identifiable malformed replies before their owning operation could retire.
+For example, numeric `session_id` or null `history_entry_id`/`session_state_cleared`
+must fail the correlated operation immediately, releasing its reservation; a later
+valid frame must not rescue it. `parseJsonObject` supplies unvalidated type and
+correlation hints solely to locate or retire work. Only contextual hosted validation
+of the original plaintext admits metadata/chunks or control replies. Valid fatal
+authentication and update-required errors take precedence over hosted correlation
+and retain their connection-wide effect. Unrelated traffic follows the existing
+parser and remains runnable during held transfers.
+
+Host-wide discovery reconciliation, cursor authenticity/expiry, capability
+advertisement and readiness refresh remain with
+[#1959](https://github.com/pyrycode/pyrycode-desktop/issues/1959); validators do not
+advertise `hosted_apps_v1`. The isolated viewer and its selected-view binding remain
+with [#1960](https://github.com/pyrycode/pyrycode-desktop/issues/1960), and real paired
+round trips/browser interaction/SQL persistence acceptance with later slices and
+[#1929](https://github.com/pyrycode/pyrycode-desktop/issues/1929). Manifest/build
+validation and asset-handle containment remain daemon-owned.
 
 `src/main/transport/hostedCodec.test.ts` keeps the unchanged shared JSON examples
 local with the pinned source revision. Negotiation uses the existing codec and
@@ -354,8 +396,15 @@ and neighbors, metadata/index limits, HEAD/204/205/304 and supplied-context mism
 A base64-helper spy checks rejection before allocating decode, including an
 over-limit decoded body whose encoded length fits. Request/chunk size cases measure
 final escaping and additive fields on both encode and decode. Repeated frames and
-context revalidation prove frame semantics only: no assembly, capability activation,
-production admission or live SQL writes are established.
+context revalidation prove frame semantics only. Stateful background coverage lives
+in `hostedResources.test.ts`: multiframe binary/POST-204, exact bounds and credit
+pacing, corruption, fixed deadlines, cleanup, cancellation and host/view isolation.
+`daemonConnection.test.ts` adds supplied-ack fake-driver lifecycle and malformed
+correlation cases, plus positive message/control processing during a held transfer;
+`connectionRegistry.test.ts` checks named-host delegation. The malformed-frame cases
+assert immediate settlement, reused active/view/reservation capacity, discarded late
+replies and cleared timers. These are background fixtures; they establish no
+production advertisement, viewer interaction or live SQL persistence.
 
 ## Configuration and usage
 

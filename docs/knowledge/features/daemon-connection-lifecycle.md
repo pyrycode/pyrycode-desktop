@@ -17,7 +17,7 @@ named-host reconnect can re-dial an unchanged pairing through the separate entry
 
 **`start()` and `reconnect()` both funnel through a private `dial()`** — the single fresh-connect path. `dial()`:
 
-1. Reset the shared thread receiver, interrupt pending queries and release assembly; `++generation` then bumps the connection fence (see below), superseding any prior dial.
+1. Reset hosted resource views and the shared thread receiver, settle pending resource work, interrupt pending queries and release assembly; `++generation` then bumps the connection fence (see below), superseding any prior dial.
 2. `driver?.stop()` then `driver = null` — tear down any live driver before dialing the next, so two sockets never stack and only the fresh server is dialed (**AC3**). The old driver's stop-terminal carries the *old* gen, so the per-dial `onEvent` wrapper drops it — no spurious `failed`. Null before the first dial (or after a not-paired boot), where this is a no-op.
 3. Keep `nextEnvelopeId` monotonic across dials. Each hello still uses id 1; app IDs begin at 2 and are never recycled by reconnect. Clearing pending state alone would let a delayed history marker match a successor request that reused its ID.
 4. `emitDaemonEvent(sink, { type: 'connecting' })` — synchronous, before any `await` (**AC2**).
@@ -214,6 +214,92 @@ terminal” tests. The verifier accepted the full gate plus unrelated rerun unde
 dispatcher's flaky-test policy; the initial full run was not failure-free. No
 real-Claude evidence is required or claimed for this client-only repair.
 
+# Hosted resource views
+
+`DaemonConnection.hostedResources` is a trusted main-process API backed by
+`src/main/transport/hostedResources.ts`. Select a host with
+`registry.connectionFor(serverId)` (null for an unknown host), then call
+`connection.hostedResources.openView(appId, release)`. The returned handle offers
+`request(input, signal?)` and `retire()`. Input discriminates `app_asset_request`
+and `app_api_request`, with wire payload fields except `app_id`/`release_version`:
+the closure pins those identities, its connection, a unique view scope and the
+current resource generation. Callers supply no envelope ID or response routing
+authority. Resource, credit and cancel IDs share `nextEnvelopeId`, which stays
+monotonic across dials.
+
+Dispatch requires a named paired host, authenticated driver and `hosted_apps_v1`
+in the current validated acknowledgement. Unavailable/unsupported connections
+settle locally. Every handshake invalidates old handles before parsing its ack,
+including automatic re-handshake on the same driver; open a fresh view after
+negotiation. Advertisement and discovery-driven readiness/view replacement remain with
+[#1959](https://github.com/pyrycode/pyrycode-desktop/issues/1959).
+
+The synchronous owner queues at most sixteen pending operations per view,
+including active work, with at most eight active per connection. Metadata reserves
+declared bytes against 16 MiB per connection before allocation. The
+[contextual codecs](wire-codec.md#response-metadata-and-original-request-correspondence)
+bound assets to 8 MiB/256 chunks, APIs to 1 MiB/32 chunks, and request bodies/chunks
+to 32768 decoded bytes. Completion requires one accepted metadata frame, feasible
+chunk counts, consecutive granted chunks, exact declared length/count and SHA-256.
+Validated zero-body metadata completes immediately. The initial request grants only
+chunk 0; consuming each nonfinal chunk sends one next credit, which grants nothing
+until its send observation reports written. Other transport/control traffic keeps
+running while a resource waits.
+
+`request` resolves to `{ ok: true, metadata, bytes: Buffer }` or
+`{ ok: false, error, uncertain }`. Allowed API verbs, encoded queries, binary
+bodies and permitted headers retain the
+[wire HTTP semantics](wire-codec.md#resource-requests-and-http-limits).
+Non-2xx HTTP status remains a successful resource result; HEAD/204/205/304 deliver
+an empty buffer. Failure categories are `unavailable`, `retired`, `aborted`,
+`limit`, `invalid`, `timeout`, `corrupt`, `bridge` and `send-failed`.
+Diagnostics contain static event/code only. Bytes stay in main on the existing
+encrypted transport, without HTTP access or persistence. Isolated viewer delivery
+belongs to [#1960](https://github.com/pyrycode/pyrycode-desktop/issues/1960); real
+round trips and SQL acceptance remain with
+[#1929](https://github.com/pyrycode/pyrycode-desktop/issues/1929).
+
+## Deadlines and retirement
+
+The thirty-second deadline starts at enqueue and never resets. Active work also
+has a five-second progress timeout, refreshed only by its accepted metadata/chunks.
+Unrelated traffic extends neither. Queue promotion checks the absolute enqueue
+deadline before sending; incoming progress checks both absolute deadlines before
+refreshing inactivity. Timer callback ordering can otherwise dispatch expired work
+or let a late frame rescue it.
+
+Abort retires one operation. View `retire()` permanently invalidates that handle
+and settles its pending work; owner `hostedResources.retire()` invalidates every
+view on that connection. Trusted callers must use these on app/release/view or
+host replacement; discovery does not yet invoke them automatically. All terminals
+settle once, remove timers/abort listeners, release reservations and partial bytes,
+then promote eligible queued work. Invalid correlated responses, bridge errors
+and send/drop failures affect only their own operation.
+
+Retirement, abort, timeout and response failure send scoped `app_cancel` for
+attempted work while connected. Its independently allocated ID owns the
+`app_cancelled.in_reply_to`; acknowledgement must also match the original target
+request and app. Target settlement does not wait for acknowledgement. At most
+sixteen cancellation records remain, each expiring after five seconds, with the
+oldest removed on overflow; acknowledgement, invalid reply or send failure clears
+its record. Cancellation cannot revive a target.
+
+Relay drop, handshake, explicit reconnect, authentication/update-required failure,
+driver error/terminal and stop reset the resource owner and its cancellation state.
+They advance the resource generation without sending old-session cancels through a
+successor handshake. Old handles stay retired even if host/app/release names match;
+the dial fence rejects superseded-driver callbacks and the shared allocator prevents
+reused IDs across redials. Unknown/late metadata/chunks allocate nothing. Failed
+POST/PUT/PATCH/DELETE operations become `uncertain: true` once sending is attempted,
+including a thrown/refused send; queued operations never attempted remain certain.
+No mutation is automatically replayed.
+
+Hosted dispatch precedes generic envelope admission and validates original bytes.
+Unvalidated `parseJsonObject` hints may locate and retire owned work even when
+`decodeEnvelope` would reject it; they never authorize byte acceptance. Valid fatal
+authentication/update errors retain precedence. See the
+[wire boundary lesson and focused coverage](wire-codec.md#consumer-obligations-and-testing).
+
 # How it works
 
 ## The bootstrap (what `start()` drives)
@@ -268,8 +354,8 @@ the same connection-bound sink.
 
 | `RelaySessionEvent` | Action |
 |---|---|
-| `handshake-complete{helloAck}` | `parseHelloAck` → authenticated `connected{ack}`, then drain held composer messages; a `parseHelloAck` throw → `failed('malformed-hello-ack')` (the caught `WireDecodeError` is dropped — its message could echo the ack bytes) |
-| `message{plaintext}` | [`parseInboundMessage`](inbound-message-decode.md) → `messageReceived{message}` / `messagesReceived{messages}` / `runConfigReceived{sessionId,model,effort,yolo,used_tokens,window_tokens}` (#491/#500, superseding the `snapshotReceived{model,effort,yolo,used_tokens,window_tokens}` arm #180 originally emitted from the `case 'snapshot'` kind below, extended with the two usage ints by #191; that arm and its `case 'snapshot':` emit were removed outright by [#621](../codebase/621.md), and [#622](../codebase/622.md) removed the decode itself in turn — `inboundMessage.ts` no longer produces a `snapshot` kind at all, so a `screen_snapshot` frame now falls to `parseInboundMessage`'s tolerant `default` arm before this switch is ever reached) / `conversationsReceived{conversations}` (#139, no field dropped) / `turnState{state}` (#214, only `conversation_id` dropped) / `stallDetected{conversationId}` (#315, at ship time **nullary** — `StallPayload`'s only field, `conversation_id`, was dropped; [#732](../codebase/732.md) widened the arm to carry it onward by name, the id stopping at the renderer timeline bridge) / `apiRetry{active,current,total}` (#492, only `conversation_id` dropped — the not-onset-only, not-deduped peer of `stallDetected`; a fresh named-field literal copied by name, never a spread of the decoded payload) / `compacting{active}` (#495, only `conversation_id` dropped — `apiRetry`'s banner-only peer, carrying exactly one bool; same fresh-named-field-literal, never-a-spread discipline) / `toolUse{turnId,toolUseId,name,inputSummary}` (#217, only `conversation_id` dropped) / `modalShown{modalId,class,title,prompt,options,defaultOptionId}` / `modalDismissed{modalId,outcome,source}` (#201, at ship time **nothing dropped — a modal carried no `conversation_id`** on either frame; [#871](../codebase/871.md) widened `modalShown` to carry `conversationId` onward by name, decoded by [#870](../codebase/870.md) — outbound scoping only, `modalId` stays the sole answering correlation key; `modalDismissed` is unaffected) / `toolResult{turnId,toolUseId,isError,resultSummary}` (#229, only `conversation_id` dropped) / `conversationCreated{conversation}` (#241, verbatim passthrough — nothing dropped, like `conversations`) / `sessionTransition{newSessionId}` (#254, only `newSessionId` carried — `previous_session_id`/`reason`/`occurred_at`/`workspace_cwd` dropped here, the #180 content-drop model's second application) / `sessionSettingsUpdated{sessionId}` (#264, verbatim passthrough — nothing to drop, the reply has only the one field) / `backgroundTaskStarted{conversationId,taskId,toolCallId,description,taskType,truncatedFields}` (#564, **`conversation_id` KEPT as `conversationId`** — unlike every turn-stream arm above, this frame carries no `turn_id` and opens/closes no turn, so it follows the `queueState` #720 daemon-state rule; a fresh named-field literal copied by name, never a spread) / `backgroundTaskUpdated{conversationId,taskId,patch,status,summary,truncatedFields}` (#565, the subset twin of the arm above — four fields not six at ship time; [#1560](https://github.com/pyrycode/pyrycode-desktop/issues/1560) added `status`/`summary`, crossing verbatim, `''` included, so today it is six fields too — but a DIFFERENT six from the sibling's, `conversation_id` likewise KEPT, and performs **no join** against `backgroundTaskStarted`: ordering is claude's, not the daemon's, so an update for a never-opened task still emits; both new fields ship dormant, unread by any bridge until [#1561](https://github.com/pyrycode/pyrycode-desktop/issues/1561)/[#1246](https://github.com/pyrycode/pyrycode-desktop/issues/1246)) / `backgroundTaskRoster{conversationId,tasks,droppedTasks}` (#566, the **aggregate peer** of the two arms above — a snapshot, not a delta, whose empty `tasks` is the positive "nothing is alive" signal; `conversation_id` likewise KEPT, `tasks` passed through **by reference** from the already-narrowed row array, snake_case, the `queueState` nested-array precedent; no join, no dedup, no snapshot diff against a held previous roster) / `modelAnnounced{model,truncated}` (#587, **only `conversation_id` dropped** — an identity report, not a turn-stream item; fresh named-field literal copied by name, never a spread; deliberately stateless like `apiRetry`/`compacting`, so a verbatim repeat still emits); a throw (oversized/malformed/mistyped) → **drop** the frame and reset shared thread state (pending queries emit static `interrupted` failures; the caught `WireDecodeError` is discarded because its message could echo plaintext); an unmodeled envelope type (`null`) → **ignore**. The transport helper owns the wire boundary; this arm does only the IPC map. **Filled in [#68](../codebase/68.md)**, extended with the `snapshot` kind in [#180](../codebase/180.md), again with `used_tokens`/`window_tokens` in [#191](../codebase/191.md), again with the `conversations` kind in [#139](../codebase/139.md), again with the `turnState` kind in [#214](../codebase/214.md), again with the `stall` kind in [#315](../codebase/315.md) (not compile-forced — this inner switch has no `assertNever` default, so the round-trip test is the guard, not the compiler), again with the `api-retry` kind in [#492](../codebase/492.md) (same not-compile-forced posture), again with the `compacting` kind in [#495](../codebase/495.md) (same not-compile-forced posture), again with the `toolUse` kind in [#217](../codebase/217.md), again with the `modalShown`/`modalDismissed` kinds in [#201](../codebase/201.md), again with the `toolResult` kind in [#229](../codebase/229.md), again with the `conversation-created` kind in [#241](../codebase/241.md), again with the `session-transition` kind in [#254](../codebase/254.md), and again with the `session-settings-updated` kind in [#264](../codebase/264.md), and again with the `background-task-started` kind in [#564](../codebase/564.md) (same not-compile-forced posture), and again with the `background-task-updated` kind in [#565](../codebase/565.md) (same not-compile-forced posture), and again with the `background-task-roster` kind in [#566](../codebase/566.md) (same not-compile-forced posture), and again with the `model-announced` kind in [#587](../codebase/587.md) (same not-compile-forced posture) |
+| `handshake-complete{helloAck}` | Reset hosted views and thread state, then `parseHelloAck` → authenticated `connected{ack}`, enable hosted resources only for negotiated `hosted_apps_v1`, then drain held composer messages; a `parseHelloAck` throw → `failed('malformed-hello-ack')` (the caught `WireDecodeError` is dropped — its message could echo the ack bytes) |
+| `message{plaintext}` | Hosted receive first (see [hosted views](#hosted-resource-views)); otherwise [`parseInboundMessage`](inbound-message-decode.md) → `messageReceived{message}` / `messagesReceived{messages}` / `runConfigReceived{sessionId,model,effort,yolo,used_tokens,window_tokens}` (#491/#500, superseding the `snapshotReceived{model,effort,yolo,used_tokens,window_tokens}` arm #180 originally emitted from the `case 'snapshot'` kind below, extended with the two usage ints by #191; that arm and its `case 'snapshot':` emit were removed outright by [#621](../codebase/621.md), and [#622](../codebase/622.md) removed the decode itself in turn — `inboundMessage.ts` no longer produces a `snapshot` kind at all, so a `screen_snapshot` frame now falls to `parseInboundMessage`'s tolerant `default` arm before this switch is ever reached) / `conversationsReceived{conversations}` (#139, no field dropped) / `turnState{state}` (#214, only `conversation_id` dropped) / `stallDetected{conversationId}` (#315, at ship time **nullary** — `StallPayload`'s only field, `conversation_id`, was dropped; [#732](../codebase/732.md) widened the arm to carry it onward by name, the id stopping at the renderer timeline bridge) / `apiRetry{active,current,total}` (#492, only `conversation_id` dropped — the not-onset-only, not-deduped peer of `stallDetected`; a fresh named-field literal copied by name, never a spread of the decoded payload) / `compacting{active}` (#495, only `conversation_id` dropped — `apiRetry`'s banner-only peer, carrying exactly one bool; same fresh-named-field-literal, never-a-spread discipline) / `toolUse{turnId,toolUseId,name,inputSummary}` (#217, only `conversation_id` dropped) / `modalShown{modalId,class,title,prompt,options,defaultOptionId}` / `modalDismissed{modalId,outcome,source}` (#201, at ship time **nothing dropped — a modal carried no `conversation_id`** on either frame; [#871](../codebase/871.md) widened `modalShown` to carry `conversationId` onward by name, decoded by [#870](../codebase/870.md) — outbound scoping only, `modalId` stays the sole answering correlation key; `modalDismissed` is unaffected) / `toolResult{turnId,toolUseId,isError,resultSummary}` (#229, only `conversation_id` dropped) / `conversationCreated{conversation}` (#241, verbatim passthrough — nothing dropped, like `conversations`) / `sessionTransition{newSessionId}` (#254, only `newSessionId` carried — `previous_session_id`/`reason`/`occurred_at`/`workspace_cwd` dropped here, the #180 content-drop model's second application) / `sessionSettingsUpdated{sessionId}` (#264, verbatim passthrough — nothing to drop, the reply has only the one field) / `backgroundTaskStarted{conversationId,taskId,toolCallId,description,taskType,truncatedFields}` (#564, **`conversation_id` KEPT as `conversationId`** — unlike every turn-stream arm above, this frame carries no `turn_id` and opens/closes no turn, so it follows the `queueState` #720 daemon-state rule; a fresh named-field literal copied by name, never a spread) / `backgroundTaskUpdated{conversationId,taskId,patch,status,summary,truncatedFields}` (#565, the subset twin of the arm above — four fields not six at ship time; [#1560](https://github.com/pyrycode/pyrycode-desktop/issues/1560) added `status`/`summary`, crossing verbatim, `''` included, so today it is six fields too — but a DIFFERENT six from the sibling's, `conversation_id` likewise KEPT, and performs **no join** against `backgroundTaskStarted`: ordering is claude's, not the daemon's, so an update for a never-opened task still emits; both new fields ship dormant, unread by any bridge until [#1561](https://github.com/pyrycode/pyrycode-desktop/issues/1561)/[#1246](https://github.com/pyrycode/pyrycode-desktop/issues/1246)) / `backgroundTaskRoster{conversationId,tasks,droppedTasks}` (#566, the **aggregate peer** of the two arms above — a snapshot, not a delta, whose empty `tasks` is the positive "nothing is alive" signal; `conversation_id` likewise KEPT, `tasks` passed through **by reference** from the already-narrowed row array, snake_case, the `queueState` nested-array precedent; no join, no dedup, no snapshot diff against a held previous roster) / `modelAnnounced{model,truncated}` (#587, **only `conversation_id` dropped** — an identity report, not a turn-stream item; fresh named-field literal copied by name, never a spread; deliberately stateless like `apiRetry`/`compacting`, so a verbatim repeat still emits); a throw (oversized/malformed/mistyped) → **drop** the frame and reset shared thread state (pending queries emit static `interrupted` failures; the caught `WireDecodeError` is discarded because its message could echo plaintext); an unmodeled envelope type (`null`) → **ignore**. The transport helper owns the wire boundary; this arm does only the IPC map. **Filled in [#68](../codebase/68.md)**, extended with the `snapshot` kind in [#180](../codebase/180.md), again with `used_tokens`/`window_tokens` in [#191](../codebase/191.md), again with the `conversations` kind in [#139](../codebase/139.md), again with the `turnState` kind in [#214](../codebase/214.md), again with the `stall` kind in [#315](../codebase/315.md) (not compile-forced — this inner switch has no `assertNever` default, so the round-trip test is the guard, not the compiler), again with the `api-retry` kind in [#492](../codebase/492.md) (same not-compile-forced posture), again with the `compacting` kind in [#495](../codebase/495.md) (same not-compile-forced posture), again with the `toolUse` kind in [#217](../codebase/217.md), again with the `modalShown`/`modalDismissed` kinds in [#201](../codebase/201.md), again with the `toolResult` kind in [#229](../codebase/229.md), again with the `conversation-created` kind in [#241](../codebase/241.md), again with the `session-transition` kind in [#254](../codebase/254.md), and again with the `session-settings-updated` kind in [#264](../codebase/264.md), and again with the `background-task-started` kind in [#564](../codebase/564.md) (same not-compile-forced posture), and again with the `background-task-updated` kind in [#565](../codebase/565.md) (same not-compile-forced posture), and again with the `background-task-roster` kind in [#566](../codebase/566.md) (same not-compile-forced posture), and again with the `model-announced` kind in [#587](../codebase/587.md) (same not-compile-forced posture) |
 | `terminal{code, reason}` | if `stopped` → **suppress** (clean local teardown); else `failed('connection-closed', "…code ${code}")`. The supervisor `reason` string is **not** forwarded (conservative) |
 | `error{reason}` | `failed(reason)` — the driver's reason is a static enum string, safe as the category `code` |
 | `relay-link-up` ([#328](../codebase/328.md)) | `relayLinkChanged{status:'connected'}` — a fresh literal, distinct from the session `connecting`/`connected`/`failed` arms above |
@@ -300,8 +386,9 @@ cannot rescue it. A marker arriving while assembly is pending also fails.
 Every `parseInboundMessage` exception resets this host's shared receiver,
 interrupting all pending queries and releasing live/history assemblies and timers.
 A silent parser drop could hide a batch even before the receiver registered a
-fragment, then let a later marker falsely certify success. Do not reparse rejected
-bytes to guess correlation: envelope metadata is untrusted at that boundary.
+fragment, then let a later marker falsely certify success. For thread queries, do
+not reparse rejected bytes to guess correlation: envelope metadata is untrusted at
+that boundary.
 Other hosts and newly registered queries remain usable.
 
 Relay drop, every handshake (including re-handshake), terminal/driver error,
@@ -368,11 +455,11 @@ control and its integrated proof belong to
 
 # State + concurrency model
 
-- **Main-process state.** Driver/lifecycle handles, generation, the pairing-scoped replay cursor and composer payload FIFO stay here. Renderer session state lives in the [session store](session-store.md); replay position is never an IPC field.
+- **Main-process state.** Driver/lifecycle handles, generation, the pairing-scoped replay cursor, composer payload FIFO and hosted resource views/assemblies stay here. Renderer session state lives in the [session store](session-store.md); replay position and hosted bytes are never IPC fields.
 - **The `start()`/`stop()` race** is closed by checking `stopped` after asynchronous dial loads, before null classification and immediately before synchronous driver construction. JS yields only at `await`: a stop during load/key ensure cancels output; a stop after construction tears down the held driver.
 - **`stopped` does double duty** — it is both the start/stop race guard *and* the "suppress the clean-stop terminal" flag, so no separate `stopping` boolean is needed.
 - **`generation` is a second, orthogonal fence for `reconnect()`** ([#82](../codebase/82.md)) — it supersedes an in-flight dial when a fresh one begins, dropping the old driver's stop-terminal and aborting a stale `bootstrap`. `stop()` deliberately does not bump it (permanent teardown stays `stopped`'s job), so the pre-`createDriver` guard checks both. Full model in § Connect-on-pair.
-- **Transient reconnects retain the driver.** The supervisor absorbs transient drops and re-dials the *same* driver without surfacing `terminal`; relay-link-down still interrupts pending thread queries. On reconnect the driver **re-sources the record via `loadDialConfig`** ([#83](../codebase/83.md)) then runs a fresh handshake and fires another `handshake-complete` → this re-emits `connected` and resets shared thread assembly/query state. During the gap the UI stays on its last session status. (This is distinct from `reconnect()`, which **replaces** the driver entirely — see § Connect-on-pair.)
+- **Transient reconnects retain the driver.** The supervisor absorbs transient drops and re-dials the *same* driver without surfacing `terminal`; relay-link-down still interrupts pending thread queries and retires hosted views. On reconnect the driver **re-sources the record via `loadDialConfig`** ([#83](../codebase/83.md)) then runs a fresh handshake and fires another `handshake-complete` → this re-emits `connected`, resets shared thread assembly/query state and invalidates hosted views before negotiating resource support again. During the gap the UI stays on its last session status. (This is distinct from `reconnect()`, which **replaces** the driver entirely — see § Connect-on-pair.)
 
 # Per-server routing
 

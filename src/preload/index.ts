@@ -1,5 +1,6 @@
 import { APP_UPDATE_STATE_CHANNEL, APP_UPDATE_ACTION_CHANNEL, projectAppUpdateState, type AppUpdateState, type AppUpdateAction } from '../shared/ipc/appUpdate'
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
+import { HOSTED_PANE_CHANNEL, type HostedPaneCommand, type HostedPaneState } from '../shared/ipc/hostedPane'
 import { CHAT_HISTORY_CHANNEL, CHAT_HISTORY_FLUSH_CHANNEL, type ChatHistoryRequest, type ChatHistoryResult } from '../shared/chatHistory'
 import { DAEMON_EVENT_CHANNEL, type StampedDaemonEvent } from '../shared/ipc/events'
 import { COMMAND_CHANNEL, isRendererCommand, type RendererCommand } from '../shared/ipc/commands'
@@ -73,6 +74,17 @@ import { MARKDOWN_SAVE_CHANNEL, type MarkdownSaveOutcome } from '../shared/ipc/m
 let historyReceipt: { type: string; serverId: string | null | undefined } | null = null
 
 const api = {
+  hostedPane: (command: HostedPaneCommand): Promise<{ ok: true; state: HostedPaneState } | { ok: false; error: 'refused' }> =>
+    ipcRenderer.invoke(HOSTED_PANE_CHANNEL, command),
+  onHostedPane: (listener: (state: HostedPaneState) => void): (() => void) => {
+    let active = true, received = false
+    const handler = (_event: IpcRendererEvent, state: HostedPaneState): void => { received = true; if (active) listener(state) }
+    ipcRenderer.on(HOSTED_PANE_CHANNEL, handler)
+    void ipcRenderer.invoke(HOSTED_PANE_CHANNEL, { type: 'snapshot' }).then(result => {
+      if (active && !received && result.ok) listener(result.state)
+    }).catch(() => {}) // A missing parent leaves the pane closed.
+    return () => { active = false; ipcRenderer.removeListener(HOSTED_PANE_CHANNEL, handler) }
+  },
   sendAppUpdateAction: (action: AppUpdateAction): void => { ipcRenderer.send(APP_UPDATE_ACTION_CHANNEL, action) },
   onAppUpdate: (listener: (state: AppUpdateState) => void): (() => void) => {
     let active = true, receivedEvent = false

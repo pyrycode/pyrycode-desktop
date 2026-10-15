@@ -1,4 +1,6 @@
 import './pairedShell.css'
+import { HostedPane, hostedPaneStore } from './HostedPane'
+import { useStore } from 'zustand'
 import { readSavedTimeline } from './store/savedTimelineRestorer'
 import { createNewestHistoryDemand } from './store/newestHistoryDemand'
 import { historyAskDeps } from './store/historyPageBridge'
@@ -294,6 +296,7 @@ const PAIRING_REJECTION_NOTICE = 'Your pairing has expired or is no longer valid
  * lands from the route it was on when the flow opened, not from which control opened it.
  */
 export function PairedShellView(props: {
+  hostedPane?: boolean
   recoveryServerId?: string | null
   recoveryRejected?: boolean
   recoveryLabel?: string
@@ -364,7 +367,7 @@ export function PairedShellView(props: {
               />
             </div>
             <div className="paired-shell__pane">
-              {visibleRoute === 'thread' ? (
+              {props.hostedPane ? <HostedPane /> : visibleRoute === 'thread' ? (
                 <ConversationScreen
                   savedTimelineTarget={props.savedTimelineTarget}
                   key={props.paneKey}
@@ -408,12 +411,30 @@ export function PairedShellView(props: {
  * `conversation` route).
  */
 export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Element {
+  const hosted = useStore(hostedPaneStore, s => s.state.type !== 'closed')
+  const closeHosted = (): void => {
+    const state = hostedPaneStore.getState().state
+    if (state.type !== 'closed') void window.pyry.hostedPane({ type: 'close', generation: state.generation })
+  }
   useEffect(() => subscribeResetContextUsage(conversationActivityStore, window.pyry.sendCommand), [])
   useEffect(() => createSavedListRestorer({
     lists: conversationListStore, servers: serverInfoStore,
     read: window.pyry.chatHistory, log: window.pyry.sendDiagnostic
   }), [])
   const [route, dispatch] = useReducer(nextPairedRoute, 'list')
+  useEffect(() => {
+    const off = window.pyry.onHostedPane(state => {
+      const previous = hostedPaneStore.getState().state
+      hostedPaneStore.setState({ state })
+      if (previous.type === 'closed' && state.type !== 'closed') dispatch({ type: 'back' })
+    })
+    return () => {
+      off()
+      const state = hostedPaneStore.getState().state
+      if (state.type !== 'closed') void window.pyry.hostedPane({ type: 'close', generation: state.generation })
+      hostedPaneStore.setState({ state: { type: 'closed', generation: state.generation } })
+    }
+  }, [])
   const localRead = useRef<ReturnType<typeof readSavedTimeline> | null>(null)
   const [savedTimelineTarget, setSavedTimelineTarget] = useState<{ serverId: string; conversationId: string }>()
   const [newestHistory] = useState(() => createNewestHistoryDemand(historyAskDeps))
@@ -514,6 +535,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // absolute, so the route does not move and the pane would otherwise keep the previous discussion's
   // transient controls. Re-key it on the creating host and minted id.
   useConversationCreatedNav((created, serverId) => {
+    closeHosted()
     localRead.current?.cancel()
     setSavedTimelineTarget(serverId === undefined ? undefined : { serverId, conversationId: created.id })
     cancelCreatedInitialization.current?.()
@@ -584,6 +606,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // up. Re-keying the pane on the clicked id is what stops that thread's screen-local state from
   // following the operator into the new one.
   const openConversation = (conversation: ConversationSummary): void => {
+    closeHosted()
     leaveRecovery()
     localRead.current?.cancel()
     setSavedTimelineTarget(undefined)
@@ -664,6 +687,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   }
   return (
     <PairedShellView
+      hostedPane={hosted}
       route={route}
       savedTimelineTarget={savedTimelineTarget}
       pairingOrigin={pairServerReturn}
@@ -675,9 +699,9 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
       recoveryRejected={recoveryStatus?.type === 'error' && recoveryStatus.error.code === 'pairing-rejected'}
       onRepairHost={openRecovery}
       onOpen={openConversation}
-      onOpenSettings={() => { leaveRecovery(); dispatch({ type: 'openSettings' }) }}
-      onOpenArchive={() => { leaveRecovery(); dispatch({ type: 'openArchive' }) }}
-      onBack={() => { leaveRecovery(); dispatch({ type: 'back' }) }}
+      onOpenSettings={() => { closeHosted(); leaveRecovery(); dispatch({ type: 'openSettings' }) }}
+      onOpenArchive={() => { closeHosted(); leaveRecovery(); dispatch({ type: 'openArchive' }) }}
+      onBack={() => { closeHosted(); leaveRecovery(); dispatch({ type: 'back' }) }}
       // #1141: all three pairing-change callbacks go through `applyPairingChange`, which owns the
       // decision of WHICH of them ends a pairing and so clears. Only `unpaired` does. Wiring them
       // here rather than threading a dep into runUnpair puts the three on adjacent lines and leaves

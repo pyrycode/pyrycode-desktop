@@ -1,4 +1,5 @@
 import { useReadPublication } from './conversationReadPublisher'
+import { conversationReadRouteStore } from './conversationReadRouteStore'
 // The renderer data path feeding the per-conversation last-read store (#777, split from #677): it keeps
 // ONE legacy invariant true — THE OPEN CONVERSATION'S LOCAL MARK EQUALS ITS OWN HELD ITEM COUNT — from two restore
 // points. `activateConversation` restores it when a conversation is opened; the store subscription below
@@ -170,7 +171,7 @@ export function subscribeConversationLastRead(
  */
 export const conversationLastReadDeps: ConversationLastReadDeps = {
   // Local marks are ID-keyed: suppress a stamp if any matching host has the complete contract.
-  isDaemonBacked: (id) => conversationListStore.getState().conversations?.some(
+  isDaemonBacked: (id) => [...conversationReadRouteStore.getState().hosts.values()].some(chats => chats.has(id)) || conversationListStore.getState().conversations?.some(
     (row) => row.id === id && hasDaemonReadState(row)
   ) === true,
   getOpenConversationId: () => {

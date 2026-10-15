@@ -1,7 +1,8 @@
 # Conversation unread predicate
 
-The pure unread predicate uses the received daemon history IDs on a
-[conversation list row](conversation-list-store.md). Rows without both IDs retain the comparison
+The pure unread predicate uses received shown/read versions on an explicitly selected thread
+route, and received daemon history IDs on other [conversation list rows](conversation-list-store.md).
+Non-thread rows without both IDs retain the comparison
 between [held timeline](conversation-timeline-holder.md) item count and
 [local last-read mark](conversation-last-read-store.md). No store, bridge, IPC arm or render lives here.
 
@@ -19,13 +20,22 @@ state rather than looking up an arbitrary matching conversation ID from another 
 
 ## What it does
 
-`isConversationUnread(timeline, lastRead, row?)` answers one boolean from a row's optional
-`read_up_to` / `latest_entry_id` and the nullable `selectTimelineFor(id)` / `selectLastReadFor(id)`
-outputs. `hasDaemonReadState(row)` tests whether both daemon fields are present, including zero.
+`isConversationUnread(timeline, lastRead, row?, threadMode = false)` answers one boolean from
+received read fields and the nullable `selectTimelineFor(id)` / `selectLastReadFor(id)` outputs.
+Callers select thread mode explicitly by host/conversation/epoch, never by optional field presence.
+`hasDaemonReadState(row)` still tests the legacy daemon pair `read_up_to` / `latest_entry_id`,
+including zero; it does not select thread mode.
 
 ## How it works
 
-- **Daemon comparison comes first.** With both fields, unread means
+- **Explicit thread mode comes first.** With both `last_shown_version` and `read_up_to`, unread
+  means `last_shown_version > read_up_to`, including without a timeline. Zero is present and
+  equality is read. Missing either field returns false (unavailable), without falling through
+  to history IDs or local marks. Hidden trailing items and live counters cannot raise it.
+  Local stamps remain suppressed even with unavailable metadata. See
+  [thread route and attention](channel-list.md#thread-route-unread-and-attention) and
+  [committed publication evidence](conversation-shell.md#authoritative-thread-read-publication).
+- **Non-thread daemon comparison precedes local counts.** With both history/read fields, unread means
   `latest_entry_id > read_up_to`, even when no timeline or local mark is held. These are durable
   per-conversation history entry IDs, independent of envelope IDs, replay event IDs and local item
   counts. Equal IDs, including `0` / `0`, read as read. Wire and saved-list parsers admit only
@@ -35,7 +45,7 @@ outputs. `hasDaemonReadState(row)` tests whether both daemon fields are present,
   conversation is closed. Delayed lists cannot lower either known latest IDs or confirmed read marks.
   Acknowledging displayed tail 10 with known latest 12 leaves `12 > 10` unread; receipt of a newer
   unseen entry never becomes visibility proof. See [received read state](conversation-list-store.md#received-read-state).
-- **Publication and confirmation are separate.** The focused, uncovered committed newest-message
+- **Legacy publication and confirmation are separate.** The focused, uncovered committed newest-message
   tail supplies a host-bound observation through the [read publisher](conversation-last-read-store.md#how-it-works).
   Sending the command changes neither daemon read state nor this predicate's answer; a received
   owning-host mark advances the comparison. Reusing observation setup still requires the latest
@@ -44,7 +54,7 @@ outputs. `hasDaemonReadState(row)` tests whether both daemon fields are present,
   delta cannot advance the observed target. Missing frame identity on a complete daemon row cannot
   restore local read authority. Daemons without the received contract retain local count persistence,
   stamps and pairing/per-server clears and receive no read command.
-- **Incomplete or absent daemon contract uses three legacy branches, in this order:**
+- **Non-thread rows with incomplete or absent daemon contract use three legacy branches, in this order:**
   1. `timeline === null` → **read**. Nothing is held for this conversation (never fed, or evicted at
      [conversation timeline holder](conversation-timeline-holder.md)'s ten-slice cap), so there is no
      locally held content to compare, whatever local mark it carries. This branch runs first because it is what
@@ -55,7 +65,7 @@ outputs. `hasDaemonReadState(row)` tests whether both daemon fields are present,
      chat another client has driven is never invisible. Opening it clears the mark by the ordinary path
      (`stampLastReadFor`) for legacy rows; this module never writes.
   3. otherwise → `timeline.items.length > lastRead`. Strict `>` — an exact match reads as read.
-- **No `?? 0`, `?? initialTimelineState`, `||`, default parameter, or non-null assertion anywhere.** Both
+- **No defaulting of nullable timeline or mark inputs.** Both
   inputs stay nullable on purpose; each absent case is its own written-out branch. `items.length > (lastRead
   ?? 0)` typechecks identically and collapses branch 2 into branch 3 — the same collapse both source
   stores' headers ban at their own read sites.
@@ -95,8 +105,8 @@ outputs. `hasDaemonReadState(row)` tests whether both daemon fields are present,
 ## Configuration and usage
 
 - File: `src/renderer/src/store/conversationUnread.ts`; exports `isConversationUnread` and
-  `hasDaemonReadState`. The optional row accepts only the two read fields through
-  `Pick<ConversationSummary, 'read_up_to' | 'latest_entry_id'>`.
+  `hasDaemonReadState`. The optional row accepts `read_up_to`, `latest_entry_id` and
+  `last_shown_version` through `Pick<ConversationSummary, …>`.
 - [`ConversationStatusDotControl`](channel-list-status-dot.md) composes the row with its two keyed
   store reads; [`conversationStatusNow(row)`](app-badge.md) performs the equivalent synchronous
   composition for the badge. A `useConversationUnread(id)` hook was declined because static renderer
@@ -104,7 +114,8 @@ outputs. `hasDaemonReadState(row)` tests whether both daemon fields are present,
 
 ## Edge cases and limitations
 
-- **Omission is unknown, never zero.** A row with only one daemon field retains the local fallback.
+- **Omission is unknown, never zero.** A non-thread row with only one history/read field retains
+  the local fallback; a selected thread route never does.
   A complete row ignores local counts, so opening it or receiving timeline content cannot clear
   daemon unread locally: both stamp paths are guarded. Desktop publication requires the
   [committed visible-tail observation](conversation-last-read-store.md#how-it-works).

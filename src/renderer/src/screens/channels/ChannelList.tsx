@@ -61,6 +61,7 @@ import { useQuestionBatchStore, selectBatchFor } from '../../store/questionBatch
 import { useActiveConversationStore } from '../../store/activeConversationStore'
 import { resolveConversationStatus } from '../../store/conversationStatus'
 import { isConversationUnread } from '../../store/conversationUnread'
+import { conversationReadRouteStore } from '../../store/conversationReadRouteStore'
 import { requestArchiveConversation } from '../conversation/ConversationScreen'
 import { ComposerOptionsMenu } from '../conversation/ComposerOptionsPanel'
 import { SaveAsChannelDialog } from './SaveAsChannelDialog'
@@ -2252,7 +2253,8 @@ function renderBody(
  * `typeof window === 'undefined'` (conversationLastReadStore.ts:246-257) — so every unseeded row
  * server-renders as `idle`.
  */
-function ConversationStatusDotControl({ row }: { row: ConversationSummary }): JSX.Element {
+function ConversationStatusDotControl({ row }: { row: ConversationSummary & { serverId?: string | null } }): JSX.Element {
+  const threadMode = useStore(conversationReadRouteStore, s => s.epochFor(row.serverId, row.id) !== undefined)
   const conversationId = row.id
   const promptPending = useModalStore(selectHasOutstandingFor(conversationId))
   // #1700: a pending question batch waits on the operator exactly as a prompt does. The selector returns
@@ -2268,7 +2270,7 @@ function ConversationStatusDotControl({ row }: { row: ConversationSummary }): JS
       status={resolveConversationStatus(
         promptPending || questionPending,
         activity,
-        isConversationUnread(timeline, lastRead, row)
+        isConversationUnread(timeline, lastRead, row, threadMode)
       )}
     />
   )

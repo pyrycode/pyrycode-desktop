@@ -1,7 +1,7 @@
-import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
+import { test, expect, FIRST_SERVER_ID, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
 import { capturePairedApp } from './fixtures/capturePairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
-import type { EnvelopeType, SendMessagePayload } from '../src/shared/wire/types'
+import type { EnvelopeType, RequestHistoryPayload, SendMessagePayload } from '../src/shared/wire/types'
 
 const ts = '2026-09-11T12:00:00Z'
 const payload = (id: string, parent?: string, name = 'Agent') => ({
@@ -479,14 +479,22 @@ test('started background agents follow the tail, navigate markers, and settle on
 
 test('connect roster Agents appear before history and keep identity through live and historical launches', async ({ launchPairedApp }) => {
   const quiet = { ...SEEDED_ROW, id: 'connect-quiet', name: 'Connect quiet room' }
-  let historyRequest: number | undefined
+  let listedConversations = [SEEDED_ROW]
+  const historyRequests = new Map<string, number>()
+  const historyKey = (conversationId: string) => JSON.stringify([FIRST_SERVER_ID, conversationId])
   const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
     const envelope = decodeEnvelope(bytes)
-    if (envelope.type === 'request_history') { historyRequest = envelope.id; return [] }
-    return [seedConversationsFrame()]
+    if (envelope.type === 'request_history') {
+      const { conversation_id } = envelope.payload as RequestHistoryPayload
+      historyRequests.set(historyKey(conversation_id), envelope.id)
+      return []
+    }
+    if (envelope.type === 'list_conversations') return [frame('conversations', { conversations: listedConversations })]
+    return []
   } })
   await page.setViewportSize({ width: 1280, height: 800 })
-  daemon.pushFrame(frame('conversations', { conversations: [SEEDED_ROW, quiet] }))
+  listedConversations = [SEEDED_ROW, quiet]
+  daemon.pushFrame(frame('conversations', { conversations: listedConversations }))
   const thread = page.locator('.conversation__thread')
   const row = (id: string) => page.locator('.tool-row:not(.tool-run__row)').filter({
     has: page.locator('.tool-row__summary', { hasText: new RegExp(`^${id}$`) })
@@ -542,19 +550,26 @@ test('connect roster Agents appear before history and keep identity through live
   user('ordinary before connect finish')
   roster([])
   await page.locator('.channel-list__row').filter({ hasText: quiet.name }).locator('.channel-list__row-open').click()
+  // Leave quiet history pending; its request must arrive after the seeded request.
+  // A single shared reply ID would now route the seeded history into the quiet room.
+  await expect.poll(() => historyRequests.has(historyKey(quiet.id))).toBe(true)
+  expect(historyRequests.has(historyKey(SEEDED_ROW.id))).toBe(true)
   terminal()
   user('ordinary after connect finish')
   await page.locator('.channel-list__row').filter({ hasText: SEEDED_ROW.name ?? '' }).locator('.channel-list__row-open').click()
   await expect(row('connect-b').locator('.tool-row__count')).toHaveText('0 tools')
   await thread.focus()
   await page.keyboard.press('Home')
-  await expect.poll(() => historyRequest).toBeDefined()
+  const historyRequest = historyRequests.get(historyKey(SEEDED_ROW.id))
+  expect(historyRequest).toBeDefined()
+  expect(historyRequest).not.toBe(historyRequests.get(historyKey(quiet.id)))
   daemon.pushFrame(encodeEnvelope({ id: 2, type: 'history_page', ts, in_reply_to: historyRequest,
     payload: { cursor: '', at_start: true, entries: [
       { id: 12, type: 'tool_use', ts, payload: payload('history-connect-child', 'connect-b', 'Read') },
       { id: 11, type: 'tool_use', ts, payload: payload('connect-b') }
     ] }
   }))
+  await expect(row('connect-b').locator('.tool-row__count')).toHaveText('1 tool')
   await expect(marker('connect-b')).toContainText('Agent finished')
   await expect(row('connect-b')).toHaveCount(1)
   const after = thread.locator('.message-row--user').filter({ hasText: 'ordinary after connect finish' })

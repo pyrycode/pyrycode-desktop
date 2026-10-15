@@ -1,5 +1,5 @@
 import { createAttachmentImageSources } from './attachmentImageSource'
-import { useReadObservation } from '../../store/conversationReadPublisher'
+import { useReadObservation, type ThreadReadInputs } from '../../store/conversationReadPublisher'
 import type { ThreadSnapshot } from '../../store/threadItemStore'
 import { threadTaskPresentations, type ThreadTaskInputs } from './threadTaskPresentation'
 import { threadItemPresentations, threadQueueHandle, actOnThreadQueue, type ThreadSendInputs } from './threadItemPresentation'
@@ -1583,6 +1583,7 @@ export function Timeline({
 
 type ThreadItemsProps = {
   snapshot: ThreadSnapshot
+  readInputs?: Omit<ThreadReadInputs, 'snapshot'>
   sendInputs?: ThreadSendInputs
   taskInputs?: ThreadTaskInputs
   turnRunning?: boolean
@@ -1595,7 +1596,7 @@ export function ThreadItemsTimeline(props: ThreadItemsProps): JSX.Element {
   const s = props.snapshot
   return <ThreadItemsView key={JSON.stringify([s.hostId, s.conversationId, s.epoch])} {...props} />
 }
-function ThreadItemsView({ snapshot, sendInputs, taskInputs, turnRunning = false, foldTools = false, onReply, onOpenMarkdownPath }: ThreadItemsProps): JSX.Element {
+function ThreadItemsView({ snapshot, readInputs, sendInputs, taskInputs, turnRunning = false, foldTools = false, onReply, onOpenMarkdownPath }: ThreadItemsProps): JSX.Element {
   const tasks = useMemo(() => threadTaskPresentations(snapshot, taskInputs), [snapshot, taskInputs])
   const [tasksOpen, setTasksOpen] = useState(false)
   const activeTaskCount = tasks.filter(task => task.active).length
@@ -1622,6 +1623,7 @@ function ThreadItemsView({ snapshot, sendInputs, taskInputs, turnRunning = false
   // Completed older pages change the immutable item list without necessarily advancing the watermark.
   const visibleItems = useMemo(() => [...snapshot.items, ...pending], [snapshot.items, pending])
   const { scrollPin, paneRef } = useThreadScrollPin(snapshot.conversationId, 0, false, visibleItems)
+  useReadObservation(null, false, paneRef, scrollPin.ref, readInputs && { ...readInputs, snapshot })
   const [expandedTools, setTools] = useState<ReadonlySet<number>>(() => new Set())
   const [expandedRuns, setRuns] = useState<ReadonlySet<number>>(() => new Set())
   const items: ThreadItem[] = rows.map(row => row.item ?? { kind: 'userText', text: '' })

@@ -1,7 +1,7 @@
 import type { Locator, Page } from '@playwright/test'
 import { test, expect, seedConversationsFrame, SEEDED_ROW, SECOND_SEEDED_ROW,
   type PairedServerHandle } from './fixtures/launchPairedApp'
-import { launchIsolatedApp, createLaunchFateLog, attachLaunchFate } from './fixtures/desktopIsolation'
+import { appWindow, launchIsolatedApp, createLaunchFateLog, attachLaunchFate } from './fixtures/desktopIsolation'
 import { COMPOSER_REPAIR_BUTTON_COPY } from '../src/renderer/src/screens/conversation/composerSend'
 import { encodeEnvelope, decodeEnvelope } from '../src/main/transport/codec'
 import { DAEMON_EVENT_CHANNEL } from '../src/shared/ipc/events'
@@ -63,7 +63,7 @@ test('startup rejection before a list waits for manual repair, cancels and re-pa
   // Reuse the SAME endpoint and fake daemon, so this is a decoded rejection, not connection refusal.
   const app = await launchIsolatedApp({ args: ['.', `--user-data-dir=${first.userDataDir}`], env, fate })
   try {
-    const page = await app.firstWindow()
+    const page = await appWindow(app)
     await page.setViewportSize({ width: 800, height: 800 })
     const recovery = page.getByRole('dialog', { name: 'Pair', exact: true })
     await expect(page.locator('.channel-list__host')).toHaveCount(1)

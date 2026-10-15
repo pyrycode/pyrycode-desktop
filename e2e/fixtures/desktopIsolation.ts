@@ -1,4 +1,4 @@
-import { expect, type ElectronApplication, type TestInfo } from '@playwright/test'
+import { expect, type ElectronApplication, type Page, type TestInfo } from '@playwright/test'
 import { electron } from './electronLaunch'
 import type { ChildProcess } from 'node:child_process'
 import { HIDDEN_WINDOW_ENV_FLAG } from '../../src/main/windowPresentation'
@@ -142,6 +142,30 @@ export async function launchIsolatedApp(options: {
     }
     throw error
   }
+}
+
+/**
+ * The launched app's first window, once its own document has finished loading. Each site that launches
+ * the app and then drives its first window takes it from here: `launchPairedApp` before its `onLaunched`
+ * hook and the pairing drive, `realDaemon.ts`'s launch, `smoke.spec.ts` and `pairing-recovery.spec.ts`.
+ * A hook that calls `firstWindow()` itself gets the same, already loaded page.
+ *
+ * `firstWindow()` alone resolves before that point in most launches. Playwright reports the page once the
+ * navigation to the app document has committed, not once it has loaded: measured 2026-10-15 in the agent
+ * image, 66 of 80 launches came back with `document.readyState` still `interactive`, with and without CPU
+ * load. Its scripts and styles may still be running, so a spec's first read could see a half-started app.
+ * `#root` is the app's own mount element and exists only in the app document, so waiting for it first
+ * makes sure the load state awaited next belongs to that document.
+ *
+ * This is NOT what the `Execution context was destroyed` helpers in mainProcessRead.ts, confirmedPush.ts,
+ * composerWindowSetup.ts and localListFailure.ts are for. Those wrap main-process evaluations, which this
+ * wait does not touch; see mainProcessRead.ts for that cause.
+ */
+export async function appWindow(app: ElectronApplication): Promise<Page> {
+  const page = await app.firstWindow()
+  await page.locator('#root').waitFor({ state: 'attached' })
+  await page.waitForLoadState('load')
+  return page
 }
 
 /**

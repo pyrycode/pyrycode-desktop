@@ -17,6 +17,7 @@ import { encodeEnvelope } from '../../src/main/transport/codec'
 import { LOOPBACK_RELAY_ENV_FLAG } from '../../src/main/relayPolicy'
 import { TEST_SECRET_BACKEND_ENV_FLAG } from '../../src/main/secretBackend'
 import {
+  appWindow,
   attachLaunchFate,
   createLaunchFateLog,
   launchIsolatedApp,
@@ -368,7 +369,12 @@ export const test = base.extend<PairedAppFixtures>({
       // failure, so the drain below records it under this thunk's label exactly like any other step.
       teardown.push({ step: 'app', run: () => fate.closeWatched(app) })
 
-      const page = await app.firstWindow()
+      // The window once its app document has loaded, so the hook and the drive below never start on a
+      // document that is still starting up (see `appWindow`). The hook therefore always runs after the
+      // app's bundle has run and React has mounted its first screen, where it used to run at the commit,
+      // usually before. Its contract is unchanged: it completes before pairing and before any
+      // conversation opens.
+      const page = await appWindow(app)
       // History-handler replacement must follow startup registration, which precedes createWindow.
       // The hook still completes before pairing or opening the restored conversation.
       await control.onLaunched?.(app)

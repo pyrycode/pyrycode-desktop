@@ -17,7 +17,7 @@ import {
   type FakeRoutingRelay
 } from '../../src/main/transport/fakeRoutingRelay'
 import { decideCapabilityGate, readDaemonCapabilities } from './daemonCapabilityGate'
-import { e2eShowsWindow, expectDesktopIsolated, RENDERER_THROTTLING_SWITCHES } from './desktopIsolation'
+import { appWindow, e2eShowsWindow, expectDesktopIsolated, RENDERER_THROTTLING_SWITCHES } from './desktopIsolation'
 import { HIDDEN_WINDOW_ENV_FLAG } from '../../src/main/windowPresentation'
 import { LOOPBACK_RELAY_ENV_FLAG } from '../../src/main/relayPolicy'
 import { TEST_SECRET_BACKEND_ENV_FLAG } from '../../src/main/secretBackend'
@@ -590,7 +590,8 @@ export async function withIsolatedElectronApp(
       env
     })
     current = app
-    const page = await app.firstWindow()
+    // The window once its app document has loaded, as the default tier's launch waits (see `appWindow`).
+    const page = await appWindow(app)
     await expectDesktopIsolated(app)
     return {
       app, page, userDataDir,

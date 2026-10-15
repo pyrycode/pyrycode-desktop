@@ -58,6 +58,10 @@ Errors remain the existing replacement Error with no cause. Parser codes are all
 - Which native Desktop capture admission route supplies the complete configured suite? The provided `platform-probe` recipe executes no candidate tests; the other two public recipes target different repositories.
 - What boundary causes the historical HTTP 400? Pending actual native capture; success-only reruns do not answer it.
 
+## Revisions
+
+2026-10-15: Capture callbacks synchronously collect at most two records per forwarder; `startFakeServer` awaits attachments in `finally`, after registering a successful daemon's teardown. This keeps attachment I/O failures from stranding a returned daemon or being misclassified as dial failures. A fixture-owned setup ordinal exists before Electron launch and advances even when setup fails; the existing Electron launch ordinal starts too late for these attachments. Successful dials with no accepted connection observed on the owning forwarder remain `unobserved`.
+
 ## Security review
 
 **Verdict:** PASS

@@ -12,7 +12,7 @@ import {
   type FakeRelayForwarder
 } from '../../src/main/transport/fakeRelayForwarder'
 import type { FakeDaemon, FakeDaemonOptions } from '../../src/main/transport/fakeDaemon'
-import { startFakeDaemonForTest } from './fakeDaemonSetup'
+import { startFakeDaemonForTest, type FakeDaemonSetupAttempt } from './fakeDaemonSetup'
 import { encodeEnvelope } from '../../src/main/transport/codec'
 import { LOOPBACK_RELAY_ENV_FLAG } from '../../src/main/relayPolicy'
 import { TEST_SECRET_BACKEND_ENV_FLAG } from '../../src/main/secretBackend'
@@ -273,8 +273,10 @@ export const test = base.extend<PairedAppFixtures>({
     testInfo.setTimeout(LAUNCH_TEST_TIMEOUT_MS)
     const fate = createLaunchFateLog()
     const teardown: Array<{ step: TeardownStep; run: () => Promise<void> }> = []
+    let setupIndex = 0
 
     await use(async (options = {}, control = {}) => {
+      const setupOrdinal = ++setupIndex
       // Isolated `--user-data-dir`. Default: `mkdtemp` a fresh throwaway for a guaranteed-unpaired start
       // (the launch-time pairing-status query resolves `not-paired`, so the router shows the pairing
       // screen) and to keep every persisted secret out of the developer's real userData. A `rm` teardown
@@ -307,15 +309,27 @@ export const test = base.extend<PairedAppFixtures>({
       ): Promise<PairedServerHandle> => {
         const forwarder = await startFakeRelayForwarder()
         teardown.push({ step: steps.forwarder, run: () => forwarder.close() })
-        const daemon = await startFakeDaemonForTest({
-          url: forwarder.url,
-          buildReply: () => seedConversationsFrame(
-            serverId === SECOND_SERVER_ID ? SECOND_SEEDED_ROW : SEEDED_ROW
-          ),
-          ...serverOptions
-        })
-        teardown.push({ step: steps.daemon, run: () => daemon.close() })
-        return { serverId, daemon, forwarder }
+        const attempts: FakeDaemonSetupAttempt[] = []
+        try {
+          const daemon = await startFakeDaemonForTest({
+            url: forwarder.url,
+            buildReply: () => seedConversationsFrame(
+              serverId === SECOND_SERVER_ID ? SECOND_SEEDED_ROW : SEEDED_ROW
+            ),
+            ...serverOptions
+          }, {
+            snapshot: () => forwarder.setupDiagnostics(),
+            record: attempt => { attempts.push(attempt) }
+          })
+          teardown.push({ step: steps.daemon, run: () => daemon.close() })
+          return { serverId, daemon, forwarder }
+        } finally {
+          for (const attempt of attempts) {
+            await testInfo.attach(`fake-daemon-setup-${setupOrdinal}-${steps.forwarder}-${attempt.attempt}`, {
+              body: Buffer.from(JSON.stringify(attempt)), contentType: 'application/json'
+            })
+          }
+        }
       }
 
       const first = await startFakeServer(FIRST_SERVER_ID, options, {

@@ -24,7 +24,7 @@ export interface ThreadLiveDeps {
   log?: { event: (fields: { event: string; code: string }) => void }
 }
 
-function familyOf(event: DaemonEvent): SessionStateFamily | null {
+export function threadLiveFamily(event: DaemonEvent): SessionStateFamily | null {
   switch (event.type) {
     case 'sessionStateCleared': return event.family
     case 'modalShown': case 'modalDismissed': return 'modal_shown'
@@ -114,7 +114,7 @@ export function createThreadLiveState(deps: ThreadLiveDeps) {
           readings.delete('modal_shown'); readings.delete('question_shown'); requests.clear()
           set({ readings }); report('prompts-reconnected'); return
         }
-        const family = familyOf(event)
+        const family = threadLiveFamily(event)
         if (family === null) return
         if (!binding || !binding.sessionId || !('serverId' in event) || event.serverId !== binding.serverId) { report('scope-refused'); return }
         if (typeof event.envelopeSessionId !== 'string' || event.envelopeSessionId === '' || event.envelopeSessionId !== binding.sessionId) { report('provenance-refused'); return }
@@ -134,7 +134,7 @@ export function createThreadLiveState(deps: ThreadLiveDeps) {
         entries.set(identity(event), event); readings.set(family, entries); set({ readings }); report('reading-admitted')
       },
       respond(displayed, command) {
-        const binding = get().binding, family = familyOf(displayed)
+        const binding = get().binding, family = threadLiveFamily(displayed)
         if (disposed || !binding || !binding.sessionId || family === null ||
           get().readings.get(family)?.get(identity(displayed)) !== displayed || !deps.isConnected(binding.serverId)) return false
         const matches = displayed.type === 'modalShown'

@@ -59,6 +59,10 @@ test('real claude session checkbox grants repeated Bash use only in the current 
         offered: event.alwaysAllow?.offered === true
       })
       if (event.type === 'turnEnd') drive.completed.push(event.conversationId)
+      const supplied = event.type === 'threadReply' && event.reply.type === 'thread_items' ? event.reply.payload.items
+        : event.type === 'threadUpdate' && event.update.type === 'thread_item_added' ? [event.update.payload.item] : []
+      for (const item of supplied) if (item.kind === 'turn_end' && item.parent === undefined && 'conversationId' in event)
+        drive.completed.push(event.conversationId)
       if (event.type === 'runConfigReceived' && event.sessionId) drive.sessions.set(event.conversationId, {
         id: event.sessionId, received: (drive.sessions.get(event.conversationId)?.received ?? 0) + 1
       })

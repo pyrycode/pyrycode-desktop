@@ -53,7 +53,7 @@ it('delivers completed updates through shared IPC and preload; legacy translator
   expect(update).toMatchObject({ type: 'threadUpdate', serverId: 'host', conversationId: 'c',
     update: { type: 'thread_text_append', payload: p }, correlation: { id: 11, ts: 'stamp', in_reply_to: 4, event_id: 31, history_entry_id: 7, session_id: 'session' } })
   const before = received.length; off(); h.emit(f[0]); h.emit(f[1]); expect(received).toHaveLength(before)
-  expect((decodeEnvelope(h.configs[0].session.hello).payload as { capabilities: string[] }).capabilities).not.toContain('thread')
+  expect((decodeEnvelope(h.configs[0].session.hello).payload as { capabilities: string[] }).capabilities).toContain('thread')
   h.connection.stop()
 })
 it.each(['thread_item_added', 'thread_item_changed', 'thread_text_append'])('forwards ordinary and oversized %s through the existing preload subscription', async type => {

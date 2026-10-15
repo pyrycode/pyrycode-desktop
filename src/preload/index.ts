@@ -74,6 +74,8 @@ import { MARKDOWN_SAVE_CHANNEL, type MarkdownSaveOutcome } from '../shared/ipc/m
 let historyReceipt: { type: string; serverId: string | null | undefined } | null = null
 
 const api = {
+  deviceIdentity: (): Promise<{ ok: true; deviceId: string } | { ok: false; error: 'identity-unavailable' }> =>
+    ipcRenderer.invoke('pyry:device-identity'),
   hostedPane: (command: HostedPaneCommand): Promise<{ ok: true; state: HostedPaneState } | { ok: false; error: 'refused' }> =>
     ipcRenderer.invoke(HOSTED_PANE_CHANNEL, command),
   onHostedPane: (listener: (state: HostedPaneState) => void): (() => void) => {

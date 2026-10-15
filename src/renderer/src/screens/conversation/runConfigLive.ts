@@ -159,7 +159,7 @@ export function subscribeRunConfigRefresh(
 export function RunConfigLiveData(): null {
   useEffect(() => {
     return subscribeConfirmedRunConfig({
-      onDaemonEvent: window.pyry.onDaemonEvent,
+      onDaemonEvent: onCurrentSessionEvent,
       getContext: () => {
         const conversationId = activeConversationStore.getState().activeConversation?.id ?? null
         return { conversationId, serverId: serverIdForOpenConversation(
@@ -173,7 +173,11 @@ export function RunConfigLiveData(): null {
       },
       writes: runSettingsWriteStore,
       config: runConfigStore,
-      setSessionId: id => sessionIdStore.getState().setSessionId(id),
+      setSessionId: id => {
+        const open = activeConversationStore.getState().activeConversation
+        if (!open || !('serverId' in open) || typeof open.serverId !== 'string' || !threadRuntime.isThread(open.serverId, open.id))
+          sessionIdStore.getState().setSessionId(id)
+      },
       refresh: () => requestRunConfigSnapshot(window.pyry.sendCommand,
         activeConversationStore.getState().activeConversation?.id ?? null),
       log: code => window.pyry.sendDiagnostic({ event: 'permission-confirmation', code })
@@ -190,7 +194,7 @@ export function RunConfigLiveData(): null {
     // zero reply would wipe the held snapshot. A duplicate, a sheet-open request landing alongside an
     // edge-driven one, needs no designing around: the reply is a whole-snapshot replace, so it is
     // idempotent.
-    return subscribeRunConfigRefresh(window.pyry.onDaemonEvent, () =>
+    return subscribeRunConfigRefresh(onCurrentSessionEvent, () =>
       requestRunConfigSnapshot(
         window.pyry.sendCommand,
         activeConversationStore.getState().activeConversation?.id ?? null
@@ -200,3 +204,4 @@ export function RunConfigLiveData(): null {
 
   return null
 }
+import { onCurrentSessionEvent, threadRuntime } from '../../store/threadRuntime'

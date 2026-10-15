@@ -44,7 +44,7 @@ import {
   registerHostLabelServerHandler,
   registerHostLabelSetHandler
 } from './hostLabelHandler'
-import { createDeviceKeypairStore } from './deviceKeypair'
+import { createDeviceKeypairStore, readDeviceIdentity } from './deviceKeypair'
 import { noiseKeyPairGenerator } from './noiseKeyPairGenerator'
 import { createDaemonConnection } from './daemonConnection'
 import { createConnectionRegistry } from './connectionRegistry'
@@ -389,6 +389,8 @@ app.whenReady().then(() => {
     secureStore,
     generator: noiseKeyPairGenerator()
   })
+  ipcMain.handle('pyry:device-identity', () => readDeviceIdentity(deviceKeypairStore))
+  app.on('will-quit', () => ipcMain.removeHandler('pyry:device-identity'))
   // The live-window holder (#519), constructed before the connection because the connection captures
   // its sink for the process lifetime. It replaces the single captured `const mainWindow =
   // createWindow()` this line used to hold: on macOS the app outlives its window and the connection
@@ -864,7 +866,8 @@ app.whenReady().then(() => {
       case 'stopBackgroundTask': {
         // Routed like the toggle above (#1770): the conversation's host gets the frame, or no wire does.
         const conversationId = command.payload.conversation_id
-        router.route(conversationId)?.stopBackgroundTask(conversationId, command.payload.task_id)
+        const taskConnection = command.serverId === undefined ? router.route(conversationId) : registry.connectionFor(command.serverId)
+        taskConnection?.stopBackgroundTask(conversationId, command.payload.task_id)
         return
       }
       case 'queryThread':
@@ -935,23 +938,27 @@ app.whenReady().then(() => {
         // — so an answer for a modal no index knows puts no frame on ANY server's wire, and the
         // answer_token this method would mint main-side is never minted at all. Inert no-op when not
         // connected (#236), now by the same expression.
-        correlations.routeModal(command.payload.modal_id)?.answerModal(command.payload)
+        (command.serverId === undefined ? correlations.routeModal(command.payload.modal_id)
+          : registry.connectionFor(command.serverId))?.answerModal(command.payload)
         return
       case 'cancelModal':
         // ROUTED BY MODAL ID (#1119), sends modal_cancel. Inert no-op when not connected (#236).
-        correlations.routeModal(command.payload.modal_id)?.cancelModal(command.payload)
+        (command.serverId === undefined ? correlations.routeModal(command.payload.modal_id)
+          : registry.connectionFor(command.serverId))?.cancelModal(command.payload)
         return
       case 'answerQuestions':
         // ROUTED BY QUESTION BATCH ID (#1119), learned off the stamped `questionShown` and forgotten at
         // `questionDismissed` — a settled batch refuses, which costs nothing, since a retired batch
         // resolves nothing daemon-side either. The method mints the answer_token main-side and sends
         // question_answer; no reply is correlated. Inert no-op when not connected (#920).
-        correlations.routeQuestions(command.payload.question_batch_id)?.answerQuestions(command.payload)
+        (command.serverId === undefined ? correlations.routeQuestions(command.payload.question_batch_id)
+          : registry.connectionFor(command.serverId))?.answerQuestions(command.payload)
         return
       case 'refuseQuestions':
         // ROUTED BY QUESTION BATCH ID (#1119), sends question_refused. It mints a token too, unlike the
         // cancelModal it otherwise mirrors. Inert no-op when not connected (#920).
-        correlations.routeQuestions(command.payload.question_batch_id)?.refuseQuestions(command.payload)
+        (command.serverId === undefined ? correlations.routeQuestions(command.payload.question_batch_id)
+          : registry.connectionFor(command.serverId))?.refuseQuestions(command.payload)
         return
       case 'createConversation':
         // ROUTED BY SERVER (#1120) — a new chat is created ON a host, so the window says which. Only
@@ -971,12 +978,14 @@ app.whenReady().then(() => {
         // Direct to the connection method (mirrors sendMessage), no orchestrator — a dequeue is
         // ungated fire-and-forget. Sends dequeue_message; no reply is expected (the daemon re-broadcasts
         // its queue_state as the observable effect, #294). Inert no-op when not connected (#300).
-        router.route(command.payload.conversation_id)?.dequeueMessage(command.payload)
+        (command.serverId === undefined ? router.route(command.payload.conversation_id)
+          : registry.connectionFor(command.serverId))?.dequeueMessage(command.payload)
         return
       case 'sendQueuedNow':
         // #1726: the dequeueMessage route, verbatim — routed by conversation, fire-and-forget, inert when
         // not connected. The daemon's next queue_state and its user `message` push are the effect.
-        router.route(command.payload.conversation_id)?.sendQueuedNow(command.payload)
+        (command.serverId === undefined ? router.route(command.payload.conversation_id)
+          : registry.connectionFor(command.serverId))?.sendQueuedNow(command.payload)
         return
       case 'interrupt': {
         // ROUTED BY CONVERSATION (#1092), mirroring the newSession arm below and no longer by server —

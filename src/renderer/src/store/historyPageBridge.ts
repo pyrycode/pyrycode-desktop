@@ -339,7 +339,8 @@ export function requestGapHistory(deps: HistoryAskDeps, conversationId: string, 
 export const historyAskDeps: HistoryAskDeps = {
   sendCommand: (command) => window.pyry.sendCommand(command),
   canRequest: conversationId => activeConversationStore.getState().activeConversation?.id === conversationId &&
-    connectedConversationHostNow(conversationId) !== null,
+    connectedConversationHostNow(conversationId) !== null &&
+    !threadRuntime.isThread(connectedConversationHostNow(conversationId), conversationId),
   getHeld: (conversationId) => {
     const host = connectedConversationHostNow(conversationId)
     const held = conversationTimelineStore.getState().timelines.get(conversationId)
@@ -379,7 +380,7 @@ export function useHistoryPageBridge(): void {
   useEffect(
     () =>
       subscribeHistoryPage(
-        window.pyry.onDaemonEvent,
+        onLegacyContentEvent,
         (conversationId, items, cursor, atStart, placements = [], servedIds, entries) => {
           const keys = conversationTimelineStore.getState().prependHistoryFor(conversationId, items, placements.length > 0, entries)
           backgroundTaskRosterStore.getState().recordHistoryPlacements(conversationId, placements.flatMap(placement => {
@@ -409,3 +410,4 @@ export function useHistoryPageBridge(): void {
     []
   )
 }
+import { onLegacyContentEvent, threadRuntime } from './threadRuntime'

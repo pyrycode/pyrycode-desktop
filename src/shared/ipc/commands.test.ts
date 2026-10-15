@@ -1,5 +1,19 @@
 import { describe, it, expect } from 'vitest'
 
+it('validates the explicit owning host on thread prompt and queue actions', () => {
+  const commands = [answerModalCommand({ modal_id: 'modal', option_id: 'deny' }),
+    cancelModalCommand({ modal_id: 'modal' }), refuseQuestionsCommand({ question_batch_id: 'questions' }),
+    answerQuestionsCommand({ question_batch_id: 'questions', answers: [{ question_index: 0, values: ['yes'] }] }),
+    dequeueMessageCommand({ conversation_id: 'chat', queued_msg_id: 7 }),
+    sendQueuedNowCommand({ conversation_id: 'chat', queued_msg_id: 7 }),
+    { type: 'stopBackgroundTask', payload: { conversation_id: 'chat', task_id: 'task' } }]
+  for (const command of commands) {
+    expect(isRendererCommand({ ...command, serverId: 'host' })).toBe(true)
+    for (const serverId of ['', 'x'.repeat(1025), null, 42])
+      expect(isRendererCommand({ ...command, serverId })).toBe(false)
+  }
+})
+
 it('carries a bounded refusal owner outside the send wire payload', () => {
   const payload = { conversation_id: 'conv', message_id: 'message', text: 'text' }
   expect(sendMessageCommand(payload, 'host')).toEqual({ type: 'sendMessage', payload, serverId: 'host' })

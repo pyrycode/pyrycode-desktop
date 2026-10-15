@@ -309,7 +309,7 @@ export type RelayLinkStatus = 'connected' | 'offline' | 'daemon-absent'
 type BaseDaemonEvent =
   | { type: 'threadReply'; conversationId: string; requestId: string; reply: ThreadReply; correlation: Omit<Envelope, 'payload' | 'type'> }
   | { type: 'threadQueryFailed'; conversationId: string; requestId: string; inReplyTo: number; reason: ThreadQueryFailure }
-  | { type: 'sessionStateCleared'; family: SessionStateFamily; correlation: Omit<Envelope, 'payload' | 'type'> }
+  | { type: 'sessionStateCleared'; family: SessionStateFamily; conversationId?: string; correlation: Omit<Envelope, 'payload' | 'type'> }
   | { type: 'threadUpdate'; conversationId: string; update: ThreadUpdate; correlation: Omit<Envelope, 'payload' | 'type'> }
   | { type: 'threadRepairNeeded'; conversationId: string; reason: ThreadRepairReason }
   | { type: 'messageDelivery'; conversationId: string; messageId: string; status: 'waiting' | 'not-sent' | 'written' }

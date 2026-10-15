@@ -114,7 +114,8 @@ it.each(cases)('%s clears before fresh, maps its family and remains inert for le
     const clear = received.at(-1)!
     expect(clear).toMatchObject({ type: 'sessionStateCleared', family: family(type), serverId: 'host', inReplyTo: in_reply_to,
       correlation: { id: 99, ts: 'stamp', in_reply_to } })
-    expect(Object.hasOwn(clear, 'conversationId')).toBe(false)
+    expect(Object.hasOwn(clear, 'conversationId')).toBe(type === 'session_settings')
+    if (type === 'session_settings') expect(clear).toMatchObject({ conversationId: 'conversation' })
     expect(Object.hasOwn(clear, 'envelopeSessionId')).toBe(tag !== undefined)
     if (tag !== undefined) expect(clear).toMatchObject({ envelopeSessionId: tag, correlation: { session_id: tag } })
     const before = received.length
@@ -203,7 +204,7 @@ it('isolates equal conversation/session IDs across hosts and preserves subscript
     ['sessionStateCleared', 'a'], ['turnState', 'b'], ['turnState', 'a']
   ])
   for (const h of [a, b]) {
-    expect((decodeEnvelope(h.configs[0].session.hello).payload as { capabilities: string[] }).capabilities).not.toContain('thread')
+    expect((decodeEnvelope(h.configs[0].session.hello).payload as { capabilities: string[] }).capabilities).toContain('thread')
     expect(h.sent).toHaveLength(0)
   }
   off(); const before = received.length

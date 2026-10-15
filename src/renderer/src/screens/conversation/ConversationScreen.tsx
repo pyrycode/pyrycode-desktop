@@ -1,4 +1,7 @@
 import { createAttachmentImageSources } from './attachmentImageSource'
+import { threadRuntime } from '../../store/threadRuntime'
+import { threadLiveInputs } from './threadLiveInputs'
+import { ThreadPromptSlot } from './ThreadPromptSlot'
 import { useReadObservation, type ThreadReadInputs } from '../../store/conversationReadPublisher'
 import type { ThreadSnapshot } from '../../store/threadItemStore'
 import { threadTaskPresentations, type ThreadTaskInputs } from './threadTaskPresentation'
@@ -305,6 +308,19 @@ export function ConversationScreen({
     ? savedTimelineTarget.serverId
     : activeConversation !== null && 'serverId' in activeConversation &&
       typeof activeConversation.serverId === 'string' ? activeConversation.serverId : null
+  const authoritative = useStore(threadRuntime.state, () => threadRuntime.isThread(selectedHost, openConversationId))
+  const authoritativeSnapshot = useStore(threadRuntime.items, s => selectedHost === null || openConversationId === null
+    ? null : s.hosts.get(selectedHost)?.get(openConversationId)?.snapshot ?? null)
+  const threadLive = useMemo(() => threadRuntime.live(selectedHost ?? '', openConversationId ?? ''), [selectedHost, openConversationId])
+  const liveState = useStore(threadLive, s => s)
+  const localSend = useStore(threadRuntime.sends, s => selectedHost === null || openConversationId === null
+    ? null : s.select(selectedHost, openConversationId))
+  const liveInput = useMemo(() => threadLiveInputs(liveState, localSend?.localSendPending), [liveState, localSend])
+  const queryKey = JSON.stringify([selectedHost, openConversationId])
+  const queryState = useStore(threadRuntime.state, s => s.queries.get(queryKey))
+  const complete = useStore(threadRuntime.state, s => s.complete.get(queryKey))
+  const threadRestoring = useStore(threadRuntime.state, s => s.restoring.has(queryKey))
+  const threadConnection = useSessionStore(s => selectedHost === null ? undefined : s.statuses.get(selectedHost))
   useEffect(() => {
     const dispatch = agentSwitchStore.getState().dispatch
     dispatch({ type: 'paneChanged', pane: selectedHost === null || openConversationId === null
@@ -326,7 +342,8 @@ export function ConversationScreen({
   const backgroundAgents = useBackgroundTaskRosterStore(s => openConversationId === null || ownSlice === undefined
     ? undefined : s.agentTimeline.get(openConversationId))
   const openTimeline = selectedHost !== null && ownSlice === undefined ? null : heldTimeline
-  const localStatus = ownSlice?.localRead ?? (ownSlice === undefined ? 'loading' : 'loaded')
+  const localStatus = authoritative ? threadRestoring ? 'loading' : 'loaded'
+    : ownSlice?.localRead ?? (ownSlice === undefined ? 'loading' : 'loaded')
   const coverage = ownSlice?.coverage ?? (ownSlice?.history?.status === 'loaded'
     ? ownSlice.history : ownSlice?.restored?.coverage)
   const olderSaved = offline && localStatus === 'loaded' &&
@@ -345,7 +362,9 @@ export function ConversationScreen({
   // exactly today's behaviour against an empty flat store. No test can tell the two readings apart at this
   // site, because both render identically; the test that CAN fail is the empty-string-key one in
   // ConversationScreen.test.tsx's `selectOpenTimelineFor` describe.
-  const thread = openTimeline === null ? initialTimelineState : openTimeline
+  const thread = authoritative ? { ...initialTimelineState, ...liveInput.status,
+    thinkingTokens: liveInput.thinkingTokens, localSendPending: localSend?.localSendPending ?? null }
+    : openTimeline === null ? initialTimelineState : openTimeline
   // The seven names below are `TimelineState`'s own seven fields, so every line of JSX under this container
   // is untouched by the cutover. Subscribing to the whole slice rather than to seven narrow selectors is
   // re-render-neutral: each of the six scalars' own comments recorded that it "adds no meaningful
@@ -516,7 +535,7 @@ export function ConversationScreen({
   // attachments and its upload listener are mount-local, so an early return here would silently drop them
   // on a same-conversation round trip through the reader. Hiding also keeps the thread's scroll position.
   const readerOpen = reader.state.type !== 'closed'
-  useReadObservation(openConversationId, readerOpen, paneRef, scrollPin.ref)
+  useReadObservation(authoritative ? null : openConversationId, readerOpen, paneRef, scrollPin.ref)
   return (
     <div className="conversation">
       {reader.state.type !== 'closed' && (
@@ -565,7 +584,7 @@ export function ConversationScreen({
           read as a fault. What survives is a read that has not settled (loading, failed) and an offline
           host whose read DID return rows — the one case where "Offline. Showing saved messages." is a
           true sentence. The disconnection itself is still announced, by the #279 banner above. */}
-      {selectedHost !== null && (localStatus !== 'loaded' || (offline && items.length > 0)) &&
+      {selectedHost !== null && (localStatus !== 'loaded' || (offline && (authoritative ? authoritativeSnapshot?.items.length : items.length))) &&
         <SavedTimelineNotice status={localStatus} />}
       {/* #1627: a markdown file that could not be opened. One client-owned line, never the path or the
           reason; cleared by the next open, and gone with the screen on a conversation switch. */}
@@ -589,7 +608,29 @@ export function ConversationScreen({
           rendered, so the overlay (Re-pair above all) still shows when an offline host leaves the
           Timeline nothing to draw; the region then stays empty rather than missing. */}
       <div className="conversation__message-area">
-      {(!offline || items.length > 0 || visibleQueued.length > 0 || pendingBatch !== undefined || hasPermissionSurface) && <Timeline
+      {authoritative && authoritativeSnapshot === null && queryState?.type === 'loading' && <p role="status">Loading messages…</p>}
+      {authoritative && authoritativeSnapshot === null && queryState?.type === 'failed' && <ComposerHistoryFailure retryable
+        onRetry={() => { if (selectedHost !== null) threadRuntime.query('retry', selectedHost) }} />}
+      {authoritative && authoritativeSnapshot && <ThreadItemsTimeline snapshot={authoritativeSnapshot}
+        onOlder={() => { if (selectedHost !== null) threadRuntime.query('older', selectedHost) }}
+        readInputs={activeConversation ? { row: { ...activeConversation, serverId: selectedHost }, readerOpen,
+          completeThrough: complete?.epoch === authoritativeSnapshot.epoch ? complete.version : 0 } : undefined}
+        sendInputs={{ local: selectedHost !== null && openConversationId !== null && localSend !== null
+          ? { hostId: selectedHost, conversationId: openConversationId, ...localSend } : undefined,
+          connection: selectedHost !== null && threadConnection ? { hostId: selectedHost, status: threadConnection } : undefined,
+          onAction: (serverId, command) => window.pyry.sendCommand({ ...command, serverId }) }}
+        taskInputs={{ connection: selectedHost !== null && threadConnection ? { hostId: selectedHost, status: threadConnection } : undefined,
+          onStopTask: (serverId, conversationId, taskId) => window.pyry.sendCommand({ type: 'stopBackgroundTask', serverId,
+            payload: { conversation_id: conversationId, task_id: taskId } }) }}
+        foldTools={collapseToolUses} turnRunning={isTurnRunning(phase)} onReply={replyToMessage} onOpenMarkdownPath={reader.open}
+        trailing={<>
+          {queryState?.type === 'loading' && <p role="status">Loading messages…</p>}
+          {queryState?.type === 'failed' && <ComposerHistoryFailure retryable onRetry={() => {
+            if (selectedHost !== null) threadRuntime.query('retry', selectedHost)
+          }} />}
+          <ThreadPromptSlot host={selectedHost} conversationId={openConversationId} />
+        </>} />}
+      {!authoritative && (!offline || items.length > 0 || visibleQueued.length > 0 || pendingBatch !== undefined || hasPermissionSurface) && <Timeline
         key={openConversationId}
         items={items}
         gapState={ownSlice}
@@ -626,7 +667,7 @@ export function ConversationScreen({
           #1634: a non-modal drawer pinned over the right of THIS region (Figma 565:2966 spans exactly the
           message area), the last child so it paints above the Top overlay. `turnRunning` is the stop
           control's own gate, so the drawer yields exactly the Escape the composer will act on. */}
-      {panelOpen && (
+      {!authoritative && panelOpen && (
         <BackgroundTaskPanel
           conversationId={activeConversation?.id ?? null}
           turnRunning={isTurnRunning(phase)}
@@ -890,7 +931,7 @@ function measureThreadChrome(pane: HTMLElement): void {
  * dependency array it already runs after every render, so "jump to the bottom now" and "stay pinned while
  * the reply streams" are not two behaviours: both are consequences of the flag being `true`.
  */
-function useThreadScrollPin(conversationId: string | null, prependedRows: number, legacyHistory = true, presentation?: object): ThreadPin {
+function useThreadScrollPin(conversationId: string | null, prependedRows: number, legacyHistory = true, presentation?: object, onOlder?: () => void): ThreadPin {
   const ref = useRef<HTMLDivElement>(null)
   const paneRef = useRef<HTMLDivElement>(null)
   const following = useRef(true)
@@ -1148,6 +1189,7 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
     if (!legacyHistory) {
       following.current = false
       rememberTop(el)
+      if (isNearTop({ scrollOffset: el.scrollTop, viewportHeight: el.clientHeight, contentHeight: el.scrollHeight })) onOlder?.()
       return
     }
     // Measure before the input scrolls: crossing into the band needs a new input.
@@ -1172,6 +1214,11 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
       viewportHeight: el.clientHeight, contentHeight: el.scrollHeight })
     if (nearTop) following.current = false
     rememberTop(el)
+    const host = connectedConversationHostNow(conversationId)
+    if (host !== null && threadRuntime.isThread(host, conversationId)) {
+      if (nearTop) threadRuntime.query('older', host)
+      return
+    }
     requestOlderHistory(historyAskDeps, conversationId, nearTop)
   }
 
@@ -1582,6 +1629,8 @@ export function Timeline({
 }
 
 type ThreadItemsProps = {
+  onOlder?: () => void
+  trailing?: ReactNode
   snapshot: ThreadSnapshot
   readInputs?: Omit<ThreadReadInputs, 'snapshot'>
   sendInputs?: ThreadSendInputs
@@ -1596,7 +1645,7 @@ export function ThreadItemsTimeline(props: ThreadItemsProps): JSX.Element {
   const s = props.snapshot
   return <ThreadItemsView key={JSON.stringify([s.hostId, s.conversationId, s.epoch])} {...props} />
 }
-function ThreadItemsView({ snapshot, readInputs, sendInputs, taskInputs, turnRunning = false, foldTools = false, onReply, onOpenMarkdownPath }: ThreadItemsProps): JSX.Element {
+function ThreadItemsView({ snapshot, readInputs, sendInputs, taskInputs, trailing, onOlder, turnRunning = false, foldTools = false, onReply, onOpenMarkdownPath }: ThreadItemsProps): JSX.Element {
   const tasks = useMemo(() => threadTaskPresentations(snapshot, taskInputs), [snapshot, taskInputs])
   const [tasksOpen, setTasksOpen] = useState(false)
   const activeTaskCount = tasks.filter(task => task.active).length
@@ -1622,7 +1671,7 @@ function ThreadItemsView({ snapshot, readInputs, sendInputs, taskInputs, turnRun
   }, [snapshot.hostId, snapshot.conversationId])
   // Completed older pages change the immutable item list without necessarily advancing the watermark.
   const visibleItems = useMemo(() => [...snapshot.items, ...pending], [snapshot.items, pending])
-  const { scrollPin, paneRef } = useThreadScrollPin(snapshot.conversationId, 0, false, visibleItems)
+  const { scrollPin, paneRef } = useThreadScrollPin(snapshot.conversationId, 0, false, visibleItems, onOlder)
   useReadObservation(null, false, paneRef, scrollPin.ref, readInputs && { ...readInputs, snapshot })
   const [expandedTools, setTools] = useState<ReadonlySet<number>>(() => new Set())
   const [expandedRuns, setRuns] = useState<ReadonlySet<number>>(() => new Set())
@@ -1707,6 +1756,7 @@ function ThreadItemsView({ snapshot, readInputs, sendInputs, taskInputs, turnRun
       })}
       {pending.map(row => <TimelineRow key={`pending-${row.key}`} item={row.item} inProgress={false}
         delivery={row.delivery} onReply={onReply} />)}
+      {trailing}
     </div>
     <ThinkingIndicator state={sendState} toolName={null} retry={null} resetting={null} thinkingTokens={null} />
     {tasks.length > 0 && <div className="composer-status">
@@ -4441,6 +4491,27 @@ function Composer({
     // as the button. The input is not cleared; nothing was sent.
     const serverId = connectedConversationHostNow(activeConversationId)
     if (!canSend || serverId === null || rememberedModel.pending.getState().target === activeConversationId) return false
+    if (activeConversationId !== null && threadRuntime.isThread(serverId, activeConversationId)) {
+      if (value.trim().length === 0) return false
+      const chat = activeConversationId, take = attach.takePendingAttachments()
+      const connection = sessionStore.getState().statuses.get(serverId)
+      const restore = (): void => {
+        take.rollback()
+        composerDraftStore.getState().setDraft(serverId, chat, value)
+        window.pyry.sendDiagnostic({ event: 'thread-send', code: 'identity-or-connection-unavailable' })
+      }
+      // Capture identity from main for this submission, fencing reconnect/downgrade across the invoke.
+      void window.pyry.deviceIdentity().then(identity => {
+        if (!identity.ok || sessionStore.getState().statuses.get(serverId) !== connection ||
+            !threadRuntime.isThread(serverId, chat)) { restore(); return }
+        submitMessage(value, chat, { serverId, threadSend: { store: threadRuntime.sends, deviceId: identity.deviceId },
+          diagnose: window.pyry.sendDiagnostic, sendCommand: window.pyry.sendCommand,
+          dispatch: () => {}, dispatchFor: () => {}, newMessageId: () => crypto.randomUUID(),
+          now: Date.now, takeAttachments: () => take })
+      }).catch(restore) // A failed identity invoke restores the captured draft and attachments.
+      onMessageSent()
+      return true
+    }
     // `window.pyry` is dereferenced only here, at interaction time — never during render — so the
     // server-rendered container smoke test never touches the bridge. Do NOT hoist the deps object out of
     // this function: that would move the dereference into the render path, where `window.pyry` does not

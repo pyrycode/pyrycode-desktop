@@ -183,10 +183,11 @@ export function ModelListData(): null {
     // Subscribe on mount; the returned off handle is the effect cleanup, so a StrictMode double-mount
     // nets exactly one live listener (the announcedModelBridge idiom) and window teardown removes it.
     // Each frame replaces its own conversation's list and leaves every other conversation untouched.
-    return subscribeModelList(window.pyry.onDaemonEvent, (snapshot) =>
+    return subscribeModelList(onCurrentSessionEvent, (snapshot) =>
       modelListStore.getState().setModelList(snapshot)
     )
   }, [])
 
   return null
 }
+import { onCurrentSessionEvent } from './threadRuntime'

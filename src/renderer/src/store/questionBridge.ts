@@ -396,10 +396,11 @@ export function useQuestionBridge(): void {
   useEffect(
     () =>
       subscribeQuestionBatches(
-        window.pyry.onDaemonEvent,
+        onLegacyContentEvent,
         (event) => questionBatchStore.getState().dispatch(event),
         (event) => questionPicksStore.getState().dispatch(event)
       ),
     []
   )
 }
+import { onLegacyContentEvent } from './threadRuntime'

@@ -836,6 +836,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   let stopped = false
   let driver: NoiseRelayDriver | null = null
   let authenticated = false
+  let threadNegotiated = false
   let deliveryFailed = false
   let drainingMessages = false
   const heldMessages: { payload: SendMessagePayload; size: number; observe?: (outcome: SendOutcome) => void }[] = []
@@ -1300,6 +1301,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         }
         pairingRejected = false
         authenticated = true
+        threadNegotiated = ack.capabilities.includes('thread')
         hostedResources.reset(ack.capabilities.includes('hosted_apps_v1'))
         hostedApps.reset(ack.server_id === deps.serverId && ack.capabilities.includes('hosted_apps_v1'))
         deliveryFailed = false
@@ -1369,10 +1371,15 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         // optional chaining, or the settled reassembler's own inert guard — preserving the prior
         // drop behaviour and keeping an unrelated `error` harmless when no bundle is streaming).
         switch (inbound.kind) {
-          case 'session-state-cleared':
+          case 'session-state-cleared': {
+            const reply = inbound.correlation.in_reply_to
+            const conversationId = reply === undefined ? undefined : inbound.family === 'session_settings'
+              ? pendingConfigRequests.get(reply) : inbound.family === 'mcp_status' ? pendingMcpStatusRequests.get(reply) : undefined
             emitDaemonEvent(sink, { type: 'sessionStateCleared', family: inbound.family,
+              ...(conversationId === undefined ? {} : { conversationId }),
               correlation: inbound.correlation, daemonTs: inbound.correlation.ts })
             return
+          }
           case 'thread-frame':
             if (authenticated && !stopped) threadReceiver.receive(inbound.envelope)
             return
@@ -3122,7 +3129,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // Advertise `multi_agent` too (#1657): without it the daemon withholds Codex conversations,
       // their frames and Codex model rows, all of which the window now decodes per agent (#1649).
       // Advertise `stop_background_task` (#1770), detection only: the echo says the daemon takes the verb.
-      capabilities: [CAPABILITY_INTERACTIVE, CAPABILITY_MULTI_AGENT, CAPABILITY_STOP_BACKGROUND_TASK, 'hosted_apps_v1']
+      capabilities: [CAPABILITY_INTERACTIVE, 'thread', CAPABILITY_MULTI_AGENT, CAPABILITY_STOP_BACKGROUND_TASK, 'hosted_apps_v1']
     })
     return {
       connection: {
@@ -3439,6 +3446,10 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   }
 
   function requestHistory(payload: RequestHistoryPayload): void {
+    if (threadNegotiated) {
+      deps.diagnosticLog?.event({ event: 'history-request-refused', code: 'thread-route' })
+      return
+    }
     if (driver === null || !authenticated) {
       failHistoryRequest(payload.conversation_id, 'unavailable')
       return

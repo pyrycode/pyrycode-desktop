@@ -11,6 +11,14 @@ A positive assertion can also be vacuous if history already satisfies it.
 Measure the pre-action count and wait for an increase.
 Keep an opening absence check when it proves that a later observation is new.
 
+Renderer evaluation completion does not establish delivery of fire-and-forget IPC. When an
+observation callback sends synchronously, a later sentinel command on the same ordered outbound
+path, received at the fake daemon, establishes processing before checking that no publication
+occurred. Keep the exclusion condition active until that receipt; restoring it earlier can let
+an incorrect excluded publication satisfy the subsequent positive poll. See
+[visible-tail read publication](development-verification-what-each-test-tier-proves.md#visible-tail-read-publication)
+for the focus/context-usage barrier and the forced-publication control that rejects this false pass.
+
 A width assertion must distinguish the before and after layouts.
 A test that passes at both widths cannot prove that resizing changed anything.
 `launchPairedApp` initially clicks an unfiltered `.channel-list__row-open` locator,

@@ -93,16 +93,24 @@ only the derived target label and rejection flag. The modal rejection notice app
 
 ### Hosted app selection and trusted chrome
 
-The [host sidebar's Apps rows](channel-list.md#host-apps), shipped in
-[#2001](https://github.com/pyrycode/pyrycode-desktop/issues/2001), select through
-`window.pyry.hostedPane({ type: 'select', serverId, appId })`. Each row names its paired
-host and discovered app explicitly; channel-link entry points remain
-[#2002](https://github.com/pyrycode/pyrycode-desktop/issues/2002).
+The [host sidebar's Apps rows](channel-list.md#host-apps) and explicitly activated
+[assistant app links](assistant-markdown-renderer.md#hosted-app-links-from-replies)
+select through `window.pyry.hostedPane({ type: 'select', serverId, appId })`.
+Both entry points name the host/app independently of the invoking conversation.
 `window.pyry.onHostedPane(listener)` returns an unsubscribe function and delivers
 `HostedPaneState` snapshots/events. It subscribes before requesting the initial
 snapshot and ignores that reply once an event has arrived. Use this stream to
 mirror state, rather than letting a late command reply overwrite newer selection.
 Commands return `{ ok: true, state }` or `{ ok: false, error: 'refused' }`.
+
+For reply links, `PairedShell.openHostedApp` checks current saved host records.
+A saved target sends select immediately, without changing the active conversation's
+host. An unknown host opens the existing manual Pair modal and captures its origin
+route. It imports no keys, auto-pairs nothing and retains no deferred app target;
+even successful pairing requires another explicit app activation. Cancel returns
+to the invoking view with its conversation and draft intact. The callback stays
+stable across reply deltas. Diagnostics use only static `hosted-link` codes
+`unpaired` or `refused`, never URLs, labels, reply text or exception details.
 
 `PairedShell` mirrors the stream in `hostedPaneStore` and passes a `hostedPane`
 boolean to the pure `PairedShellView`. Opening from closed dispatches `back` to
@@ -144,6 +152,12 @@ completion uses a separate selection-identity fence: a release-generation change
 must not discard a still-current label read. Exact registered client/main-frame
 membership, strict command shapes and bounded geometry are checked in main;
 malformed, stale or untrusted requests return `refused` without changing the pane.
+Link routing adds no IPC or external-link permission. Main independently validates
+the attached privileged main frame, strict select shape and named paired-host
+membership; hosted content receives no client navigation capability. Select replaces
+subscriptions synchronously and advances the generation. A delayed select result
+or discovery completion from A cannot overwrite a newer selection B; the shell
+observes pane events rather than applying command-result snapshots.
 
 App navigation leaves the active channel/chat identity and its host intact, creates no conversation,
 and preserves `composerDraftStore` entries keyed by host/conversation. The pane stream controls app
@@ -161,6 +175,9 @@ pairing dialogs preserve the selection while hiding native content. Shell unmoun
 unsubscribes and closes the current selection, and parent reload/close disposes
 discovery and native content. The [focused pane verification](daemon-connection-hosted-resource-views.md#trusted-pane-verification)
 covers the production preload/IPC path and these ownership boundaries.
+The [link scenarios](development-verification.md#hosted-app-link-verification)
+also cover streaming/settled activation, manual pairing, delayed replies and return
+through the sidebar to the original host/conversation-keyed draft.
 
 ### The pair-new-host plus and origin-aware cancel (#1303)
 

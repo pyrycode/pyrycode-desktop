@@ -246,6 +246,7 @@ export function selectOpenTimelineFor(
 }
 
 export interface ConversationScreenProps {
+  onOpenHostedApp?: (serverId: string, appId: string) => void
   savedTimelineTarget?: { serverId: string; conversationId: string }
   onRepairHost?: (serverId: string) => void
   // Compatibility prop for existing embedders; repair now delegates through onRepairHost.
@@ -265,6 +266,7 @@ export interface ConversationScreenProps {
 }
 
 export function ConversationScreen({
+  onOpenHostedApp,
   savedTimelineTarget,
   onRepairHost,
   onBack,
@@ -658,6 +660,7 @@ export function ConversationScreen({
         olderSaved={olderSaved}
         saved={offline || ownSlice?.localRead !== undefined}
         onOpenMarkdownPath={reader.open}
+        onOpenHostedApp={onOpenHostedApp}
         agent={openAgent}
         onDropQueued={actionsAvailable ? onDropQueued : undefined}
         midTurnInput={midTurnInput}
@@ -1395,7 +1398,8 @@ export function Timeline({
   onOpenMarkdownPath,
   agent,
   trailing,
-  onReply
+  onReply,
+  onOpenHostedApp
 }: {
   trailing?: ReactNode
   gapState?: Pick<ConversationSlice, 'gaps' | 'display' | 'history'>
@@ -1424,6 +1428,7 @@ export function Timeline({
   /** #1627: opens the in-app reader for a markdown link in a settled assistant reply. Optional for the
    *  `onDropQueued` reason: absent, such a link keeps its plain-text rendering. */
   onOpenMarkdownPath?: (path: string) => void
+  onOpenHostedApp?: (serverId: string, appId: string) => void
   /** #1656: the open conversation's agent, named by the banner and stopped-turn rows. Optional for the
    *  `scrollPin` reason: absent reads Claude, so the existing render sites stay byte-identical. */
   agent?: WireAgent
@@ -1573,6 +1578,7 @@ export function Timeline({
         item={row.item} readRowKey={typeof rowKey === 'number' ? rowKey : undefined} delivery={localEchoes?.find(e => e.rowKey === rowKeys?.[row.itemIndex])?.delivery} queued={row.queued} onDropQueued={onDropQueued} turnStats={turnStats.get(row.itemIndex)}
         midTurnInput={midTurnInput} onSendQueuedNow={onSendQueuedNow}
         onOpenMarkdownPath={onOpenMarkdownPath} agent={agent}
+        onOpenHostedApp={onOpenHostedApp}
         onReply={onReply}
         inProgress={!saved && row.item.kind === 'assistantText' &&
           (row.itemIndex === items.length - 1 || (row.itemIndex === openBubble && !row.item.parentToolUseId))} />
@@ -1636,6 +1642,7 @@ export function Timeline({
 type ThreadItemsProps = {
   onOlder?: () => void
   trailing?: ReactNode
+  onOpenHostedApp?: (serverId: string, appId: string) => void
   snapshot: ThreadSnapshot
   readInputs?: Omit<ThreadReadInputs, 'snapshot'>
   sendInputs?: ThreadSendInputs
@@ -1650,7 +1657,7 @@ export function ThreadItemsTimeline(props: ThreadItemsProps): JSX.Element {
   const s = props.snapshot
   return <ThreadItemsView key={JSON.stringify([s.hostId, s.conversationId, s.epoch])} {...props} />
 }
-function ThreadItemsView({ snapshot, readInputs, sendInputs, taskInputs, trailing, onOlder, turnRunning = false, foldTools = false, onReply, onOpenMarkdownPath }: ThreadItemsProps): JSX.Element {
+function ThreadItemsView({ snapshot, readInputs, sendInputs, taskInputs, trailing, onOlder, turnRunning = false, foldTools = false, onReply, onOpenMarkdownPath, onOpenHostedApp }: ThreadItemsProps): JSX.Element {
   const tasks = useMemo(() => threadTaskPresentations(snapshot, taskInputs), [snapshot, taskInputs])
   const [tasksOpen, setTasksOpen] = useState(false)
   const activeTaskCount = tasks.filter(task => task.active).length
@@ -1756,7 +1763,7 @@ function ThreadItemsView({ snapshot, readInputs, sendInputs, taskInputs, trailin
                 onDropQueued={() => actOnThreadQueue(snapshot, row.source, sendInputs, 'drop')}
                 onSendQueuedNow={() => actOnThreadQueue(snapshot, row.source, sendInputs, 'send-now')}
                 delivery={row.source.kind === 'user_message' && row.source.status === 'lost' ? 'not-delivered' : undefined}
-                turnStats={row.stats} agent={agent} onReply={onReply} onOpenMarkdownPath={onOpenMarkdownPath} />}
+                turnStats={row.stats} agent={agent} onReply={onReply} onOpenMarkdownPath={onOpenMarkdownPath} onOpenHostedApp={onOpenHostedApp} />}
         </div>]
       })}
       {pending.map(row => <TimelineRow key={`pending-${row.key}`} item={row.item} inProgress={false}
@@ -2061,6 +2068,7 @@ const TimelineRow = memo(function TimelineRow({
   onSendQueuedNow,
   turnStats,
   onOpenMarkdownPath,
+  onOpenHostedApp,
   agent,
   onReply,
   authoritativeSummary
@@ -2079,6 +2087,7 @@ const TimelineRow = memo(function TimelineRow({
   turnStats?: string
   /** #1627: read only by the `assistantText` arm; user messages render no markdown. */
   onOpenMarkdownPath?: (path: string) => void
+  onOpenHostedApp?: (serverId: string, appId: string) => void
   /** #1656: read by the banner and turnBoundary arms, which name the conversation's agent. */
   agent?: WireAgent
   onReply?: (role: 'user' | 'assistant', text: string) => void
@@ -2093,8 +2102,8 @@ const TimelineRow = memo(function TimelineRow({
           <div className="bubble bubble--daemon" data-thread-role="assistant">
             <div className="bubble__markdown">
               {inProgress
-                ? <StreamingAssistantMarkdown text={item.text} onOpenMarkdownPath={onOpenMarkdownPath} />
-                : <AssistantMarkdown text={item.text} onOpenMarkdownPath={onOpenMarkdownPath} />}
+                ? <StreamingAssistantMarkdown text={item.text} onOpenMarkdownPath={onOpenMarkdownPath} onOpenHostedApp={onOpenHostedApp} />
+                : <AssistantMarkdown text={item.text} onOpenMarkdownPath={onOpenMarkdownPath} onOpenHostedApp={onOpenHostedApp} />}
             </div>
             {inProgress && <span className="bubble__cursor" aria-hidden="true">▎</span>}
             <BubbleMeta side="daemon" createdAt={item.createdAt} turnStats={turnStats} />

@@ -148,21 +148,23 @@ export function pendingMarkdown(source: string): { text: string; allowElement: A
   return { text, allowElement }
 }
 
-const FrozenMarkdown = memo(function FrozenMarkdown({ text, onOpenMarkdownPath }: {
+const FrozenMarkdown = memo(function FrozenMarkdown({ text, onOpenMarkdownPath, onOpenHostedApp }: {
   text: string; onOpenMarkdownPath?: (path: string) => void
+  onOpenHostedApp?: (serverId: string, appId: string) => void
 }): JSX.Element {
-  return <AssistantMarkdown text={text} onOpenMarkdownPath={onOpenMarkdownPath} />
+  return <AssistantMarkdown text={text} onOpenMarkdownPath={onOpenMarkdownPath} onOpenHostedApp={onOpenHostedApp} />
 })
 
-export function StreamingAssistantMarkdown({ text, onOpenMarkdownPath }: {
+export function StreamingAssistantMarkdown({ text, onOpenMarkdownPath, onOpenHostedApp }: {
   text: string; onOpenMarkdownPath?: (path: string) => void
+  onOpenHostedApp?: (serverId: string, appId: string) => void
 }): JSX.Element {
   const [held, setHeld] = useState(() => partitionMarkdown(text))
   const partition = held.source === text ? held : partitionMarkdown(text, held)
   if (partition !== held) setHeld(partition)
   const pending = pendingMarkdown(text.slice(partition.offset))
   return <>
-    {partition.frozen.map(unit => <FrozenMarkdown key={unit.offset} text={unit.text} onOpenMarkdownPath={onOpenMarkdownPath} />)}
-    <AssistantMarkdown text={pending.text} allowElement={pending.allowElement} onOpenMarkdownPath={onOpenMarkdownPath} />
+    {partition.frozen.map(unit => <FrozenMarkdown key={unit.offset} text={unit.text} onOpenMarkdownPath={onOpenMarkdownPath} onOpenHostedApp={onOpenHostedApp} />)}
+    <AssistantMarkdown text={pending.text} allowElement={pending.allowElement} onOpenMarkdownPath={onOpenMarkdownPath} onOpenHostedApp={onOpenHostedApp} />
   </>
 }

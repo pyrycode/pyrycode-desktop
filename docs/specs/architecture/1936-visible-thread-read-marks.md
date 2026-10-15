@@ -113,3 +113,20 @@ repairs merged, so no stale re-observation comment is needed.
 - Pending documentation stage: `docs/knowledge/features/development-verification.md`,
   mounted evidence guidance — receipt/commit barriers, attempted versus delivered
   versus confirmed commands, final gate counts and #1908's production/live handoff.
+
+## Rework validation
+Source candidate: `ddb9bce8db99546129037f00713b753f603562d9`, containing main
+`3af69885191d`. Pre-verify: 5/5 checks; 10,279 unit tests passed, 3 existing
+skips. Build and docs guard passed after the final main-merge check. Focused
+Linux mounted run: 18 executed, 18 passed, 0 skipped (12 thread-items, 6 tool-groups).
+The controlled shared-ID regression failed before selecting the owning request.
+Reviewed source-candidate read captures at 1280×773 and 800×773.
+
+Complete native acceptance is pending task
+`400bbaf6852f5e7efa8c860719fcf81552c8014a58142a12f66936d55fa14a07`
+(`desktop-fake-suite`, exact source candidate above). It remains queued without
+an assigned runner or result; this is neither a failed test nor a passing gate.
+On completion, retrieve it with `fleet-task.py await <task> --out <fresh-directory>`,
+inspect revision/configuration, counts, retries, skip reasons, logs and every
+fake-daemon setup attachment, then commit the evidence and update PR #1965 before
+native acceptance. This evidence-only plan addition changes no tested source.

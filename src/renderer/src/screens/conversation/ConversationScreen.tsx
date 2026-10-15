@@ -324,7 +324,8 @@ export function ConversationScreen({
   const complete = useStore(threadRuntime.state, s => s.complete.get(queryKey))
   const threadRestoring = useStore(threadRuntime.state, s => s.restoring.has(queryKey))
   const threadConnection = useSessionStore(s => selectedHost === null ? undefined : s.statuses.get(selectedHost))
-  const threadSummary = useConversationListStore(s => s.byServer.get(selectedHost)?.find(row => row.id === openConversationId))
+  const threadSummary = useConversationListStore(s => authoritative
+    ? s.byServer.get(selectedHost)?.find(row => row.id === openConversationId) : undefined)
   useEffect(() => {
     const dispatch = agentSwitchStore.getState().dispatch
     dispatch({ type: 'paneChanged', pane: selectedHost === null || openConversationId === null

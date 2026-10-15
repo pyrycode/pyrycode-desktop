@@ -32,7 +32,8 @@ cached running state grants no readiness. Capability downgrade or a foreign host
 acknowledgement leaves discovery unsupported. Identical app IDs on different hosts
 have independent records and bindings.
 
-The successful binding's `view` offers `request(input, signal?)` and `retire()`.
+The successful binding's `view` offers `request(input, signal?)`, native-only
+`cancelRequests(signals)` for document-owned work, and `retire()`.
 The underlying `hostedResources.openView(appId, release)` remains the lower-level
 transport seam, backed by `src/main/transport/hostedResources.ts`; it checks
 authentication/capability and pins identities, but does not establish discovery
@@ -148,9 +149,56 @@ parent/content destruction. Listener exceptions cannot alter policy.
 The native `request` delegates to the captured discovery binding, including its
 API methods and abort support. A result arriving after native retirement becomes
 `{ ok: false, error: 'retired', uncertain }`, preserving mutation uncertainty when
-the operation could have been sent. No request capability is installed in page
-JavaScript. This seam supports the later Fetch adapter; it does not implement
-that adapter's browser behavior.
+the operation could have been sent. Page JavaScript gets only the bounded Fetch
+adapter below, never this native handle or its authority selectors.
+
+### Hosted Fetch
+
+`src/preload/hosted.ts` is a dedicated sandboxed preload, built separately from
+the privileged client preload by `electron.vite.config.ts`. Its `hostedFetch`
+surface offers only request/abort; IPC and the document token stay in the isolated
+world. `src/main/hostedAppLockdown.js` installs immutable `window.fetch` at document
+start through the debugger hook. `src/main/hostedFetch.ts` validates each request
+and abort against the exact live WebContents, its actual main frame, bound origin
+and private document token. Main supplies host/app/release/view/generation and
+wire request identity through the captured readiness-gated binding. Page sequence
+numbers are cancellation correlations only; repeated numbers and extra identity
+fields cannot select another operation or authority.
+
+Fetch resolves relative or same-view URLs, strips fragments, and extracts encoded
+path/query without rebuilding search parameters. Query order, duplicates, empty
+values and escape spelling survive; an empty query is omitted. Asset requests
+allow GET only, with `navigation: false`; `/api/` allows GET, HEAD, POST, PUT,
+PATCH, DELETE and OPTIONS. Paths are bounded to 2048 characters and queries to
+1024, with the [wire containment rules](wire-codec.md#resource-requests-and-http-limits).
+Cross-origin/credential-bearing URLs, forbidden routes/methods/headers, Range,
+GET/HEAD bodies and streaming uploads reject locally. A Request with a body is
+unsupported streaming input; bodyless Requests retain method, headers and signal.
+
+Request headers are limited to `accept`, `content-type` and `if-none-match`, with
+at most 1024 UTF-8 bytes per value, no controls and at most 4096 bytes of serialized
+headers. API headers reach the wire; asset headers are checked but the asset wire
+shape has no header field. Credentials are omitted; no cookie or authentication
+surface is enabled. Serialization accepts strings, Blob, FormData, ArrayBuffer
+and binary views, with a **32768-byte decoded body cap before IPC**:
+
+- Strings use a capped UTF-8 destination; binary views check length before copying.
+- Blob size is checked before reading bytes. FormData accounts for all multipart
+  headers, separators, field bytes and Blob sizes before reading Blob data, then
+  sets an explicit content type with the matching generated boundary.
+- Preload bounds the serialized shape again. Main independently validates it,
+  including a 4096-character URL limit, before the existing contextual resource
+  codec and transport admission/assembly machinery accept it.
+
+Only complete validated responses cross back. Fetch preserves opaque bytes,
+status (including non-2xx) and the four permitted headers: `content-type`,
+`cache-control`, `etag`, `last-modified`. HEAD/204/205/304 have null bodies. API
+redirects return their status without following or exposing Location. Fetch
+responses do not inherit the resource loader's synthesized content-length,
+CSP or nosniff headers; the document still receives its native isolation policy.
+Abort rejects with AbortError; other bridge/transport failures become static
+`TypeError('Failed to fetch')`, never daemon diagnostics. There is no browser
+network fallback or automatic retry.
 
 ### Browser resource loading
 
@@ -180,14 +228,15 @@ HTTP status, synthesize `content-length`, and add exact CSP/nosniff headers.
 204/205 responses use null bodies. The loader rejects 3xx as network errors and
 never follows redirects; other non-2xx statuses such as 404 remain HTTP responses.
 The lower-level native request retains resource HTTP semantics, including 3xx
-results. Fetch adaptation must define its own redirect/mutation behavior in
-[#1961](https://github.com/pyrycode/pyrycode-desktop/issues/1961).
+results. The [Fetch adapter](#hosted-fetch) has its own response semantics and
+does not broaden the browser resource handler's GET-only policy.
 
 ### Browser isolation and document-start policy
 
 The `WebContentsView` has Node integration and webview tags off, context isolation
-and renderer sandbox on, with no preload or client bridge. Hosted HTML never
-enters the privileged renderer. Native policy denies external/cross-view URLs,
+and renderer sandbox on, with only the dedicated hosted preload and no client
+bridge. Hosted HTML never enters the privileged renderer. Native policy denies
+external/cross-view URLs,
 other schemes, frames, redirects, popups, downloads, authentication and OS/device
 permissions. The app-owned document-start script immutably disables XHR,
 EventSource, WebSocket, workers, WebRTC, file pickers and both `cookieStore` and
@@ -200,8 +249,10 @@ Page, installs `Page.addScriptToEvaluateOnNewDocument`, disables document cookie
 with `Emulation.setDocumentCookieDisabled`, and intercepts file choosers before
 loading hosted bytes. Setup failure or debugger detachment retires the view.
 Electron 33 contextBridge cannot override existing browser properties, so a
-lockdown preload would not establish this policy. Native document-cookie disabling
-alone leaves Cookie Store writes usable; deny both APIs before page scripts and
+preload alone would not establish lockdown or replace Fetch. The dedicated
+preload supplies the narrow bridge; the document-start hook installs browser
+overrides. Native document-cookie disabling alone leaves Cookie Store writes
+usable; deny both APIs before page scripts and
 verify the native session jar as well as page-visible behavior.
 
 Every resource response receives `X-Content-Type-Options: nosniff` and this CSP;
@@ -216,8 +267,9 @@ default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; f
 Discovery notifications check the captured running release. Release change,
 removal/non-running state, discovery gaps/refresh/failure, disconnect,
 re-handshake/unpair, replacement and parent teardown all retire the native view.
-Cleanup aborts loader work, retires the binding, detaches/closes content, removes
-the HTTPS handler, denies remaining session requests and clears storage. No old
+Cleanup retires the binding **before** aborting individual Fetch/loader
+controllers, removes Fetch IPC listeners, detaches/closes content, removes the
+HTTPS handler, denies remaining session requests and clears storage. No old
 handle reopens, even for the same names and release. Rediscovery authorizes only
 a new binding/session/origin.
 
@@ -284,6 +336,38 @@ listeners and release reservations/partial bytes. Invalid correlated resource
 responses, bridge errors and send/drop failures affect their own operation.
 
 ### Cancellation ownership
+
+Fetch owns settlement before starting body serialization: its document active
+set and AbortSignal listener are registered before any Blob/multipart await.
+Pre-aborted and in-flight signals reject with AbortError, including while a body
+read is held. One settlement removes the signal listener and active entry. Blob
+reads have no cancellation API; their bounded eventual result or failure is
+discarded after settlement and cannot dispatch IPC or settle again. Registering
+ownership only after serialization would leave a stalled body uncancellable.
+
+The isolated preload obtains a new native random document token on authenticated
+main-frame bind. Rotate there, not on attempted navigation: Electron announces
+blocked form/frame navigations without replacing the document, so rotating on
+those attempts would strand its live adapter. Each layer admits at most sixteen
+pending adapter operations. Completion checks both token and pending-entry identity
+after await; a new document can restart its sequence without accepting old replies.
+
+On document bind/replacement or pagehide, invalidate the token and clear native
+correlations, then use binding `cancelRequests(signals)` to remove the complete
+document-owned set under `withoutPromotion`, selected by both binding scope and
+captured signal. Only then abort individual controllers. Sequential aborts would
+free a transport slot and dispatch a queued mutation before its turn to cancel.
+Unrelated work resumes after the barrier; successor resource loads are unaffected.
+Both preload and document-start pagehide paths use one idempotent document abort,
+close their request surfaces and settle local work, including pending serialization.
+Ordinary AbortSignal cancellation remains per request. Terminal view teardown
+retires the entire binding first, then disposes Fetch and loader controllers.
+
+Losing or cancelling a dispatched mutation does not prove it failed at the service.
+Fetch exposes a network failure/abort rather than native uncertainty details;
+applications reconcile with a fresh read after readiness is confirmed and a new
+binding opens. Reconnect and retry hints never replay writes. Old page keys,
+tokens, replies and retired handles cannot resolve a successor's work.
 
 Discovery lists/cancellations and resource credits/cancellations share sixteen
 control reservations per connection. Pending correlations and held sends reserve
@@ -365,6 +449,51 @@ no display pointer. Only the plan changed between the tested repair and reviewed
 head `e1085c43`. The dispatcher's later green gate has no per-test counts; the
 named-test evidence above comes from the verifier's inspected recovery artifacts.
 No live-Claude run is claimed; real daemon/relay/SQL proof remains #1929.
+
+### Fetch verification
+
+The [verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/1994#issuecomment-6189074574)
+at `139fa318` records **427 Playwright tests executed and passed, 0 failed,
+1 skipped**, including all **23 hosted-view cases present and passed**. Unit
+evidence is **10,287 executed and passed, 0 failed, 3 skipped**. The dispatcher's
+gate summary has no per-test counts; these counts and named-case confirmation
+come from the verifier's inspected gate evidence.
+
+`e2e/hosted-app-view.spec.ts` drives the production native view and adapter through
+`launchPairedApp`, with retained service state confined to the focused scenario.
+The passed hosted-view cases include:
+
+- `Fetch writes retained preferences and serializes bounded request bodies`:
+  POST/204, recreated-view GET, exact query/header/body bytes, binary/Blob/multipart
+  encodings, 32768-byte acceptance and oversized-body/multipart-overhead rejection,
+  method restrictions and non-2xx/redirect/null-body semantics.
+- `Fetch cancellation and document replacement fence late completions and forged bridge calls`:
+  pre/in-flight abort, one settlement, stale token/frame/sender rejection and late
+  replies after replacement, followed by a completed allowed read.
+- `Fetch reconnect reconciles committed uncertain writes without replay`: the
+  fake service commits before withholding its reply; reconnect waits for fresh
+  discovery, opens a new origin and reconciles by GET, with exactly one POST.
+- `Fetch cancels held Blob serialization on signal`,
+  `Fetch cancels held Blob serialization on pagehide`,
+  `Fetch cancels held FormData serialization on signal` and
+  `Fetch cancels held FormData serialization on pagehide`: a positive body-read
+  barrier precedes cancellation; AbortError must settle **before** releasing the
+  held read. Releasing first would conceal an unowned serialization await.
+- `Fetch bulk cancellation never promotes a queued mutation on <cause>`: all seven
+  cases (`close`, `view-replacement`, `parent`, `document-bind`,
+  `document-navigation`, `fetch-pagehide`, `preload-pagehide`) saturate eight active
+  reads and queue a POST. Ordered native rejection proves enqueue processing;
+  cancellation acknowledgements and a completed successor read fence late replies
+  before asserting zero POST dispatches.
+
+Held-body cases also await eventual body completion and completed native processing
+before checking zero mutations and single settlement. Native boundary unit coverage
+in `hostedFetch.test.ts` checks sender/frame/origin/token, independent input
+validation, correlation reuse and stale completion; `hostedResources.test.ts`
+covers scoped atomic cancellation and unaffected queue resumption. Retained fake
+state proves the client contract only. No live-Claude run or real persistence is
+claimed; real SQL durability and relay acceptance remain
+[#1929](https://github.com/pyrycode/pyrycode-desktop/issues/1929).
 
 ### Trusted pane verification
 

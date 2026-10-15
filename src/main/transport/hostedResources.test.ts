@@ -54,6 +54,33 @@ it('assembles binary frames with one next credit and preserves POST bytes plus H
   expect(vi.getTimerCount()).toBe(0)
 })
 
+it('atomically cancels document signals before promoting queued work and preserves other owners', async () => {
+  const h = setup(), controllers = Array.from({ length: 9 }, () => new AbortController())
+  const reads = controllers.slice(0, 8).map(c => h.view.request(asset, c.signal))
+  const mutation = h.view.request(api, controllers[8].signal)
+  const unaffected = h.view.request(asset, new AbortController().signal)
+  // Even a shared signal cannot grant cancellation authority over another binding.
+  const peer = h.resources.openView(app, '1.0.0').request(asset, controllers[0].signal)
+  expect(h.sent.filter(r => r.type === 'app_asset_request')).toHaveLength(8)
+  h.view.cancelRequests(new Set(controllers.map(c => c.signal)))
+  expect(await mutation).toEqual({ ok: false, error: 'aborted', uncertain: false })
+  expect(await Promise.all(reads)).toEqual(Array(8).fill({ ok: false, error: 'aborted', uncertain: false }))
+  // All affected requests are removed before unrelated work resumes.
+  expect(h.sent.filter(r => r.type === 'app_api_request')).toEqual([])
+  const survivors = h.sent.filter(r => r.type === 'app_asset_request').slice(8)
+  expect(survivors).toHaveLength(2)
+  for (const r of survivors) h.metadata(r.id, Buffer.alloc(0), 0)
+  expect(await unaffected).toMatchObject({ ok: true })
+  expect(await peer).toMatchObject({ ok: true })
+  for (const controller of controllers) controller.abort()
+  // The binding still accepts new requests after document cancellation.
+  const successor = h.view.request(api)
+  h.metadata(h.sent.at(-1)!.id, Buffer.alloc(0), 0, { status: 204 })
+  expect(await successor).toMatchObject({ ok: true })
+  h.resources.reset()
+  expect(vi.getTimerCount()).toBe(0)
+})
+
 it('enforces active/view admission and reuses released reservations', async () => {
   const h = setup(), pending = Array.from({ length: 16 }, () => h.view.request(asset))
   expect(h.sent).toHaveLength(8)

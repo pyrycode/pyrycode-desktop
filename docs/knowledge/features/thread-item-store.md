@@ -144,7 +144,7 @@ It retains item ids/revisions, held order, unknown JSON/null clears, epoch, appl
 version, complete checkpoint, ranges, optional older availability, repair and
 unfinished progress. No raw event replay, server request, batch completion or new
 coverage is manufactured. A missing result leaves the scope absent. The private
-restored marker lets the [history writer](chat-history.md#buffered-replacements)
+restored marker lets the [history writer](chat-history-storage.md#buffered-replacements)
 exclude hydration from saves while accepting later owned changes.
 
 `beginBatch(hostId, conversationId, epoch)` returns null without matching ownership.

@@ -1,7 +1,7 @@
 import { test as base, expect } from './fixtures/launchPairedApp'
 import type { ElectronApplication } from '@playwright/test'
 import { WELCOME_STALL_ATTACHMENT } from './fixtures/welcomeDiagnostics'
-import { LAUNCH_FATE_ATTACHMENT } from './fixtures/desktopIsolation'
+import { e2eShowsWindow, LAUNCH_FATE_ATTACHMENT } from './fixtures/desktopIsolation'
 
 // Registered before the launch fixture, so this check runs after its existing teardown/attachments.
 const test = base.extend<{ evidenceCheck: void }>({
@@ -18,6 +18,52 @@ const test = base.extend<{ evidenceCheck: void }>({
     expect(launches.map((launch: { exitCode: number }) => launch.exitCode)).toEqual([0, 0])
     expect(JSON.parse(fate?.body?.toString() ?? '{}').teardownFailures).toEqual([])
   }, { auto: true }]
+})
+
+base('ordinary Welcome pairing stays responsive while its native window is hidden', async ({ launchPairedApp }, testInfo) => {
+  const paired = await launchPairedApp({}, { onLaunched: async app => {
+    const page = await app.firstWindow()
+    const button = page.getByRole('button', { name: 'I already have pyrycode', exact: true })
+    await expect(button).toBeVisible()
+    const window = await app.browserWindow(page)
+    try {
+      // Let the normal ready-to-show handler finish before holding the window hidden.
+      if (e2eShowsWindow()) await expect.poll(() => window.evaluate(w => w.isVisible())).toBe(true)
+      await window.evaluate(w => w.hide())
+      expect(await window.evaluate(w => w.isVisible())).toBe(false)
+    } finally {
+      await window.dispose()
+    }
+    await button.evaluate(element => {
+      const input = { clicks: 0, trusted: 0 }
+      ;(window as any).__welcomeInput = input
+      element.addEventListener('click', event => {
+        input.clicks++
+        if (event.isTrusted) input.trusted++
+      }, { once: true })
+    })
+  } })
+  // Returning from the fixture proves ordinary Welcome → pairing → confirmation → connected thread.
+  await expect(paired.page.getByRole('button', { name: 'Send' })).toBeEnabled()
+  expect(await paired.page.evaluate(() => {
+    const input = (window as any).__welcomeInput
+    delete (window as any).__welcomeInput
+    return input
+  })).toEqual({ clicks: 1, trusted: 1 })
+  const window = await paired.app.browserWindow(paired.page)
+  try {
+    expect(await window.evaluate(w => ({ visible: w.isVisible(), throttling: w.webContents.getBackgroundThrottling() })))
+      .toEqual({ visible: false, throttling: false })
+  } finally {
+    await window.dispose()
+  }
+  // Actual frame callbacks must progress despite native invisibility; no timer or synthetic input.
+  expect(await paired.page.evaluate(() => new Promise<number>(resolve => {
+    let frames = 0
+    const tick = () => { if (++frames === 2) resolve(frames); else requestAnimationFrame(tick) }
+    requestAnimationFrame(tick)
+  }))).toBe(2)
+  expect(testInfo.attachments.filter(a => a.name === WELCOME_STALL_ATTACHMENT)).toHaveLength(0)
 })
 
 test('a controlled real Welcome stall retains progress evidence before teardown and correlates multiple launches', async ({ launchPairedApp }, testInfo) => {

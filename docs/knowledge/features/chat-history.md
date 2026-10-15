@@ -35,8 +35,8 @@ they never become authoritative daemon items. Both conversation formats may coex
 at the same coordinates and have separate reads.
 
 Both legacy backends use the unchanged `parseChatHistorySnapshot` admission and
-allowlisted projection. Indexed disk reconstruction preserves supplied held order,
-optional-field absence and all admitted evidence; equal or misleading timestamps
+allowlisted projection for full snapshots. Indexed disk reconstruction preserves
+supplied held order, optional-field absence and all admitted evidence; equal or misleading timestamps
 never reorder rows. Ownership remains exact and case-sensitive. SQLite coordinates
 use UTF-16LE BLOBs for every lookup, enumeration, insert and removal: TEXT binding
 would replace lone surrogates and merge distinct admitted JavaScript ids with U+FFFD.
@@ -332,6 +332,40 @@ locally restored rendering separately suppresses the streaming cursor and groupe
 running label, including on connected opening and after reconnect. New live receipts
 resume normal rendering; connection status alone cannot revive saved working state.
 Renderer web storage remains prohibited for conversation content.
+
+### Bounded local-page evidence
+
+The indexed backend's [main-only page methods](chat-history-api.md#main-only-bounded-legacy-pages)
+return selected rows and their evidence separately from the full snapshot contract.
+`savedCoverage` is the saved scope's oldest-end coverage; optional `newestCursor`
+retains its saved origin. Neither is recalculated from the selected row count.
+A short/empty local page or `continuation: null` establishes no daemon completeness,
+freshness or new coverage. Optional evidence absent in the snapshot remains absent;
+a present evidence field can project to an empty array.
+
+`display` includes committed contributions bound to the selected row keys. Their
+inclusive `id`/`lastId` ranges select existing `servedIds` and receipt memberships;
+display-only rows never acquire invented served ids. Each receipt projection keeps
+its original snapshot ordinal as `identity`, original receipt order, selected
+membership order, cursor and `atStart`, and explicitly carries `partial: true`.
+Omitted memberships and receipts remain unknown. These projections cannot replace
+the complete receipt union required by full-snapshot admission.
+
+`gaps` includes numeric gaps intersecting those contribution ranges inclusively,
+so both gaps survive when a selected id is their shared boundary. Legacy gaps
+retain only memberships for selected keys in their original order. Each projection
+keeps its snapshot ordinal `identity` and `partial: true`; it omits unselected
+memberships and all `refusedCursors`. Absence from a page does not retire saved gaps
+or promote omitted facts to known coverage.
+
+Necessary adjacent cursors appear separately in
+`cursorAnchors: { receiptIdentity, id, cursor, atStart }[]`. For each selected gap,
+selection uses the nearest receipt whose first membership is at or after its
+`newerId`, breaking ties by receipt ordinal and deduplicating receipts. It does
+not collect every cursor from intersecting spans. Anchor ids alone never become
+selected served ids or receipt memberships, and their start flags certify no
+additional completeness. See [selected-record validation and protection](chat-history-results.md#bounded-page-results)
+and [bounded-work fixtures](chat-history-testing.md#bounded-legacy-page-regressions).
 
 ### Received-state admission and ownership
 
@@ -637,8 +671,9 @@ ordered receipts and their individual id memberships, display contributions and
 row associations, gaps, legacy gap-key memberships and refused cursors. The encrypted
 header retains scope coverage, newest cursor, optional-evidence presence, allocator
 and prepended count independently of those records. Plain numeric indexes support
-future selection without a whole-timeline or all-evidence cell. Reconstruction
-returns one committed snapshot and checks its records against canonical parser output.
+bounded page selection without a whole-timeline or all-evidence cell. Full
+reconstruction returns one committed snapshot and checks its records against
+canonical parser output.
 
 Every replacement, including identical or empty content, receives a new random UUID
 snapshot identity; delete/recreate cannot reuse the previous commit's identity.
@@ -650,9 +685,9 @@ The adapter is pinned to `better-sqlite3` 12.4.1. Host Node and Electron require
 separate native rebuilds; packaging rebuilds for the target ABI and unpacks the
 adapter from asar. See [commands and counted Linux/macOS proof](chat-history-testing.md#native-runtime-and-packaged-proof).
 Windows NSIS x64/arm64 targets remain configured; these smokes add no Linux/macOS
-release channel. Application binding and collection import belong to #1975,
-authoritative storage to #1974, bounded legacy paging to #1980, and local-page
-consumers/partial writes to #1931.
+release channel. Main-only bounded legacy pages are independently callable;
+application binding and collection import belong to #1975, authoritative storage
+to #1974, and local-page consumers/partial writes to #1931.
 
 ## Testing
 

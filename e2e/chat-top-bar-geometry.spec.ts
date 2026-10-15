@@ -176,7 +176,7 @@ const scrollTopOf = (page: Page): Promise<number> =>
 /** Drive one send whose reply overflows the thread, then assert it ACTUALLY overflows — the non-vacuity
  *  gate for the scroll block, which has nothing to scroll in a thread that fits. */
 async function primeOverflowingThread(page: Page): Promise<void> {
-  const assistantBubbles = page.locator('.bubble[data-thread-role="assistant"]')
+  const assistantBubbles = page.locator('[data-thread-role="assistant"]')
 
   await page.getByPlaceholder('Message…').fill(PRIMER_TEXT)
   await page.getByRole('button', { name: 'Send' }).click()

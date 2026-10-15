@@ -1,9 +1,8 @@
+import { sendConversationCommand } from './screens/conversation/conversationActionAvailability'
 import './pairedShell.css'
 import { HostedPane, hostedPaneStore } from './HostedPane'
 import { useStore } from 'zustand'
-import { readSavedTimeline } from './store/savedTimelineRestorer'
-import { createNewestHistoryDemand } from './store/newestHistoryDemand'
-import { historyAskDeps } from './store/historyPageBridge'
+import { threadRuntime } from './store/threadRuntime'
 import { createSavedListRestorer } from './store/savedListRestorer'
 import { connectedConversationHostNow, initializeCreatedConversationAfterList } from './screens/conversation/conversationActionAvailability'
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
@@ -125,11 +124,12 @@ const activateDeps: ActivateConversationDeps = {
   // on every activation, including reopening it. Each sender refuses falsy ids and sends once;
   // app-lifetime subscribers receive their replies. Read window.pyry only at activation time.
   requestConversationConfig: (conversationId) => {
-    if (connectedConversationHostNow(conversationId) === null) return
-    requestRunConfigSnapshot(window.pyry.sendCommand, conversationId)
-    requestContextUsage(window.pyry.sendCommand, conversationId)
-    requestModelList(window.pyry.sendCommand, conversationId)
-    requestSystemPrompt(window.pyry.sendCommand, conversationId)
+    const owner = connectedConversationHostNow(conversationId)
+    if (owner === null || !conversationListStore.getState().byServer.get(owner)?.some(row => row.id === conversationId)) return
+    requestRunConfigSnapshot(sendConversationCommand, conversationId)
+    requestContextUsage(sendConversationCommand, conversationId)
+    requestModelList(sendConversationCommand, conversationId)
+    requestSystemPrompt(sendConversationCommand, conversationId)
   }
 }
 
@@ -418,7 +418,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
     const state = hostedPaneStore.getState().state
     if (state.type !== 'closed') void window.pyry.hostedPane({ type: 'close', generation: state.generation })
   }
-  useEffect(() => subscribeResetContextUsage(conversationActivityStore, window.pyry.sendCommand), [])
+  useEffect(() => subscribeResetContextUsage(conversationActivityStore, sendConversationCommand), [])
   useEffect(() => createSavedListRestorer({
     lists: conversationListStore, servers: serverInfoStore,
     read: window.pyry.chatHistory, log: window.pyry.sendDiagnostic
@@ -437,31 +437,9 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
       hostedPaneStore.setState({ state: { type: 'closed', generation: state.generation } })
     }
   }, [])
-  const localRead = useRef<ReturnType<typeof readSavedTimeline> | null>(null)
+  const localRead = useRef<ReturnType<typeof threadRuntime.open> | null>(null)
   const [savedTimelineTarget, setSavedTimelineTarget] = useState<{ serverId: string; conversationId: string }>()
-  const [newestHistory] = useState(() => createNewestHistoryDemand(historyAskDeps))
-  useEffect(() => {
-    let listening = true
-    const sync = (): void => {
-      const target = route === 'thread' && savedTimelineTarget !== undefined &&
-        activeConversationStore.getState().activeConversation?.id === savedTimelineTarget.conversationId
-        ? savedTimelineTarget : null
-      newestHistory.sync(target, target !== null &&
-        connectedConversationHostNow(target.conversationId) === target.serverId)
-    }
-    // Let receipt admission and writer capture finish before releasing deferred demand.
-    const schedule = (): void => { queueMicrotask(() => { if (listening) sync() }) }
-    const connectionChanged = (): void => {
-      // Observe loss immediately even if a reconnect arrives in the same event turn.
-      if (savedTimelineTarget !== undefined &&
-        sessionStore.getState().statuses.get(savedTimelineTarget.serverId)?.type !== 'connected') sync()
-      else schedule()
-    }
-    const offs = [activeConversationStore.subscribe(schedule), conversationListStore.subscribe(schedule),
-      sessionStore.subscribe(connectionChanged), conversationTimelineStore.subscribe(schedule)]
-    sync()
-    return () => { listening = false; offs.forEach(off => off()) }
-  }, [newestHistory, route, savedTimelineTarget])
+  // Newest content comes from the thread route's catch-up; the legacy newest-history demand is unhooked (#1908).
 
   useEffect(() => {
     const off = activeConversationStore.subscribe((state, previous) => {
@@ -556,9 +534,11 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
     setSavedTimelineTarget(serverId === undefined ? undefined : { serverId, conversationId: created.id })
     cancelCreatedInitialization.current?.()
     leaveRecovery()
-    activateConversation(activateDeps, created)
+    const owned = serverId === undefined ? created : { ...created, serverId }
+    activateConversation(activateDeps, owned)
     if (serverId !== undefined) {
       conversationTimelineStore.getState().initializeCreatedTimeline(serverId, created.id)
+      localRead.current = threadRuntime.open(serverId, created.id)
     }
     cancelCreatedInitialization.current = initializeCreatedConversationAfterList(
       created.id, serverId, activateDeps.requestConversationConfig
@@ -577,6 +557,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
     confirmConversationDeleted(
       { ...exitConversationDeps,
         getTimelineServerId: id => {
+          if (savedTimelineTarget?.conversationId === id) return savedTimelineTarget.serverId
           conversationTimelineStore.flushTimeline()
           return conversationTimelineStore.getState().timelines.get(id)?.serverId
         },
@@ -629,9 +610,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
     activateConversation(activateDeps, conversation)
     if ('serverId' in conversation && typeof conversation.serverId === 'string') {
       setSavedTimelineTarget({ serverId: conversation.serverId, conversationId: conversation.id })
-      localRead.current = readSavedTimeline({
-        timelines: conversationTimelineStore, read: window.pyry.chatHistory, log: window.pyry.sendDiagnostic
-      }, conversation.serverId, conversation.id)
+      localRead.current = threadRuntime.open(conversation.serverId, conversation.id)
     }
     setPaneKey(JSON.stringify([
       'serverId' in conversation && typeof conversation.serverId === 'string' ? conversation.serverId : null,

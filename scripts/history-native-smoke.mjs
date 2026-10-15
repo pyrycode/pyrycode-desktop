@@ -33,7 +33,7 @@ await bundle({ configFile: false, logLevel: 'warn', build: { ssr: resolve('src/m
   outDir: stage, emptyOutDir: false, rollupOptions: { external: ['electron', 'better-sqlite3'],
     output: { format: 'cjs', entryFileNames: 'main.cjs' } } } })
 const platform = process.platform === 'darwin' ? builder.Platform.MAC : builder.Platform.LINUX
-await builder.build({ targets: platform.createTarget('dir'), publish: 'never', config: {
+await builder.build({ projectDir: stage, targets: platform.createTarget('dir'), publish: 'never', config: {
   extends: null, appId: 'dev.pyrycode.history-smoke', productName: 'History Native Smoke',
   electronVersion: require('electron/package.json').version, directories: { app: stage, output: join(root, 'package') },
   files: ['main.cjs', 'package.json'], asar: true, asarUnpack: ['node_modules/better-sqlite3/**'],

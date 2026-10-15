@@ -113,7 +113,7 @@ test('the attachment file row draws in the bubble, and a long name wraps beside 
   await pushCompleted(FIRST_UPLOAD)
   await send(FIRST_MESSAGE)
 
-  const firstBubble = page.locator('.bubble[data-thread-role="user"]').first()
+  const firstBubble = page.locator('[data-thread-role="user"]').first()
   const firstRow = firstBubble.locator('.bubble__file')
   await expect(firstRow).toHaveCount(1, { timeout: ROW_TIMEOUT_MS })
   await expect(firstRow.locator('.bubble__file-name')).toHaveText(FIRST_UPLOAD.filename)
@@ -160,7 +160,7 @@ test('the attachment file row draws in the bubble, and a long name wraps beside 
   await pushCompleted(SECOND_UPLOAD)
   await send(SECOND_MESSAGE)
 
-  const secondBubble = page.locator('.bubble[data-thread-role="user"]').nth(1)
+  const secondBubble = page.locator('[data-thread-role="user"]').nth(1)
   const secondRow = secondBubble.locator('.bubble__file')
   await expect(secondRow).toHaveCount(1, { timeout: ROW_TIMEOUT_MS })
   await expect(firstRow).toHaveCount(1)
@@ -294,7 +294,7 @@ test('activating the file row asks the host for that attachment, by click and by
     await send([FIRST_MESSAGE, SECOND_MESSAGE, THIRD_MESSAGE][index])
   }
 
-  const rows = page.locator('.bubble[data-thread-role="user"] .bubble__file')
+  const rows = page.locator('[data-thread-role="user"] .bubble__file')
   await expect(rows).toHaveCount(3, { timeout: ROW_TIMEOUT_MS })
 
   // --- AC1's "one control, not two". The row IS the button; neither the icon nor the name is separately
@@ -353,9 +353,9 @@ test('activating the file row asks the host for that attachment, by click and by
   const rowBox = (await first.boundingBox())!
   const iconBox = (await first.locator('.bubble__file-icon').boundingBox())!
   const nameBox = (await first.locator('.bubble__file-name').boundingBox())!
-  const bubbleBox = (await page.locator('.bubble[data-thread-role="user"]').first().boundingBox())!
+  const bubbleBox = (await page.locator('[data-thread-role="user"]').first().boundingBox())!
   const metaBox = (await page
-    .locator('.bubble[data-thread-role="user"]')
+    .locator('[data-thread-role="user"]')
     .first()
     .locator('.bubble__meta')
     .boundingBox())!

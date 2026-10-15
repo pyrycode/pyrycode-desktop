@@ -79,7 +79,7 @@ export interface PendingAttachmentTake {
  */
 export interface ComposerSendDeps {
   serverId?: string
-  threadSend?: { store: ReturnType<typeof createThreadSendStore>; deviceId: string | null }
+  threadSend?: { store: ReturnType<typeof createThreadSendStore>; deviceId: string | null; version?: number }
   diagnose?: (record: MessageLifecycleDiagnostic) => void
   sendCommand: (command: RendererCommand) => void
   dispatch: (event: ThreadEvent) => void
@@ -141,6 +141,7 @@ export function submitMessage(
   }
   try {
     deps.sendCommand(sendMessageCommand(payload, deps.serverId))
+    if (threadSend && host) threadSend.store.getState().clearReports(host, conversationId, threadSend.version ?? 0)
     return true
   } catch {
     diagnose('message-bridge-failed')
@@ -271,6 +272,14 @@ export function composerAvailability(status: ConnectionStatus): ComposerAvailabi
       return assertNever(status)
   }
 }
+
+/** The host's daemon lacks `thread` (#1908): its copy names the daemon, never this app. */
+export function isDaemonUpdateRequired(status: ConnectionStatus | undefined): boolean {
+  return status?.type === 'error' && status.error.code === 'update-required' && status.error.cause === 'daemon'
+}
+
+/** Client-owned copy for that state; no download link, since the app is not what needs updating. */
+export const DAEMON_UPDATE_REQUIRED_COPY = 'The Pyrycode daemon on this host needs an update. Update pyry on the host to reconnect.'
 
 /** Only an explicit pairing rejection establishes that re-pairing can help. */
 export function shouldOfferRepair(status: ConnectionStatus): boolean {

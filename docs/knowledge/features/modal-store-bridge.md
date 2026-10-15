@@ -181,8 +181,8 @@ daemon frame ─(#201/#248 transport, snake→camel; `modal_shown`'s `conversati
 
 ## Session-scoped thread prompts
 
-The inactive `createThreadLiveState` adapter admits permission/question readings
-through [host/conversation ownership and envelope provenance](session-id-store.md#summary-authority-in-the-inactive-thread-adapter)
+The production `createThreadLiveState` adapter admits permission/question readings
+through [host/conversation ownership and envelope provenance](session-id-store.md#summary-authority-in-the-thread-runtime)
 before `threadLiveInputs` uses the existing prompt translators. Original modal and
 question-batch IDs survive. Item snapshots and cache hydration cannot create an
 outstanding prompt. Empty question batches are ignored, including replacements:
@@ -206,10 +206,13 @@ A thrown send returns false and retains the prompt. A successful synchronous sen
 removes only the same held object, so a replacement admitted by the sink survives.
 Choice, confirmation and question-selection semantics remain presentation-owned.
 
-The ordinary app keeps its existing bridge/store behavior below. Production
-thread subscriptions and host-bound IPC composition, integrated interaction and
-combined live proof remain with
-[#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
+The ordinary app mounts `ThreadPromptSlot` from this admitted state and reuses the
+existing choice, consent, question and rejection-feedback components. Current
+prompts remain answerable while initial history is loading or has failed. Reconnect
+retires old prompt handles while retaining displayed rejection feedback.
+The [thread runtime](thread-runtime.md#live-controls-and-read-publication) owns
+subscriptions and host-bound response commands. The legacy bridge behavior below
+is retained for isolated callers. Credentialed live proof is separately pending.
 
 ## Choice and consent lifetime
 

@@ -269,10 +269,10 @@ test('reply appends and focuses in a reopened saved offline chat', async ({ laun
   await expect(page.getByRole('button', { name: 'Reply to message' })).toBeVisible()
   await expect.poll(async () => {
     const result = await page.evaluate(serverId => window.pyry.chatHistory({
-      operation: 'readTimeline', serverId, conversationId: 'seed-conversation'
+      operation: 'readThread', serverId, conversationId: 'seed-conversation'
     }), servers[0].serverId)
-    return result.status === 'stored' && result.snapshot.kind === 'timeline'
-      ? result.snapshot.items.some(item => item.kind === 'assistantText' && item.text === SOURCE) : false
+    return result.status === 'stored' && result.snapshot.kind === 'daemon-items'
+      ? result.snapshot.thread.items.some(item => item.kind === 'assistant_message' && (item.content as { text?: unknown })?.text === SOURCE) : false
   }).toBe(true)
   await page.locator('.conversation__overflow-trigger').click()
   await page.getByRole('menuitem', { name: 'Channel info' }).click()
@@ -302,10 +302,10 @@ test('received history is saved for equal ids on different hosts and replies reo
   } })
   const savedReplies = async (serverId: string) => {
     const result = await page.evaluate(host => window.pyry.chatHistory({
-      operation: 'readTimeline', serverId: host, conversationId: 'seed-conversation'
+      operation: 'readThread', serverId: host, conversationId: 'seed-conversation'
     }), serverId)
-    return result.status === 'stored' && result.snapshot.kind === 'timeline'
-      ? result.snapshot.items.filter(item => item.kind === 'assistantText').map(item => item.text) : null
+    return result.status === 'stored' && result.snapshot.kind === 'daemon-items'
+      ? result.snapshot.thread.items.filter(item => item.kind === 'assistant_message').map(item => (item.content as { text?: unknown })?.text) : null
   }
   await openRow(page, SEEDED_ROW.name as string)
   servers[0].daemon.pushFrame(assistant(SOURCE))
@@ -314,6 +314,8 @@ test('received history is saved for equal ids on different hosts and replies reo
   await expect(reply).toBeVisible()
   await expect.poll(() => savedReplies(servers[0].serverId)).toEqual([SOURCE])
   await openRow(page, secondRow.name as string)
+  // Establish this host's empty canonical window before publishing its first live reply.
+  await expect(page.locator('.conversation__empty')).toBeVisible()
   servers[1].daemon.pushFrame(assistant(secondSource))
   servers[1].daemon.pushFrame(turnEnd())
   await expect(reply).toBeVisible()

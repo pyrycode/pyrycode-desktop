@@ -13,7 +13,7 @@ import { createQueueTurnEvidence } from './fixtures/queueTurnEvidence'
 
 // The dispatcher owns credentialed execution. Keep the old drop-only case alongside these
 // positive delivery cases; neither queue disappearance nor bubble counts establish a turn.
-test.use({ interactiveRunner: 'stream-json' })
+test.use({ interactiveRunner: 'stream-json', requiredCapabilities: ['interactive', 'thread'] })
 const TURN_TIMEOUT = 120_000
 type Evidence = ReturnType<typeof createQueueTurnEvidence>
 type EvidenceWindow = typeof window & { queueTurnEvidence: Pick<Evidence, 'snapshot'> & { stop: () => void } }
@@ -69,6 +69,7 @@ for (const scenario of [
         await confirmCreateChat(page)
         await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled({ timeout: 45_000 })
         await expect.poll(async () => (await readEvidence(page, expected)).conversationId.length).toBeGreaterThan(0)
+        expect((await readEvidence(page, expected)).thread, 'actual app connection negotiated thread').toBe(true)
         await composer.fill(first)
         await composer.press('Enter')
         await expect.poll(() => existsSync(entered), { timeout: TURN_TIMEOUT }).toBe(true)

@@ -1,4 +1,5 @@
 import { AgentSwitchData } from './store/AgentSwitchData'
+import { useThreadRuntime } from './store/threadRuntime'
 import { AgentSwitchDialog } from './screens/conversation/AgentSwitchDialog'
 import { appUpdateStore } from './store/appUpdateStore'
 import { useEffect, useState } from 'react'
@@ -114,6 +115,7 @@ export function AppView(props: {
  * — one stable app-lifetime listener with no subscribe/unsubscribe churn as the route flips.
  */
 function App(): JSX.Element {
+  useThreadRuntime()
   useEffect(() => window.pyry.onAppUpdate(state => appUpdateStore.setState(state, true)), [])
   useChatHistoryWriter()
   useDaemonEventBridge()

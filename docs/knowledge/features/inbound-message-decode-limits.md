@@ -120,10 +120,10 @@ reply or history range. [#1902](https://github.com/pyrycode/pyrycode-desktop/iss
 owns that certification and recovery requests.
 [#1912](https://github.com/pyrycode/pyrycode-desktop/issues/1912) reuses the representation
 and assembly for catch-up/pages; [#1914](https://github.com/pyrycode/pyrycode-desktop/issues/1914)
-owns summary/session-state metadata. Production capability activation and combined
-live proof remain [#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
-The supplied-delivery transport adds no catch-up/page commands or capability
-requests.
+owns summary/session-state metadata. Production now connects these boundaries
+through the [thread runtime](thread-runtime.md). The original supplied-delivery
+transport slice adds no query commands by itself; the coordinator owns catch-up
+and page demand. Credentialed live proof remains separately pending.
 
 ## Why the explicit size guard, given the transport already bounds the plaintext
 

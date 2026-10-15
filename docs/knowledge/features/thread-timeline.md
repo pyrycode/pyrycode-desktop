@@ -1,7 +1,11 @@
 # Thread timeline (conversation model)
 
-A heterogeneous, ordered conversation-timeline data model — the foundation the structured
-event-stream render vertical builds on. Introduced **alongside**
+The retained legacy conversation reducer. Production conversation content now uses
+[daemon thread items](thread-item-store.md) through the [thread runtime](thread-runtime.md).
+Paired-host events cannot feed this reducer or its history recovery. It remains in
+the tree for tested compatibility and later cleanup.
+
+The earlier structured event-stream model is described below. Introduced **alongside**
 [session store](session-store.md)'s flat `MessagePayload[]` as a Strangler Fig. The cutover shipped in
 [#179](../codebase/179.md): the coarse `message`/`message_chunk` render path (`MessageThread`) is
 retired to dead-but-tested residue, and this model — via [timelineStore](conversation-timeline-store.md) —

@@ -34,6 +34,17 @@ const active = (over: Partial<ConversationCreatedPayload> = {}): ConversationCre
 })
 
 describe('reseededActiveConversation', () => {
+  it('preserves selected host coordinates and refuses a same-ID refresh from another host', () => {
+    const selected = { ...active(), serverId: 'chosen' }
+    expect(reseededActiveConversation([row({ name: 'Renamed' })], selected)).toMatchObject({ serverId: 'chosen' })
+    let receive: (event: DaemonEvent) => void = () => {}
+    const set = vi.fn()
+    subscribeActiveConversationReseed(listener => { receive = listener; return () => {} }, () => selected, set)
+    receive({ type: 'conversationsReceived', conversations: [row({ name: 'Foreign' })], serverId: 'other' } as DaemonEvent)
+    expect(set).not.toHaveBeenCalled()
+    receive({ type: 'conversationsReceived', conversations: [row({ name: 'Own' })], serverId: 'chosen' } as DaemonEvent)
+    expect(set).toHaveBeenCalledWith(expect.objectContaining({ name: 'Own', serverId: 'chosen' }))
+  })
   it('re-seeds from the matching row when the daemon renamed the open chat (AC1)', () => {
     const renamed = row({ name: 'Renamed by the daemon' })
     expect(reseededActiveConversation([renamed], active())).toEqual({

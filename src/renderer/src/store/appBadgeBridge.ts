@@ -1,3 +1,5 @@
+import { threadRuntime } from './threadRuntime'
+import { threadLiveInputs } from '../screens/conversation/threadLiveInputs'
 // The app icon's attention badge, renderer half (#1592). The badge is the number of sidebar status dots
 // that ask for the operator — `input-required` or `new-messages` — across every paired host, archived
 // rows left out as the sidebar leaves them out, and muted rows left out because the host has silenced them
@@ -47,6 +49,11 @@ export function countAttentionConversations<T extends { id: string }>(
  */
 export function conversationStatusNow(row: Pick<ConversationSummary, 'id' | 'read_up_to' | 'latest_entry_id' | 'last_shown_version'> & { serverId?: string | null }): ConversationStatus {
   const conversationId = row.id
+  const native = typeof row.serverId === 'string' ? threadRuntime.live(row.serverId, row.id).getState() : null
+  if (native?.binding?.sessionId) {
+    const input = threadLiveInputs(native)
+    return resolveConversationStatus(input.hasOutstanding, input.activity, isConversationUnread(null, null, row, true))
+  }
   return resolveConversationStatus(
     selectHasOutstandingFor(conversationId)(modalStore.getState()) ||
       selectBatchFor(conversationId)(questionBatchStore.getState()) !== undefined,
@@ -55,7 +62,7 @@ export function conversationStatusNow(row: Pick<ConversationSummary, 'id' | 'rea
       selectTimelineFor(conversationId)(conversationTimelineStore.getState()),
       selectLastReadFor(conversationId)(conversationLastReadStore.getState()),
       row,
-      conversationReadRouteStore.getState().epochFor(row.serverId, row.id) !== undefined
+      typeof row.serverId === 'string' || conversationReadRouteStore.getState().epochFor(row.serverId, row.id) !== undefined
     )
   )
 }
@@ -75,6 +82,7 @@ export function subscribeToAttentionStores(listener: () => void): () => void {
   const offs = [
     conversationListStore.subscribe(listener),
     conversationReadRouteStore.subscribe(listener),
+    threadRuntime.state.subscribe(listener),
     modalStore.subscribe(listener),
     conversationActivityStore.subscribe(listener),
     conversationTimelineStore.subscribe(listener),

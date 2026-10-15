@@ -2,11 +2,28 @@ import { describe, it, expect, vi } from 'vitest'
 import { EncryptionUnavailableError, type SecureStore } from './secureStore'
 import {
   createDeviceKeypairStore,
+  readDeviceIdentity,
   DEVICE_STATIC_KEY_NAME,
   MalformedDeviceKeypairError,
   type DeviceKeyPair,
   type KeyPairGenerator
 } from './deviceKeypair'
+
+describe('thread submission device identity', () => {
+  it('returns only the daemon-compatible hexadecimal public identifier', async () => {
+    const store = { ensure: vi.fn(async () => ({
+      privateKey: new Uint8Array(32).fill(255),
+      publicKey: Uint8Array.from({ length: 32 }, (_, i) => i)
+    })) }
+    expect(await readDeviceIdentity(store)).toEqual({ ok: true,
+      deviceId: '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f' })
+    expect(store.ensure).toHaveBeenCalledOnce()
+  })
+  it('contains keychain failures at the IPC boundary', async () => {
+    expect(await readDeviceIdentity({ ensure: async () => { throw new Error('secret') } }))
+      .toEqual({ ok: false, error: 'identity-unavailable' })
+  })
+})
 
 // Both effectful edges are faked in-file — no keychain, no filesystem, no wasm (the ticket's AC5;
 // mirrors secureStore.test.ts's in-file-fake idiom). The SecureStore fake is Map-backed and

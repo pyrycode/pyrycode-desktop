@@ -76,6 +76,8 @@ let historyReceipt: { type: string; serverId: string | null | undefined } | null
 let hostedAppsToken = 0
 
 const api = {
+  deviceIdentity: (): Promise<{ ok: true; deviceId: string } | { ok: false; error: 'identity-unavailable' }> =>
+    ipcRenderer.invoke('pyry:device-identity'),
   refreshHostedApps: (serverId: string): Promise<{ ok: true } | { ok: false; error: 'refused' }> =>
     ipcRenderer.invoke(HOSTED_APPS_DISPLAY_CHANNEL, { type: 'refresh', serverId, token: 0 }),
   onHostedApps: (serverId: string, listener: (state: HostedAppsDisplayState) => void): (() => void) => {

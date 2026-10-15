@@ -120,7 +120,7 @@ export function SessionIdData(): null {
     // RunConfigLiveData's wiring verbatim, down to the `?? null` spelling — so this leaf still
     // subscribes to nothing and the store is touched only when a marker arrives, never during render.
     return subscribeSessionId(
-      window.pyry.onDaemonEvent,
+      onLegacyContentEvent,
       (id) => sessionIdStore.getState().setSessionId(id),
       () => activeConversationStore.getState().activeConversation?.id ?? null
     )
@@ -128,3 +128,4 @@ export function SessionIdData(): null {
 
   return null
 }
+import { onLegacyContentEvent } from './threadRuntime'

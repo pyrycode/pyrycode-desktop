@@ -13,7 +13,7 @@ import { watchPhaseReconnect, readPhaseReconnect, stopPhaseReconnect, hasRunning
 // Dispatcher-owned live acceptance: PYRY_BIN must contain pyrycode#2718,
 // 25b532b6205507784a7615fe59d3c5a7bb2f5484. An all-skipped run is not acceptance.
 // No production phase fix accompanies this baseline; annotations record the original behavior.
-test.use({ interactiveRunner: 'stream-json' })
+test.use({ interactiveRunner: 'stream-json', requiredCapabilities: ['interactive', 'thread'] })
 const TURN_TIMEOUT = 120_000
 const RECONNECT_TIMEOUT = 45_000
 
@@ -85,6 +85,7 @@ test('real claude restores the status after reconnect during the same running tu
     const hasRunningLabel = () => page.locator('.composer-status__label').evaluateAll(hasRunningPhaseLabel)
     await expect.poll(hasRunningLabel).toBe(true)
     const before = await readPhaseReconnect(page)
+    expect(before.thread, 'actual app connection negotiated thread').toBe(true)
     const current = before.phases.filter(phase => phase.conversationId === before.conversationId).at(-1)
     expect(current?.state === 'thinking' || current?.state === 'responding').toBe(true)
     testInfo.annotations.push({ type: 'baseline-before-drop', description: `running phase: ${current?.state}` })

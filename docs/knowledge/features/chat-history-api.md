@@ -14,8 +14,9 @@ contract. `kind: 'daemon-items'` records contain `{ version: 1, serverId,
 conversationId, thread }`; `thread.hostId` and `thread.conversationId` must match
 the outer coordinates. The outer format version and held thread's applied version
 are separate values. Version-1 `timeline` records keep app-built rows and merge
-evidence for the one-release fallback. They coexist with daemon records at the same
-host/conversation, and legacy reads never convert rows into authoritative items.
+evidence for retained legacy APIs. They coexist with daemon records at the same
+host/conversation, but production display reads only `daemon-items`. Legacy reads
+never convert rows into authoritative items and supply no fallback route.
 
 [`createChatHistoryStore({ secureStore, log })`](../../../src/main/chatHistoryStore.ts)
 returns `execute(request: unknown): Promise<ChatHistoryResult>`.
@@ -264,5 +265,6 @@ one-shot complete/fail/cancel handle uses a process-local token. A replacement r
 admitted state or scoped cleanup invalidates it, even when identity strings are
 reused. Delayed stored, missing or failed reads cannot replace admitted facts.
 Restoration sends no transport requests or raw events and certifies no progress.
-Production thread lifecycle activation remains
-[#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
+The [thread runtime](thread-runtime.md#restore-recovery-and-cleanup) uses this
+authoritative restore path in production. Indexed partial reads remain separate
+from the full protected-snapshot integration.

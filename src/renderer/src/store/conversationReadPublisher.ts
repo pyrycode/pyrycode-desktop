@@ -178,23 +178,35 @@ export function useReadObservation(id: string | null, readerOpen: boolean,
 
 function useThreadReadObservation(inputs: ThreadReadInputs | undefined,
   pane: RefObject<HTMLDivElement>, thread: RefObject<HTMLDivElement>): void {
+  const committed = useRef(inputs)
+  const setup = useRef<{ key: string; region: HTMLElement; covered: HTMLElement; tail: HTMLElement;
+    observe: () => void; dispose: () => void }>()
+  useReadLayoutEffect(() => { committed.current = inputs })
   useReadLayoutEffect(() => {
     const region = thread.current, covered = pane.current
-    if (!inputs || inputs.readerOpen || !region || !covered) return
-    const { snapshot: s } = inputs, target = readTargetFor(undefined, inputs), newest = newestShown(s)
-    if (target === undefined || !newest) return
+    const target = inputs && readTargetFor(undefined, inputs), newest = inputs && newestShown(inputs.snapshot)
+    const key = inputs && newest && JSON.stringify([inputs.snapshot.hostId, inputs.snapshot.conversationId, inputs.snapshot.epoch, newest.id])
+    const held = setup.current
+    if (held && key === held.key && region === held.region && covered === held.covered &&
+      !inputs?.readerOpen && target !== undefined && held.tail.isConnected) { held.observe(); return }
+    held?.dispose(); setup.current = undefined
+    if (!inputs || inputs.readerOpen || !region || !covered || target === undefined || !newest || !key) return
     const tail = region.querySelector<HTMLElement>(`[data-read-row="${newest.id}"]`)
     if (!tail) return
+    const { hostId, conversationId, epoch } = inputs.snapshot
     const observe = () => {
-      if (conversationReadRouteStore.getState().epochFor(s.hostId, s.conversationId) !== s.epoch ||
-        !document.hasFocus() || document.visibilityState !== 'visible' || !tail.isConnected || tail.closest('[hidden]')) return
+      const current = committed.current
+      if (!current || current.readerOpen || current.snapshot.hostId !== hostId || current.snapshot.conversationId !== conversationId || current.snapshot.epoch !== epoch) return
+      const target = readTargetFor(undefined, current)
+      if (target === undefined || newestShown(current.snapshot)?.id !== newest.id ||
+        conversationReadRouteStore.getState().epochFor(hostId, conversationId) !== epoch ||
+        !document.hasFocus() || document.visibilityState !== 'visible' || !tail.isConnected || tail.closest('[hidden]') || tail.classList.contains('message-row--queued')) return
       const viewport = region.getBoundingClientRect(), rect = tail.getBoundingClientRect()
       const shell = covered.closest('.conversation__covered') ?? covered
       const top = Math.max(viewport.top, shell.querySelector('.conversation__top-chrome')?.getBoundingClientRect().bottom ?? viewport.top)
       const bottom = Math.min(viewport.bottom, shell.querySelector('.conversation__input-chrome')?.getBoundingClientRect().top ?? viewport.bottom)
       if (rect.height <= 0 || rect.bottom <= top || rect.bottom > bottom) return
-      const sink = inputs.publisher ?? publisher
-      sink.observe(s.hostId, s.conversationId, target, s.epoch)
+      ;(current.publisher ?? publisher).observe(hostId, conversationId, target, epoch)
     }
     const resize = new ResizeObserver(observe)
     resize.observe(region); resize.observe(covered); resize.observe(tail)
@@ -202,8 +214,9 @@ function useThreadReadObservation(inputs: ThreadReadInputs | undefined,
     region.addEventListener('scroll', observe); window.addEventListener('focus', observe)
     document.addEventListener('visibilitychange', observe)
     const off = conversationListStore.subscribe(observe)
+    setup.current = { key, region, covered, tail, observe, dispose() { off(); resize.disconnect();
+      region.removeEventListener('scroll', observe); window.removeEventListener('focus', observe); document.removeEventListener('visibilitychange', observe) } }
     observe()
-    return () => { off(); resize.disconnect(); region.removeEventListener('scroll', observe)
-      window.removeEventListener('focus', observe); document.removeEventListener('visibilitychange', observe) }
   })
+  useReadLayoutEffect(() => () => { setup.current?.dispose(); setup.current = undefined }, [])
 }

@@ -147,7 +147,7 @@ for (const mode of ['automatic', 'explicit', 'terminal'] as const) {
     push('message', { ...queued[0], role: 'user', text: 'duplicate ignored' })
     push('assistant_delta', { turn_id: 'barrier', seq: 0, text: 'Replay barrier' })
     await expect(page.getByText('Replay barrier', { exact: false })).toBeVisible()
-    expect((await rows.allTextContents()).slice(0, -1)).toEqual(before)
+    expect((await rows.allTextContents()).filter(text => !text.includes('Replay barrier'))).toEqual(before)
     await expect(page.locator('.message-row--user')).toHaveCount(2)
     for (let i = 0; i < 2; i++) {
       await expect(page.locator('.message-row--user', { hasText: accepted[i].text })).toHaveCount(1)

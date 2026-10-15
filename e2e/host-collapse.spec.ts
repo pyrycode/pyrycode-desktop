@@ -80,7 +80,8 @@ test('hosts and sections fold independently; an empty host creates in its defaul
   await app.app.evaluate(({ BrowserWindow }, value) => {
     BrowserWindow.getAllWindows()[0].webContents.send(value.channel, value.event)
   }, { channel: DAEMON_EVENT_CHANNEL,
-    event: { type: 'connected', serverId: SECOND_SERVER_ID, ack: { protocol_version: 1 } } })
+    event: { type: 'connected', serverId: SECOND_SERVER_ID, ack: {
+      protocol_version: 'v2', server_id: SECOND_SERVER_ID, conn_id: 'synthetic', capabilities: ['interactive', 'thread'] } } })
   await expect(chatCreates).toHaveCount(2)
   await expect(page.locator('.channel-list__host-disclosure')).toHaveCount(2)
   await expect(page.locator('.channel-list__row').filter({ hasText: 'Untitled' })).toHaveCount(1)

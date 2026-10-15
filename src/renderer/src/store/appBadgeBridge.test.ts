@@ -24,7 +24,8 @@ it('composes shown-version unread with existing attention ranking and host-owned
     expect(conversationStatusNow(row)).toBe('idle')
     expect(conversationStatusNow({ ...row, read_up_to: 9 })).toBe('new-messages')
     expect(conversationStatusNow({ ...row, last_shown_version: undefined })).toBe('idle')
-    expect(conversationStatusNow({ ...row, serverId: 'host-b' })).toBe('new-messages')
+    expect(conversationStatusNow({ ...row, serverId: 'host-b' })).toBe('idle')
+    expect(conversationStatusNow({ ...row, serverId: 'host-b', read_up_to: 9 })).toBe('new-messages')
     showBatch(id)
     expect(conversationStatusNow(row)).toBe('input-required')
   } finally { route.select('host-a', id, null); dismissBatch(id) }
@@ -250,7 +251,7 @@ describe('row-owned daemon attention', () => {
   })
   it('counts colliding IDs independently and retains precedence and badge exclusions', () => {
     const row = { id: 'same', name: null, cwd: '/w', is_promoted: false, is_archived: false,
-      last_message_ts: '', last_used_at: '', workspace_label: null, read_up_to: 0, latest_entry_id: 10 }
+      last_message_ts: '', last_used_at: '', workspace_label: null, read_up_to: 0, latest_entry_id: 10, last_shown_version: 10 }
     conversationListStore.getState().setConversations([row,
       { ...row, id: 'archived', is_archived: true }, { ...row, id: 'muted', is_muted: true }], 'a')
     conversationListStore.getState().setConversations([row], 'b')

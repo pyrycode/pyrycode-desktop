@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { threadRuntime } from './threadRuntime'
 import type { StoreApi } from 'zustand/vanilla'
 import { parseChatHistorySnapshot, type ChatHistorySnapshot, type ChatHistoryRequest, type ChatHistoryResult } from '@shared/chatHistory'
 import type { StampedDaemonEvent } from '@shared/ipc/events'
@@ -294,7 +295,7 @@ export function createChatHistoryWriter(deps: {
 
 export function useChatHistoryWriter(): void {
   useEffect(() => {
-    const writer = createChatHistoryWriter({ lists: conversationListStore, timelines: conversationTimelineStore,
+    const writer = createChatHistoryWriter({ threads: threadRuntime.items, lists: conversationListStore, timelines: conversationTimelineStore,
       subscribeTimelineWrites: conversationTimelineStore.subscribeTimelineWrites,
       flushTimeline: conversationTimelineStore.flushTimeline,
       subscribeEvents: window.pyry.onDaemonEvent,

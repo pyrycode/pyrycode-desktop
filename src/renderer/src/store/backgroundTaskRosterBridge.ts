@@ -318,7 +318,7 @@ export function BackgroundTaskRosterData(): null {
     // read and the write: both stores are written from this one synchronous dispatch, with no await
     // between them.
     return subscribeBackgroundTaskRoster(
-      window.pyry.onDaemonEvent,
+      onLegacyContentEvent,
       (snapshot) => backgroundTaskRosterStore.getState().setRoster(snapshot),
       (origin) =>
         backgroundTaskRosterStore
@@ -341,3 +341,4 @@ export function BackgroundTaskRosterData(): null {
 
   return null
 }
+import { onLegacyContentEvent } from './threadRuntime'

@@ -29,6 +29,8 @@ export interface ConnectionError {
   code: string // wire ErrorPayload.code, or 'transport' | 'handshake' for non-wire failures
   message: string // human-readable, for the banner
   retryable: boolean
+  /** `daemon` when update-required means the host's daemon lacks `thread` (#1908). */
+  cause?: 'daemon'
 }
 
 /**

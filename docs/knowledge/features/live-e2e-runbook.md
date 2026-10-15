@@ -114,7 +114,39 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 
 ## Current real-claude gate state
 
-**Latest recorded run: #1949, 2026-10-14 — 27 executed, 27 passed, 0 failed,
+As of 2026-10-15, credentialed acceptance of production daemon-built threads is
+pending. The final manual fake-daemon suite executed and passed 434 cases, failed
+zero and skipped 20. The 15 production activation cases and 12 supplied thread
+cases were present and passed. This is fake-transport evidence only. The source
+revision is `8d2f3a03d69c7b81019354feca58d42e0008d977`. See the
+[activation plan](../../specs/architecture/1908-thread-activation.md#manual-completion-shared-fake-migration-and-client-regressions)
+for configuration, source/report hashes and individual skip reasons.
+
+No credentialed thread run, daemon source revision, binary digest or live artifact
+is supplied by this manual completion. Do not carry earlier legacy-route live
+acceptance forward as proof of this activation. Execute the following exact specs
+against an isolated source-stamped daemon containing daemon #3164, #3236 and #3324:
+
+- `e2e/real-claude-thread.spec.ts`
+- `e2e/real-daemon-history-on-open.spec.ts`
+- `e2e/real-claude-phase-reconnect.spec.ts`
+- `e2e/real-claude-queue-delivery.spec.ts`
+- `e2e/real-claude-queue-send-now.spec.ts`
+- `e2e/real-claude-permission-modal.spec.ts`
+- `e2e/real-claude-permission-mode.spec.ts`
+- `e2e/real-claude-codex-channel.spec.ts`
+
+Record the Desktop source and daemon source/binary identities. Assert accepted
+`interactive` and `thread` on the actual app connection separately from the
+fixture's probe pairing. Return named-scenario executed/passed/failed/skipped counts
+and JSON/artifact paths for send/stream, reopen, reconnect, older paging, agent
+placement, queued delivery, session reset and saved-history recovery. Collection
+or an all-skip exit supplies no execution proof. Use the dedicated test executable;
+never silently replace the operator's running daemon.
+
+### Earlier October 14 effort acceptance
+
+**Earlier recorded run: #1949, 2026-10-14 — 27 executed, 27 passed, 0 failed,
 1 skipped; the repaired effort-default test passed on its first attempt.** The
 supplied dispatcher per-test report records `2026-10-14T11-31-33-267Z`, testing
 `feature/1949` at `a1e0ae54b399` integrated with `origin/main` at `cbf60aa2a012`.

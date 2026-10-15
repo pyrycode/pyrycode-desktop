@@ -1,3 +1,4 @@
+import { sendConversationCommand } from './conversationActionAvailability'
 import { useEffect, useState } from 'react'
 import { connectedConversationHostNow, useConversationActionAvailability } from './conversationActionAvailability'
 import type { RendererCommand } from '@shared/ipc/commands'
@@ -170,7 +171,7 @@ export function CreateFolderDialog({
       newFolderStore.getState().dispatch({ type: 'reset' })
       return
     }
-    requestChangeWorkspace(window.pyry.sendCommand, conversation.id, roundTrip.path)
+    requestChangeWorkspace(sendConversationCommand, conversation.id, roundTrip.path)
     onCreated()
   }, [roundTrip, conversation.id, onCreated])
 
@@ -193,7 +194,7 @@ export function CreateFolderDialog({
           const serverId = connectedConversationHostNow(conversation.id)
           if (serverId === null) return
           newFolderStore.getState().dispatch({ type: 'createRequested' })
-          requestCreateWorkspaceFolder(window.pyry.sendCommand, conversation.cwd, name, serverId)
+          requestCreateWorkspaceFolder(sendConversationCommand, conversation.cwd, name, serverId)
         }}
       />
     </>

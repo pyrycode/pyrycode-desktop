@@ -228,7 +228,9 @@ export function useConversationCreatedNav(
         getModels: () => modelListStore.getState().lists.get(created.id),
         writes: runSettingsWriteStore,
         submit: (sessionId, change, changeId) => submitSettingsChange({
-          sessionId, sendCommand: window.pyry.sendCommand,
+          sessionId, sendCommand: command => {
+            if (serverId !== undefined) window.pyry.sendCommand({ ...command, serverId })
+          },
           dispatch: runSettingsWriteStore.getState().dispatch, mintChangeId: () => changeId
         }, change),
         mintChangeId: () => crypto.randomUUID(),

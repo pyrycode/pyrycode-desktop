@@ -97,6 +97,7 @@ const BOOTSTRAP_UUID = '77777777-7777-4777-8777-777777777777'
 const BOUND_CONVERSATION_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
 
 export interface SpawnedDaemon {
+  mintPairing: () => Promise<Pick<QrPayload, 'server' | 'token' | 'server_static_pubkey'>>
   // Only the three credential fields decoded from `pyry pair` stdout. The QrPayload's `relay` is assembled
   // test-side from the #251 relay's /v1/client leg, never from pyry's output (which points at prod).
   pairFields: Pick<QrPayload, 'server' | 'token' | 'server_static_pubkey'>
@@ -520,7 +521,8 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
         if (decision.skip) testInfo.skip(true, decision.reason)
       }
 
-      await use({ pairFields, workdir })
+      await use({ pairFields, workdir, mintPairing: async () => decodePairFields(
+        await runPyryPair(pyryBin, daemonEnv, allowRemotePermissions, 'realclaude-e2e')) })
     } finally {
       await cleanup()
     }

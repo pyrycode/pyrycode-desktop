@@ -38,7 +38,7 @@ async function connected(serverId = 'host') {
     createDriver: config => { configs.push(config); return { sendMessage: bytes => { sent.push(bytes) }, stop: () => {} } }
   })
   connection.start(); await vi.waitFor(() => expect(configs).toHaveLength(1))
-  const ack = encodeEnvelope({ id: 1, type: 'hello_ack', ts: 'stamp', payload: { protocol_version: 'v2', server_id: 'host', conn_id: 'connection', capabilities: [] } })
+  const ack = encodeEnvelope({ id: 1, type: 'hello_ack', ts: 'stamp', payload: { protocol_version: 'v2', server_id: 'host', conn_id: 'connection', capabilities: ['thread'] } })
   const emit = (plaintext: Uint8Array) => configs.at(-1)!.onEvent({ type: 'message', plaintext })
   configs[0].onEvent({ type: 'handshake-complete', helloAck: ack })
   return { connection, configs, events, emit, ack, sent }
@@ -53,7 +53,7 @@ it('delivers completed updates through shared IPC and preload; legacy translator
   expect(update).toMatchObject({ type: 'threadUpdate', serverId: 'host', conversationId: 'c',
     update: { type: 'thread_text_append', payload: p }, correlation: { id: 11, ts: 'stamp', in_reply_to: 4, event_id: 31, history_entry_id: 7, session_id: 'session' } })
   const before = received.length; off(); h.emit(f[0]); h.emit(f[1]); expect(received).toHaveLength(before)
-  expect((decodeEnvelope(h.configs[0].session.hello).payload as { capabilities: string[] }).capabilities).not.toContain('thread')
+  expect((decodeEnvelope(h.configs[0].session.hello).payload as { capabilities: string[] }).capabilities).toContain('thread')
   h.connection.stop()
 })
 it.each(['thread_item_added', 'thread_item_changed', 'thread_text_append'])('forwards ordinary and oversized %s through the existing preload subscription', async type => {

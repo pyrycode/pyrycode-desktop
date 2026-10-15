@@ -79,12 +79,10 @@ only subsequent item updates change lifecycle.
 
 The supplied view keys its local drawer and expansion state by host/conversation/epoch,
 so switching any coordinate discards the previous scope's presentation state. This
-differs from the legacy drawer visibility held in `PairedShell` below. Production
-subscriptions, command wiring, capability advertisement and combined live-daemon
-verification remain [#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908);
-live-input admission and reset remain
-[#1935](https://github.com/pyrycode/pyrycode-desktop/issues/1935). The injectable seam
-does not establish either integration.
+differs from the legacy drawer visibility described below. Production uses the
+same drawer state for the ordinary Background tasks menu, count pill and close
+action. The [thread runtime](thread-runtime.md) supplies task state and scoped Stop
+commands. Credentialed live verification is separately pending.
 
 **Supplied testing.** `threadTaskPresentation.test.tsx` uses pure projection and
 static renders for membership/deduplication, recorded attribution, independent

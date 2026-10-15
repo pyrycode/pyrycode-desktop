@@ -23,7 +23,9 @@ import {
   type ServerConversationSummary
 } from './conversationListStore'
 import { conversationTimelineStore } from './conversationTimelineStore'
-import { notificationPreviewIn, type NotifyEvent } from './notificationPreview'
+import { threadRuntime } from './threadRuntime'
+import { threadItemPresentations } from '../screens/conversation/threadItemPresentation'
+import { notificationPreviewFromItems, notificationPreviewIn, type NotifyEvent } from './notificationPreview'
 import { pushNotificationPrefStore } from './pushNotificationPrefStore'
 
 /**
@@ -127,7 +129,16 @@ export function subscribePushNotify(
   previewFor?: (event: NotifyEvent) => string | null
 ): () => void {
   const announced = new Set<string>()
-  return onDaemonEvent((event) => {
+  return onDaemonEvent((received) => {
+    let event = received
+    let ending: string | null = null
+    if (event.type === 'threadUpdate' && event.update.type === 'thread_item_added') {
+      const item = event.update.payload.item
+      if (item.kind !== 'turn_end' || item.parent !== undefined || typeof item.turn !== 'string') return
+      ending = JSON.stringify([event.serverId, event.conversationId, event.update.payload.epoch, item.id])
+      if (announced.has(ending)) return
+      event = { type: 'turnEnd', serverId: event.serverId, conversationId: event.conversationId, turnId: item.turn, stopReason: '' }
+    }
     const kind = notifyKindForEvent(event)
     if (kind === null) return
     // Narrowing on the discriminant is what makes `event.modalId` legal — no cast. This local is the
@@ -160,6 +171,7 @@ export function subscribePushNotify(
       }
     })
     if (announceKey !== null) announced.add(announceKey)
+    if (ending !== null) announced.add(ending)
   })
 }
 
@@ -281,7 +293,11 @@ export function usePushNotify(targets: NotificationTargets): void {
         targets.mint,
         (serverId, conversationId) =>
           conversationMutedIn(conversationListStore.getState(), serverId, conversationId),
-        (event) => notificationPreviewIn(conversationTimelineStore.getState(), event)
+        (event) => {
+          const snapshot = event.serverId === null ? null : threadRuntime.items.getState().snapshot(event.serverId, event.conversationId)
+          return snapshot ? notificationPreviewFromItems(threadItemPresentations(snapshot).flatMap(row => row.item ? [row.item] : []), event)
+            : notificationPreviewIn(conversationTimelineStore.getState(), event)
+        }
       ),
     [targets]
   )

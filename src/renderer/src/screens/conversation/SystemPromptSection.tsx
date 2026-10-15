@@ -1,3 +1,4 @@
+import { sendConversationCommand } from './conversationActionAvailability'
 // #1078: the channel info sheet's System prompt section — the surface for a whole vertical that has
 // been built and dark since #1230. It reads `systemPromptStore` (what this conversation holds, and
 // whether the running session was started with something else) and `systemPromptWriteStore` (what
@@ -271,7 +272,7 @@ export function SystemPromptSection({ conversationId }: { conversationId: string
   const submit = (systemPrompt: string | null): void =>
     submitSystemPrompt(
       {
-        sendCommand: window.pyry.sendCommand,
+        sendCommand: sendConversationCommand,
         dispatch: (event) => systemPromptWriteStore.getState().dispatch(event)
       },
       conversationId,

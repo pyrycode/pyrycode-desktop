@@ -50,6 +50,16 @@ export interface DeviceKeypairStore {
   ensure(): Promise<DeviceKeyPair>
 }
 
+/** Matches daemon connSender's authenticated StaticKey; never expose key bytes over IPC. */
+export async function readDeviceIdentity(store: DeviceKeypairStore): Promise<
+  { ok: true; deviceId: string } | { ok: false; error: 'identity-unavailable' }
+> {
+  try {
+    const pair = await store.ensure()
+    return { ok: true, deviceId: Buffer.from(pair.publicKey).toString('hex') }
+  } catch { return { ok: false, error: 'identity-unavailable' } }
+}
+
 /**
  * Thrown when a stored blob is present but is not a valid 64-byte keypair (tamper / format drift).
  * The message is static and carries no key bytes; it lets the consumer branch to a "re-pair"

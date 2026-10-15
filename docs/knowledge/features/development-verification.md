@@ -34,7 +34,7 @@ Read all callers before broadening what an empty identifier means.
 Renderer units are static `renderToStaticMarkup` in Node: they prove markup and pure decisions,
 not effects, focus, scrolling or publication. The existing `rendererFixture` in
 [`e2e/thread-items.spec.ts`](../../../e2e/thread-items.spec.ts) supplies route, immutable
-snapshot, summary, completion and reader inputs to the inactive item view. Keep
+snapshot, summary, completion and reader inputs to the isolated item view. Keep
 `ConversationListData` mounted when replacing `App`; writing a mark directly into the list
 store does not test received owning-daemon confirmation.
 
@@ -63,6 +63,10 @@ to commit before asserting the finished marker. One shared latest-request slot c
 wrong chat because main correlates replies by request ID and suppresses repeated pending asks.
 Reply to `list_conversations` with the current roster, retaining the single-row launch seed and
 both rows afterwards; a catch-all one-row list response can silently remove quiet ownership.
+The [controlled shared-ID proof](../../specs/architecture/1936-visible-thread-read-marks.md#revisions)
+failed at the historical-child commit barrier (`0 tools`, expected `1 tool`); selecting the
+owning request passed the existing identity, finished-marker and navigation assertions. Preserve
+that barrier and request ordering when reusing the scenario to validate another platform.
 
 The [final verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/1965#issuecomment-6188903924)
 records the configured Linux gate on `20d0f07140931f3f0aaad4977f6a186c5f761727`, 2026-10-15:
@@ -77,6 +81,45 @@ recorded 3 passed and 2 deliberately skipped by `--no-suite`, with typecheck sub
 These results supersede the earlier red complete gates; a focused pass or a baseline comparison
 alone did not satisfy that full-suite requirement.
 
+The [connect-roster verifier](https://github.com/pyrycode/pyrycode-desktop/pull/2000#issuecomment-6189606015)
+records the unchanged scenario/configuration on `1e6cc84ce2117dd6c06a31d11af901f25ac7d6eb`,
+2026-10-15: the complete Linux gate ran **427 executed, 427 passed, 0 failed, 3 skipped,
+0 flaky**, four actual workers and zero retries. The named connect-roster scenario above was
+present and passed: **1 executed, 1 passed, 0 failed, 0 skipped**, retry 0. The skips were two
+macOS badge cases and the macOS window-reopen case. Retained reports are
+`/work/Projects/pyrycode-desktop-agents/logs/verifier-gate_#1998.pass.json` and
+`verifier-gate_#1998_6.log` (Playwright JSON) with its stderr log in that directory; shared
+verifier evidence bundle `7e872c636b8d6eb367de8e665f72659b5feea9c4cbce0cf933466bd04cf00a29`
+includes the verdict and report tail, with the full-report pointer in `pointers.json`.
+
+The [native validation evidence](../../specs/architecture/1998-connect-roster-native-validation.md#validation-evidence)
+now includes inspected managed `desktop-fake-suite` task
+`0234f9aa222747faa60ae91272b3c4c0a8c191f095a48b442728b5adbb6e44ce`, run on the MacBook
+at revision `0573bc79d97199427d6eebdf4f36f9d3785f7321`, 2026-10-15. The complete configured
+suite recorded **429 executed, 429 passed, 0 failed, 1 skipped, 0 flaky**, four actual
+workers and zero retries. The named connect-roster scenario above was present and passed:
+**1 executed, 1 passed, 0 failed, 0 skipped**, retry 0. The sole skip was the independent
+input-enabled-cover hover case because a never-shown window receives no display pointer.
+The named case's `launch-fate` attachment records a running app at outcome, exit 0 and no
+teardown failures; the setup summary is `[]`, with no top-level report errors.
+
+Documentation inspected all six retained artifacts in `/tmp/docs-1998-native-20261015/desktop/`:
+`capture.json`, `playwright.json`, `playwright.list.log`, `execution.log`, returned
+`playwright.config.ts` and `fake-daemon-setup.json`. They remain retrievable through the
+managed task. Its invocation was Playwright `test --config=playwright.config.ts`, without
+file, grep, project or shard filters; all 430 configured cases are accounted for.
+The returned configuration SHA256 is
+`f2868e97d72733c286ff8c3098f09adc62e2e8bfa3ad9393e000eebf9a429d5a`, matching the
+candidate and original failing configuration. The scenario is unchanged in the current
+branch; later main merges changed configuration, so these counts belong to the recorded
+candidate. Reuse the controlled ownership proof above rather than adding another regression
+or replacing the complete configured gate with a filtered pass.
+
+Native execution is verified; acceptance remains pending the builder's required returned-artifact
+inspection and evidence commit, as specified by the PR/verifier handoff. The earlier task-access
+blocker is resolved. This documentation inspection does not stand in for that builder-owned step;
+return the existing task reports to the builder without requesting duplicate execution.
+
 Separate native/macOS evidence for older candidate `ddb9bce8db99546129037f00713b753f603562d9`
 remains unverified and handed to the dispatcher: task
 `400bbaf6852f5e7efa8c860719fcf81552c8014a58142a12f66936d55fa14a07` has no verified result
@@ -84,8 +127,9 @@ in the verdict. Any result needs its own revision/configuration, executed/failed
 named cases and setup-attachment review before native acceptance. Replacement-epoch captures at
 1280×773 and 800×773 show existing bubbles and copy/reply controls; the supplied fixture omits
 the surrounding sidebar/top/input chrome, so they do not prove integrated chrome fidelity.
-No real-Claude/live-daemon test ran or was required for this supplied seam. Production
-activation and combined live proof remain [#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
+No real-Claude/live-daemon test ran or was required for this supplied seam.
+Production activation has separate [counted fake-suite evidence](thread-runtime.md#validation-boundaries).
+Credentialed live acceptance remains pending in the live runbook.
 
 ## Hosted app link verification
 

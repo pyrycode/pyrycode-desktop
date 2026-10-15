@@ -346,7 +346,7 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * matching case to isRendererCommand in lockstep, or the new member is silently dropped at
  * the boundary.
  */
-export type RendererCommand =
+export type RendererCommand = (
   | { type: 'queryThread'; serverId: string; requestId: string; query: ThreadQuery }
   | { type: 'requestHostSystemPrompt'; serverId: string; requestId: string }
   | { type: 'setHostSystemPrompt'; serverId: string; requestId: string; payload: SetHostSystemPromptPayload }
@@ -358,15 +358,15 @@ export type RendererCommand =
   | { type: 'requestMcpStatus'; payload: MCPStatusRequestPayload }
   | { type: 'reconnectMcpServer'; payload: MCPReconnectPayload }
   | { type: 'toggleMcpServer'; payload: MCPTogglePayload }
-  | { type: 'stopBackgroundTask'; payload: StopBackgroundTaskPayload }
+  | { type: 'stopBackgroundTask'; payload: StopBackgroundTaskPayload; serverId?: string }
   | { type: 'requestHistory'; payload: RequestHistoryPayload }
   | { type: 'requestSystemPrompt'; payload: RequestSystemPromptPayload }
   | { type: 'requestConversations'; serverId?: string }
   | { type: 'requestRecentWorkspaces'; serverId?: string }
-  | { type: 'answerModal'; payload: AnswerModalCommandPayload }
-  | { type: 'cancelModal'; payload: ModalCancelPayload }
-  | { type: 'answerQuestions'; payload: AnswerQuestionsCommandPayload }
-  | { type: 'refuseQuestions'; payload: RefuseQuestionsCommandPayload }
+  | { type: 'answerModal'; payload: AnswerModalCommandPayload; serverId?: string }
+  | { type: 'cancelModal'; payload: ModalCancelPayload; serverId?: string }
+  | { type: 'answerQuestions'; payload: AnswerQuestionsCommandPayload; serverId?: string }
+  | { type: 'refuseQuestions'; payload: RefuseQuestionsCommandPayload; serverId?: string }
   | { type: 'createConversation'; payload: CreateConversationPayload; serverId?: string }
   | { type: 'promoteConversation'; payload: PromoteConversationPayload }
   | { type: 'archiveConversation'; payload: ArchiveConversationPayload }
@@ -382,13 +382,14 @@ export type RendererCommand =
   | { type: 'createWorkspaceFolder'; payload: CreateWorkspaceFolderPayload; serverId?: string }
   | { type: 'renameWorkspace'; payload: RenameWorkspacePayload; serverId?: string; attemptId?: string }
   | { type: 'setSessionSettings'; payload: SetSessionSettingsPayload; changeId: string }
-  | { type: 'dequeueMessage'; payload: DequeueMessagePayload }
-  | { type: 'sendQueuedNow'; payload: SendQueuedNowPayload }
+  | { type: 'dequeueMessage'; payload: DequeueMessagePayload; serverId?: string }
+  | { type: 'sendQueuedNow'; payload: SendQueuedNowPayload; serverId?: string }
   | { type: 'interrupt'; payload: InterruptCommandPayload }
   | { type: 'newSession'; payload: NewSessionCommandPayload }
   | { type: 'switchAgent'; payload: SwitchAgentPayload }
   | { type: 'notify'; payload: NotifyPayload }
   | { type: 'setBadgeCount'; payload: BadgeCountPayload }
+) & { serverId?: string }
 
 /**
  * Wrap already-assembled send-message fields into a well-formed command. Pure: it does NOT
@@ -517,6 +518,9 @@ export function interruptCommand(fields: InterruptCommandPayload): RendererComma
  */
 export function isRendererCommand(value: unknown): value is RendererCommand {
   if (typeof value !== 'object' || value === null || !('type' in value)) return false
+  // Conversation/session coordinates are optional for legacy callers, but never an unchecked hint.
+  if ('payload' in value && typeof value.payload === 'object' && value.payload !== null &&
+      ('conversation_id' in value.payload || 'session_id' in value.payload) && !hasValidThreadHost(value)) return false
   switch (value.type) {
     case 'queryThread': {
       const text = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 1024
@@ -561,7 +565,7 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
     case 'toggleMcpServer':
       return 'payload' in value && isMCPTogglePayload(value.payload)
     case 'stopBackgroundTask':
-      return 'payload' in value && isStopBackgroundTaskPayload(value.payload)
+      return hasValidThreadHost(value) && 'payload' in value && isStopBackgroundTaskPayload(value.payload)
     case 'requestHistory':
       // Payload-required (#1222) — the neighbour's idiom verbatim, including why the
       // explicitly-`undefined` case is refused by the payload guard and not by the `in` check.
@@ -583,13 +587,13 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       // Bare member (#380): no payload to validate, so the optional server id (#1120) is the whole check.
       return hasValidServerId(value)
     case 'answerModal':
-      return 'payload' in value && isAnswerModalPayload(value.payload)
+      return hasValidThreadHost(value) && 'payload' in value && isAnswerModalPayload(value.payload)
     case 'cancelModal':
-      return 'payload' in value && isCancelModalPayload(value.payload)
+      return hasValidThreadHost(value) && 'payload' in value && isCancelModalPayload(value.payload)
     case 'answerQuestions':
-      return 'payload' in value && isAnswerQuestionsPayload(value.payload)
+      return hasValidThreadHost(value) && 'payload' in value && isAnswerQuestionsPayload(value.payload)
     case 'refuseQuestions':
-      return 'payload' in value && isRefuseQuestionsPayload(value.payload)
+      return hasValidThreadHost(value) && 'payload' in value && isRefuseQuestionsPayload(value.payload)
     case 'createConversation':
       return (
         'payload' in value && isCreateConversationPayload(value.payload) && hasValidServerId(value)
@@ -643,9 +647,9 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
         typeof value.changeId === 'string'
       )
     case 'dequeueMessage':
-      return 'payload' in value && isDequeueMessagePayload(value.payload)
+      return hasValidThreadHost(value) && 'payload' in value && isDequeueMessagePayload(value.payload)
     case 'sendQueuedNow':
-      return 'payload' in value && isSendQueuedNowPayload(value.payload)
+      return hasValidThreadHost(value) && 'payload' in value && isSendQueuedNowPayload(value.payload)
     case 'interrupt':
       // The newSession arm's shape (#1092) — a required payload, refused BY isInterruptPayload rather
       // than by the `in` check, for the reason the requestModelList arm records. NO serverId arm any
@@ -697,6 +701,11 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
 function hasValidServerId(value: object): boolean {
   if (!('serverId' in value)) return true
   return value.serverId === undefined || typeof value.serverId === 'string'
+}
+
+function hasValidThreadHost(value: object): boolean {
+  if (!('serverId' in value) || value.serverId === undefined) return true
+  return typeof value.serverId === 'string' && value.serverId.length > 0 && value.serverId.length <= 1024
 }
 
 function isSendMessagePayload(value: unknown): value is SendMessagePayload {

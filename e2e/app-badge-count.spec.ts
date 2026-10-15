@@ -45,14 +45,14 @@ function attentionDots(page: Page): Promise<number> {
 test('the badge counts attention dots as prompts arrive and resolve and chats are read', async ({
   launchPairedApp
 }) => {
-  const rows = [SEEDED_ROW]
+  const rows: ConversationSummary[] = [{ ...SEEDED_ROW, read_up_to: 0, last_shown_version: 0 }]
   const { page, app, daemon } = await launchPairedApp({
     buildReplyFrames: (bytes) =>
       decodeEnvelope(bytes).type === 'list_conversations' ? [frame('conversations', { conversations: rows })] : []
   })
   await expect.poll(badge(app)).toBe(0)
 
-  rows.push(OTHER)
+  rows.push({ ...OTHER, read_up_to: 0, last_shown_version: 0 })
   daemon.pushFrame(frame('conversations', { conversations: rows }))
   await expect(page.locator('.channel-list__row')).toHaveCount(2)
   await expect.poll(badge(app)).toBe(0)
@@ -70,12 +70,16 @@ test('the badge counts attention dots as prompts arrive and resolve and chats ar
   await expect.poll(badge(app)).toBe(0)
 
   // A turn ending in the unopened chat leaves it unread: a new-messages dot.
+  daemon.pushFrame(encodeEnvelope({ id: 1, type: 'assistant_delta', ts: '2026-10-15T00:00:00Z', history_entry_id: 1,
+    payload: { conversation_id: OTHER.id, turn_id: 'badge-turn', seq: 0, text: 'Unread reply' } }))
   daemon.pushFrame(turnEnd(OTHER.id))
   await expect.poll(badge(app)).toBe(1)
   expect(await attentionDots(page)).toBe(1)
 
   // Reading it clears it.
   await page.locator('.channel-list__row', { hasText: OTHER.name ?? '' }).locator('.channel-list__row-open').click()
+  await expect(page.locator('.conversation__thread')).toContainText('Unread reply')
+  daemon.pushFrame(frame('conversation_updated', { ...OTHER, read_up_to: 1 }))
   await expect.poll(badge(app)).toBe(0)
   expect(await attentionDots(page)).toBe(0)
 })

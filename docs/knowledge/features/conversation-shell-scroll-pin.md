@@ -351,8 +351,10 @@ passed. Ticket coverage executed 3, passed 3,
 failed 0, skipped 1; the skip is the separate #1926 attachment transport reproduction.
 Full fake-transport coverage executed 380, passed 379, failed 1, skipped 4, with the
 unrelated `history-gaps` failure passing an isolated rerun (1 executed/passed,
-0 failed/skipped). These are injected snapshot/typed-update proofs; production
-selection and combined live acceptance remain with #1908.
+0 failed/skipped). These are injected snapshot/typed-update proofs. Production
+shares this pin with the actual authoritative scroller; its send-from-older-content
+regression passed in the final [activation run](thread-runtime.md#validation-boundaries).
+Credentialed live acceptance is separately pending.
 
 The supplied-agent cases establish a stronger held-reader baseline at native
 1280×800 and 800×800. After native End/Home motion settles, a spec-local target

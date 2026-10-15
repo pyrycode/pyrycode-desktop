@@ -24,7 +24,7 @@ function background(diagnosticLog: DiagnosticLog) {
   })
   const handshake = () => config?.onEvent({ type: 'handshake-complete', helloAck: encodeEnvelope({
     id: 1, type: 'hello_ack', ts: '2026-10-01T00:00:00Z',
-    payload: { protocol_version: 'v2', server_id: 'srv-1', conn_id: 'conn' }
+    payload: { protocol_version: 'v2', server_id: 'srv-1', conn_id: 'conn', capabilities: ['thread'] }
   }) })
   return { connection, sink, send, handshake }
 }

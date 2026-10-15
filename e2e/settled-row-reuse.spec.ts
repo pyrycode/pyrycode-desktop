@@ -47,7 +47,7 @@ test('settled rows skip deltas and unrelated group toggles while the active repl
   }
   tool('parent', undefined, 'Agent')
   tool('child', 'parent')
-  await expect(row('parent').locator('.tool-row__count')).toHaveText('1 tool')
+  await expect(row('parent').locator('.tool-row__count').last()).toHaveText('1 tool')
   await expect(row('child')).toBeHidden()
   // A message separates the unrelated tool from the grouped block, avoiding run folding.
   daemon.pushFrame(delta('another settled reply', 'separator'))

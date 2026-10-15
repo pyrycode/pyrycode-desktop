@@ -109,7 +109,7 @@ test('the reader menu copies the note three ways and refreshes it (#1630)', asyn
 
   await page.getByPlaceholder('Message…').fill('where is the plan?')
   await page.getByRole('button', { name: 'Send' }).click()
-  const planLink = page.locator('.bubble[data-thread-role="assistant"]').getByRole('button', { name: 'the plan' })
+  const planLink = page.locator('[data-thread-role="assistant"]').getByRole('button', { name: 'the plan' })
   await expect(planLink).toBeVisible({ timeout: TIMEOUT_MS })
 
   const reader = page.locator('.markdown-reader')

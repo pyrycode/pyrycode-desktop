@@ -19,8 +19,9 @@ export function subscribeSessionFacts(
 
 export function SessionFactsData(): null {
   useEffect(() => subscribeSessionFacts(
-    window.pyry.onDaemonEvent,
+    onCurrentSessionEvent,
     sessionFactsStore.getState().setSessionFacts
   ), [])
   return null
 }
+import { onCurrentSessionEvent } from './threadRuntime'

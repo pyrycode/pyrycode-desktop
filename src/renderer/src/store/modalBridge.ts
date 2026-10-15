@@ -381,10 +381,11 @@ export function useModalBridge(): void {
   useEffect(
     () =>
       subscribeModal(
-        window.pyry.onDaemonEvent,
+        onLegacyContentEvent,
         (event) => modalStore.getState().dispatch(event),
         (origin) => selectConversationIdsFor(origin)(conversationListStore.getState())
       ),
     []
   )
 }
+import { onLegacyContentEvent } from './threadRuntime'

@@ -271,8 +271,7 @@ function signedSafe(value: unknown): number {
   return Number.isSafeInteger(n) ? n : invalid()
 }
 
-function retainedThread(value: unknown, hostId: string, conversationId: string): ThreadSnapshot {
-  const v = record(value)
+function retainedItems(value: unknown): ThreadSnapshot['items'] {
   let nodes = 0
   function json(value: unknown, depth = 0): unknown {
     if (++nodes > MAX_CHAT_HISTORY_ITEMS || depth > 64) return invalid()
@@ -286,30 +285,44 @@ function retainedThread(value: unknown, hostId: string, conversationId: string):
     // fromEntries creates own data properties, including __proto__, without invoking setters.
     return Object.fromEntries(entries.map(([key, child]) => [string(key), json(child, depth + 1)]))
   }
-  const items = array(v.items, value => {
+  return array(value, value => {
     const item = record(json(value))
     return { ...item, id: readId(item.id), kind: string(item.kind), rev: readId(item.rev) }
   })
-  const itemIds = new Set(items.map(item => item.id))
-  const arrivalOrder = optional(v.arrivalOrder, value => array(value, readId))
-  const version = readId(v.version), checkpoint = readId(v.checkpoint)
-  const uncommittedVersion = v.uncommittedVersion === undefined ? (version > checkpoint ? version : 0) : readId(v.uncommittedVersion)
-  const ranges = array(v.ranges, value => {
+}
+function retainedRanges(value: unknown): ThreadSnapshot['ranges'] {
+  const ranges = array(value, value => {
     const r = record(value), start = readId(r.start), end = readId(r.end)
     return start <= end ? { start, end } : invalid()
   })
+  if (ranges.some((r, i) => i > 0 && r.start <= ranges[i - 1].end)) return invalid()
+  return ranges
+}
+function retainedMetadata(value: unknown, hostId: string, conversationId: string): Omit<ThreadSnapshot, 'items' | 'ranges' | 'arrivalOrder'> {
+  const v = record(value)
+  const version = readId(v.version), checkpoint = readId(v.checkpoint)
+  const uncommittedVersion = v.uncommittedVersion === undefined ? (version > checkpoint ? version : 0) : readId(v.uncommittedVersion)
   const repair = nullable(v.repair, value => {
     const r = record(value), fromVersion = readId(r.fromVersion), throughVersion = readId(r.throughVersion)
     return fromVersion === checkpoint && throughVersion >= fromVersion ? { fromVersion, throughVersion } : invalid()
   })
   if (id(v.hostId) !== hostId || id(v.conversationId) !== conversationId || checkpoint > version ||
-      uncommittedVersion > version || itemIds.size !== items.length ||
-      (arrivalOrder !== undefined && (arrivalOrder.length !== items.length ||
-        new Set(arrivalOrder).size !== items.length || arrivalOrder.some(id => !itemIds.has(id)))) ||
-      ranges.some((r, i) => i > 0 && r.start <= ranges[i - 1].end)) return invalid()
-  return { hostId, conversationId, epoch: id(v.epoch), items, version, checkpoint, uncommittedVersion, ranges, repair,
-    ...(arrivalOrder === undefined ? {} : { arrivalOrder }),
+      uncommittedVersion > version) return invalid()
+  return { hostId, conversationId, epoch: id(v.epoch), version, checkpoint, uncommittedVersion, repair,
     ...(v.olderAvailable === undefined ? {} : { olderAvailable: bool(v.olderAvailable) }) }
+}
+/** Selected facts share admission with full snapshots, without claiming complete membership. */
+export const threadHistoryCodec = { items: retainedItems, ranges: retainedRanges, metadata: retainedMetadata }
+
+function retainedThread(value: unknown, hostId: string, conversationId: string): ThreadSnapshot {
+  const v = record(value), items = retainedItems(v.items), ranges = retainedRanges(v.ranges)
+  const itemIds = new Set(items.map(item => item.id))
+  const arrivalOrder = optional(v.arrivalOrder, value => array(value, readId))
+  if (itemIds.size !== items.length ||
+      (arrivalOrder !== undefined && (arrivalOrder.length !== items.length ||
+        new Set(arrivalOrder).size !== items.length || arrivalOrder.some(id => !itemIds.has(id))))) return invalid()
+  return { ...retainedMetadata(v, hostId, conversationId), items, ranges,
+    ...(arrivalOrder === undefined ? {} : { arrivalOrder }) }
 }
 
 /** Parsers return detached, allowlisted data; callers contain the static validation failures. */

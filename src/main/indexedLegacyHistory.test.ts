@@ -126,6 +126,7 @@ it('migrates version-1 ownership keys atomically without changing payloads or sn
   const original = h.database.transaction(db => db.prepare('SELECT identity FROM legacy_scopes').get())
   h.database.transaction(db => db.exec(`
     UPDATE legacy_scopes SET server = 'Host', conversation = 'Chat';
+    DROP TABLE thread_records; DROP TABLE thread_scopes;
     PRAGMA user_version = 1;
     CREATE TRIGGER fail_migration BEFORE UPDATE ON legacy_scopes BEGIN SELECT RAISE(ABORT, 'injected'); END;
   `))
@@ -144,7 +145,7 @@ it('migrates version-1 ownership keys atomically without changing payloads or sn
   h.encryption.decrypt = decrypt
   expect(await fresh.store.execute(read())).toEqual({ status: 'stored', snapshot: parseChatHistorySnapshot(snapshot()) })
   fresh.database.transaction(db => {
-    expect(db.pragma('user_version', { simple: true })).toBe(2)
+    expect(db.pragma('user_version', { simple: true })).toBe(3)
     expect(db.prepare('SELECT identity FROM legacy_scopes').get()).toEqual(original)
     expect(db.prepare('SELECT typeof(server) AS server, typeof(conversation) AS conversation FROM legacy_scopes').get())
       .toEqual({ server: 'blob', conversation: 'blob' })
@@ -194,7 +195,7 @@ it('fails closed for unavailable encryption, corrupt payloads and unsupported sc
     expect(await h.store.execute(request)).toEqual({ status: 'error', code: 'unreadable' })
   expect(protectedBytes(h.root)).toEqual(bytes)
   expect(JSON.stringify(h.lines)).not.toContain('MESSAGE-SENTINEL-1979')
-  h.database.transaction(db => db.pragma('user_version = 3'))
+  h.database.transaction(db => db.pragma('user_version = 999'))
   h.database.close()
   const unsupported = protectedBytes(h.root)
   expect(await h.fresh().store.execute(read())).toEqual({ status: 'error', code: 'unsupported-version' })

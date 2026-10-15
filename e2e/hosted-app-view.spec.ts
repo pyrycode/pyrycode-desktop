@@ -103,7 +103,8 @@ test('native resources load modules, SPA navigation, binary bytes and HTTP seman
   const capture = await app.evaluate(async () => (await (globalThis as any).hosted.content.webContents.capturePage()).toPNG().toString('base64'))
   await writeFile('/tmp/builder-1991/native-view.png', Buffer.from(capture, 'base64'))
   await evaluate(app, `location.href = '/nested/route#fragment'; undefined`)
-  await expect.poll(() => evaluate(app, 'document.body.dataset.loaded')).toBe('first-dynamic')
+  await expect.poll(() => evaluate(app, '[location.pathname, document.body.dataset.loaded, document.readyState]'))
+    .toEqual(['/nested/route', 'first-dynamic', 'complete'])
   expect(s.seen.find(r => r.payload.path === '/nested/route').payload.navigation).toBe(true)
   expect(await app.evaluate(() => (globalThis as any).hostedStates)).toEqual(['loading', 'ready', 'loading', 'ready'])
   await evaluate(app, `history.pushState({}, '', '/history'); history.back(); undefined`)
@@ -149,8 +150,16 @@ test('hostile content cannot escape native policy or dispatch unsupported traffi
     return [typeof XMLHttpRequest, typeof EventSource, typeof WebSocket, typeof Worker, typeof SharedWorker,
       typeof navigator.serviceWorker, typeof window.pyry, typeof require, document.cookie, window.inlineRan === true];
   })()`)).toEqual(['undefined','undefined','undefined','undefined','undefined','undefined','undefined','undefined','',false])
+  expect(await evaluate(app, `(async () => {
+    try { await cookieStore.set('verifier', 'synthetic'); return 'allowed' } catch { return 'denied' }
+  })()`)).toBe('denied')
+  expect(await evaluate(app, `(() => {
+    const descriptor = Object.getOwnPropertyDescriptor(window, 'cookieStore');
+    return [typeof cookieStore, typeof CookieStore, descriptor.writable, descriptor.configurable];
+  })()`)).toEqual(['undefined', 'undefined', false, false])
   // Completed read is the processing barrier after the hostile batch.
   expect(await evaluate(app, `fetch('/api/read?barrier=hostile').then(r => r.status)`)).toBe(200)
+  expect(await app.evaluate(() => (globalThis as any).hosted.content.webContents.session.cookies.get({}))).toEqual([])
   expect(s.seen.filter(r => ['app_asset_request', 'app_api_request'].includes(r.type)).slice(baseline).map(r => r.payload.path))
     .toEqual(['/api/read'])
   expect(externalRequests).toBe(0)
@@ -163,7 +172,8 @@ test('hostile content cannot escape native policy or dispatch unsupported traffi
   await expect.poll(() => app.evaluate(() => (globalThis as any).downloadPrevented)).toBe(true)
   expect(await evaluate(app, `fetch('/nonexistent', {headers:{'X-Pyry-Navigation':'1'}}).then(r => r.status)`)).toBe(404)
   expect(s.seen.at(-1).payload.navigation).toBe(false)
-  expect(await evaluate(app, `(() => { const f = document.createElement('iframe'); document.body.append(f); return typeof f.contentWindow.XMLHttpRequest })()`)).toBe('undefined')
+  expect(await evaluate(app, `(() => { const f = document.createElement('iframe'); document.body.append(f); return [typeof f.contentWindow.XMLHttpRequest, typeof f.contentWindow.cookieStore] })()`))
+    .toEqual(['undefined', 'undefined'])
   expect(await page.evaluate(() => typeof window.pyry)).toBe('object')
   expect(await page.evaluate(() => document.body.dataset.loaded)).toBeUndefined()
   await app.evaluate(({ webContents }, origin) => {
@@ -222,9 +232,13 @@ test('authority changes retire pending work and isolate releases and two hosts',
 for (const cause of ['removed', 'discovery-gap', 'rehandshake', 'unpair', 'parent'] as const) {
   test(`native view retires on ${cause}`, async ({ launchPairedApp }) => {
     const s = scenario(), { app, page, daemon } = await launchPairedApp(s.options)
-    const initial = await open(app)
+    const initial = await open(app, FIRST_SERVER_ID, cause === 'parent')
     await expect.poll(() => evaluate(app, 'document.body.dataset.loaded')).toBe('first-dynamic')
     await app.evaluate(() => { (globalThis as any).retiredContents = (globalThis as any).hosted.content.webContents })
+    if (cause === 'parent') {
+      await evaluate(app, `window.pending = fetch('/api/held').catch(() => 'retired'); undefined`)
+      await expect.poll(() => s.seen.filter(r => r.type === 'app_api_request' && r.payload.path === '/api/held').length).toBe(1)
+    }
     if (cause === 'removed') daemon.pushFrame(s.frame('app_removed', { app_id: appId, revision: 2 }))
     if (cause === 'discovery-gap') daemon.pushFrame(s.frame('app_removed', { app_id: appId, revision: 900 }))
     if (cause === 'rehandshake') await page.evaluate(server => window.pyry.reconnectServer(server), FIRST_SERVER_ID)
@@ -233,6 +247,17 @@ for (const cause of ['removed', 'discovery-gap', 'rehandshake', 'unpair', 'paren
     await expect.poll(() => app.evaluate(() => (globalThis as any).hosted.read().type)).toBe(
       cause === 'parent' ? 'closed' : cause === 'unpair' || cause === 'rehandshake' ? 'disconnected' : 'unavailable')
     await expect.poll(() => app.evaluate(() => (globalThis as any).retiredContents.isDestroyed())).toBe(true)
+    if (cause === 'parent') {
+      const held = s.seen.find(r => r.type === 'app_api_request' && r.payload.path === '/api/held')
+      await expect.poll(() => s.seen.some(r => r.type === 'app_cancel' && r.payload.request_id === held.id)).toBe(true)
+      const next = await open(app)
+      expect(next.origin).not.toBe(initial.origin)
+      for (const frame of s.late.splice(0)) daemon.pushFrame(frame)
+      await expect.poll(() => evaluate(app, 'document.body.dataset.loaded')).toBe('first-dynamic')
+      expect(await evaluate(app, `fetch('/api/read?barrier=parent').then(r => r.status)`)).toBe(200)
+      expect(await app.evaluate(() => [(globalThis as any).hosted.read().type, (globalThis as any).retiredContents.isDestroyed()]))
+        .toEqual(['ready', true])
+    }
     if (cause === 'discovery-gap' || cause === 'rehandshake') {
       await expect.poll(() => s.seen.filter(r => r.type === 'list_apps').length).toBe(2)
       const next = await open(app)

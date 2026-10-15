@@ -14,7 +14,9 @@ export function createHistoryDatabase({ userDataPath }: { userDataPath: string }
     const db = new Database(path)
     try {
       const version = db.pragma('user_version', { simple: true })
-      if (version !== 0 && version !== 1 && version !== 2 && version !== 3) throw UNSUPPORTED_CHAT_HISTORY_VERSION
+      if (version !== 4) {
+        if (version !== 0 && version !== 1 && version !== 2 && version !== 3) throw UNSUPPORTED_CHAT_HISTORY_VERSION
+      }
       if (version === 0) {
         const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()
         if (tables.length) throw UNSUPPORTED_CHAT_HISTORY_VERSION
@@ -62,6 +64,20 @@ export function createHistoryDatabase({ userDataPath }: { userDataPath: string }
           db.exec(`CREATE INDEX IF NOT EXISTS legacy_receipt_start
             ON legacy_records(scope, entry_id, parent) WHERE kind = 'receipt-id' AND ordinal = 0`)
           db.pragma('user_version = 3')
+        }
+        if (db.pragma('user_version', { simple: true }) === 3) {
+          // Also accept databases created by this branch before the two migrations merged.
+          db.exec(`CREATE INDEX IF NOT EXISTS legacy_receipt_start
+            ON legacy_records(scope, entry_id, parent) WHERE kind = 'receipt-id' AND ordinal = 0`)
+          db.exec(`CREATE TABLE IF NOT EXISTS thread_scopes (
+              identity TEXT PRIMARY KEY, server BLOB NOT NULL, conversation BLOB NOT NULL, UNIQUE(server, conversation));
+            CREATE TABLE IF NOT EXISTS thread_records (
+              scope TEXT NOT NULL REFERENCES thread_scopes(identity) ON DELETE CASCADE,
+              kind TEXT NOT NULL CHECK(kind IN ('header', 'item', 'range')), ordinal INTEGER NOT NULL,
+              arrival INTEGER, item_order INTEGER, range_ordinal INTEGER, range_start INTEGER, range_end INTEGER, payload BLOB NOT NULL,
+              PRIMARY KEY(scope, kind, ordinal), UNIQUE(scope, kind, arrival));
+            CREATE INDEX IF NOT EXISTS thread_ranges ON thread_records(scope, kind, range_start, range_end);
+            PRAGMA user_version = 4;`)
         }
         return run(db)
       })()

@@ -131,6 +131,17 @@ Versions can skip integers. Newer held facts may accompany an earlier complete
 checkpoint; caching them does not certify the intervening progress. Envelope replay
 cursors and fragment progress are [separate transport facts](inbound-message-decode-interface.md#complete-live-thread-updates).
 
+The independently callable [authoritative SQLite backend](chat-history-api.md#main-only-bounded-authoritative-pages)
+preserves full snapshots and exposes explicitly partial held-order pages. Its
+`arrivalPositions`, when present, are original first-arrival positions aligned with
+selected items, not a shortened `arrivalOrder` permutation. Selected `ranges` are
+intact saved ranges containing indexable selected orders plus the newest saved
+boundary anchor, deduplicated in saved order. Hidden/unordered items remain held;
+their presence adds no coverage. The header returns saved scalar ownership,
+progress, repair and optional availability separately and unchanged. Such a page
+cannot be passed to the full-snapshot hydration seam as if it were complete;
+reader activation and partial application remain #1931.
+
 `beginLocalRead(hostId, conversationId)` provides the narrowly scoped disk hydration
 seam. A held scope returns null; an absent one receives a one-shot `complete`,
 `fail`, `cancel` handle owned by a private process-local token. A replacement read,
@@ -205,6 +216,15 @@ snapshots without the field conservatively restore it as applied `version` when
 ahead of checkpoint, otherwise zero. Using applied version for every snapshot
 would overstate the unfinished obligation when newer live facts coexist with a
 lower pending batch, preventing its actual completion from releasing the fence.
+
+Protected full reads and bounded local pages retain that normalized unfinished
+version independently of applied version, including already-covered values. Pages
+also preserve complete checkpoint, repair and optional `olderAvailable` without
+reinterpreting them for the selected window. A local continuation is a position in
+one committed saved snapshot, not a daemon cursor or batch certificate. Reaching
+its end cannot advance checkpoint, clear repair, release unfinished progress or
+turn unknown/true older availability into false; only completed daemon
+certification can establish that progress.
 
 ## Epochs and cleanup ownership
 
@@ -376,6 +396,20 @@ after each cleanup operation.
 The [cache testing reference](chat-history-testing.md#restoration) covers local-read
 ownership, protected fresh-instance restoration and restart regressions for
 already-covered unfinished progress and first-arrival ties.
+
+[`indexedThreadHistory.test.ts`](../../../src/main/indexedThreadHistory.test.ts)
+covers fresh-instance protected full reads, 200-item backward traversal, bounded
+selected reads/decodes/decrypts, long-string continuations, scoped cleanup,
+corruption and transactional preservation. The
+[verifier re-review](https://github.com/pyrycode/pyrycode-desktop/pull/2014#issuecomment-6191872749)
+confirms all 25 authoritative on-disk cases executed and passed, 0 failed and 0
+skipped, within the unit gate's 10,356 executed/passed, 0 failed and 3 skipped at
+`a57a82d771e1d6c5f2d53765781939091f79ac75`. The cases include
+`exact round trip and first-arrival restart retain covered unfinished progress`
+and `200-item windows traverse held order exactly once across ties/null/unordered items`;
+both were present and passed. Protection uses an injected reversible fake,
+including base64 expansion and additional overhead; this proves no OS key-store
+round trip or live-daemon behavior.
 
 The [verifier's re-review](https://github.com/pyrycode/pyrycode-desktop/pull/1920#issuecomment-6099461564)
 on 2026-10-10 records 2 executed, 2 passed, 0 failed and 32 skipped by its name filter.

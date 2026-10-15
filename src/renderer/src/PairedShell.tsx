@@ -540,9 +540,11 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
     setSavedTimelineTarget(serverId === undefined ? undefined : { serverId, conversationId: created.id })
     cancelCreatedInitialization.current?.()
     leaveRecovery()
-    activateConversation(activateDeps, created)
+    const owned = serverId === undefined ? created : { ...created, serverId }
+    activateConversation(activateDeps, owned)
     if (serverId !== undefined) {
       conversationTimelineStore.getState().initializeCreatedTimeline(serverId, created.id)
+      localRead.current = threadRuntime.open(serverId, created.id)
     }
     cancelCreatedInitialization.current = initializeCreatedConversationAfterList(
       created.id, serverId, activateDeps.requestConversationConfig
@@ -561,6 +563,8 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
     confirmConversationDeleted(
       { ...exitConversationDeps,
         getTimelineServerId: id => {
+          if (savedTimelineTarget?.conversationId === id && threadRuntime.isThread(savedTimelineTarget.serverId, id))
+            return savedTimelineTarget.serverId
           conversationTimelineStore.flushTimeline()
           return conversationTimelineStore.getState().timelines.get(id)?.serverId
         },

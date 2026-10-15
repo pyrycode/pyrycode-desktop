@@ -1,6 +1,9 @@
 import { createAttachmentImageSources } from './attachmentImageSource'
 import { threadRuntime } from '../../store/threadRuntime'
 import { threadLiveInputs } from './threadLiveInputs'
+import { workingIndicatorState as deriveWorkingIndicator, workingIndicatorStateWithLocalSend as deriveLocalIndicator,
+  type ThreadStatus, type WorkingIndicatorState } from './workingIndicatorState'
+export type { ThreadStatus, WorkingIndicatorState } from './workingIndicatorState'
 import { ThreadPromptSlot } from './ThreadPromptSlot'
 import { useReadObservation, type ThreadReadInputs } from '../../store/conversationReadPublisher'
 import type { ThreadSnapshot } from '../../store/threadItemStore'
@@ -661,7 +664,7 @@ export function ConversationScreen({
         // control is. No timeline write: the message is being delivered, so its echo stays true.
         onSendQueuedNow={actionsAvailable ? onSendQueuedNow : undefined}
       />}
-      <TopOverlayControl onRepairHost={onRepairHost} />
+      <TopOverlayControl onRepairHost={onRepairHost} threadError={authoritative ? liveInput.sessionError?.code ?? null : undefined} />
       {/* #581: the background-task panel, reading the roster store itself, so only the conversation id goes
           down; with no active conversation the id is null and the panel reads "never observed". It mounts
           no data path — the roster bridge is already app-wide in App.tsx.
@@ -3047,16 +3050,6 @@ export const STALL_COPY = 'The turn seems to have stalled…'
 // CLIENT-OWNED literal, so the label choice stays a closed set of this file's own constants. The reset's
 // two decoded tokens ride their own separately-typed prop (`resetting`), the third of the daemon's
 // contributions to this label and the first whose fields are closed unions rather than free values.
-export type WorkingIndicatorState =
-  | 'thinking'
-  | 'working'
-  | 'retrying'
-  | 'compacting'
-  | 'stalled'
-  | 'resetting'
-  // #1725: the local send window's two stages, which replace its former `'thinking'` answer.
-  | 'sending'
-  | 'waiting'
 
 // #967: the label for each of the five states — a total switch with NO default, so a sixth member is a
 // `tsc` error here rather than a silently unlabelled row. Every arm returns a client-owned constant; only
@@ -3460,13 +3453,6 @@ export function ComposerStatusArea({
 // #1517 IS THE FOURTH, and it takes the field on #967's own terms: required, one more token in every
 // literal, and `tsc` names every site. What is different is where it lands in the order — the TOP, not
 // the middle — for the reason the constants above give.
-export interface ThreadStatus {
-  phase: TurnPhase
-  apiRetry: ApiRetryStatus | null
-  compacting: boolean
-  stalled: boolean
-  resetting: ResettingStatus | null
-}
 
 // #493: whether the generic thinking indicator shows — thinking, and nothing supersedes it (AC5).
 // Retrying against an API error is NOT compatible with "thinking" — claude is not making progress on the
@@ -3541,12 +3527,7 @@ export function shouldShowThinking(status: ThreadStatus): boolean {
 // an unknown-count retry (`{ current: 0, total: 0 }`) picks `'retrying'` exactly like a known one, and the
 // counter's absence is then apiRetryLabel's business, not this function's.
 export function workingIndicatorState(status: ThreadStatus): WorkingIndicatorState | null {
-  if (status.resetting !== null) return 'resetting'
-  if (status.apiRetry !== null) return 'retrying'
-  if (status.compacting) return 'compacting'
-  if (status.stalled) return 'stalled'
-  if (!shouldShowThinking(status)) return null
-  return status.phase === 'thinking' ? 'thinking' : 'working'
+  return deriveWorkingIndicator(status)
 }
 
 // #650: the locally-opened window — the indicator now opens the moment the composer accepts a submit,
@@ -3600,12 +3581,7 @@ export function workingIndicatorStateWithLocalSend(
   status: ThreadStatus,
   localSendPending: LocalSendPending | null
 ): WorkingIndicatorState | null {
-  const daemonState = workingIndicatorState(status)
-  if (daemonState !== null) return daemonState
-  if (localSendPending === null) return null
-  const local = workingIndicatorState({ ...status, phase: 'thinking' })
-  if (local !== 'thinking') return local
-  return localSendPending.queued ? 'waiting' : 'sending'
+  return deriveLocalIndicator(status, localSendPending)
 }
 
 // #649: the `name` of the most recently started still-open main-thread tool call, or null if none is open.
@@ -4476,6 +4452,8 @@ function Composer({
   // rather than a second bridge call of its own, which is what keeps ONE owner of the clear-on-gesture
   // and one outcome surface for both entries. The conversation rides `attach.dropFile` itself (#1205).
   const fileDrop = useComposerFileDrop({ onFile: attach.dropFile })
+  const identityPending = useRef(false)
+  const owningHost = serverId
 
   // #680: the composer's ONE send path, extracted from handleSubmit so the Actions menu's picked command
   // takes the identical route a typed message does rather than a parallel one. The gate, the deps object,
@@ -4490,28 +4468,41 @@ function Composer({
     // AC1: the authoritative gate. Return before touching submitMessage so no sendCommand and no
     // optimistic echo fire while not connected — this blocks the Enter path (handleKeyDown) as well
     // as the button. The input is not cleared; nothing was sent.
-    const serverId = connectedConversationHostNow(activeConversationId)
+    const serverId = connectedConversationHostNow(activeConversationId, owningHost ?? undefined)
     if (!canSend || serverId === null || rememberedModel.pending.getState().target === activeConversationId) return false
     if (activeConversationId !== null && threadRuntime.isThread(serverId, activeConversationId)) {
-      if (value.trim().length === 0) return false
-      const chat = activeConversationId, take = attach.takePendingAttachments()
+      if (value.trim().length === 0 || identityPending.current) return false
+      identityPending.current = true
+      const chat = activeConversationId, claimed = attach.takePendingAttachments()
+      const submittedDrafts = composerDraftStore.getState().drafts.get(serverId)
+      let rolledBack = false
+      const take = { attachments: claimed.attachments, rollback: () => {
+        if (rolledBack) return
+        rolledBack = true; claimed.rollback()
+      } }
       const connection = sessionStore.getState().statuses.get(serverId)
+      const ownsSubmission = threadRuntime.submissionOwner(serverId, chat)
       const restore = (): void => {
         take.rollback()
-        composerDraftStore.getState().setDraft(serverId, chat, value)
         window.pyry.sendDiagnostic({ event: 'thread-send', code: 'identity-or-connection-unavailable' })
       }
       // Capture identity from main for this submission, fencing reconnect/downgrade across the invoke.
       void window.pyry.deviceIdentity().then(identity => {
         if (!identity.ok || sessionStore.getState().statuses.get(serverId) !== connection ||
-            !threadRuntime.isThread(serverId, chat)) { restore(); return }
-        submitMessage(value, chat, { serverId, threadSend: { store: threadRuntime.sends, deviceId: identity.deviceId },
+            !threadRuntime.isThread(serverId, chat) || !ownsSubmission()) { restore(); return }
+        const sent = submitMessage(value, chat, { serverId, threadSend: { store: threadRuntime.sends, deviceId: identity.deviceId },
           diagnose: window.pyry.sendDiagnostic, sendCommand: window.pyry.sendCommand,
           dispatch: () => {}, dispatchFor: () => {}, newMessageId: () => crypto.randomUUID(),
           now: Date.now, takeAttachments: () => take })
-      }).catch(restore) // A failed identity invoke restores the captured draft and attachments.
-      onMessageSent()
-      return true
+        if (!sent) return // submitMessage owns attachment rollback; the retained draft remains editable.
+        const drafts = composerDraftStore.getState()
+        if (drafts.drafts.get(serverId) === submittedDrafts && selectDraft(drafts, serverId, chat) === value) {
+          drafts.setDraft(serverId, chat, '')
+          window.pyry.sendDiagnostic({ event: 'composer-draft-cleared', code: 'local-submit' })
+        }
+        onMessageSent()
+      }).catch(restore).finally(() => { identityPending.current = false }) // The pending submission owns its attachment claim.
+      return false // The continuation clears only the unchanged submitted draft after acceptance.
     }
     // `window.pyry` is dereferenced only here, at interaction time — never during render — so the
     // server-rendered container smoke test never touches the bridge. Do NOT hoist the deps object out of
@@ -4927,9 +4918,10 @@ export function ConnectionBanner({ status }: { status: ConnectionStatus }): JSX.
 // branches both need `error`, the banner's disconnected branch is a VISIBLE state, so the initial
 // (disconnected) store is enough to server-render the container's shown path.
 function useOpenConnectionStatus(): ConnectionStatus {
-  const openId = useActiveConversationStore(s => s.activeConversation?.id ?? null)
+  const open = useActiveConversationStore(s => s.activeConversation)
   const rows = useConversationListStore(selectConversations)
-  const serverId = serverIdForOpenConversation(rows, openId)
+  const serverId = open && 'serverId' in open && typeof open.serverId === 'string'
+    ? open.serverId : serverIdForOpenConversation(rows, open?.id ?? null)
   return useSessionStore(s => serverId === null ? initialSessionState.status
     : selectStatusFor(serverId)(s) ?? initialSessionState.status)
 }
@@ -5334,8 +5326,9 @@ function ComposerErrorSlotControl({
 //
 // Repair resolves the host from the stores at CLICK time and delegates to the shell, preserving this
 // host's saved credentials and held chats — the slot's former `handleRepair`, moved.
-function TopOverlayControl({ onRepairHost }: {
+function TopOverlayControl({ onRepairHost, threadError }: {
   onRepairHost?: (serverId: string) => void
+  threadError?: NonNullable<ReturnType<typeof threadLiveInputs>['sessionError']>['code'] | null
 }): JSX.Element | null {
   const status = useOpenConnectionStatus()
   const open = useActiveConversationStore(selectActiveConversation)
@@ -5390,7 +5383,7 @@ function TopOverlayControl({ onRepairHost }: {
   }
   return (
     <TopOverlay
-      sessionError={sessionError?.code}
+      sessionError={threadError === undefined ? sessionError?.code : threadError ?? undefined}
       resolution={resolution?.phase === 'displayed' ? resolution.kind : null}
       onDismissResolution={() => {
         if (resolution !== null) modalStore.getState().dispatch({ type: 'resolutionDismissed', resolution })

@@ -27,20 +27,17 @@ import {
 import { changeSetting, isAddressableSessionId } from './runSettingsControls'
 import { contextUsagePercent } from './contextUsage'
 import {
-  conversationListStore,
   useConversationListStore,
   selectConversations,
   selectConversationAgentFor,
   type ConversationListState
 } from '../../store/conversationListStore'
-import { sessionStore, useSessionStore } from '../../store/sessionStore'
+import { connectedConversationHostNow, useConversationActionAvailability } from './conversationActionAvailability'
 import { serverIdForOpenConversation } from './unpairAction'
 
 /** Subscribe to the conversation's owner, never the last host whose status changed. */
 export function useSessionSettingsConnected(conversationId: string | null): boolean {
-  const rows = useConversationListStore(selectConversations)
-  const serverId = serverIdForOpenConversation(rows, conversationId)
-  return useSessionStore(s => serverId !== null && s.statuses.get(serverId)?.type === 'connected')
+  return useConversationActionAvailability(conversationId)
 }
 
 /** #1651 — which agent runs the conversation these controls configure. The owner is resolved exactly as
@@ -65,10 +62,7 @@ export function useConversationAgent(conversationId: string | null): WireAgent {
 
 /** Re-read ownership and status at the action boundary, including for pre-opened controls. */
 export function sessionSettingsConnected(conversationId: string | null): boolean {
-  const serverId = serverIdForOpenConversation(
-    selectConversations(conversationListStore.getState()), conversationId
-  )
-  return serverId !== null && sessionStore.getState().statuses.get(serverId)?.type === 'connected'
+  return connectedConversationHostNow(conversationId) !== null
 }
 
 export function changeConnectedSetting(conversationId: string | null, change: SettingsChange): void {

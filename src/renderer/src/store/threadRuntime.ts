@@ -13,6 +13,7 @@ import { readSavedTimeline } from './savedTimelineRestorer'
 import { conversationTimelineStore } from './conversationTimelineStore'
 import { conversationReadRouteStore } from './conversationReadRouteStore'
 import { connectThreadLiveProjection } from './threadLiveProjection'
+import { subscribeChatHistoryRemoval } from './chatHistoryRemoval'
 
 const key = (host: string, chat: string) => JSON.stringify([host, chat])
 
@@ -98,19 +99,43 @@ export function createThreadRuntime(deps: {
     lives.get(key(host, chat))?.getState().dispatch({ type: 'dispose' }); lives.delete(key(host, chat))
     conversationReadRouteStore.getState().select(host, chat, null)
     state.setState(s => {
-      const complete = new Map(s.complete), saved = new Set(s.saved), queries = new Map(s.queries)
+      const complete = new Map(s.complete), saved = new Set(s.saved), queries = new Map(s.queries), restoring = new Set(s.restoring)
       complete.delete(key(host, chat)); saved.delete(key(host, chat)); queries.delete(key(host, chat))
-      return { complete, saved, queries }
+      restoring.delete(key(host, chat))
+      return { complete, saved, queries, restoring }
     })
   }
+  function removeHost(host: string): void {
+    if (selected?.host === host) { selected.cancel?.(); selected = undefined }
+    links.delete(host); query.cancelHost(host)
+    const prefix = '[' + JSON.stringify(host) + ','
+    for (const [id, store] of lives) if (id.startsWith(prefix)) {
+      store.getState().dispatch({ type: 'dispose' }); lives.delete(id)
+    }
+    items.getState().removeHost(host); sends.getState().removeHost(host)
+    conversationReadRouteStore.setState(s => { const hosts = new Map(s.hosts); hosts.delete(host); return { hosts } })
+    state.setState(s => {
+      const routes = new Map(s.routes); routes.delete(host)
+      return { routes, saved: new Set([...s.saved].filter(id => !id.startsWith(prefix))),
+        restoring: new Set([...s.restoring].filter(id => !id.startsWith(prefix))),
+        queries: new Map([...s.queries].filter(([id]) => !id.startsWith(prefix))),
+        complete: new Map([...s.complete].filter(([id]) => !id.startsWith(prefix))) }
+    })
+  }
+  const offRemoval = subscribeChatHistoryRemoval(host => removed => { if (removed) removeHost(host) })
   return {
     items, sends, state, live, isThread,
+    submissionOwner(host: string, chat: string): () => boolean {
+      const target = selected
+      return () => selected === target && target?.host === host && target.chat === chat
+    },
     acceptsSession(event: StampedDaemonEvent): boolean {
       const host = event.serverId
-      if (host === null || state.getState().routes.get(host) !== true || threadLiveFamily(event) === null) return true
-      if (!('conversationId' in event) || typeof event.conversationId !== 'string') return false
-      const binding = lives.get(key(host, event.conversationId))?.getState().binding
-      return !!binding?.sessionId && event.envelopeSessionId === binding.sessionId
+      if (threadLiveFamily(event) === null) return true
+      if (selected && isThread(selected.host, selected.chat) && 'conversationId' in event && event.conversationId === selected.chat) return false
+      if (host === null || state.getState().routes.get(host) !== true) return true
+      // Current-session inputs are admitted by live state and projected from the selected host only.
+      return false
     },
     summary(host: string, row: Pick<ConversationSummary, 'id' | 'current_session_id'>) {
       if (state.getState().routes.get(host)) live(host, row.id).getState().dispatch({ type: 'summary', serverId: host, summary: row })
@@ -143,15 +168,6 @@ export function createThreadRuntime(deps: {
       }
       if (event.type === 'connecting' || event.type === 'disconnected' || event.type === 'failed') {
         links.delete(host); query.cancelHost(host)
-        if (event.type === 'failed' && event.error.code === 'unpair') {
-          if (selected?.host === host) { selected.cancel?.(); selected = undefined }
-          for (const chat of items.getState().hosts.get(host)?.keys() ?? []) remove(host, chat)
-          items.getState().removeHost(host); sends.getState().removeHost(host)
-          for (const [id, store] of lives) if (store.getState().binding?.serverId === host) {
-            store.getState().dispatch({ type: 'dispose' }); lives.delete(id)
-          }
-          state.setState(s => { const routes = new Map(s.routes); routes.delete(host); return { routes } })
-        }
         return
       }
       if (event.type === 'conversationDeleted') { remove(host, event.id); return }
@@ -181,7 +197,7 @@ export function createThreadRuntime(deps: {
       }
     },
     dispose() {
-      disposed = true; selected?.cancel?.(); selected = undefined; query.dispose(); offItems()
+      disposed = true; selected?.cancel?.(); selected = undefined; query.dispose(); offItems(); offRemoval()
       for (const [host, chats] of items.getState().hosts) for (const chat of chats.keys()) conversationReadRouteStore.getState().select(host, chat, null)
       for (const store of lives.values()) store.getState().dispatch({ type: 'dispose' })
       lives.clear(); links.clear(); items.getState().clearAll(); sends.getState().dispose()

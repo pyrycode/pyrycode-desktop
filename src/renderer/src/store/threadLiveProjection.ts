@@ -8,6 +8,8 @@ import { modelListStore } from './modelListStore'
 import { slashCommandListStore } from './slashCommandListStore'
 import { sessionFactsStore } from './sessionFactsStore'
 import { mcpStatusStore } from './mcpStatusStore'
+import { reportedContextStore } from './reportedContextStore'
+import { translateContextUsage } from './reportedContextBridge'
 
 /** Keep existing footer/sheet readers on the selected authoritative session's inputs. */
 export function connectThreadLiveProjection(runtime: ReturnType<typeof createThreadRuntime>): () => void {
@@ -16,10 +18,11 @@ export function connectThreadLiveProjection(runtime: ReturnType<typeof createThr
   let previous: ReturnType<ReturnType<typeof runtime.live>['getState']> | undefined
   function publish(): void {
     const state = selected?.getState(), binding = state?.binding
-    if (!state || !binding || state === previous) return
+    const id = binding?.conversationId ?? activeConversationStore.getState().activeConversation?.id
+    if (!state || !id || state === previous) return
     const old = previous
     previous = state
-    const input = threadLiveInputs(state), id = binding.conversationId
+    const input = threadLiveInputs(state)
     if (old?.binding !== binding || old?.readings.get('session_settings') !== state.readings.get('session_settings')) {
       runConfigStore.setState({ snapshot: input.runConfig })
       if (input.sessionId === null) sessionIdStore.getState().clearSessionId()
@@ -47,6 +50,11 @@ export function connectThreadLiveProjection(runtime: ReturnType<typeof createThr
     if (old?.binding !== binding || old?.readings.get('mcp_status') !== state.readings.get('mcp_status')) {
       if (input.mcpStatus) mcpStatusStore.getState().setMcpStatus(input.mcpStatus)
       else mcpStatusStore.setState(s => { const reports = new Map(s.reports); reports.delete(id); return { reports } })
+    }
+    if (old?.binding !== binding || old?.readings.get('context_usage') !== state.readings.get('context_usage')) {
+      const reading = input.contextUsage && translateContextUsage(input.contextUsage)
+      if (reading) reportedContextStore.getState().setReportedContext(reading)
+      else reportedContextStore.setState(s => { const readings = new Map(s.readings); readings.delete(id); return { readings } })
     }
   }
   function sync(): void {

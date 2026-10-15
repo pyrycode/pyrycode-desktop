@@ -1,21 +1,31 @@
 import { conversationListStore, useConversationListStore, selectConversations } from '../../store/conversationListStore'
 import { sessionStore, useSessionStore } from '../../store/sessionStore'
 import { serverIdForOpenConversation } from './unpairAction'
-import { activeConversationStore } from '../../store/activeConversationStore'
+import { activeConversationStore, useActiveConversationStore } from '../../store/activeConversationStore'
 
 export function useConversationActionAvailability(conversationId: string | null, hostId?: string): boolean {
-  const serverId = useConversationListStore(s => hostId ?? serverIdForOpenConversation(selectConversations(s), conversationId))
+  const selectedHost = useActiveHost(conversationId)
+  const serverId = useConversationListStore(s => hostId ?? selectedHost ?? serverIdForOpenConversation(selectConversations(s), conversationId))
   return useSessionStore(s => serverId !== null && s.statuses.get(serverId)?.type === 'connected')
 }
 
 // Resolve again immediately before dispatch, before any optimistic state changes.
 export function connectedConversationHostNow(conversationId: string | null, hostId?: string): string | null {
-  const serverId = hostId ?? serverIdForOpenConversation(selectConversations(conversationListStore.getState()), conversationId)
+  const serverId = hostId ?? activeHost(conversationId) ?? serverIdForOpenConversation(selectConversations(conversationListStore.getState()), conversationId)
   const connected = serverId !== null && sessionStore.getState().statuses.get(serverId)?.type === 'connected'
   if (typeof window !== 'undefined') {
     window.pyry?.sendDiagnostic?.({ event: 'conversation-action-availability', code: connected ? 'connected' : 'unavailable' })
   }
   return connected ? serverId : null
+}
+
+function activeHost(conversationId: string | null): string | undefined {
+  const active = activeConversationStore.getState().activeConversation
+  return active?.id === conversationId && 'serverId' in active && typeof active.serverId === 'string' ? active.serverId : undefined
+}
+function useActiveHost(conversationId: string | null): string | undefined {
+  return useActiveConversationStore(s => s.activeConversation?.id === conversationId &&
+    'serverId' in s.activeConversation && typeof s.activeConversation.serverId === 'string' ? s.activeConversation.serverId : undefined)
 }
 
 /** Complete connected creation initialization after the authoritative list arrives, never on reconnect. */

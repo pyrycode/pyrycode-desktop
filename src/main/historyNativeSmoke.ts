@@ -5,7 +5,9 @@ import { createRequire } from 'node:module'
 import { isDeepStrictEqual } from 'node:util'
 import { parseChatHistorySnapshot } from '../shared/chatHistory'
 import { createHistoryDatabase } from './historyDatabase'
-import { createIndexedLegacyHistory } from './indexedLegacyHistory'
+import { createChatHistoryStore } from './chatHistoryStore'
+import { createSecureStore } from './secureStore'
+import { fileSecretPersistence } from './fileSecretPersistence'
 import { electronSecretEncryption } from './electronSecretEncryption'
 
 // Isolated packaged entrypoint, bundled only by check:history-native, never the application build.
@@ -23,22 +25,31 @@ void app.whenReady().then(async () => {
     evidence.unpacked = existsSync(join(adapter.replace('app.asar/', 'app.asar.unpacked/'), '..', 'build/Release/better_sqlite3.node'))
     const encryption = electronSecretEncryption()
     if (!app.isPackaged || !evidence.asar || !evidence.unpacked || !encryption.isAvailable()) throw new Error('runtime')
-    const store = createIndexedLegacyHistory({ database, encryption, log: { event: () => {} } })
+    const secureStore = createSecureStore({ encryption, persistence: fileSecretPersistence(join(app.getPath('userData'), 'secrets')) })
+    const fresh = () => createChatHistoryStore({ database, encryption, secureStore, log: { event: () => {} } })
+    const store = fresh()
     const snapshot = { version: 1, kind: 'timeline', serverId: 'smoke', conversationId: 'chat', prependedRows: 0,
       items: [{ kind: 'userText', text: 'NATIVE-CONTENT-1979', attachments: [{ attachmentId: 'a', filename: 'NATIVE-ATTACHMENT-1979' }] }],
       coverage: { status: 'received', cursor: 'NATIVE-CURSOR-1979', atStart: false } }
-    evidence.stage = 'replace'
-    const result = await store.execute({ operation: 'replaceTimeline', serverId: 'smoke', conversationId: 'chat', snapshot })
-    if (result.status !== 'ok') throw new Error('write')
+    const thread = { version: 1, kind: 'daemon-items', serverId: 'smoke', conversationId: 'chat', thread: {
+      hostId: 'smoke', conversationId: 'chat', epoch: 'native', version: 1, checkpoint: 1, ranges: [],
+      items: [{ id: 1, rev: 1, kind: 'future', content: { text: 'NATIVE-THREAD-1975' } }] } }
+    await secureStore.set('chat-history', Buffer.from(JSON.stringify({ version: 1, snapshots: [snapshot, thread] })))
+    evidence.stage = 'import'
+    const result = await store.execute({ operation: 'readTimeline', serverId: 'smoke', conversationId: 'chat' })
+    if (result.status !== 'stored' || !isDeepStrictEqual(result.snapshot, parseChatHistorySnapshot(snapshot))) throw new Error('import')
     database.close()
     evidence.stage = 'reopen'
-    const reopened = await store.execute({ operation: 'readTimeline', serverId: 'smoke', conversationId: 'chat' })
+    const next = fresh()
+    const reopened = await next.execute({ operation: 'readTimeline', serverId: 'smoke', conversationId: 'chat' })
     if (reopened.status !== 'stored' || !isDeepStrictEqual(reopened.snapshot, parseChatHistorySnapshot(snapshot))) throw new Error('reopen')
+    const reopenedThread = await next.execute({ operation: 'readThread', serverId: 'smoke', conversationId: 'chat' })
+    if (reopenedThread.status !== 'stored' || !isDeepStrictEqual(reopenedThread.snapshot, parseChatHistorySnapshot(thread))) throw new Error('thread')
     evidence.stage = 'protected-bytes'
     const directory = join(app.getPath('userData'), 'history')
     for (const name of readdirSync(directory)) {
       const bytes = readFileSync(join(directory, name))
-      if (['NATIVE-CONTENT-1979', 'NATIVE-ATTACHMENT-1979', 'NATIVE-CURSOR-1979'].some(s => bytes.includes(Buffer.from(s)))) throw new Error('plaintext')
+      if (['NATIVE-CONTENT-1979', 'NATIVE-ATTACHMENT-1979', 'NATIVE-CURSOR-1979', 'NATIVE-THREAD-1975'].some(s => bytes.includes(Buffer.from(s)))) throw new Error('plaintext')
     }
     evidence.passed = 1; evidence.stage = 'complete'
   } catch { evidence.failed = 1 }

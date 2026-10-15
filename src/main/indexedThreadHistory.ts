@@ -135,7 +135,9 @@ export function createIndexedThreadHistory(deps: {
       ...(h.hasArrival ? { arrivalPositions: selected.map(r => natural(r.arrival)) } : {}), continuation } }
   }
   return {
-    async execute(value: unknown): Promise<ThreadHistoryResult> {
+    async execute(value: unknown): Promise<ThreadHistoryResult> { return this.executeSync(value) },
+    /** Main-only synchronous seam for atomic multi-family import and removal. */
+    executeSync(value: unknown): ThreadHistoryResult {
       const report = (result: ThreadHistoryResult): ThreadHistoryResult => {
         log.event({ event: 'history-storage-result', code: result.status === 'error' ? result.code : result.status }); return result
       }

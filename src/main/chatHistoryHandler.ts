@@ -10,6 +10,7 @@ export function createChatHistoryHandler(deps: {
 }) {
   let queue: Promise<unknown> = Promise.resolve()
   const generations = new Map<string, number>()
+  const conversations = new Map<string, Map<string, number>>()
   function enqueue<T>(run: () => Promise<T>): Promise<T> {
     const operation = queue.then(run, run)
     queue = operation.then(() => undefined, () => undefined)
@@ -27,8 +28,14 @@ export function createChatHistoryHandler(deps: {
       return Promise.resolve(failure('invalid-request'))
     }
     const generation = generations.get(request.serverId)
+    const conversationId = 'conversationId' in request ? request.conversationId : undefined
+    const conversationGeneration = conversationId === undefined ? undefined : conversations.get(request.serverId)?.get(conversationId)
+    const listGenerations = request.operation === 'replaceList'
+      ? request.snapshot.conversations.map(c => ({ id: c.id, generation: conversations.get(request.serverId)?.get(c.id) })) : []
     const run = async (): Promise<ChatHistoryResult> => {
       if (generation !== generations.get(request.serverId)) return failure('unknown-host')
+      if (conversationId !== undefined && conversationGeneration !== conversations.get(request.serverId)?.get(conversationId)) return failure('unknown-host')
+      if (listGenerations.some(c => c.generation !== conversations.get(request.serverId)?.get(c.id))) return failure('unknown-host')
       try {
         if ((await deps.pairedServers.loadById(request.serverId)) === null) return failure('unknown-host')
       } catch {
@@ -36,6 +43,15 @@ export function createChatHistoryHandler(deps: {
       }
       try {
         const result = await deps.store.execute(request)
+        if (request.operation === 'removeConversation') {
+          const host = conversations.get(request.serverId) ?? new Map<string, number>()
+          host.set(request.conversationId, (host.get(request.conversationId) ?? 0) + 1)
+          conversations.set(request.serverId, host)
+        }
+        if (request.operation === 'removeServer') {
+          generations.set(request.serverId, (generations.get(request.serverId) ?? 0) + 1)
+          conversations.delete(request.serverId)
+        }
         deps.log.event({ event: 'history-handler-result', code: result.status === 'error' ? result.code : result.status })
         return result
       } catch {
@@ -47,6 +63,7 @@ export function createChatHistoryHandler(deps: {
     return enqueue(run)
   }
   return Object.assign(handle, {
+    async drain(): Promise<void> { await queue },
     /** Main-only capability: credential erasure and history deletion share the admission queue. */
     clearServer(serverId: string, clearCredentials: MultiPairedServerStore['clearServer']) {
       return enqueue(async () => {
@@ -58,6 +75,7 @@ export function createChatHistoryHandler(deps: {
           if (result.status === 'ok') code = 'ok'
         } catch { /* Credential erasure remains authoritative; never expose the caught value. */ }
         generations.set(serverId, (generations.get(serverId) ?? 0) + 1)
+        conversations.delete(serverId)
         deps.log.event({ event: 'history-unpair-cleanup', code })
         return outcome
       })

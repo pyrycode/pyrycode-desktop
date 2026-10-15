@@ -97,6 +97,22 @@ describe('chat history injected handler', () => {
     expect(JSON.stringify(h.event.mock.calls)).not.toMatch(/saved|private-/)
   })
 
+  it('invalidates queued conversation work while allowing fresh identical coordinates', async () => {
+    const h = setup()
+    h.execute.mockResolvedValue({ status: 'ok' })
+    const remove = h.handle(null, { operation: 'removeConversation', serverId: 'saved', conversationId: 'chat' })
+    const stale = h.handle(null, { operation: 'readTimeline', serverId: 'saved', conversationId: 'chat' })
+    const staleList = h.handle(null, { operation: 'replaceList', serverId: 'saved', snapshot: {
+      version: 1, kind: 'list', serverId: 'saved', conversations: [{ id: 'chat', name: null, cwd: '/',
+        is_promoted: false, is_archived: false, last_message_ts: '', last_used_at: '', workspace_label: null }] } })
+    const peer = h.handle(null, { operation: 'readTimeline', serverId: 'saved', conversationId: 'peer' })
+    await remove
+    expect(await stale).toEqual({ status: 'error', code: 'unknown-host' })
+    expect(await staleList).toEqual({ status: 'error', code: 'unknown-host' })
+    expect(await peer).toEqual({ status: 'ok' })
+    expect(await h.handle(null, { operation: 'readTimeline', serverId: 'saved', conversationId: 'chat' })).toEqual({ status: 'ok' })
+  })
+
   it('composes cleanup failure with successful unpair and connection teardown', async () => {
     const h = setup()
     h.execute.mockResolvedValue({ status: 'error', code: 'remove-failed' })

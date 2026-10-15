@@ -22,6 +22,7 @@ import { pathToFileURL } from 'url'
 import { hostname } from 'os'
 import { createSecureStore } from './secureStore'
 import { createChatHistoryStore } from './chatHistoryStore'
+import { createHistoryDatabase } from './historyDatabase'
 import { createChatHistoryHandler } from './chatHistoryHandler'
 import { CHAT_HISTORY_CHANNEL, CHAT_HISTORY_FLUSH_CHANNEL } from '../shared/chatHistory'
 import { electronSecretEncryption } from './electronSecretEncryption'
@@ -277,12 +278,13 @@ app.whenReady().then(() => {
   // passed UNCALLED (a `() => SecretEncryption` factory), so it is constructed only when selected —
   // the keychain-free dev path never loads it. `process.env` structurally satisfies the
   // `Record<string, string | undefined>` param (no cast). Mirrors the #97 selectRelayPolicy call below.
-  const secureStore = createSecureStore({
-    encryption: selectSecretEncryption({
+  const encryption = selectSecretEncryption({
       isPackaged: app.isPackaged,
       env: process.env,
       real: electronSecretEncryption
-    }),
+    })
+  const secureStore = createSecureStore({
+    encryption,
     persistence: fileSecretPersistence(join(app.getPath('userData'), 'secrets'))
   })
   const pairedServerStore = createPairedServerStore({ secureStore })
@@ -418,8 +420,10 @@ app.whenReady().then(() => {
   const clientVersion = app.getVersion()
   logSessionStart(diagnosticLog, clientVersion)
 
+  const historyStore = createChatHistoryStore({ secureStore, encryption, log: diagnosticLog,
+    database: createHistoryDatabase({ userDataPath: app.getPath('userData') }) })
   const historyHandler = createChatHistoryHandler({
-    store: createChatHistoryStore({ secureStore, log: diagnosticLog }),
+    store: historyStore,
     pairedServers: pairedServerStore, log: diagnosticLog
   })
   const historyOperations = new Set<Promise<unknown>>()
@@ -672,6 +676,8 @@ app.whenReady().then(() => {
   let quitting = false
   const drainQuit = createQuitDrain(() => registry.stop(), async () => {
     await Promise.all(BrowserWindow.getAllWindows().map(flushHistory))
+    await historyHandler.drain()
+    await historyStore.close()
     quitDrained = true
   })
   const appUpdate = createAppUpdateController({

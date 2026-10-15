@@ -10,15 +10,18 @@ import { createChatHistoryWriter } from '../src/renderer/src/store/chatHistoryWr
 import { createConversationListStore } from '../src/renderer/src/store/conversationListStore'
 import { createConversationTimelineStore } from '../src/renderer/src/store/conversationTimelineStore'
 import { readSavedTimeline } from '../src/renderer/src/store/savedTimelineRestorer'
+import { createHistoryDatabase } from '../src/main/historyDatabase'
 
 const roots: string[] = []
-afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
+const owners: ReturnType<typeof createHistoryDatabase>[] = []
+afterEach(async () => { owners.splice(0).forEach(db => db.close()); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
 
 async function cache() {
   const root = await mkdtemp(join(tmpdir(), 'thread-restart-')); roots.push(root)
-  const fresh = () => createChatHistoryStore({ log: { event: () => {} }, secureStore: createSecureStore({
-    persistence: fileSecretPersistence(root), encryption: { isAvailable: () => true,
-      encrypt: bytes => bytes.map(b => b ^ 173), decrypt: bytes => bytes.map(b => b ^ 173) } }) })
+  const database = createHistoryDatabase({ userDataPath: root }); owners.push(database)
+  const encryption = { isAvailable: () => true, encrypt: (bytes: Uint8Array) => bytes.map(b => b ^ 173), decrypt: (bytes: Uint8Array) => bytes.map(b => b ^ 173) }
+  const fresh = () => { database.close(); return createChatHistoryStore({ log: { event: () => {} }, database, encryption,
+    secureStore: createSecureStore({ persistence: fileSecretPersistence(root), encryption }) }) }
   const storage = fresh(), source = createThreadItemStore(), api = source.getState()
   const writer = createChatHistoryWriter({ threads: source, lists: createConversationListStore(),
     timelines: createConversationTimelineStore(), receipt: () => null, log: () => {},

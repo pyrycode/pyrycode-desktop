@@ -298,7 +298,7 @@ it.each(['legacy', 'authoritative'])('preserves the %s schema-3 layout when both
   const reopenedLegacy = createIndexedLegacyHistory({ database: fresh.database, encryption: h.encryption, log: { event: () => {} } })
   expect(await reopenedLegacy.execute(ask('readTimeline'))).toEqual(stored(timeline))
   fresh.database.transaction(db => {
-    expect(db.pragma('user_version', { simple: true })).toBe(4)
+    expect(db.pragma('user_version', { simple: true })).toBe(5)
     expect(db.prepare("SELECT name FROM sqlite_master WHERE name = 'legacy_receipt_start'").get()).toEqual({ name: 'legacy_receipt_start' })
   })
 })

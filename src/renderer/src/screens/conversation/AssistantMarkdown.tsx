@@ -266,6 +266,17 @@ function webLink(href: string | undefined, children: ReactNode): JSX.Element {
   )
 }
 
+/** Match the rendered label: formatting keeps its children and images render only their alt text. */
+function hasLinkLabel(children: ReactNode): boolean {
+  return Children.toArray(children).some(child => {
+    if (typeof child === 'string' || typeof child === 'number') return String(child).trim() !== ''
+    if (!isValidElement<{ children?: ReactNode; alt?: unknown }>(child)) return false
+    return typeof child.props.alt === 'string'
+      ? child.props.alt.trim() !== ''
+      : hasLinkLabel(child.props.children)
+  })
+}
+
 /**
  * Element overrides. The link, image and input rules are load-bearing — none of the three falls out of
  * "raw HTML disabled", because a conforming renderer emits a real `<a href>`, a real `<img src>` and
@@ -405,8 +416,11 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({ text, onOpenM
       // it opens an in-app view and must never navigate. Bound by the never-spread rule like `a` above.
       a: ({ href, children }) => {
         const app = parseHostedAppLink(href)
-        if (app && onOpenHostedApp) return <button type="button" className="markdown-link"
-          onClick={() => onOpenHostedApp(app.serverId, app.appId)}>{children}</button>
+        if (app && onOpenHostedApp) {
+          if (!hasLinkLabel(children)) return <>{children}</>
+          return <button type="button" className="markdown-link"
+            onClick={() => onOpenHostedApp(app.serverId, app.appId)}>{children}</button>
+        }
         const path = markdownLinkPath(href)
         if (path === null || onOpenMarkdownPath === undefined) return webLink(href, children)
         return (

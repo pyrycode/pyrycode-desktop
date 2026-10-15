@@ -12,6 +12,30 @@ describe('conversation hosted links', () => {
     expect(html).toBe('<p><button type="button" class="markdown-link">Open app</button></p>')
     expect(open).not.toHaveBeenCalled()
   })
+  for (const [name, Renderer] of [['settled', AssistantMarkdown], ['streaming', StreamingAssistantMarkdown]] as const) {
+    it(`${name} leaves empty hosted-link labels inert`, () => {
+      const open = vi.fn()
+      for (const label of ['', '   ', '\t\n ', '&nbsp;', '**&nbsp;**', '` `', '![](https://example.com/image)', '![ ](https://example.com/image)']) {
+        const source = `[${label}](${link})`
+        const text = `${source}\n\nparagraph\nline\n\n${source}`
+        expect(partitionMarkdown(text).frozen[0]?.text).toContain(source)
+        const html = renderToStaticMarkup(<Renderer text={text} onOpenHostedApp={open} />)
+        expect(html, label).toBe(renderToStaticMarkup(<Renderer text={text} />))
+        expect(html, label).not.toMatch(/<button|<a |href=|pyrycode:/)
+      }
+      expect(open).not.toHaveBeenCalled()
+    })
+    it(`${name} preserves meaningful formatted hosted-link labels`, () => {
+      const open = vi.fn()
+      for (const [label, markup] of [['**Open _app_** `now` ~~later~~', '<strong>Open <em>app</em></strong> <code>now</code> <del>later</del>'],
+        ['![Dashboard](https://example.com/image)', 'Dashboard']]) {
+        const text = `[${label}](${link})`
+        expect(renderToStaticMarkup(<Renderer text={text} onOpenHostedApp={open} />))
+          .toBe(`<p><button type="button" class="markdown-link">${markup}</button></p>`)
+      }
+      expect(open).not.toHaveBeenCalled()
+    })
+  }
   it.each(['inline', 'reference'])('accepts escaped titles independently of %s destinations', style => {
     const open = vi.fn()
     for (const destination of [link, `<${link}>`]) {

@@ -35,7 +35,7 @@ retry, timeout increase, arbitrary sleep or route injection is permitted.
 ### State transitions and identity reuse
 | Event | Required regression |
 | --- | --- |
-| Initial Welcome readiness and click | New focused causal regression, named once mechanism is established |
+| Initial Welcome readiness and click | `ordinary Welcome pairing stays responsive while its native window is hidden` |
 | Pending/rejected click | Existing controlled Welcome diagnostic spec and diagnostic unit tests |
 | Close and relaunch | Existing Welcome diagnostic spec: two correlated clean launches |
 | Reconnect and settings selection | Unchanged offline settings spec, all three menu cases |
@@ -54,9 +54,9 @@ counts and fresh report paths. Merge main, run pre-verify and build. The dispatc
 owns the complete configured fake gate; its result remains pending.
 
 ### Open Questions
-What mechanism prevents Welcome click completion? Resolve from a controlled
-comparison before implementing. Historical trigger remains unproven without its
-missing attachment. Sizing: one deliverable, four criteria, approximately 360
+The native-hidden frame-starvation mechanism is resolved by the controlled
+comparison and repair contract below. Historical trigger remains unproven without
+its missing attachment. Sizing: one deliverable, four criteria, approximately 360
 written lines, zero new exported API/types or migrated consumers, within limits.
 
 ### Revision — controlled mechanism and repair contract (2026-10-15)
@@ -189,3 +189,48 @@ ticket's spec-local/menu scope. No existing open issue specifically owns that
 Welcome timeout; do not create a duplicate of this ticket's recorded failure.
 No implementation, product change, full-spec acceptance or dispatcher gate is
 claimed complete.
+
+2026-10-15 — The subsequent live re-refinement authorized the Welcome boundary;
+the current design and controlled-mechanism revision at the top supersede the
+earlier menu design and refinement handoff. Implementation is `0d5e9393d12ac6e4ba82e6dade967e02276087bc`.
+Only the default fixture's exact pairing window is unthrottled; its JSHandle is
+disposed in finally. Shared helper signatures, real-tier callers, diagnostics
+and the entire offline-settings spec remain unchanged. The native-hide regression
+fails at the actual Welcome click with only the repair removed and passes with
+it restored. The historical trigger remains unproven, distinct from the repaired
+native-hidden mechanism. Diagnosis and complete commands are recorded on
+[the ticket](https://github.com/pyrycode/pyrycode-desktop/issues/1986).
+
+## Final validation
+Tested code revision: `0d5e9393d12ac6e4ba82e6dade967e02276087bc`, after final
+`git fetch origin --prune --quiet` / `git merge origin/main` (already current at
+`af90e0d7`). Linux x64, Node 25.8.0, Electron 33.4.11, Playwright 1.61.1;
+`xvfb-run -a`, normal shown 1100×800 windows, deliberately hidden regression window.
+
+All commands use `PLAYWRIGHT_JSON_OUTPUT_NAME=/tmp/builder-1986/<run>.json xvfb-run -a npx playwright test`,
+the arguments below, then `--retries=0 --reporter=list,json --output=/tmp/builder-1986/<run>-results`.
+Matching `<run>.log`, JSON reports and result directories are retained there.
+
+| Run | Arguments | Configured / actual workers | Executed / passed / failed / skipped / retries |
+| --- | --- | --- | --- |
+| `final-one` | `e2e/offline-session-settings.spec.ts --grep 'pre-opened composer menus' --repeat-each=20 --workers=1 --trace=retain-on-failure` | 1 / 1 | 20 / 20 / 0 / 0 / 0 |
+| `final-four` | Same focused arguments with `--workers=4` | 4 / 4 | 20 / 20 / 0 / 0 / 0 |
+| `final-spec` | `e2e/offline-session-settings.spec.ts --workers=1 --trace=on` | 1 / 1 | 4 / 4 / 0 / 0 / 0 |
+| `final-welcome` | `e2e/welcome-stall.spec.ts --workers=1 --trace=on` | 1 / 1 | 2 / 2 / 0 / 0 / 0 |
+
+Authoritative deletion control: `mutation-red.json` / `.log` / `mutation-red-results/`:
+one executed/failed, zero passed/skipped/retries, one worker; 30000ms Welcome click
+timeout, native hidden, enabled control, zero frames / 14 timers over 750ms.
+The first `regression-red` also had an unrelated inherited teardown assertion;
+the final regression uses the base fixture, so the deletion control has only the
+causal click failure. `acceptance-one` overlapped rebuilding out and is excluded;
+`final-one` began after build completion. Discarded scratch `native-stable` and
+`recovery` contain probe implementation errors and are not causal evidence.
+
+`python3 /work/Projects/pyrycode-desktop-agents/bin/pre-verify-check` passes all five
+checks (`pre-verify.log`): main merged, security label checked, removed-string check,
+typecheck, and 10,178 unit tests passed / three existing skips. All 11 diagnostic
+unit tests passed. `npm run build` passes (`build-final.log`); `npm run check:docs`
+passes. No live test was changed or required. Complete configured fake-transport
+gate: **pending dispatcher**, separate from these focused passes; no full gate
+result or unrelated final-gate failure is claimed by this builder.

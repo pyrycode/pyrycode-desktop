@@ -75,3 +75,7 @@ None. A simpler shape is to reuse the existing select IPC rather than add URL IP
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-15
+
+## Revisions
+
+2026-10-15: The shared launch fixture's host IDs are legacy non-UUID names. The focused spec uses its `skipPairing` entry and existing pairing drivers with spec-local canonical identities; no shared fixture migration. Markdown source validation is a narrowing-only remark plugin over link/definition nodes, preserving reference links while rejecting entity/backslash normalization. Production still reuses the existing selection IPC without changing main or preload policy. Recovery scenarios follow the existing initial-selection automatic-open versus retired-pane Reopen behavior; no viewer state machine changes.

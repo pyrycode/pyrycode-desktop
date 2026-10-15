@@ -18,6 +18,8 @@ import type {} from 'remark-parse'
 import type { Processor } from 'unified'
 import { MAX_WORKSPACE_FILE_PATH_LENGTH } from '@shared/ipc/workspaceFileRead'
 import { allowedLinkHref } from '@shared/externalLink'
+import { parseHostedAppLink } from '@shared/hostedAppLink'
+import type { Nodes, Root } from 'mdast'
 import { copyMessageText } from './copyMessageText'
 
 // #608: assistant-reply markdown → React elements. Daemon-supplied text may render as content
@@ -30,7 +32,7 @@ import { copyMessageText } from './copyMessageText'
 //     it would mean ADDING A PACKAGE to package.json — a visible, reviewable act — rather than
 //     flipping a boolean. Capability-absent, not capability-disabled; that property is why
 //     react-markdown was chosen over the far smaller markdown-to-jsx, whose HTML parser ships on.
-//   • ONE `remarkPlugin`, `remarkGfmSubset` below, and it registers the GFM TABLE, TASK LIST and
+//   • `remarkGfmSubset` registers the GFM TABLE, TASK LIST and
 //     STRIKETHROUGH constructs and nothing else. `remark-gfm` itself is still never added: it is a
 //     BUNDLE of five unrelated extensions, and the two that matter here — autolink literals and
 //     footnotes — are separate packages that are NOT INSTALLED. So bare URLs and bare email addresses
@@ -113,21 +115,26 @@ export function remarkGfmSubset(this: Processor): undefined {
   return undefined
 }
 
-/**
- * The plugin list, a module constant rather than an inline array literal at the call site: a fresh array
- * on every render would give react-markdown a new prop identity each time for no gain.
- *
- * ITS LENGTH IS NO LONGER THE CONSTRUCT COUNT, and #1080 is why this docstring says so. It read "one
- * entry, one construct" while that happened to hold; adding two constructs inside `remarkGfmSubset`
- * left the array at length 1, so the claim went quietly wrong with nothing to redden. What this array
- * actually guards is narrower and still worth guarding: THIS MODULE PASSES EXACTLY ONE PLUGIN, and that
- * plugin is defined directly above, in this file, where its whole extension list can be read at once.
- * A second entry here would put part of the parse configuration somewhere else — including anywhere a
- * dependency's default export could reach — which is the change the header's contract is about. The
- * construct count lives in `remarkGfmSubset`'s body and in the header's own sentence, both of which
- * name all three; keep the three statements in step.
- */
-const remarkPlugins = [remarkGfmSubset]
+/** Reject destinations made canonical only by Markdown entity/backslash normalization. */
+function remarkHostedLinks() {
+  return (tree: Root, file: { value: unknown }): void => {
+    const source = String(file.value)
+    const visit = (node: Nodes): void => {
+      if ((node.type === 'link' || node.type === 'definition') && parseHostedAppLink(node.url)) {
+        const raw = source.slice(node.position?.start.offset, node.position?.end.offset)
+        const start = node.type === 'definition' ? raw.indexOf(']:') : raw.lastIndexOf('](')
+        const destination = start < 0 ? raw : raw.slice(start + 2).trimStart()
+        const end = node.type === 'definition' ? '' : '\\)'
+        const literal = new RegExp(`^(?:${node.url}|<${node.url}>)(?:\\s+(?:"[^"\\\\]*"|'[^'\\\\]*'|\\([^()\\\\]*\\)))?\\s*${end}$`)
+        if (raw !== `<${node.url}>` && !literal.test(destination)) node.url = ''
+      }
+      if ('children' in node) node.children.forEach(visit)
+    }
+    visit(tree)
+  }
+}
+// Stable list: the subset registers syntax; the second plugin only narrows existing destinations.
+const remarkPlugins = [remarkGfmSubset, remarkHostedLinks]
 
 const LANGUAGE_PREFIX = 'language-'
 
@@ -189,7 +196,7 @@ function fenceLanguage(children: ReactNode): string | null {
  * link. The default stays a prior, independent narrowing for everything else, and the override below
  * remains the enforcement point. A module constant for a stable prop identity.
  */
-const urlTransform: UrlTransform = (url) => allowedLinkHref(url) ?? defaultUrlTransform(url)
+const urlTransform: UrlTransform = (url) => parseHostedAppLink(url) ? url : allowedLinkHref(url) ?? defaultUrlTransform(url)
 
 /** A trailing `:line` or `:line:column` suffix. Anchored, digits only: nothing to backtrack on. */
 const LINE_SUFFIX = /:\d+(?::\d+)?$/
@@ -368,7 +375,7 @@ function CodeBlock({ children }: { children?: ReactNode }): JSX.Element {
  * CommonMark ends the language token at the first whitespace character and CSS class separators ARE
  * whitespace, so a fence can never contribute more than that one token.
  */
-export const AssistantMarkdown = memo(function AssistantMarkdown({ text, onOpenMarkdownPath, allowElement }: {
+export const AssistantMarkdown = memo(function AssistantMarkdown({ text, onOpenMarkdownPath, onOpenHostedApp, allowElement }: {
   text: string
   /** Streaming presentation can remove elements; all renderer security rules still apply. */
   allowElement?: AllowElement
@@ -376,17 +383,21 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({ text, onOpenM
    *  calls this with the path. Absent — the reader, and every caller that predates it — such a link keeps
    *  its plain-text rendering and the module-constant table is used unchanged. */
   onOpenMarkdownPath?: (path: string) => void
+  onOpenHostedApp?: (serverId: string, appId: string) => void
 }): JSX.Element {
   const table = useMemo<Components>(() => {
-    if (onOpenMarkdownPath === undefined) return components
+    if (onOpenMarkdownPath === undefined && onOpenHostedApp === undefined) return components
     return {
       ...components,
       // THE PATH LIVES ONLY IN THE CLICK CLOSURE. No href, title, data-* or aria-* carries it, so the
       // markup shows it nowhere but the visible text the reply already had. A <button>, not an anchor:
       // it opens an in-app view and must never navigate. Bound by the never-spread rule like `a` above.
       a: ({ href, children }) => {
+        const app = parseHostedAppLink(href)
+        if (app && onOpenHostedApp) return <button type="button" className="markdown-link"
+          onClick={() => onOpenHostedApp(app.serverId, app.appId)}>{children}</button>
         const path = markdownLinkPath(href)
-        if (path === null) return webLink(href, children)
+        if (path === null || onOpenMarkdownPath === undefined) return webLink(href, children)
         return (
           <button type="button" className="markdown-link" onClick={() => onOpenMarkdownPath(path)}>
             {children}
@@ -394,7 +405,7 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({ text, onOpenM
         )
       }
     }
-  }, [onOpenMarkdownPath])
+  }, [onOpenMarkdownPath, onOpenHostedApp])
   return (
     <Markdown components={table} remarkPlugins={remarkPlugins} urlTransform={urlTransform} allowElement={allowElement} unwrapDisallowed={allowElement !== undefined}>
       {text}

@@ -14,7 +14,9 @@ export function createHistoryDatabase({ userDataPath }: { userDataPath: string }
     const db = new Database(path)
     try {
       const version = db.pragma('user_version', { simple: true })
-      if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4) throw UNSUPPORTED_CHAT_HISTORY_VERSION
+      if (version !== 4) {
+        if (version !== 0 && version !== 1 && version !== 2 && version !== 3) throw UNSUPPORTED_CHAT_HISTORY_VERSION
+      }
       if (version === 0) {
         const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()
         if (tables.length) throw UNSUPPORTED_CHAT_HISTORY_VERSION

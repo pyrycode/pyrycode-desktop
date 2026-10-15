@@ -85,6 +85,36 @@ it('200-item windows traverse held order exactly once across ties/null/unordered
   expect(await fresh.store.execute(ask('readThread'))).toEqual(stored(s))
 })
 
+it.each([0, 4096])('follows boundary-string continuations after reopen with %i bytes of protection overhead', async padding => {
+  const h = setup(), s = snapshot(2, '\ud800'.repeat(8192), '\udfff'.repeat(8192))
+  s.thread.epoch = '\ud801'.repeat(8192)
+  const encrypt = h.encryption.encrypt, decrypt = h.encryption.decrypt
+  // Include the production bridge's base64 expansion plus deliberately large fixed overhead.
+  h.encryption.encrypt = b => encrypt(Buffer.concat([Buffer.alloc(padding), Buffer.from(Buffer.from(b).toString('base64'))]))
+  h.encryption.decrypt = b => Buffer.from(Buffer.from(decrypt(b)).subarray(padding).toString(), 'base64')
+  const request = (operation: string, extra: object = {}) => ask(operation, { limit: 1, ...extra }, s.serverId, s.conversationId)
+  expect(await h.store.execute(put(s))).toEqual({ status: 'ok' })
+  h.database.close(); const fresh = h.fresh()
+  const newest = await page(fresh.store, request('newestThreadPage'))
+  expect(newest.items).toEqual(s.thread.items.slice(1))
+  expect(newest.continuation).not.toBeNull()
+  fresh.database.close(); const reopened = h.fresh()
+  const before = request('beforeThreadPage', { continuation: newest.continuation })
+  expect(await page(reopened.store, before)).toMatchObject({ items: s.thread.items.slice(0, 1), continuation: null })
+  expect(newest.continuation!.length).toBeLessThanOrEqual(8192)
+  expect(h.encryption.decrypt(Buffer.from(newest.continuation!, 'base64url')).byteLength).toBeLessThanOrEqual(101)
+  expect(await reopened.store.execute(put({ ...s, thread: { ...s.thread, epoch: 'replacement' } }))).toEqual({ status: 'ok' })
+  expect(await reopened.store.execute(before)).toEqual(error('invalid-request'))
+})
+
+it.each([0, 49153])('never emits an inadmissible continuation from %i protected bytes', async size => {
+  const h = setup(), s = snapshot()
+  expect(await h.store.execute(put(s))).toEqual({ status: 'ok' })
+  vi.spyOn(h.encryption, 'encrypt').mockReturnValueOnce(new Uint8Array(size))
+  expect(await h.store.execute(newest())).toEqual(error('unreadable'))
+  expect(await h.store.execute(ask('readThread'))).toEqual(stored(s))
+})
+
 it('optional defaults, saved empty, missing, empty/unordered anchors and sparse ranges', async () => {
   const h = setup(), s = snapshot(0)
   const old = { ...s, thread: { ...s.thread, arrivalOrder: undefined, olderAvailable: undefined, uncommittedVersion: undefined } }
@@ -133,6 +163,8 @@ it('continuations reject replaced/recreated snapshots, wrong owners/formats and 
   }
   await fresh.store.execute(put(snapshot(9, 'Other')))
   expect(await fresh.store.execute(before(token, 'Other'))).toEqual(error('invalid-request'))
+  await fresh.store.execute(put(snapshot(9, 'Host', 'Other')))
+  expect(await fresh.store.execute(ask('beforeThreadPage', { limit: 2, continuation: token }, 'Host', 'Other'))).toEqual(error('invalid-request'))
   const raw = JSON.parse(Buffer.from(h.encryption.decrypt(Buffer.from(token!, 'base64url'))).toString())
   for (const replacement of [{ ...raw, format: 'timeline' }, { ...raw, epoch: 'wrong' }, { ...raw, before: 999 }, { ...raw, extra: true }]) {
     const invalid = Buffer.from(h.encryption.encrypt(Buffer.from(JSON.stringify(replacement)))).toString('base64url')
@@ -248,6 +280,26 @@ it('schema-2 additive migration rolls back with failed authoritative writes and 
   expect(await fresh.store.execute(put(snapshot()))).toEqual({ status: 'ok' })
   const reopenedLegacy = createIndexedLegacyHistory({ database: fresh.database, encryption: h.encryption, log: { event: () => {} } })
   expect(await reopenedLegacy.execute(ask('readTimeline'))).toEqual(stored(timeline))
+})
+
+it.each(['legacy', 'authoritative'])('preserves the %s schema-3 layout when both migrations converge', async family => {
+  const h = setup(), s = snapshot()
+  const timeline = { version: 1, kind: 'timeline', serverId: 'Host', conversationId: 'Chat', items: [], prependedRows: 0, coverage: { status: 'unknown' } }
+  const legacy = createIndexedLegacyHistory({ database: h.database, encryption: h.encryption, log: { event: () => {} } })
+  expect(await legacy.execute(ask('replaceTimeline', { snapshot: timeline }))).toEqual({ status: 'ok' })
+  expect(await h.store.execute(put(s))).toEqual({ status: 'ok' })
+  h.database.transaction(db => {
+    db.exec(family === 'legacy' ? 'DROP TABLE thread_records; DROP TABLE thread_scopes' : 'DROP INDEX legacy_receipt_start')
+    db.pragma('user_version = 3')
+  })
+  h.database.close(); const fresh = h.fresh()
+  expect(await fresh.store.execute(ask('readThread'))).toEqual(family === 'legacy' ? { status: 'missing' } : stored(s))
+  const reopenedLegacy = createIndexedLegacyHistory({ database: fresh.database, encryption: h.encryption, log: { event: () => {} } })
+  expect(await reopenedLegacy.execute(ask('readTimeline'))).toEqual(stored(timeline))
+  fresh.database.transaction(db => {
+    expect(db.pragma('user_version', { simple: true })).toBe(4)
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE name = 'legacy_receipt_start'").get()).toEqual({ name: 'legacy_receipt_start' })
+  })
 })
 
 it('empty replacements always rotate durable identity and invalidate older continuations', async () => {

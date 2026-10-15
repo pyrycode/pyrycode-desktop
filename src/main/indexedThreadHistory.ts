@@ -18,6 +18,7 @@ type Row = { kind: string; ordinal: number; arrival: number | null; item_order: 
   range_ordinal: number | null; range_start: number | null; range_end: number | null; payload: unknown }
 const columns = 'kind, ordinal, arrival, item_order, range_ordinal, range_start, range_end, payload'
 const INVALID_CONTINUATION = new Error('invalid local history continuation')
+const MAX_CONTINUATION_LENGTH = 65536
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -99,8 +100,8 @@ export function createIndexedThreadHistory(deps: {
     if (!row) throw INVALID_CHAT_HISTORY
     const h = header(decode(row, identity), server, conversation)
     if (row.arrival !== null || row.item_order !== null || row.range_ordinal !== null || row.range_start !== null || row.range_end !== null) throw INVALID_CHAT_HISTORY
-    if (token && (token.identity !== identity || token.serverId !== server || token.conversationId !== conversation ||
-      token.epoch !== h.metadata.epoch || typeof token.before !== 'number' || token.before > h.itemCount)) throw INVALID_CONTINUATION
+    // The committed UUID binds the exact scoped owner and validated header's epoch.
+    if (token && (token.identity !== identity || typeof token.before !== 'number' || token.before > h.itemCount)) throw INVALID_CONTINUATION
     const end = token ? natural(token.before) : h.itemCount, start = Math.max(0, end - limit)
     const selected = db.prepare<[string, number, number], Row>(`SELECT ${columns} FROM thread_records
       WHERE scope = ? AND kind = 'item' AND ordinal >= ? AND ordinal < ? ORDER BY ordinal`).all(identity, start, end)
@@ -127,8 +128,9 @@ export function createIndexedThreadHistory(deps: {
         range.range_start > item.item_order || item.item_order >= range.range_end) throw INVALID_CHAT_HISTORY
     }
     const continuation = start === 0 ? null : Buffer.from(encryption.encrypt(Buffer.from(JSON.stringify({
-      format: 'daemon-items', serverId: server, conversationId: conversation, epoch: h.metadata.epoch, identity, before: start
+      format: 'daemon-items', identity, before: start
     })))).toString('base64url')
+    if (continuation !== null && (continuation.length === 0 || continuation.length > MAX_CONTINUATION_LENGTH)) throw INVALID_CHAT_HISTORY
     return { status: 'page', page: { partial: true, metadata: h.metadata, items, ranges,
       ...(h.hasArrival ? { arrivalPositions: selected.map(r => natural(r.arrival)) } : {}), continuation } }
   }
@@ -144,7 +146,7 @@ export function createIndexedThreadHistory(deps: {
           const before = v.operation === 'beforeThreadPage'
           if (natural(v.limit) < 1 || natural(v.limit) > 200 ||
             Object.keys(v).some(k => !['operation', 'serverId', 'conversationId', 'limit', ...(before ? ['continuation'] : [])].includes(k)) ||
-            before && (typeof v.continuation !== 'string' || v.continuation.length === 0 || v.continuation.length > 65536 || !/^[A-Za-z0-9_-]+$/.test(v.continuation))) throw INVALID_CHAT_HISTORY
+            before && (typeof v.continuation !== 'string' || v.continuation.length === 0 || v.continuation.length > MAX_CONTINUATION_LENGTH || !/^[A-Za-z0-9_-]+$/.test(v.continuation))) throw INVALID_CHAT_HISTORY
           paging = { limit: natural(v.limit), ...(before && typeof v.continuation === 'string' ? { continuation: v.continuation } : {}) }
           request = parseChatHistoryRequest({ operation: 'readThread', serverId: v.serverId, conversationId: v.conversationId })
         } else request = parseChatHistoryRequest(value)
@@ -159,9 +161,8 @@ export function createIndexedThreadHistory(deps: {
         if (paging?.continuation !== undefined) {
           try {
             token = object(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(encryption.decrypt(Buffer.from(paging.continuation, 'base64url')))))
-            if (token.format !== 'daemon-items' || Object.keys(token).length !== 6 ||
-              typeof token.identity !== 'string' || typeof token.epoch !== 'string' || natural(token.before) === 0 ||
-              token.serverId !== request.serverId || !('conversationId' in request) || token.conversationId !== request.conversationId) throw INVALID_CHAT_HISTORY
+            if (token.format !== 'daemon-items' || Object.keys(token).length !== 3 ||
+              typeof token.identity !== 'string' || !/^[0-9a-f-]{36}$/.test(token.identity) || natural(token.before) === 0) throw INVALID_CHAT_HISTORY
           } catch { return report({ status: 'error', code: 'invalid-request' }) }
         }
         return report(database.transaction((db): ThreadHistoryResult => {

@@ -67,3 +67,9 @@ None. Estimated written work: 780 lines including plan/tests; one deliverable, n
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-15
+
+## Revisions
+
+2026-10-15: Rotate the document fence on the isolated preload's authenticated main-frame bind, rather than on attempted navigation. Electron announces blocked form/frame navigations without replacing the document; rotating then stranded its existing adapter. The hostile-page regression requires a successful read after blocked navigation. Main retains the old fence until a new document actually binds, then aborts its controllers; reply checks still fence all awaits. Fetch responses expose only the four permitted headers, whereas browser resource responses continue carrying native CSP/nosniff. Electron omits the preload path from `getLastWebPreferences`; production write/bridge behavior verifies the dedicated preload instead.
+
+Added `src/main/hostedFetch.test.ts` to cover exact sender/frame/document checks, independent native input validation, reused correlations and stale completions after rebinding/retirement. Asset GET accepts permitted headers but the asset wire contract has no header field; API headers are preserved. Final scope remains below 800 written lines.

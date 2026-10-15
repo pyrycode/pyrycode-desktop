@@ -57,6 +57,10 @@ None.
 
 2026-10-15: The scroll hook's two surviving callers both use supplied items. Remove its legacy gap-demand branch and numeric prepend bookkeeping, retaining the identical supplied-item demand and immutable-presentation anchor comparison. Shared attachment, timestamp, copy/reply, delimiter and markdown-link suites render the surviving row view directly; tool-run assertions use supplied snapshots. The drawer's private summary/status inputs are now required supplied facts, so its legacy duplicate-summary suppression and label fallback are also removed.
 
+2026-10-15 (verifier finding 1): Restore producer coverage removed with the mixed presentation suites. Move tool-result parent precedence and adjacent assistant-delta assertions into `threadTimeline.test.ts`, history tool/assistant attribution into `historyPageBridge.test.ts`, and receipt row identity/idempotence/reset into `queuedEchoSettlement.test.ts`. The terminal-status variants used only roster projection, so retain their common reducer assertions once without roster setup. No runtime contract changes or retired presentation API restoration.
+
+Audit the remaining mixed-suite deletions against `ac44f55c`: roster/history/receipt/delivery/stop suites retain their direct producer assertions; grouping, queue folding, gap, task-panel and interaction deletions assert retired presentation. The version-1 assistant-parent round trip already survives in `src/shared/chatHistory.test.ts`. The queue-settlement audit also found producer transitions whose last assertion used the removed projection: retain direct stored-row and settlement assertions, including the deleted Send now stream-position scenario. Rework touches three existing test files and this plan; total written work remains below 800 lines, with no additional exports, consumers, state or reject branches. No numbered in-flight branch overlaps the three test files.
+
 ## Validation evidence
 
 - Plan committed first as `f2eb1407`; implementation/runtime candidate `221b9b8b`, containing main `ac44f55c`. Final fixture cleanup changes only two unit specs and this record.
@@ -67,3 +71,18 @@ None.
 - Inspected all 19 skips: 16 retained legacy cases owned by #2024 (nine recording, two gaps, one history-open, two own-settlement, one replay and one read-tail); three platform skips (two macOS badge cases and one macOS window-reopen). No unexpected failure or retry result.
 - Full JSON: `/tmp/builder-2023-fake-suite.json`, SHA256 `5b786d5054c69063c367b011a7fcd3b58c7e0a68445fc7ab71bb05abb0e98007`; stderr `/tmp/builder-2023-fake-suite.stderr`. Pre-verify/build logs: `/tmp/builder-2023-preverify.log`, `/tmp/builder-2023-final-build.log`. Scratch artifacts remain outside the worktree.
 - Final scope: four production files, one existing row component newly exported, no new state/reject branch/dependency. Written work remains below 800 lines; deleted lines are separate. No live specs changed, no live Claude proof required, no documentation handoff requirements.
+
+### Rework validation, 2026-10-15
+
+- Restored/strengthened producer targets: `threadTimeline.test.ts` 213/213, `historyPageBridge.test.ts` 37/37, `queuedEchoSettlement.test.ts` 21/21; **271 executed, 271 passed**. Delta timestamps advance independently so overwriting the first stamp would fail.
+- After the final merge of `origin/main` (`ac44f55c`, already contained): pre-verify **5/5 checks passed**, **416 unit files, 10,252 passed, 30 existing skips**; `npm run build` and `npm run check:docs` passed. Logs: `/tmp/builder-2023/rework-preverify.log` and `/tmp/builder-2023/rework-build.log`.
+- Rework changes only three producer test files and this plan. Production and browser specs remain identical to verifier-reviewed `5a70a79e`, whose complete configured fake suite passed 432/432 with 19 existing skips. No browser or live test changed or ran in this rework; the dispatcher's next complete fake gate remains pending.
+
+## Documentation handoff
+
+Pending for the documentation stage, as requested by the verifier:
+
+- `docs/knowledge/features/conversation-shell-timeline-render.md` — Structured-stream timeline render; Supplied daemon item presentation; Legacy row reuse and stopped-turn records: describe the authoritative route and surviving shared rows.
+- `docs/knowledge/features/conversation-shell-background-tasks.md` — Background-task panel; Stop task; Status tag and summary: remove retired roster-adapter inputs and distinguish supplied task facts from retained producers.
+- `docs/knowledge/features/conversation-shell-tool-row-header-groups.md` — Subagent tool groups; Adjacent tool runs: remove retired grouping/queue projections and update coverage locations.
+- `docs/knowledge/features/conversation-shell-scroll-pin.md` — User demand and prepend position: remove legacy gap-demand and numeric prepend bookkeeping references while retaining supplied-item scrolling.

@@ -243,7 +243,7 @@ test('reused conversation IDs keep selected metadata, content and commands on th
 
 test('thread lifecycle refreshes settings after a turn and confirms permission changes', async ({ launchPairedApp }) => {
   const requests: Envelope[] = []
-  let permission = 'default', used = 10
+  let permission = 'default', used = 10000
   const settings = (reply?: number) => frame('session_settings', { conversation_id: SEEDED_ROW.id,
     session_id: 'session', model: 'opus', effort: 'high', yolo: false, permission_mode: permission,
     window_tokens: 200000, used_tokens: used }, reply, 'session')
@@ -257,12 +257,14 @@ test('thread lifecycle refreshes settings after a turn and confirms permission c
   } })
   await expect(page.getByText('Lifecycle ready', { exact: true })).toBeVisible()
   await expect(page.locator('.composer__permission')).toBeVisible()
+  await expect(page.locator('.composer__context-label')).toHaveText('Context: 5%')
   const initial = requests.filter(r => r.type === 'request_session_settings').length
   daemon.pushFrame(frame('turn_state', { conversation_id: SEEDED_ROW.id, state: 'thinking' }, undefined, 'session'))
   await expect(page.locator('.composer-status')).toContainText('Thinking')
-  used = 50
+  used = 50000
   daemon.pushFrame(frame('turn_state', { conversation_id: SEEDED_ROW.id, state: 'idle' }, undefined, 'session'))
   await expect.poll(() => requests.filter(r => r.type === 'request_session_settings').length).toBeGreaterThan(initial)
+  await expect(page.locator('.composer__context-label')).toHaveText('Context: 25%')
   const afterTurn = requests.filter(r => r.type === 'request_session_settings').length
   await page.locator('.composer__permission').click()
   await page.getByRole('menuitem', { name: 'Plan', exact: true }).click()
@@ -317,6 +319,7 @@ test('current thread prompts remain answerable during pending and failed initial
     const request = decodeEnvelope(bytes); foreignRequests.push(request)
     return request.type === 'list_conversations' ? [seedConversationsFrame(SECOND_SEEDED_ROW)] : []
   } } })
+  await page.getByText(SEEDED_ROW.name!, { exact: true }).first().click()
   await expect.poll(() => requests.some(r => r.type === 'thread_catch_up')).toBe(true)
   for (const phase of ['pending', 'failed']) {
     if (phase === 'failed') {

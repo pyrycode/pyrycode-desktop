@@ -1,4 +1,3 @@
-import { connectedConversationHostNow } from './conversationActionAvailability'
 import { sendConversationCommand } from './conversationActionAvailability'
 // The run-configuration read's APP-LIFETIME half (#810): the always-on subscriber that lands every
 // `runConfigReceived` in the two stores, plus the refresh trigger that re-requests the reply on the two
@@ -50,7 +49,8 @@ import { isTurnRunning } from './ConversationScreen'
 import { requestRunConfigSnapshot } from './runConfigSnapshot'
 import { subscribeConfirmedRunConfig } from './confirmedRunConfig'
 import { runSettingsWriteStore } from '../../store/runSettingsWriteStore'
-import { conversationListStore } from '../../store/conversationListStore'
+import { conversationListStore, selectConversations } from '../../store/conversationListStore'
+import { serverIdForOpenConversation } from './unpairAction'
 
 /**
  * The refresh trigger, as a STATEFUL FACTORY: each call returns a fresh predicate over the daemon-event
@@ -166,8 +166,11 @@ export function RunConfigLiveData(): null {
         return !row || !('serverId' in row) || typeof row.serverId !== 'string' || !threadRuntime.isThread(row.serverId, row.id)
       },
       getContext: () => {
-        const conversationId = activeConversationStore.getState().activeConversation?.id ?? null
-        return { conversationId, serverId: connectedConversationHostNow(conversationId) }
+        const row = activeConversationStore.getState().activeConversation
+        const conversationId = row?.id ?? null
+        const host = row && 'serverId' in row && typeof row.serverId === 'string' ? row.serverId : null
+        return { conversationId, serverId: threadRuntime.isThread(host, conversationId) ? host
+          : serverIdForOpenConversation(selectConversations(conversationListStore.getState()), conversationId) }
       },
       subscribeContext: listener => {
         const offActive = activeConversationStore.subscribe(listener)

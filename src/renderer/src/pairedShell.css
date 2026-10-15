@@ -153,6 +153,12 @@
   height: 100%;
 }
 
+.hosted-pane { position: relative; display: flex; flex-direction: column; height: 100%; font-family: var(--font-sans); color: var(--color-on-surface); }
+.hosted-pane__chrome { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); padding: var(--space-4); border-bottom: 1px solid var(--color-primary); font-size: var(--text-body-small-size); }
+.hosted-pane__identity { display: flex; flex: 1; flex-direction: column; min-width: 0; overflow-wrap: anywhere; gap: var(--space-1); }
+.hosted-pane__chrome button { font: inherit; color: var(--color-primary); background: transparent; border: 0; cursor: pointer; padding: var(--space-2); border-radius: var(--radius-xs); }
+.hosted-pane__surface { flex: 1; min-height: 0; }
+
 
 /* Recovery adapts the existing pairing form to the narrow pane beside the sidebar. */
 .paired-shell__recovery {

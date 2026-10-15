@@ -131,14 +131,12 @@ Retention, send windows and row identity in the [conversation timeline](conversa
   including surviving echo rows and reserved evidence-only page tails. Numeric keys
   do not establish history chronology. See
   [page boundary mapping](conversation-timeline-store-internals.md#background-agent-history-placement).
-- **Saved timelines have no background-task frames.** `readSavedTimeline` snapshots
-  retain the unchanged format and existing placement; neither task lifecycle evidence
-  nor `rowArrivalOrder` is persisted. A saved Agent/result alone cannot reconstruct a
-  live-tail row or its terminal boundary. Connect rosters now supply provisional
-  rows through a memory-only display projection; synthetic items never enter saved
-  history. Daemon pages now reconstruct finished Agents from started/updated placement
-  evidence; saved snapshots alone cannot. Durable history admission/persistence and
-  newest-page refresh use [retained contributions and receipts](chat-history.md#received-state-admission-and-ownership).
+- **Legacy saved timelines have no background-task frames.** Their retained
+  format excludes task lifecycle evidence and `rowArrivalOrder`; a saved Agent/result
+  cannot reconstruct a live-tail row or terminal boundary. Legacy roster/page
+  projections remain memory-only producer behavior. Production `readSavedTimeline`
+  requests only authoritative daemon items and does not restore this legacy holder.
+  See [protected history](chat-history.md#received-state-admission-and-ownership).
 - **Repeat admission needs retained display evidence.** The mounted entry path
   joins newest/older overlaps and split replies against contributions, preserving
   surviving rows once. Legacy row-only admission cannot infer durable contribution

@@ -1,4 +1,63 @@
-# Offline composer settings regression reliability
+# Welcome setup reliability for the offline settings regression
+
+## Current design (2026-10-15 re-refinement)
+The live issue now authorizes diagnosis and repair in the existing Welcome
+pairing helper, diagnostic wrapper and default fixture wiring. This section
+supersedes the menu-focused design below; the earlier evidence remains history.
+
+### Files read
+- `e2e/fixtures/pairingArrival.ts` → `pairFromUnpairedLaunch`, `drivePairingForm`: ordinary click and pairing arrival, shared three-argument contract.
+- `e2e/fixtures/welcomeDiagnostics.ts` → `observeWelcomeClick`, `withWelcomeDiagnostics`, `capture`: bounded primitive-only capture with original-error preservation.
+- `e2e/fixtures/launchPairedApp.ts` → `launchPairedApp`: first-window readiness, page-specific registration and teardown.
+- `e2e/welcome-stall.spec.ts` → controlled diagnostic regression: actual TestInfo attachments and clean second launch.
+- `e2e/fixtures/desktopIsolation.ts` → `launchIsolatedApp`: shown Linux windows, native-pointer isolation and throttling switches.
+- `src/main/index.ts` → `createWindow`: asynchronous ready-to-show presentation and initial document load.
+- `docs/knowledge/features/e2e-harness-desktop-isolation.md`, `e2e-harness-launch-fate.md`, `development-verification.md`, `development-verification-evidence-that-cannot-pass-too-early.md`: distinct native, renderer, frame and input evidence requirements.
+
+### Context and design
+The historical failure is a Welcome CTA click timeout at df4ce98b, with no
+retained call log or natural diagnostic attachment. Passing unchanged repetitions
+do not diagnose it. First recover any available attachment, then compare native
+presentation/occlusion, renderer timer/frame progress, actionability and actual
+input delivery in controlled launches. Scratch experiments stay outside the tree.
+Only a demonstrated causal defect justifies a helper repair and a focused failing
+regression; do not substitute a simulated diagnostic fault for that proof.
+Preserve the shared pairing API and all offline-menu assertions, callers and real
+tier behavior. No app production, wire, visual or dependency change is planned.
+The remote branch overlap check found no edits to these four helper/spec files.
+
+### State + concurrency model
+No application state changes. Each launch owns its existing profile, transport,
+observer registration and teardown. Any added observation uses the existing
+bounded capture/cleanup ownership and primitive allowlist. No replacement click,
+retry, timeout increase, arbitrary sleep or route injection is permitted.
+
+### State transitions and identity reuse
+| Event | Required regression |
+| --- | --- |
+| Initial Welcome readiness and click | New focused causal regression, named once mechanism is established |
+| Pending/rejected click | Existing controlled Welcome diagnostic spec and diagnostic unit tests |
+| Close and relaunch | Existing Welcome diagnostic spec: two correlated clean launches |
+| Reconnect and settings selection | Unchanged offline settings spec, all three menu cases |
+
+### Error handling
+Preserve original click errors, bounded diagnostics and isolation cleanup. Missing
+causal evidence leaves diagnosis unresolved; it does not authorize speculative
+hardening. Diagnostic reports exclude payloads, field values, raw errors and DOM.
+
+### Testing strategy
+Test-first controlled failure at the demonstrated boundary, then the same test
+passing with the repair. Run affected diagnostic coverage, 20 named offline
+repetitions each with one and four workers, and all four offline-spec tests with
+retries disabled. Record revision, platform, presentation, actual workers, outcome
+counts and fresh report paths. Merge main, run pre-verify and build. The dispatcher
+owns the complete configured fake gate; its result remains pending.
+
+### Open Questions
+What mechanism prevents Welcome click completion? Resolve from a controlled
+comparison before implementing. Historical trigger remains unproven without its
+missing attachment. Sizing: one deliverable, four criteria, approximately 360
+written lines, zero new exported API/types or migrated consumers, within limits.
 
 ## Files read
 - `e2e/offline-session-settings.spec.ts` → `event`, `connection`, `settings`, `observeCommands` and the pre-opened menu scenario: current synchronization and command observation.

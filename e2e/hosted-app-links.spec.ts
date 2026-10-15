@@ -31,7 +31,7 @@ async function launch(start: (options?: LaunchPairedAppOptions, control?: Launch
 }
 function scenario(second = false) {
   let id = 2000, revision = 1, state = 'running', hold = false, missing = false
-  const capabilities = ['hosted_apps_v1']
+  const capabilities = ['thread', 'hosted_apps_v1']
   const seen: any[] = [], held: Uint8Array[] = []
   const frame = (type: string, payload: unknown, reply?: number) => Buffer.from(JSON.stringify({
     id: id++, type, ts: '2026-10-15T10:00:00Z', ...(reply === undefined ? {} : { in_reply_to: reply }), payload
@@ -39,7 +39,7 @@ function scenario(second = false) {
   const record = () => ({ app_id: appId, title: `${second ? 'Second' : 'First'} app ${revision}`, state,
     desired: 'available', active_release: '1.0.0', pending_release: null, last_error: null, revision })
   return { seen, held, frame, hold(value = true) { hold = value },
-    support(value: boolean) { capabilities.splice(0, capabilities.length, ...(value ? ['hosted_apps_v1'] : [])) },
+    support(value: boolean) { capabilities.splice(0, capabilities.length, 'thread', ...(value ? ['hosted_apps_v1'] : [])) },
     update(next = state) { state = next; revision++; return frame('app_updated', record()) },
     remove() { missing = true; revision++; return frame('app_removed', { app_id: appId, revision }) },
     options: { helloAck: { server_id: second ? SECOND_SERVER_ID : FIRST_SERVER_ID, capabilities },
@@ -148,7 +148,7 @@ test('streaming and settled links preserve conversation drafts', async ({ launch
   await page.evaluate(() => {
     ;(window as any).linkTurnSettled = false
     const off = window.pyry.onDaemonEvent(event => {
-      if (event.type === 'turnEnd' && event.turnId === 'links') { (window as any).linkTurnSettled = true; off() }
+      if (event.type === 'threadUpdate' && event.update.type === 'thread_item_added' && event.update.payload.item.kind === 'turn_end' && event.update.payload.item.turn === 'links') { (window as any).linkTurnSettled = true; off() }
     })
   })
   daemon.pushFrame(s.frame('turn_end', { conversation_id: SEEDED_ROW.id, turn_id: 'links', stop_reason: 'end_turn' }))

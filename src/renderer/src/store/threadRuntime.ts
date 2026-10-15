@@ -7,12 +7,15 @@ import type { RendererDiagnosticEvent } from '@shared/ipc/diagnostics'
 import type { ConversationSummary } from '@shared/wire/types'
 import { createThreadItemStore } from './threadItemStore'
 import { createThreadSendStore } from './threadSendStore'
-import { createThreadLiveState, threadLiveFamily } from './threadLiveState'
+import { createThreadLiveState, selectThreadReadings, threadLiveFamily } from './threadLiveState'
 import { createThreadQueryCoordinator, type ThreadQueryState } from './threadQueryCoordinator'
 import { readSavedTimeline } from './savedTimelineRestorer'
 import { conversationReadRouteStore } from './conversationReadRouteStore'
 import { connectThreadLiveProjection } from './threadLiveProjection'
 import { subscribeChatHistoryRemoval } from './chatHistoryRemoval'
+import { replySuggestionStore } from './replySuggestionStore'
+import { createThreadTaskStops } from '../screens/conversation/threadTaskPresentation'
+import { createThreadRefusalActions, threadComposerReports } from '../screens/conversation/threadComposerReports'
 
 const key = (host: string, chat: string) => JSON.stringify([host, chat])
 const MAX_HELD_APPENDS = 256
@@ -37,13 +40,14 @@ export function createThreadRuntime(deps: {
   frame?: ThreadFrameScheduler
 }) {
   const items = createThreadItemStore({ event: deps.log }), sends = createThreadSendStore(deps.log)
+  const refusals = createThreadRefusalActions(), taskStops = createThreadTaskStops()
   const state = createStore<{
     /** Hosts whose current connection completed an accepted `thread` handshake. */
-    linked: ReadonlySet<string>; saved: ReadonlySet<string>
+    liveRevision: number; linked: ReadonlySet<string>; saved: ReadonlySet<string>
     queries: ReadonlyMap<string, ThreadQueryState>
     complete: ReadonlyMap<string, { epoch: string; version: number }>
     restoring: ReadonlySet<string>
-  }>(() => ({ linked: new Set(), saved: new Set(), queries: new Map(), complete: new Map(), restoring: new Set() }))
+  }>(() => ({ liveRevision: 0, linked: new Set(), saved: new Set(), queries: new Map(), complete: new Map(), restoring: new Set() }))
   const lives = new Map<string, ReturnType<typeof createThreadLiveState>>()
   const isLinked = (host: string): boolean => state.getState().linked.has(host)
   const setLinked = (host: string, linked: boolean): void => {
@@ -60,6 +64,18 @@ export function createThreadRuntime(deps: {
     if (held) return held
     const store = createThreadLiveState({ isConnected: isLinked,
       sendResponse: (serverId, command) => deps.send({ ...command, serverId }), log: { event: deps.log } })
+    store.subscribe((next, previous) => {
+      state.setState(s => ({ liveRevision: s.liveRevision + 1 }))
+      if (next.binding?.sessionId !== previous.binding?.sessionId) {
+        const transition: StampedDaemonEvent = { type: 'sessionTransition', serverId: host, conversationId: chat,
+          newSessionId: next.binding?.sessionId ?? '', reason: 'clear', workspaceCwd: null, occurredAt: '' }
+        replySuggestionStore.getState().receive(transition)
+      }
+      for (const type of ['replySuggestion', 'turnState'] as const) {
+        const reading = selectThreadReadings(next, type)[0]
+        if (reading && reading !== selectThreadReadings(previous, type)[0]) replySuggestionStore.getState().receive(reading)
+      }
+    })
     lives.set(id, store)
     return store
   }
@@ -100,14 +116,21 @@ export function createThreadRuntime(deps: {
     for (const [host, chats] of items.getState().hosts) for (const chat of chats.keys()) {
       const snapshot = items.getState().snapshot(host, chat)
       if (!snapshot || !isThread(host, chat)) continue
-      sends.getState().settle(snapshot)
+      sends.getState().settle(snapshot); taskStops.getState().settle(snapshot)
+      observeReports(host, chat)
       if (conversationReadRouteStore.getState().epochFor(host, chat) !== snapshot.epoch)
         conversationReadRouteStore.getState().select(host, chat, snapshot.epoch)
     }
   })
+  function observeReports(host: string, chat: string): void {
+    const snapshot = items.getState().snapshot(host, chat)
+    const session = lives.get(key(host, chat))?.getState().binding?.sessionId ?? null
+    const offer = snapshot && threadComposerReports(snapshot, session).refusal
+    if (offer) refusals.getState().observe(offer)
+  }
   function remove(host: string, chat: string): void {
     if (selected?.host === host && selected.chat === chat) { selected.cancel?.(); selected = undefined; query.cancelHost(host) }
-    items.getState().deleteConversation(host, chat); sends.getState().deleteConversation(host, chat)
+    items.getState().deleteConversation(host, chat); sends.getState().deleteConversation(host, chat); refusals.getState().remove(host, chat); taskStops.getState().remove(host, chat)
     lives.get(key(host, chat))?.getState().dispatch({ type: 'dispose' }); lives.delete(key(host, chat))
     conversationReadRouteStore.getState().select(host, chat, null)
     state.setState(s => {
@@ -124,7 +147,7 @@ export function createThreadRuntime(deps: {
     for (const [id, store] of lives) if (id.startsWith(prefix)) {
       store.getState().dispatch({ type: 'dispose' }); lives.delete(id)
     }
-    items.getState().removeHost(host); sends.getState().removeHost(host)
+    items.getState().removeHost(host); sends.getState().removeHost(host); refusals.getState().remove(host); taskStops.getState().remove(host)
     conversationReadRouteStore.setState(s => { const hosts = new Map(s.hosts); hosts.delete(host); return { hosts } })
     state.setState(s => {
       const linked = new Set(s.linked); linked.delete(host)
@@ -136,7 +159,7 @@ export function createThreadRuntime(deps: {
   }
   const offRemoval = subscribeChatHistoryRemoval(host => removed => { if (removed) removeHost(host) })
   return {
-    items, sends, state, live, isThread,
+    items, sends, refusals, taskStops, state, live, isThread,
     acceptsLifecycle(event: StampedDaemonEvent): boolean {
       if (this.acceptsSession(event)) return true
       if (!selected || event.serverId !== selected.host) return false
@@ -157,6 +180,7 @@ export function createThreadRuntime(deps: {
     },
     summary(host: string, row: Pick<ConversationSummary, 'id' | 'current_session_id'>) {
       if (isLinked(host)) live(host, row.id).getState().dispatch({ type: 'summary', serverId: host, summary: row })
+      observeReports(host, row.id)
     },
     open(host: string, chat: string) {
       selected?.cancel?.()
@@ -212,8 +236,10 @@ export function createThreadRuntime(deps: {
   }
   function handle(event: StampedDaemonEvent): void {
     if (disposed || event.serverId === null) return
+    refusals.getState().event(event); taskStops.getState().event(event)
     const host = event.serverId
     if (event.type === 'connected') {
+      replySuggestionStore.getState().receive(event)
       query.cancelHost(host)
       // Main reports a handshake without `thread` as update-required; a stray one links nothing.
       const thread = event.ack.capabilities.includes('thread')
@@ -229,6 +255,11 @@ export function createThreadRuntime(deps: {
       return
     }
     if (event.type === 'conversationDeleted') { remove(host, event.id); return }
+    if (event.type === 'modalAnswerRejected') {
+      for (const store of lives.values()) store.getState().dispatch({ type: 'daemon', event })
+      return
+    }
+    if (event.type === 'messageDelivery') { sends.getState().feedback(host, event.conversationId, event); return }
     if (!isLinked(host)) return
     if (event.type === 'conversationsReceived') {
       for (const store of lives.values()) {
@@ -236,14 +267,20 @@ export function createThreadRuntime(deps: {
         if (binding?.serverId === host && !event.conversations.some(row => row.id === binding.conversationId))
           store.getState().dispatch({ type: 'summary', serverId: host, summary: null })
       }
-      for (const row of event.conversations) live(host, row.id).getState().dispatch({ type: 'summary', serverId: host, summary: row })
+      for (const row of event.conversations) {
+        live(host, row.id).getState().dispatch({ type: 'summary', serverId: host, summary: row })
+        observeReports(host, row.id)
+      }
       return
     }
     if (event.type === 'threadReply' || event.type === 'threadUpdate' || event.type === 'threadQueryFailed' || event.type === 'threadRepairNeeded') {
       query.input({ type: 'daemon', event }); return
     }
-    if (event.type === 'messageDelivery') sends.getState().feedback(host, event.conversationId, event)
-    for (const store of lives.values()) store.getState().dispatch({ type: 'daemon', event })
+    for (const store of lives.values()) {
+      store.getState().dispatch({ type: 'daemon', event })
+      if (event.type === 'sessionError' && selectThreadReadings(store.getState(), 'sessionError').includes(event))
+        sends.getState().endFeedback(host, event.conversationId)
+    }
   }
 }
 export const threadRuntime = createThreadRuntime({ send: command => window.pyry.sendCommand(command),

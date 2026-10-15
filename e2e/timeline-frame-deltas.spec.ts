@@ -20,7 +20,7 @@ const streaming = { id: 10, rev: 1, order: 10, kind: 'assistant_message', status
   shown: true, summary: '', content: { text: 'start,' }, session: 'session' }
 
 test('the mounted bridge publishes a delta-only burst on its first frame with one React commit', async ({ launchPairedApp }) => {
-  const { page, daemon } = await launchPairedApp({
+  const { page, daemon } = await launchPairedApp({ threadMode: 'native',
     buildReplyFrames: bytes => {
       const request = decodeEnvelope(bytes)
       if (request.type === 'list_conversations') return [seedConversationsFrame()]

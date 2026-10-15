@@ -24,7 +24,7 @@ test('creating a fresh thread opens catch-up and sends without a sidebar reopen'
   const requests: Envelope[] = []
   const created = { ...SEEDED_ROW, id: 'new-thread', name: null, current_session_id: 'session' }
   let made = false
-  const { page, daemon } = await launchPairedApp({ helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
+  const { page, daemon } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
     const request = decodeEnvelope(bytes); requests.push(request)
     if (request.type === 'list_conversations') return [seedConversationsFrame(made ? created : SEEDED_ROW)]
     if (request.type === 'create_conversation') { made = true; return [frame('conversation_created', created, request.id)] }
@@ -47,7 +47,7 @@ test('creating a fresh thread opens catch-up and sends without a sidebar reopen'
 
 test('identity failure, rejection and connection replacement preserve subsequent edits and an unchanged retry draft', async ({ launchPairedApp }) => {
   const requests: Envelope[] = []
-  const { page, app, forwarder } = await launchPairedApp({ helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
+  const { page, app, forwarder } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
     const request = decodeEnvelope(bytes); requests.push(request)
     if (request.type === 'list_conversations') return [seedConversationsFrame(SEEDED_ROW)]
     return request.type === 'thread_catch_up' ? windowFrames(request, SEEDED_ROW.id, 'Identity test ready') : []
@@ -96,7 +96,7 @@ test('identity failure, rejection and connection replacement preserve subsequent
 
 test('a synchronous bridge failure keeps the draft recoverable and rolls back its attachment claim once', async ({ launchPairedApp }) => {
   const requests: Envelope[] = []
-  const { page } = await launchPairedApp({ helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
+  const { page } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
     const request = decodeEnvelope(bytes); requests.push(request)
     if (request.type === 'list_conversations') return [seedConversationsFrame(SEEDED_ROW)]
     return request.type === 'thread_catch_up' ? windowFrames(request, SEEDED_ROW.id, 'Bridge failure ready') : []
@@ -146,7 +146,7 @@ test('a synchronous bridge failure keeps the draft recoverable and rolls back it
 
 test('the overlay follows current thread errors and session replacement', async ({ launchPairedApp }) => {
   let session = 'A'
-  const { page, daemon } = await launchPairedApp({ helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
+  const { page, daemon } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
     const request = decodeEnvelope(bytes)
     if (request.type === 'list_conversations') return [seedConversationsFrame({ ...SEEDED_ROW, current_session_id: session })]
     return request.type === 'thread_catch_up' ? windowFrames(request, SEEDED_ROW.id, 'Error route ready') : []
@@ -175,7 +175,7 @@ test('thread task drawer shares menu and count state across close and conversati
   const task: ThreadItem = { ...item(12, 'Authoritative task'), kind: 'agent', status: 'running', active: true,
     agent: 'claude', content: { task_id: 'task', tool_use_id: 'call',
       task_link: { task_id: 'task', tool_call_id: 'call' }, input: { description: 'Authoritative task' } } }
-  const { page, app, daemon } = await launchPairedApp({ helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
+  const { page, app, daemon } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
     const ask = decodeEnvelope(bytes)
     if (ask.type === 'list_conversations') return [seedConversationsFrame({ ...SEEDED_ROW, current_session_id: 'session' })]
     if (ask.type !== 'thread_catch_up') return []
@@ -222,8 +222,8 @@ test('reused conversation IDs keep selected metadata, content and commands on th
       permission_mode: 'default', window_tokens: 200000, used_tokens: 10 }, request.id, 'session')]
     return request.type === 'thread_catch_up' ? windowFrames(request, SEEDED_ROW.id, host === 0 ? 'Host A content' : 'Host B content') : []
   }
-  const { page, servers } = await launchPairedApp({ helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: replies(0) },
-    { secondServer: { helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: replies(1) } })
+  const { page, servers } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: replies(0) },
+    { secondServer: { threadMode: 'native', helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: replies(1) } })
   await page.getByText(SECOND_SEEDED_ROW.name!, { exact: true }).first().click()
   await expect(page.getByText('Host B content', { exact: true })).toBeVisible()
   const models = (value: string) => frame('model_list', { conversation_id: SEEDED_ROW.id, dropped_models: 0,
@@ -286,7 +286,7 @@ test('thread lifecycle refreshes settings after a turn and confirms permission c
   const settings = (reply?: number) => frame('session_settings', { conversation_id: SEEDED_ROW.id,
     session_id: 'session', model: 'opus', effort: 'high', yolo: false, permission_mode: permission,
     window_tokens: 200000, used_tokens: used }, reply, 'session')
-  const { page, daemon } = await launchPairedApp({ helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
+  const { page, daemon } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
     const request = decodeEnvelope(bytes); requests.push(request)
     if (request.type === 'list_conversations') return [seedConversationsFrame({ ...SEEDED_ROW, current_session_id: 'session' })]
     if (request.type === 'thread_catch_up') return windowFrames(request, SEEDED_ROW.id, 'Lifecycle ready')
@@ -323,7 +323,7 @@ test('thread lifecycle refreshes settings after a turn and confirms permission c
 
 test('sending from older authoritative content resumes following the actual scroller', async ({ launchPairedApp }) => {
   const requests: Envelope[] = []
-  const { page, daemon } = await launchPairedApp({ helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
+  const { page, daemon } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
     const request = decodeEnvelope(bytes); requests.push(request)
     if (request.type === 'list_conversations') return [seedConversationsFrame({ ...SEEDED_ROW, current_session_id: 'session' })]
     if (request.type === 'thread_catch_up') return [frame('thread_items', { conversation_id: SEEDED_ROW.id, epoch: 'epoch', version: 20,
@@ -350,11 +350,11 @@ test('sending from older authoritative content resumes following the actual scro
 
 test('current thread prompts remain answerable during pending and failed initial recovery', async ({ launchPairedApp }) => {
   const requests: Envelope[] = [], foreignRequests: Envelope[] = []
-  const { page, daemon } = await launchPairedApp({ helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
+  const { page, daemon } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
     const request = decodeEnvelope(bytes); requests.push(request)
     if (request.type === 'list_conversations') return [seedConversationsFrame({ ...SEEDED_ROW, current_session_id: 'session' })]
     return []
-  } }, { secondServer: { buildReplyFrames: bytes => {
+  } }, { secondServer: { threadMode: 'native', buildReplyFrames: bytes => {
     const request = decodeEnvelope(bytes); foreignRequests.push(request)
     return request.type === 'list_conversations' ? [seedConversationsFrame(SECOND_SEEDED_ROW)] : []
   } } })
@@ -384,7 +384,7 @@ test('current thread prompts remain answerable during pending and failed initial
 test('restore overlapping live content retains complete progress across an interrupted catch-up and epoch replacement', async ({ launchPairedApp }) => {
   const requests: Envelope[] = []
   let interrupt = false, reset = false, overlapped = false
-  let { page, app, daemon, forwarder, userDataDir } = await launchPairedApp({ helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
+  let { page, app, daemon, forwarder, userDataDir } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
     const request = decodeEnvelope(bytes); requests.push(request)
     if (request.type === 'list_conversations') return [seedConversationsFrame({ ...SEEDED_ROW, current_session_id: 'session' })]
     if (request.type !== 'thread_catch_up') return []
@@ -404,7 +404,7 @@ test('restore overlapping live content retains complete progress across an inter
     return result.status === 'stored' && result.snapshot.kind === 'daemon-items' ? result.snapshot.thread.checkpoint : null
   }, SEEDED_ROW.id)).toBe(20)
   await app.close()
-  const resumed = await launchPairedApp({}, { reuseUserDataDir: userDataDir, onLaunched: async app => { await app.evaluate(({ ipcMain }) => {
+  const resumed = await launchPairedApp({ threadMode: 'native',}, { reuseUserDataDir: userDataDir, onLaunched: async app => { await app.evaluate(({ ipcMain }) => {
     const original = (ipcMain as any)._invokeHandlers.get('pyry:chat-history')
     Object.assign(globalThis, { heldThreadReads: 0 })
     ipcMain.removeHandler('pyry:chat-history')
@@ -461,7 +461,7 @@ test('restore overlapping live content retains complete progress across an inter
 test('queued acknowledgement recovery, successful unpair and deletion retire the owning pairing scopes', async ({ launchPairedApp }) => {
   const requests: Envelope[] = [], otherRequests: Envelope[] = []
   let accepted: ThreadItem | undefined, fresh = false, deleted = false, holdDeletion = false
-  const { page, daemon, forwarder, servers } = await launchPairedApp({ helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
+  const { page, daemon, forwarder, servers } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
     const request = decodeEnvelope(bytes); requests.push(request)
     if (request.type === 'list_conversations') return deleted ? [frame('conversations', { conversations: [] })]
       : [seedConversationsFrame({ ...SEEDED_ROW, current_session_id: fresh ? 'new-session' : 'session' })]
@@ -477,7 +477,7 @@ test('queued acknowledgement recovery, successful unpair and deletion retire the
       active: true, status: 'queued', content: { text: request.payload.text, message_id: request.payload.message_id,
         device_id: deviceId, queued_msg_id: 77 } }
     return []
-  } }, { secondServer: { buildReplyFrames: bytes => {
+  } }, { secondServer: { threadMode: 'native', buildReplyFrames: bytes => {
     const request = decodeEnvelope(bytes); otherRequests.push(request)
     return request.type === 'list_conversations' ? [seedConversationsFrame(SECOND_SEEDED_ROW)] : []
   } } })
@@ -572,7 +572,7 @@ test('ordinary app resumes a thread host from its saved checkpoint and pages old
     }
     return []
   }
-  const { page, app, daemon, forwarder } = await launchPairedApp({ helloAck: { capabilities: ['interactive', 'thread'] },
+  const { page, app, daemon, forwarder } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities: ['interactive', 'thread'] },
     buildReplyFrames: replies })
   await expect(page.getByText('Authoritative saved answer', { exact: true })).toBeVisible()
   for (const width of [1280, 800]) {
@@ -610,7 +610,7 @@ test('ordinary thread submission settles authenticated identity, routes queue ac
   const route = { conversation_id: SEEDED_ROW.id, epoch: 'epoch' }
   const queued: ThreadItem = { id: 50, rev: 1, kind: 'user_message', shown: true, active: true, status: 'queued',
     summary: 'Queued integration message', content: {} }
-  const { page, daemon } = await launchPairedApp({ helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
+  const { page, daemon } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
     const request = decodeEnvelope(bytes); requests.push(request)
     if (request.type === 'list_conversations') return [seedConversationsFrame({ ...SEEDED_ROW, current_session_id: session })]
     if (request.type === 'thread_catch_up') return [frame('thread_items', { ...route, version,
@@ -663,7 +663,7 @@ test('ordinary thread submission settles authenticated identity, routes queue ac
 
 test('a fresh offline app draws its protected authoritative saved history', async ({ launchPairedApp }) => {
   const route = { conversation_id: SEEDED_ROW.id, epoch: 'saved-epoch', version: 20 }
-  const first = await launchPairedApp({ helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
+  const first = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
     const request = decodeEnvelope(bytes)
     if (request.type === 'list_conversations') return [seedConversationsFrame(SEEDED_ROW)]
     if (request.type !== 'thread_catch_up') return []
@@ -677,7 +677,7 @@ test('a fresh offline app draws its protected authoritative saved history', asyn
   }, SEEDED_ROW.id)).toBe(20)
   await first.app.close()
   await first.forwarder.close()
-  const second = await launchPairedApp({}, { reuseUserDataDir: first.userDataDir })
+  const second = await launchPairedApp({ threadMode: 'native',}, { reuseUserDataDir: first.userDataDir })
   await second.page.getByText(SEEDED_ROW.name!, { exact: true }).first().click()
   await expect(second.page.getByText('Protected offline authoritative answer', { exact: true })).toBeVisible()
   await expect(second.page.getByText('Offline. Showing saved messages.', { exact: true })).toBeVisible()
@@ -695,8 +695,8 @@ test('a host without thread beside a thread host is update-required alone and cl
     if (request.type === 'thread_catch_up') return windowFrames(request, rows[host].id, host === 0 ? 'First host thread' : 'Second host thread')
     return []
   }
-  const { page, servers } = await launchPairedApp({ helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: replies(0) },
-    { secondServer: { helloAck: { capabilities }, buildReplyFrames: replies(1) } })
+  const { page, servers } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: replies(0) },
+    { secondServer: { threadMode: 'native', helloAck: { capabilities }, buildReplyFrames: replies(1) } })
   const hosts = page.locator('.channel-list__host')
   await expect(hosts).toHaveCount(2)
   await page.getByText(SECOND_SEEDED_ROW.name!, { exact: true }).first().click()

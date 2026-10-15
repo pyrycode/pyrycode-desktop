@@ -11,7 +11,7 @@ async function event(app: PairedApp, value: object): Promise<void> {
 }
 
 async function connection(app: PairedApp, serverId: string, type: string): Promise<void> {
-  await event(app, { type, serverId, ack: { protocol_version: 'v2', server_id: serverId, conn_id: 'synthetic', capabilities: ['interactive'] },
+  await event(app, { type, serverId, ack: { protocol_version: 'v2', server_id: serverId, conn_id: 'synthetic', capabilities: ['interactive', 'thread'] },
     error: { code: 'transport', message: 'Offline', retryable: true } })
 }
 

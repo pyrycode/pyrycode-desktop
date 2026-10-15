@@ -21,6 +21,7 @@ export function createQueueTurnEvidence(options: {
   const suffixLimit = Math.max(...options.markers.map(marker => marker.length)) - 1
 
   function observe(event: DaemonEvent): void {
+    if (event.type === 'threadUpdate' || event.type === 'threadReply') thread = true
     if (event.type === 'connected') { thread = event.ack.capabilities.includes('thread'); return }
     if (event.type === 'conversationCreated' && conversationId === '') conversationId = event.conversation.id
     if (!('conversationId' in event) || event.conversationId !== conversationId) return

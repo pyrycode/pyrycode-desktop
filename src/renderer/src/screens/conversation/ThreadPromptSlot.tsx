@@ -2,29 +2,41 @@ import { useEffect, useMemo } from 'react'
 import { useStore } from 'zustand'
 import { threadRuntime } from '../../store/threadRuntime'
 import { selectThreadReadings } from '../../store/threadLiveState'
-import { translateModalEvent } from '../../store/modalBridge'
 import { translateQuestionEvent } from '../../store/questionBridge'
 import { createPermissionChoices } from './permissionChoices'
-import { PermissionModalView } from './PermissionModal'
-import { createQuestionPicksStore, selectBatchSelections } from '../../store/questionPicksStore'
+import { PermissionModalView, RejectionSurfaceView } from './PermissionModal'
+import { selectBatchSelections } from '../../store/questionPicksStore'
 import { resolveQuestionAnswers } from './questionResolution'
 import { QuestionPanelView, optionPickEventFor, otherPickEventFor } from './QuestionPanel'
+import { createPermissionConsent } from './permissionConsent'
 import { sessionStore } from '../../store/sessionStore'
+
+// Consent belongs to the retained live scope, while two-click arming belongs to the pane.
+const consents = new WeakMap<ReturnType<typeof threadRuntime.live>, ReturnType<typeof createPermissionConsent>>()
+function consentFor(live: ReturnType<typeof threadRuntime.live>) {
+  let consent = consents.get(live)
+  if (!consent) {
+    consent = createPermissionConsent(() => live.getState().modals.getState().outstanding.map(prompt =>
+      ({ prompt, serverId: live.getState().binding?.serverId ?? null })),
+    changed => live.getState().modals.subscribe(changed))
+    consents.set(live, consent)
+  }
+  return consent
+}
 
 /** Existing prompt views with session-owned readings and exact retained response authority. */
 export function ThreadPromptSlot({ host, conversationId }: { host: string | null; conversationId: string | null }): JSX.Element | null {
   const live = useMemo(() => threadRuntime.live(host ?? '', conversationId ?? ''), [host, conversationId])
   const state = useStore(live, s => s)
   const connected = useStore(sessionStore, s => host !== null && s.statuses.get(host)?.type === 'connected')
-  const permission = selectThreadReadings(state, 'modalShown')[0]
   const question = selectThreadReadings(state, 'questionShown')[0]
+  const modalFeedback = useStore(state.modals, s => s)
+  const rejection = <RejectionSurfaceView rejections={modalFeedback.rejections}
+    onDismiss={modalId => state.modals.getState().dispatch({ type: 'rejectionDismissed', modalId })} />
   const batch = question ? translateQuestionEvent(question) : null
   const scope = useMemo(() => {
-    let previous: typeof permission, prompt: ReturnType<typeof translateModalEvent>
     const read = () => {
-      const displayed = selectThreadReadings(live.getState(), 'modalShown')[0]
-      if (displayed !== previous) { previous = displayed; prompt = displayed ? translateModalEvent(displayed, () => new Set()) : null }
-      return { prompt: prompt?.type === 'shown' ? prompt : undefined, serverId: host,
+      return { prompt: live.getState().modals.getState().outstanding[0], serverId: host,
         available: host !== null && sessionStore.getState().statuses.get(host)?.type === 'connected' }
     }
     const choices = createPermissionChoices(read, changed => {
@@ -33,23 +45,23 @@ export function ThreadPromptSlot({ host, conversationId }: { host: string | null
     }, { sendCommand: command => {
       const displayed = selectThreadReadings(live.getState(), 'modalShown')[0]
       if (displayed && (command.type === 'answerModal' || command.type === 'cancelModal')) live.getState().respond(displayed, command)
-    }, dispatch: () => {} })
+    }, dispatch: () => {} }, consentFor(live))
     return { choices, read }
   }, [live, host])
   const { choices } = scope
   useEffect(() => choices.start(), [choices])
   const choice = useStore(choices.store, s => s)
   const prompt = scope.read().prompt
-  const picks = useMemo(() => createQuestionPicksStore(), [question])
+  const picks = state.questions
   const selections = useStore(picks, selectBatchSelections(question?.questionBatchId ?? ''))
   const answers = batch?.type === 'shown' ? resolveQuestionAnswers(batch.questions, selections) : null
-  if (prompt) return <PermissionModalView prompt={prompt}
+  if (prompt) return <>{rejection}<PermissionModalView prompt={prompt}
     armedOption={prompt.options.find(option => option.id === choice.armedOptionId) ?? null}
     responseAvailable={connected} sessionPermissionChecked={choices.checked(prompt)}
     onSessionPermissionChange={checked => choices.toggle(prompt, checked)}
-    onActivate={id => choices.activate(prompt, id)} onCancel={() => choices.cancel(prompt)} />
-  if (!question || batch?.type !== 'shown') return null
-  return <QuestionPanelView questions={batch.questions} selections={selections} canAnswer={answers !== null}
+    onActivate={id => choices.activate(prompt, id)} onCancel={() => choices.cancel(prompt)} /></>
+  if (!question || batch?.type !== 'shown') return rejection
+  return <>{rejection}<QuestionPanelView questions={batch.questions} selections={selections} canAnswer={answers !== null}
     responseAvailable={connected} onCancel={() => live.getState().respond(question,
       { type: 'refuseQuestions', payload: { question_batch_id: question.questionBatchId } })}
     onAnswer={() => { if (answers) live.getState().respond(question,
@@ -63,5 +75,5 @@ export function ThreadPromptSlot({ host, conversationId }: { host: string | null
     }} onOtherTextChanged={(questionIndex, text) => {
       const q = question.questions[questionIndex]
       if (q) picks.getState().dispatch({ type: 'otherTextChanged', questionBatchId: question.questionBatchId, questionIndex, text, multiSelect: q.multi_select })
-    }} />
+    }} /></>
 }

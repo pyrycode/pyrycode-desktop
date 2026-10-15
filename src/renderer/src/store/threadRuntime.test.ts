@@ -33,6 +33,18 @@ describe('production thread composition', () => {
     expect(r.acceptsLifecycle(ack)).toBe(false)
     r.dispose()
   })
+  it('ends local send feedback only after the owning current-session error is admitted', () => {
+    const { runtime: r } = fixture()
+    r.event(connected('one', true)); r.summary('one', { id: 'chat', current_session_id: 'A' })
+    r.sends.getState().retain('one', 'chat', 'device', { type: 'userText', text: 'pending', messageId: 'message' })
+    const error: StampedDaemonEvent = { type: 'sessionError', serverId: 'one', conversationId: 'chat', envelopeSessionId: 'old', code: 'session.blocked' }
+    r.event(error)
+    expect(r.sends.getState().select('one', 'chat').localSendPending).not.toBeNull()
+    r.event({ ...error, envelopeSessionId: 'A' })
+    expect(r.sends.getState().select('one', 'chat').localSendPending).toBeNull()
+    expect(r.sends.getState().select('one', 'chat').pending).toHaveLength(1)
+    r.dispose()
+  })
   it('successful removal cancels empty-scope work and forgets every pairing-owned adapter', async () => {
     const { runtime: r, send } = fixture()
     r.event(connected('one', true))

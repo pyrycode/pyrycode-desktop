@@ -1290,7 +1290,7 @@ type JoinSnapshot = { rowGap: number; radiusXs: string; bubbleBottom: number; ro
 async function joinSnapshotOf(page: Page): Promise<JoinSnapshot> {
   return page.locator('.conversation__thread').evaluate((thread) => {
     const threadStyle = getComputedStyle(thread)
-    const bubble = thread.querySelector('.bubble[data-thread-role="assistant"]')
+    const bubble = thread.querySelector('[data-thread-role="assistant"]')
     if (bubble === null) throw new Error('the assistant bubble the run has to clear is not mounted')
     return {
       rowGap: parseFloat(threadStyle.rowGap),
@@ -1349,7 +1349,7 @@ test('tool row: consecutive rows join into one stack with a single border at eac
   // The non-tool neighbour first, so the run lands under it.
   daemon.pushFrame(joinAssistantDeltaFrame())
   daemon.pushFrame(joinTurnEndFrame())
-  await expect(page.locator('.bubble[data-thread-role="assistant"]')).toHaveCount(1, {
+  await expect(page.locator('[data-thread-role="assistant"]')).toHaveCount(1, {
     timeout: ROUNDTRIP_TIMEOUT_MS
   })
 

@@ -13595,6 +13595,26 @@ describe('composer diagnostics through the daemon connection', () => {
     for (const ctx of [local, other]) ctx.connection.stop()
     expect(lines).toHaveLength(4)
   })
+  it('acknowledges canonical accepted sends by host, conversation and authenticated device', async () => {
+    const lines: string[] = []
+    const lifecycle = createMessageLifecycle(createDiagnosticLog({ sink: { write: line => lines.push(line) } }))
+    const ctx = build({ serverId: 'host', messageLifecycle: lifecycle })
+    ctx.connection.start(); await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    lifecycle.queued(id, 'chat')
+    ctx.connection.send({ message_id: id, conversation_id: 'chat', text: 'TEXT_SECRET' })
+    ctx.drivers[0].observations[0]({ type: 'sent', connectionId: '22345678-1234-4123-8123-123456789abc' })
+    const publish = (device_id: string, conversation_id = 'chat') => ctx.drivers[0].emit({ type: 'message',
+      plaintext: encodeEnvelope({ id: 1, type: 'thread_item_added', ts: FIXED_TS, payload: {
+        conversation_id, epoch: 'epoch', version: 1, item: { id: 1, rev: 1, kind: 'user_message', status: 'queued', active: true,
+          shown: true, summary: '', content: { device_id, message_id: id, text: 'WIRE_SECRET' } } } }) })
+    publish('other-device'); publish(Buffer.from(PAIR.publicKey).toString('hex'), 'other-chat')
+    expect(lines).toHaveLength(2)
+    publish(Buffer.from(PAIR.publicKey).toString('hex')); publish(Buffer.from(PAIR.publicKey).toString('hex'))
+    expect(lines.map(line => JSON.parse(line).event)).toEqual(['message-queued', 'message-sent', 'message-acknowledged'])
+    expect(lines.join()).not.toContain('SECRET')
+    ctx.connection.stop()
+  })
   it.each(['unavailable', 'driver-failure', 'encode-failure'] as const)('records %s without inventing sent', async mode => {
     const lines: string[] = []
     const lifecycle = createMessageLifecycle(createDiagnosticLog({ sink: { write: line => lines.push(line) } }))

@@ -172,7 +172,7 @@ test('the drawn thumbnail opens its picture in the OS viewer, by click and by ke
     await page.getByRole('button', { name: 'Send' }).click()
   }
 
-  const bubble = (index: number) => page.locator('.bubble[data-thread-role="user"]').nth(index)
+  const bubble = (index: number) => page.locator('[data-thread-role="user"]').nth(index)
 
   /** Every path the app has handed to `shell.openPath` so far, read out of the main process. */
   const handedOver = (): Promise<string[]> =>

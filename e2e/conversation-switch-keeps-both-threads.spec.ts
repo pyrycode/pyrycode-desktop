@@ -88,7 +88,7 @@ test("switching away from a chat and back shows that chat's own thread", async (
   // one row, still that row's own message, with only the stamp admitted as a digit shape. NOTE for whoever
   // adds the next text-bearing child to `.bubble`: this locator is BOUND TO A CONST, so a grep for the
   // assertion and the `.bubble` selector on one line does not find these four sites. It missed them once.
-  const userRows = page.locator('.bubble[data-thread-role="user"]')
+  const userRows = page.locator('[data-thread-role="user"]')
   const sendButton = page.getByRole('button', { name: 'Send' })
   const composer = page.getByPlaceholder('Message…')
 

@@ -64,7 +64,7 @@ test("reveals time and turn stats together on row hover or focus and collapses t
   launchPairedApp
 }) => {
   const { page } = await launchPairedApp({ buildReplyFrames })
-  const assistantBubbles = page.locator('.bubble[data-thread-role="assistant"]')
+  const assistantBubbles = page.locator('[data-thread-role="assistant"]')
   const composer = page.getByPlaceholder('Message…')
 
   await composer.fill(WITH_NUMBERS)
@@ -119,7 +119,7 @@ test("reveals time and turn stats together on row hover or focus and collapses t
     expect((await bubble.boundingBox())!.height).toBe(restingBox.height)
   }
 
-  const user = page.locator('.bubble[data-thread-role="user"]').first()
+  const user = page.locator('[data-thread-role="user"]').first()
   await composer.focus()
   await page.mouse.move(0, 0)
   await expect(user.locator('.bubble__meta')).toBeHidden()
@@ -135,7 +135,7 @@ test("reveals time and turn stats together on row hover or focus and collapses t
   await bareBubble.locator('..').hover({ position: { x: 2, y: 2 } })
   await expect(bareBubble.locator('.bubble__turn-stats')).toHaveCount(0)
   await expect(bareBubble.locator('.bubble__meta-time')).toBeVisible()
-  await expect(page.locator('.bubble[data-thread-role="user"] .bubble__turn-stats')).toHaveCount(0)
+  await expect(page.locator('[data-thread-role="user"] .bubble__turn-stats')).toHaveCount(0)
 })
 
 test('repeated metadata reveal preserves bottom clearance and held reader position', async ({ launchPairedApp }, testInfo) => {

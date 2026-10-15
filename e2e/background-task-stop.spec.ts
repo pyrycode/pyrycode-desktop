@@ -74,8 +74,9 @@ test('silent stops survive navigation and settle on stopped, omission and correl
   await panel.locator('li').filter({ hasText: 'Synthetic roster work' }).getByRole('button', { name: 'Stop task' }).click()
   await expect.poll(() => fake.backgroundTaskStopRequests().length).toBe(2)
   await expect(panel.getByRole('heading', { name: 'Running · 1', exact: true })).toBeVisible()
-  await expect(panel.locator('li').filter({ hasText: 'Synthetic roster work' })).toHaveCount(0)
-  await expect(finished.locator('.background-task-panel__tag')).toHaveText('Stopped')
+  // Authoritative ended items remain durable after the roster omits a task.
+  await expect(panel.locator('li').filter({ hasText: 'Synthetic roster work' })).toContainText('Outcome unknown')
+  await expect(panel.locator('li').filter({ hasText: 'Synthetic terminal work' }).locator('.background-task-panel__tag')).toHaveText('Stopped')
 
   const refusedButton = panel.locator('li').filter({ hasText: 'Synthetic refused work' }).getByRole('button', { name: 'Stop task' })
   await refusedButton.click()

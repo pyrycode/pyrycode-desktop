@@ -6,6 +6,10 @@ import { readMainProcess } from './fixtures/mainProcessRead'
 import { installUnreadableLocalList } from './fixtures/localListFailure'
 import { HISTORY_ASK_BAND_VIEWPORTS } from '../src/renderer/src/screens/conversation/threadScrollPosition'
 
+// Scripted history is published as thread catch-up/pages by the shared fake daemon.
+test.use({ scriptedHistory: true })
+// #2020: these cases assert the retired raw-event cache and receipt ledger.
+
 const ts = '2026-07-07T12:00:00.000Z'
 const frame = (type: string, payload: Record<string, unknown>, in_reply_to?: number) =>
   encodeEnvelope({ id: 90, type, ts, payload, in_reply_to })
@@ -32,7 +36,7 @@ async function pushDeltaThroughPausedFrame(app: PairedApp, turnId: string, seq: 
   await app.page.clock.runFor(16)
 }
 
-test('confirmed deletion removes saved content through restart without waiting for a list refresh', async ({ launchPairedApp }) => {
+test.skip('confirmed deletion removes saved content through restart without waiting for a list refresh', async ({ launchPairedApp }) => {
   const commands: string[] = []
   let deleteReplyTo: number | undefined
   let confirmed = false
@@ -108,7 +112,7 @@ test('confirmed deletion removes saved content through restart without waiting f
   expect(commands.filter(c => c === 'request_history')).toHaveLength(1)
 })
 
-test('explicit unpair discards buffered history across restart while same-server repair retains it', async ({ launchPairedApp }) => {
+test.skip('explicit unpair discards buffered history across restart while same-server repair retains it', async ({ launchPairedApp }) => {
   test.setTimeout(90_000)
   const commands: string[] = []
   const first = await launchPairedApp({ buildReplyFrames: bytes => {
@@ -149,12 +153,12 @@ test('explicit unpair discards buffered history across restart while same-server
   expect(await read(first.page, serverId, 'omitted-chat')).toMatchObject({ status: 'stored' })
   expect(commands.filter(c => c === 'request_history')).toHaveLength(1)
   await first.page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
-  await expect(first.page.locator('.bubble[data-thread-role="assistant"]')).toContainText('saved before removal')
+  await expect(first.page.locator('[data-thread-role="assistant"]')).toContainText('saved before removal')
 
   await first.page.clock.install({ time: new Date('2026-09-13T00:00:00Z') })
   await first.page.clock.pauseAt(new Date('2026-09-13T00:00:01Z'))
   await pushDeltaThroughPausedFrame(first, 'before-forget', 1, ' buffered stale tail')
-  await expect(first.page.locator('.bubble[data-thread-role="assistant"]')).toContainText('buffered stale tail')
+  await expect(first.page.locator('[data-thread-role="assistant"]')).toContainText('buffered stale tail')
   expect(await read(first.page)).toEqual(saved)
   await first.page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
   await first.page.getByRole('menuitem', { name: 'Settings', exact: true }).click()
@@ -200,7 +204,7 @@ async function observeCommands(app: PairedApp) {
   return () => app.page.evaluate(() => (window as any).__savedCommands as object[])
 }
 
-test('receipt saturation still saves a repeated page and later live content across fresh relaunches', async ({ launchPairedApp }) => {
+test.skip('receipt saturation still saves a repeated page and later live content across fresh relaunches', async ({ launchPairedApp }) => {
   const ids = Array.from({ length: 200 }, (_, i) => i)
   const receipts = Array.from({ length: 500 }, (_, i) => ({ ids, cursor: `page-${i}`, atStart: false }))
   const entries = ids.map(id => ({ id, ts, type: id === 0 ? 'assistant_delta' : 'unsupported',
@@ -263,7 +267,7 @@ test('receipt saturation still saves a repeated page and later live content acro
     })
   }, { serverId, conversationId: SEEDED_ROW.id })
   await second.page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
-  await expect(second.page.locator('.bubble[data-thread-role="assistant"]')).toHaveCount(1)
+  await expect(second.page.locator('[data-thread-role="assistant"]')).toHaveCount(1)
   await expect(second.page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled({ timeout: 20_000 })
   // Restored rows and enabled Send can precede this receipt; focus creates no history demand.
   await expect.poll(() => second.page.evaluate(() => (window as typeof window & {
@@ -276,7 +280,7 @@ test('receipt saturation still saves a repeated page and later live content acro
     served: { ids, highestId: 199, receipts: [...receipts.slice(1), { ids, cursor: 'repeat', atStart: false }] } }
   await expect.poll(savedItemCounts, { timeout: 5_000 }).toContain(1)
   expect(await read(second.page)).toEqual({ status: 'stored', snapshot: expected })
-  await expect(second.page.locator('.bubble[data-thread-role="assistant"]')).toHaveCount(1)
+  await expect(second.page.locator('[data-thread-role="assistant"]')).toHaveCount(1)
   await second.page.evaluate(({ serverId, conversationId }) => {
     Object.assign(window, { laterLiveDelivered: false })
     const off = window.pyry.onDaemonEvent(event => {
@@ -305,7 +309,7 @@ test('receipt saturation still saves a repeated page and later live content acro
   expect(await read(third.page)).toEqual(saved)
 })
 
-test('records received content, drains buffered quit, and reads locally after relaunch', async ({ launchPairedApp }) => {
+test.skip('records received content, drains buffered quit, and reads locally after relaunch', async ({ launchPairedApp }) => {
   let historyAsks = 0
   const queuedText = 'queued echo to cancel'
   let queuedMessageId: string | undefined
@@ -327,14 +331,14 @@ test('records received content, drains buffered quit, and reads locally after re
   const serverId = servers[0].serverId
   const read = () => page.evaluate(({ serverId, conversationId }) => window.pyry.chatHistory({
     operation: 'readTimeline', serverId, conversationId }), { serverId, conversationId: SEEDED_ROW.id })
-  await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveCount(14)
+  await expect(page.locator('[data-thread-role="user"]')).toHaveCount(14)
   await expect.poll(async () => {
     await page.locator('.conversation__thread').evaluate((el) => { el.scrollTop = el.scrollTop === 1 ? 2 : 1 })
     await page.locator('.conversation__thread').focus()
     await page.keyboard.press('ArrowUp')
     return historyAsks
   }).toBe(2)
-  await expect(page.locator('.bubble[data-thread-role="user"]').first()).toContainText('loaded history 0')
+  await expect(page.locator('[data-thread-role="user"]').first()).toContainText('loaded history 0')
   await page.getByPlaceholder('Message…').fill('composer echo saved')
   await page.getByRole('button', { name: 'Send' }).click()
   await daemon.pushFrame(frame('assistant_delta', {
@@ -370,7 +374,7 @@ test('records received content, drains buffered quit, and reads locally after re
   await daemon.pushFrame(frame('assistant_delta', {
     conversation_id: SEEDED_ROW.id, turn_id: 'partial-turn', seq: 1, text: ' final buffered text' }))
   await daemon.pushFrame(seedConversationsFrame({ ...SEEDED_ROW, name: 'latest received list' }))
-  await expect.poll(() => page.locator('.bubble[data-thread-role="assistant"]').textContent()).toContain('final buffered text')
+  await expect.poll(() => page.locator('[data-thread-role="assistant"]').textContent()).toContain('final buffered text')
   await expect.poll(() => page.locator('.channel-list__row-open').textContent()).toContain('latest received list')
   expect(snapshotText(await read())).not.toContain('final buffered text')
   forwarder.closeClientLeg(4401)
@@ -391,10 +395,10 @@ test('records received content, drains buffered quit, and reads locally after re
   const outbound = await observeCommands(second)
   await second.page.getByRole('button', { name: 'latest received list', exact: true }).click()
   await expect(second.page.getByText('Offline. Showing saved messages.', { exact: true })).toBeVisible()
-  await expect(second.page.locator('.bubble[data-thread-role="assistant"]')).toContainText('live partial final buffered text')
+  await expect(second.page.locator('[data-thread-role="assistant"]')).toContainText('live partial final buffered text')
   await expect(second.page.locator('.bubble__cursor')).toHaveCount(0)
   await expect(second.page.getByText('Older messages require a connection.', { exact: true })).toHaveCount(0)
-  await second.page.locator('.bubble[data-thread-role="assistant"]').locator('..').getByRole('button', { name: 'Copy message' }).click()
+  await second.page.locator('[data-thread-role="assistant"]').locator('..').getByRole('button', { name: 'Copy message' }).click()
   await expect.poll(() => second.app.evaluate(({ clipboard }) => clipboard.readText())).toBe('live partial final buffered text')
   await second.page.locator('.conversation__thread').evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')) })
   expect(await outbound()).toEqual([])
@@ -420,7 +424,7 @@ test('records received content, drains buffered quit, and reads locally after re
   expect(historyAsks).toBe(2)
 })
 
-test('window close saves accepted deltas before their frame and reopening restores the full reply', async ({ launchPairedApp }) => {
+test.skip('window close saves accepted deltas before their frame and reopening restores the full reply', async ({ launchPairedApp }) => {
   const first = await launchPairedApp()
   const { page, app, servers } = first
   const serverId = servers[0].serverId
@@ -473,7 +477,7 @@ test('window close saves accepted deltas before their frame and reopening restor
   await expect(reopened.locator('[data-thread-role="assistant"] .bubble__markdown')).toHaveText('saved prefix accepted tail')
 })
 
-test('restores a pairing-rejected saved host beside a usable connected host', async ({ launchPairedApp }) => {
+test.skip('restores a pairing-rejected saved host beside a usable connected host', async ({ launchPairedApp }) => {
   let rejected = false
   const commands: string[] = []
   const first = await launchPairedApp({ buildReplyFrames: bytes => {
@@ -490,7 +494,7 @@ test('restores a pairing-rejected saved host beside a usable connected host', as
   await first.daemon.pushFrame(frame('assistant_delta', {
     conversation_id: SEEDED_ROW.id, turn_id: 'saved-rejected', seq: 0, text: 'Saved rejected-host reply'
   }))
-  await expect(first.page.locator('.bubble[data-thread-role="assistant"]')).toContainText('Saved rejected-host reply')
+  await expect(first.page.locator('[data-thread-role="assistant"]')).toContainText('Saved rejected-host reply')
   await first.app.close()
   rejected = true
   commands.length = 0
@@ -509,10 +513,10 @@ test('restores a pairing-rejected saved host beside a usable connected host', as
   expect(commands.filter(c => c !== 'list_conversations')).toEqual([])
   const outbound = await observeCommands(second)
   await page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
-  await expect(page.locator('.bubble[data-thread-role="assistant"]')).toContainText('Saved rejected-host reply')
+  await expect(page.locator('[data-thread-role="assistant"]')).toContainText('Saved rejected-host reply')
   await expect(page.getByText('Older messages require a connection.', { exact: true })).toBeVisible()
   await page.locator('.conversation__thread').evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')) })
-  await page.locator('.bubble[data-thread-role="assistant"]').locator('..').getByRole('button', { name: 'Copy message' }).click()
+  await page.locator('[data-thread-role="assistant"]').locator('..').getByRole('button', { name: 'Copy message' }).click()
   await expect.poll(() => second.app.evaluate(({ clipboard }) => clipboard.readText())).toBe('Saved rejected-host reply')
   expect(await outbound()).toEqual([])
   await page.setViewportSize({ width: 1280, height: 800 })
@@ -532,7 +536,7 @@ test('restores a pairing-rejected saved host beside a usable connected host', as
   await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
 })
 
-test('pending saved reading survives opening and cancelling host repair', async ({ launchPairedApp }) => {
+test.skip('pending saved reading survives opening and cancelling host repair', async ({ launchPairedApp }) => {
   const launched = await launchPairedApp()
   const { app, page, daemon, servers } = launched
   const text = 'Saved reply after repair cancellation'
@@ -576,7 +580,7 @@ test('pending saved reading survives opening and cancelling host repair', async 
   await page.getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(page.getByRole('dialog', { name: 'Pair', exact: true })).toHaveCount(0)
   await app.evaluate(() => (globalThis as any).__releaseSavedRead())
-  const reply = page.locator('.bubble[data-thread-role="assistant"]')
+  const reply = page.locator('[data-thread-role="assistant"]')
   await expect(reply).toContainText(text)
   await expect(page.getByText('Offline. Showing saved messages.', { exact: true })).toBeVisible()
   await reply.locator('..').getByRole('button', { name: 'Copy message' }).click()
@@ -610,7 +614,7 @@ test('local list read failures stay beside the saved host', async ({ launchPaire
   await page.screenshot({ path: '/tmp/builder-1794/local-error-800.png', animations: 'disabled' })
 })
 
-test('saved coverage survives offline restart, reconnect, live receipts and connected reopening', async ({ launchPairedApp }) => {
+test.skip('saved coverage survives offline restart, reconnect, live receipts and connected reopening', async ({ launchPairedApp }) => {
   test.setTimeout(90_000)
   let unavailable = false
   let holdReconnectList = false
@@ -741,7 +745,7 @@ test('saved coverage survives offline restart, reconnect, live receipts and conn
   expect(cursors).toEqual(['', '', 'saved-cursor', '', 'advanced-cursor'])
 })
 
-test('protected restoration joins partial pages while retaining an expanded tool and content anchor', async ({ launchPairedApp }) => {
+test.skip('protected restoration joins partial pages while retaining an expanded tool and content anchor', async ({ launchPairedApp }) => {
   let request: number | undefined
   let asks = 0
   const history = (id: number, type: string, payload: Record<string, unknown>) => ({ id, type, ts: `join-${id}`,
@@ -815,7 +819,7 @@ test('protected restoration joins partial pages while retaining an expanded tool
   const joinedEntries = covering([result(61, 'orphan'), tool(60, 'orphan'), result(51, 'pending'), result(31, 'survivor'),
     tool(30, 'survivor'), delta(20, 'newer text'), delta(10, 'older ')])
   await first.daemon.pushFrame(frame('history_page', { entries: joinedEntries, cursor: 'repeat', at_start: false }, request))
-  await expect(thread.locator('.bubble[data-thread-role="assistant"]')).toHaveText('older newer text')
+  await expect(thread.locator('[data-thread-role="assistant"]')).toHaveText('older newer text')
   await expect(survivor.locator('.tool-row__chip')).toHaveAttribute('aria-expanded', 'true')
   await expect(survivor.locator('.tool-row__result')).toHaveText('result survivor')
   expect(await toolNode!.evaluate(el => el.isConnected)).toBe(true)
@@ -836,5 +840,5 @@ test('protected restoration joins partial pages while retaining an expanded tool
     const saved = await read(second.page)
     return saved.status === 'stored' && saved.snapshot.kind === 'timeline' ? saved.snapshot.coverage : null
   }).toEqual({ status: 'received', cursor: '', atStart: true })
-  await expect(thread.locator('.bubble[data-thread-role="assistant"]')).toHaveCount(1)
+  await expect(thread.locator('[data-thread-role="assistant"]')).toHaveCount(1)
 })

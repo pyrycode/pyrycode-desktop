@@ -233,7 +233,7 @@ test('unrelated host traffic preserves a disconnected host name save lock and co
       text: 'Unrelated host A message'
     } }))
     // Visible receipt proves the unrelated message crossed IPC before checking the held save.
-    await expect(page.locator('.bubble[data-thread-role="user"]')).toContainText('Unrelated host A message')
+    await expect(page.locator('[data-thread-role="user"]')).toContainText('Unrelated host A message')
     await assertLocked()
     servers[0].forwarder.closeClientLeg(4401)
     await expect(hosts.nth(0)).toHaveClass(/channel-list__host--failed/)

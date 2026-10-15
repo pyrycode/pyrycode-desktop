@@ -2,6 +2,9 @@ import { createStore } from 'zustand/vanilla'
 import type { DaemonEvent } from '@shared/ipc/events'
 import type { RendererCommand } from '@shared/ipc/commands'
 import type { ConversationSummary, SessionStateFamily } from '@shared/wire/types'
+import { createQuestionPicksStore } from './questionPicksStore'
+import { createModalStore } from './modalStore'
+import { translateModalEvent } from './modalBridge'
 
 type Binding = { serverId: string; conversationId: string; sessionId: string | null }
 type Response = Extract<RendererCommand, { type: 'answerModal' | 'cancelModal' | 'answerQuestions' | 'refuseQuestions' }>
@@ -10,8 +13,11 @@ export type ThreadLiveInput =
   | { type: 'daemon'; event: DaemonEvent }
   | { type: 'request'; serverId: string; conversationId: string; requestId: number }
   | { type: 'requestEnded'; requestId: number }
+  | { type: 'consume'; displayed: DaemonEvent }
   | { type: 'dispose' }
 export interface ThreadLiveState {
+  questions: ReturnType<typeof createQuestionPicksStore>
+  modals: ReturnType<typeof createModalStore>
   binding: Binding | null
   readings: ReadonlyMap<SessionStateFamily, ReadonlyMap<string, DaemonEvent>>
   dispatch: (input: ThreadLiveInput) => void
@@ -66,7 +72,9 @@ const sameBinding = (a: Binding | null, b: Binding | null): boolean => a === b |
 export function createThreadLiveState(deps: ThreadLiveDeps) {
   return createStore<ThreadLiveState>((set, get) => {
     const requests = new Map<number, Binding>()
-    let disposed = false
+    const questions = createQuestionPicksStore(), modals = createModalStore()
+    const resetPrompts = () => { questions.getState().dispatch({ type: 'reconnected' }); modals.getState().dispatch({ type: 'reset' }) }
+    let disposed = false, settingsBlocked = false
     const report = (code: string) => deps.log?.event({ event: 'thread-live-state', code })
     function owned(event: DaemonEvent, family: SessionStateFamily, binding: Binding): boolean {
       if ('conversationId' in event) return event.conversationId !== '' && event.conversationId === binding.conversationId
@@ -86,11 +94,16 @@ export function createThreadLiveState(deps: ThreadLiveDeps) {
       set({ readings })
     }
     return {
-      binding: null, readings: new Map(),
+      questions, modals, binding: null, readings: new Map(),
       dispatch(input) {
         if (disposed) return
+        if (input.type === 'consume') {
+          const family = threadLiveFamily(input.displayed)
+          if (family && get().readings.get(family)?.get(identity(input.displayed)) === input.displayed) remove(family, identity(input.displayed))
+          return
+        }
         if (input.type === 'dispose') {
-          disposed = true; requests.clear(); set({ binding: null, readings: new Map() }); report('disposed'); return
+          disposed = true; requests.clear(); settingsBlocked = false; resetPrompts(); set({ binding: null, readings: new Map() }); report('disposed'); return
         }
         if (input.type === 'summary') {
           const summary = input.summary
@@ -98,7 +111,7 @@ export function createThreadLiveState(deps: ThreadLiveDeps) {
             serverId: input.serverId, conversationId: summary.id, sessionId: summary.current_session_id ?? null
           }
           if (!sameBinding(get().binding, binding)) {
-            requests.clear(); set({ binding, readings: new Map() }); report('binding-changed')
+            requests.clear(); settingsBlocked = false; resetPrompts(); set({ binding, readings: new Map() }); report('binding-changed')
           }
           return
         }
@@ -110,19 +123,40 @@ export function createThreadLiveState(deps: ThreadLiveDeps) {
         }
         const event = input.event
         if (event.type === 'connected' && binding && 'serverId' in event && event.serverId === binding.serverId) {
-          const readings = new Map(get().readings)
-          readings.delete('modal_shown'); readings.delete('question_shown'); requests.clear()
-          set({ readings }); report('prompts-reconnected'); return
+          requests.clear(); settingsBlocked = false
+          questions.getState().dispatch({ type: 'reconnected' })
+          const { rejections, rejectionOwners } = modals.getState()
+          modals.getState().dispatch({ type: 'reset' })
+          modals.setState({ rejections, rejectionOwners })
+          set({ readings: new Map() }); report('session-reconnected'); return
+        }
+        if (event.type === 'modalAnswerRejected' && binding && 'serverId' in event && event.serverId === binding.serverId) {
+          const modalState = modals.getState()
+          if ([...modalState.outstanding, ...modalState.resolved].some(prompt => prompt.modalId === event.modalId))
+            modalState.dispatch({ type: 'rejected', modalId: event.modalId })
+          return
         }
         const family = threadLiveFamily(event)
         if (family === null) return
         if (!binding || !binding.sessionId || !('serverId' in event) || event.serverId !== binding.serverId) { report('scope-refused'); return }
         if (typeof event.envelopeSessionId !== 'string' || event.envelopeSessionId === '' || event.envelopeSessionId !== binding.sessionId) { report('provenance-refused'); return }
         if (!owned(event, family, binding)) { report('ownership-refused'); return }
-        if (event.type === 'sessionStateCleared') { remove(family); report('family-cleared'); return }
-        if (event.type === 'modalDismissed' || event.type === 'questionDismissed') { remove(family, identity(event)); return }
+        if (event.type === 'sessionStateCleared') {
+          if (family === 'modal_shown') modals.getState().dispatch({ type: 'reset' })
+          if (family === 'question_shown') questions.getState().dispatch({ type: 'reconnected' })
+          remove(family); report('family-cleared'); return
+        }
+        const modal = translateModalEvent(event, () => new Set())
+        if (modal) modals.getState().dispatch(modal)
+        if (event.type === 'modalDismissed' || event.type === 'questionDismissed') {
+          if (event.type === 'questionDismissed') questions.getState().dispatch({ type: 'dismissed', questionBatchId: event.questionBatchId })
+          remove(family, identity(event)); return
+        }
+        if (event.type === 'runConfigReceived' && settingsBlocked) { report('settings-resetting'); return }
         if (event.type === 'questionShown' && event.questions.length === 0) { report('reading-ineligible'); return }
         const readings = new Map(get().readings), entries = new Map(readings.get(family))
+        if (event.type === 'resetting' && event.active) { settingsBlocked = true; readings.delete('session_settings') }
+        if (event.type === 'resetting' && !event.active) settingsBlocked = false
         if (event.type === 'turnState') {
           readings.delete('stall')
           if (event.state !== 'thinking') readings.delete('thinking_progress')
@@ -144,7 +178,11 @@ export function createThreadLiveState(deps: ThreadLiveDeps) {
         try { deps.sendResponse(binding.serverId, command) }
         catch { report('response-failed'); return false }
         // A synchronous response sink may itself invalidate the scope or replace this prompt.
-        if (get().readings.get(family)?.get(identity(displayed)) === displayed) remove(family, identity(displayed))
+        if (get().readings.get(family)?.get(identity(displayed)) === displayed) {
+          if (displayed.type === 'questionShown') questions.getState().dispatch({ type: 'dismissed', questionBatchId: displayed.questionBatchId })
+          if (displayed.type === 'modalShown') modals.getState().dispatch({ type: 'dismissed', modalId: displayed.modalId, source: 'local', outcome: '' })
+          remove(family, identity(displayed))
+        }
         report('response-sent'); return true
       }
     }

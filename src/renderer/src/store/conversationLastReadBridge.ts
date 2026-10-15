@@ -170,10 +170,8 @@ export function subscribeConversationLastRead(
  * import, two is a home") — a separate three-line ticket for whoever needs a third.
  */
 export const conversationLastReadDeps: ConversationLastReadDeps = {
-  // Local marks are ID-keyed: suppress a stamp if any matching host has the complete contract.
-  isDaemonBacked: (id) => [...conversationReadRouteStore.getState().hosts.values()].some(chats => chats.has(id)) || conversationListStore.getState().conversations?.some(
-    (row) => row.id === id && hasDaemonReadState(row)
-  ) === true,
+  // Production has no legacy content route, including before the first summary arrives.
+  isDaemonBacked: () => true,
   getOpenConversationId: () => {
     const open = selectActiveConversation(activeConversationStore.getState())
     return open === null ? null : open.id

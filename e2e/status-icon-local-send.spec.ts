@@ -133,7 +133,7 @@ test('the status row reads Sending, then Waiting for Claude, then Thinking, with
   const queuedRows = page.locator('[data-thread-role="queued"]')
   daemon.pushFrame(queueStateFrame([
     queuedItem('another-device-id', 'Queued from another device'),
-    queuedItem('', 'Queued with no id')
+    { ...queuedItem('', 'Queued with no id'), queued_msg_id: 2 }
   ]))
   await expect(queuedRows).toHaveCount(2, { timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(label).toHaveText('Sending…')
@@ -143,11 +143,11 @@ test('the status row reads Sending, then Waiting for Claude, then Thinking, with
   await expect(label).toHaveText('Waiting for Claude', { timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(spinningIcon).toBeVisible()
 
-  // Claude commits the item before its first turn_state: the snapshot empties and the label stays.
+  // Canonical delivery settles local feedback. The next phase comes from live state.
   daemon.pushFrame(queueStateFrame([]))
   await expect(queuedRows).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
-  await expect(label).toHaveText('Waiting for Claude')
-  await expect(spinningIcon).toBeVisible()
+  await expect(label).toHaveCount(0)
+  await expect(spinningIcon).toHaveCount(0)
 
   // --- 3. #1725 AC2: Thinking only from the daemon's turn_state{thinking}; the mark keeps turning ---
   daemon.pushFrame(turnStateFrame('thinking'))

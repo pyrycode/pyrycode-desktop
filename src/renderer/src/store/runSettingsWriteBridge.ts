@@ -9,6 +9,7 @@ import { sendConversationCommand } from '../screens/conversation/conversationAct
 // Nothing here touches keys, sockets, ipcRenderer, or raw frames — it subscribes through the
 // preload bridge and sends one already-typed command; `changeId` is a client-minted, IPC-internal
 // correlation key, never a secret and never serialized onto the wire.
+import { threadRuntime } from './threadRuntime'
 import { useEffect } from 'react'
 import type { DaemonEvent } from '@shared/ipc/events'
 import type { RendererCommand } from '@shared/ipc/commands'
@@ -223,7 +224,8 @@ export function subscribeRefusalRecovery(
   writes: StoreApi<RunSettingsWriteStore>,
   timelines: StoreApi<ConversationTimelineStore>,
   getOpenId: () => string | null,
-  log?: (code: string) => void
+  log?: (code: string) => void,
+  modelSelected?: (id: string, changeId: string) => void
 ): () => void {
   const offWrites = writes.subscribe((next, previous) => {
     const id = getOpenId()
@@ -231,6 +233,7 @@ export function subscribeRefusalRecovery(
     for (const [changeId, change] of next.pending) {
       if (change.field === 'model' && !previous.pending.has(changeId)) {
         timelines.getState().dispatchFor(id, { type: 'refusalModelSelected', changeId })
+        modelSelected?.(id, changeId)
       }
     }
   })
@@ -269,7 +272,11 @@ export function RunSettingsWriteData(): null {
   useEffect(() => subscribeRefusalRecovery(
     window.pyry.onDaemonEvent, runSettingsWriteStore, conversationTimelineStore,
     () => activeConversationStore.getState().activeConversation?.id ?? null,
-    code => window.pyry.sendDiagnostic({ event: 'refusal-recovery', code })
+    code => window.pyry.sendDiagnostic({ event: 'refusal-recovery', code }),
+    (id, changeId) => {
+      const host = conversationHostNow(id)
+      if (host) threadRuntime.refusals.getState().selected(host, id, changeId)
+    }
   ), [])
   useEffect(() => {
     // #1169: the fold, not a bare dispatch. Every reply still reaches the store exactly as before; the

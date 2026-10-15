@@ -101,6 +101,34 @@ Resolved: identity is lowercase hexadecimal public key, matching daemon `connSen
 
 ## Revisions
 
+### Manual completion: shared fake migration and client regressions
+
+The owner authorised repairing app regressions exposed by the migration. The manual session uses an isolated clone of `feature/1908`. The protected workflow is Halted with an explicit operator pause so a builder cannot pick it up concurrently. No daemon production source is changed.
+
+`scriptedThread` is test infrastructure. Each fake daemon owns independent conversation epochs, versions, retained items and current-session readings. Existing scripts remain inputs, while the app receives canonical items, appends, changes, catch-up windows and older pages. A history-script alias is internal to the fixture. Actual outbound requests stay `thread_catch_up` and `thread_page`. Native thread fixtures bypass translation byte for byte. Replies are split into bounded batches before their completion certificate. Synthetic historical order leaves a spare slot between recorded IDs so an empty older cursor page can still certify a nonempty order interval. Item versions remain separate from that order. Tool-parent identities are reserved before an out-of-order parent arrives. The fixture reads the app's public device identity to distinguish own sends from foreign messages with colliding message IDs.
+
+The fake simplifies daemon persistence and folding into deterministic in-memory records. It does not provide evidence of live daemon compatibility. Native item/transport tests retain their supplied frames, corruption cases and bounds. Credentialed combined acceptance remains the dispatcher-owned gate named below.
+
+Observed client regressions repaired here include composer reports, current-session errors and inventory, host-owned prompt/queue/task controls, retained prompt choices and rejection feedback, reply suggestions, native notifications and message acknowledgement diagnostics, shown-version attention before opening a chat, visible-tail read observation, scrolling and joined tool rows. Queue Send now follows the reported session capability. Packaged storage proof now collects and rebuilds dependencies from its isolated application directory, preserving production encryption.
+
+Legacy-only cases retained for #2020 cleanup:
+
+| File | Cases | Retired behaviour asserted |
+| --- | --- | --- |
+| `chat-history-recording.spec.ts` | 9 | Legacy timeline snapshots, raw receipt ledgers, raw cursor coverage and their buffer lifecycle. Canonical cache/removal/restart behaviour stays covered by thread activation and protected cache tests. |
+| `history-gaps.spec.ts` | 2 | Renderer reconstruction and persistence of raw-event gaps. |
+| `reconnect-event-replay.spec.ts` | 1 | Raw hello replay joined to the legacy newest-history request. |
+| `queued-own-settlement.spec.ts` | 2 | Restoration of legacy tool identities from saved timeline rows. |
+| `history-on-open.spec.ts` | 1 | Retaining the retired non-cancellable history request across pane changes. |
+| `tool-groups.spec.ts` | 2 | Provisional roster identities and reconstruction from late raw history. Authoritative ancestry and ordinary grouped-tool interaction remain active. |
+| `background-task-reconnect.spec.ts` | 1 | Clearing roster-only inferred content into empty versus unobserved states. Canonical task items retain explicit lifecycle facts. |
+| `visible-tail-read.spec.ts` | 1 | Raw receipts without durable IDs establishing read eligibility through the renderer ledger. |
+
+These 19 cases remain present and are explicitly skipped for cleanup. No reducer or unit suite is deleted. The existing desktop-isolation skip is separate. Final counted validation and source revision will be recorded after the final run.
+
+Security review of manual changes: PASS. Host and conversation ownership remain client-scoped; current-session readings still require matching envelope provenance and positive ownership. Retained prompt answers and queue/task actions recheck their source at interaction time. Canonical user acknowledgements must match the authenticated public device identity and an existing main-process message lifecycle entry. Diagnostic additions contain no message text. The test publisher uses synthetic content only and is absent from production bundles. No Electron security switch, cache encryption rule or credentialed acceptance requirement is weakened.
+
+
 2026-10-15 scope change, finished by hand on PR #2003: Juhana dropped the legacy fallback ("We won't have old daemons running around"). Removed: per-connection route selection between thread and legacy, saved legacy timeline display, the legacy newest-history demand, the mixed-route and upgrade/downgrade fake specs, the legacy saved-display unit tests and the branch's legacy history-host unit test. Added: main's handshake decision with the parked driver and `cause: 'daemon'`, daemon copy in the banner and daemon leg label, an update-required beside thread host fake spec, the runtime's per-frame append batching, and `thread` as the fake daemon's default capability. Kept: per-host routing for several daemons (every request carries its owning host), owning-host capture for item, page, gap and retry requests (the coordinator's `queryThread` carries `serverId`), shared shell task drawer state, agent identity from the selected host. The old reducer, history matching modules and their tests stay for #2020.
 
 Validation at `1aab32ca` on pyrybox, in `localhost/pyrycode-agent-runtime` (rootless podman, the gate's `npx playwright test`, four workers, zero retries, own Xvfb per run): unit 10376 passed, 30 skipped (three existing, 27 legacy history tests parked for #2020); typecheck, build and docs guard pass. Electron fake suite: 454 tests, **189 passed, 262 failed, 3 skipped**. All 15 activation cases, the ported frame spec, `update-required-host` and every `thread-items` case pass. The 262 failures are in 114 existing spec files whose fake daemons script legacy content (`assistant_delta`, `turn_end`, `tool_use`, `history_page`, `queue_state`, `modal_shown` and similar) or session readings without the summary's `current_session_id` and a matching envelope `session_id`. With `thread` required those fixtures draw nothing, which is the scope change working as specified. Moving them to thread fixtures is a suite-wide port that the issue's sizing did not count; it is not done here, and this revision does not claim a green native gate. Failed test list: `full2-failed.txt` beside the run logs.

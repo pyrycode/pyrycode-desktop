@@ -1,3 +1,4 @@
+import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import { test, expect, FIRST_SERVER_ID, SEEDED_ROW, SECOND_SEEDED_ROW, type PairedApp } from './fixtures/launchPairedApp'
 import { DAEMON_EVENT_CHANNEL } from '../src/shared/ipc/events'
 import { ATTACHMENT_UPLOAD_EVENT_CHANNEL } from '../src/shared/ipc/attachmentUpload'
@@ -8,13 +9,26 @@ async function settle(app: PairedApp) {
   await app.page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
 }
 async function event(app: PairedApp, value: object, channel = DAEMON_EVENT_CHANNEL) {
-  await app.app.evaluate(({ BrowserWindow }, { channel, value }) => {
-    BrowserWindow.getAllWindows()[0].webContents.send(channel, value)
-  }, { channel, value })
+  const content = value as Record<string, any>
+  if (content.type === 'assistantDelta' || content.type === 'queueState') {
+    const daemon = app.servers.find(server => server.serverId === content.serverId)?.daemon
+    if (!daemon) throw new Error('Missing fixture host')
+    daemon.pushFrame(encodeEnvelope({ id: 1, ts: '2026-10-15T00:00:00Z',
+      type: content.type === 'assistantDelta' ? 'assistant_delta' : 'queue_state', payload: {
+        conversation_id: content.conversationId, ...(content.type === 'assistantDelta'
+          ? { turn_id: content.turnId, seq: content.seq, text: content.text } : { queued: content.queued }) } }))
+  } else {
+    const delivered = { envelopeSessionId: 'session', ...content,
+      ...(Array.isArray(content.conversations) ? { conversations: content.conversations.map(row =>
+        ({ current_session_id: 'session', ...row })) } : {}) }
+    await app.app.evaluate(({ BrowserWindow }, { channel, value }) => {
+      BrowserWindow.getAllWindows()[0].webContents.send(channel, value)
+    }, { channel, value: delivered })
+  }
   await settle(app)
 }
 async function connection(app: PairedApp, type: string) {
-  await event(app, { type, serverId: FIRST_SERVER_ID, ack: { protocol_version: '1', server_id: 'test', conn_id: 'test', capabilities: [] },
+  await event(app, { type, serverId: FIRST_SERVER_ID, ack: { protocol_version: '1', server_id: 'test', conn_id: 'test', capabilities: ['thread'] },
     error: { code: 'transport', message: 'Offline', retryable: true } })
 }
 async function observe(app: PairedApp) {
@@ -35,7 +49,13 @@ async function info(app: PairedApp) {
 }
 
 test('held reading, draft and queue survive offline actions, reopening and copying; another host and reconnect work', async ({ launchPairedApp }) => {
-  const app = await launchPairedApp({ buildReplyFrames: conversationStateFake({ conversations: [SEEDED_ROW] }) },
+  let sent: Record<string, any> = {}
+  const stateful = conversationStateFake({ conversations: [SEEDED_ROW] })
+  const app = await launchPairedApp({ buildReplyFrames: bytes => {
+    const request = decodeEnvelope(bytes)
+    if (request.type === 'send_message') sent = request.payload
+    return stateful(bytes)
+  } },
     { secondServer: { buildReplyFrames: conversationStateFake({ conversations: [SECOND_SEEDED_ROW] }) } })
   const { page } = app
   await page.setViewportSize({ width: 1280, height: 800 })
@@ -45,6 +65,8 @@ test('held reading, draft and queue survive offline actions, reopening and copyi
   await page.getByPlaceholder('Message…').fill('Held attachment message')
   await page.getByRole('button', { name: 'Send', exact: true }).click()
   await expect(page.locator('.bubble__file')).toBeEnabled()
+  app.daemon.pushFrame(encodeEnvelope({ id: 2, type: 'message', ts: '2026-10-15T00:00:00Z', payload: { ...sent, role: 'user',
+    attachments: [{ attachment_id: 'held-image', filename: 'held.png' }, { attachment_id: 'held-file', filename: 'held.pdf' }] } }))
   await event(app, { type: 'assistantDelta', serverId: FIRST_SERVER_ID, conversationId: SEEDED_ROW.id,
     turnId: 'held-turn', seq: 0, text: 'Held reply\n'.repeat(100) })
   await event(app, { type: 'queueState', serverId: FIRST_SERVER_ID, conversationId: SEEDED_ROW.id,
@@ -84,8 +106,9 @@ test('held reading, draft and queue survive offline actions, reopening and copyi
   await page.getByPlaceholder('Message…').press('Escape')
   await page.getByPlaceholder('Message…').press('Enter')
   await expect(page.getByPlaceholder('Message…')).toHaveValue('Retained local draft')
-  await expect(page.locator('.queued-row__drop')).toBeDisabled()
-  await page.locator('.queued-row__drop').dispatchEvent('click')
+  await expect(page.locator('[data-thread-role="queued"]')).toHaveCount(1)
+  await expect(page.locator('.queued-row__drop')).toHaveCount(0)
+  // Offline authoritative items expose no queue action handle.
   await expect(page.locator('.conversation__thread')).toContainText('Held queued work')
   await expect(page.locator('.bubble__file')).toBeDisabled()
   await page.locator('.bubble__file').dispatchEvent('click')
@@ -141,7 +164,7 @@ test('pre-opened action menu and missing, connecting, failed or ambiguous owners
   await event(app, { type: 'conversationsReceived', serverId: 'no-status', conversations: [SEEDED_ROW] })
   await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled()
   await page.getByRole('button', { name: 'Send', exact: true }).dispatchEvent('click')
-  await event(app, { type: 'connected', serverId: 'other-connected', ack: {} })
+  await event(app, { type: 'connected', serverId: 'other-connected', ack: { capabilities: ['thread'] } })
   await event(app, { type: 'conversationsReceived', serverId: 'other-connected', conversations: [SEEDED_ROW] })
   await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled()
   await page.getByPlaceholder('Message…').press('Enter')
@@ -158,17 +181,16 @@ test('offline opening does not consume first-history eligibility', async ({ laun
   await connection(app, 'disconnected')
   const read = await observe(app)
   await app.page.getByRole('button', { name: held.name, exact: true }).click()
-  await expect(app.page.locator('.conversation__thread')).toContainText('Received before opening')
-  await app.page.locator('.conversation__thread').evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')) })
+  // An unqueried chat has no accepted epoch, so unverified live content stays hidden.
+  await expect(app.page.getByText('Received before opening', { exact: false })).toHaveCount(0)
   await settle(app)
   expect(await read()).toEqual({ commands: [], attachments: [] })
   await connection(app, 'connected')
   // The fake's reconnect list can replace the injected row. Restore its stamped ownership.
   await event(app, { type: 'conversationsReceived', serverId: FIRST_SERVER_ID, conversations: [SEEDED_ROW, held] })
-  await app.page.getByRole('button', { name: held.name, exact: true }).click()
   await settle(app)
-  expect((await read()).commands.filter(c => c.type === 'requestHistory' && c.payload.conversation_id === held.id)).toHaveLength(1)
+  expect((await read()).commands.filter(c => c.type === 'queryThread' && c.query.payload.conversation_id === held.id)).toHaveLength(1)
   await app.page.locator('.conversation__thread').focus()
   await app.page.keyboard.press('Home')
-  await expect.poll(async () => (await read()).commands.filter(c => c.type === 'requestHistory' && c.payload.conversation_id === held.id).length).toBe(1)
+  await expect.poll(async () => (await read()).commands.filter(c => c.type === 'queryThread' && c.query.payload.conversation_id === held.id).length).toBe(1)
 })

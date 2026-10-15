@@ -176,6 +176,7 @@ test('confirmed own-agent settings yield to incoming footer and open sheet on au
     incoming = true
     daemon.pushFrame(frame('conversations', { conversations: [{ ...SEEDED_ROW, agent: 'codex' }] }))
     daemon.pushFrame(settings(heldRead!.id))
+    daemon.pushFrame(frame('model_list', { conversation_id: SEEDED_ROW.id, models, dropped_models: 0 }))
     await expect(footer.getByRole('button', { name: 'GPT-6 Luna', exact: true })).toBeEnabled()
     await expect.poll(() => sent.filter(e => e.type === 'request_session_settings').length).toBe(reads + 1)
     await expect(sheet.locator('.run-config__model-row').filter({ hasText: 'GPT-6 Luna' }).getByRole('img', { name: 'Current model', exact: true })).toBeVisible()

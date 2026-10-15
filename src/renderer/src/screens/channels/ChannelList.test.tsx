@@ -155,7 +155,10 @@ const render = (
   renderToStaticMarkup(
     <ChannelListView
       {...apps}
-      conversations={conversations}
+      conversations={conversations?.map(row => ({ ...row,
+        ...(row.latest_entry_id !== undefined ? { last_shown_version: row.latest_entry_id } : {}),
+        ...(timelineStore.getState().timelines.has(row.id) && row.last_shown_version === undefined && row.latest_entry_id === undefined
+          ? { last_shown_version: 1, read_up_to: lastReadStore.getState().marks.has(row.id) ? 1 : 0 } : {}) })) ?? null}
       serverIds={serverIds}
       statuses={statuses}
       openConversationId={openConversationId}

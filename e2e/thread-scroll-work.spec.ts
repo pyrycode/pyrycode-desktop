@@ -95,9 +95,9 @@ test('scroll lookup and same-row growth stay bounded on short and long threads',
     } }, { onLaunched: async app => instrument(await app.firstWindow()) })
     await page.locator('.composer__input').fill('seed')
     await page.getByRole('button', { name: 'Send', exact: true }).click({ timeout: 60_000 })
-    await expect(page.locator('.bubble[data-thread-role="assistant"]').last()).toContainText(`History row ${size - 1}`, { timeout: 15_000 })
+    await expect(page.locator('[data-thread-role="assistant"]').last()).toContainText(`History row ${size - 1}`, { timeout: 15_000 })
     daemon.pushFrame(delta('growing', 0, 'Growing row\n'))
-    await expect(page.locator('.bubble[data-thread-role="assistant"]').last()).toContainText('Growing row')
+    await expect(page.locator('[data-thread-role="assistant"]').last()).toContainText('Growing row')
     await settle(page)
     await page.locator('.conversation__thread').evaluate(el => { el.scrollTop = el.scrollHeight * 0.65 })
     await settle(page)
@@ -153,7 +153,7 @@ test('gaps, long hidden runs and target changes preserve a valid anchor and clea
     return []
   } }, { onLaunched: async app => instrument(await app.firstWindow()) })
   for (let i = 0; i < 100; i++) { daemon.pushFrame(delta(`row-${i}`, 0, `History row ${i}`)); daemon.pushFrame(end(`row-${i}`)) }
-  await expect(page.locator('.bubble[data-thread-role="assistant"]').last()).toContainText('History row 99')
+  await expect(page.locator('[data-thread-role="assistant"]').last()).toContainText('History row 99')
   await settle(page)
   // DOM-only adversarial geometry: flex gaps have positive height, hidden rectangles
   // reset to viewport zero. Neither may become the remembered row.
@@ -182,7 +182,7 @@ test('gaps, long hidden runs and target changes preserve a valid anchor and clea
   expect(await page.evaluate(() => window.scrollWork.lastRow?.hasAttribute('data-test-anchor'))).toBe(true)
   // Force a hook render without changing membership; it must retain the valid row.
   daemon.pushFrame(delta('growth', 0, 'Growth after hidden rows'))
-  await expect(page.locator('.bubble[data-thread-role="assistant"]').last()).toContainText('Growth after hidden rows')
+  await expect(page.locator('[data-thread-role="assistant"]').last()).toContainText('Growth after hidden rows')
   await settle(page)
   expect(await page.locator('[data-test-anchor]').evaluate(el => ({ text: el.textContent, top: window.scrollWork.rect(el).top }))).toEqual(retained)
   await page.locator('.conversation__thread').evaluate(el => {

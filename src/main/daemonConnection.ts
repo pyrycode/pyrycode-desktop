@@ -797,6 +797,14 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // one — is the only binding by that name in the factory, and the unbound sink can be reached only
   // by naming `deps.sink` again, which nothing below does.
   const sink = bindServerOrigin(deps.sink, deps.serverId)
+  let authenticatedDeviceId: string | undefined
+  const acknowledgeThreadItem = (conversationId: string, item: import('../shared/wire/thread').ThreadItem) => {
+    const content = item.content
+    if (item.kind !== 'user_message' || typeof content !== 'object' || content === null ||
+        !('device_id' in content) || content.device_id !== authenticatedDeviceId ||
+        !('message_id' in content) || typeof content.message_id !== 'string') return
+    deps.messageLifecycle?.acknowledge(deps.serverId, conversationId, [content.message_id])
+  }
   const threadReceiver = createThreadUpdateReceiver(event => {
     if (event.kind === 'thread-query-failed') {
       emitDaemonEvent(sink, { type: 'threadQueryFailed', conversationId: event.conversationId,
@@ -804,6 +812,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       return
     }
     if (event.kind === 'thread-reply') {
+      if (event.reply.type === 'thread_items') for (const item of event.reply.payload.items)
+        acknowledgeThreadItem(event.reply.payload.conversation_id, item)
       const { payload, type, ...correlation } = event.envelope
       emitDaemonEvent(sink, { type: 'threadReply', conversationId: event.reply.payload.conversation_id,
         requestId: event.requestId, reply: event.reply, correlation })
@@ -813,6 +823,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       emitDaemonEvent(sink, { type: 'threadRepairNeeded', conversationId: event.conversationId, reason: event.reason })
       return
     }
+    if (event.update.type === 'thread_item_added') acknowledgeThreadItem(event.update.payload.conversation_id, event.update.payload.item)
     const { payload, type, ...correlation } = event.envelope
     emitDaemonEvent(sink, { type: 'threadUpdate', conversationId: event.update.payload.conversation_id,
       update: event.update, correlation, daemonTs: correlation.ts, historyEntryId: correlation.history_entry_id })
@@ -3132,6 +3143,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
     const pair = await deviceKeypair.ensure()
     if (stopped || gen !== generation) return null
+    authenticatedDeviceId = Buffer.from(pair.publicKey).toString('hex')
     const remoteStaticPublicKey = decodeServerKey(record.server_static_pubkey)
     if (
       replayPairing === null || replayPairing.server !== record.server ||

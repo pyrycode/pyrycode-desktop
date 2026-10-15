@@ -1,3 +1,6 @@
+import { useStore } from 'zustand'
+import { threadRuntime } from '../../store/threadRuntime'
+import { selectThreadReadings } from '../../store/threadLiveState'
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
 import { agentFromWire, MAX_SYSTEM_PROMPT_BYTES, type ConversationCreatedPayload, type WireModelOption } from '@shared/wire/types'
 import { ChannelForm } from './ChannelForm'
@@ -154,7 +157,11 @@ export function CreateChannelDialog({ serverId, onDismiss }: {
   const conversations = useConversationListStore(selectHostConversations)
   const selectHostModels = useCallback((state: ModelListState) =>
     cachedChannelModels(conversations, state), [conversations])
-  const models = useModelListStore(selectHostModels)
+  const cachedModels = useModelListStore(selectHostModels)
+  useStore(threadRuntime.state, s => s.liveRevision)
+  const published = conversations?.map(row => selectThreadReadings(threadRuntime.live(serverId, row.id).getState(), 'modelList')[0]?.models)
+    .find(models => models !== undefined)
+  const models = published ?? cachedModels
   const selectedModel = models?.find(row => modelDraft === null
     ? row.value === 'default' && agentFromWire(row.agent) === 'claude'
     : row.value === modelDraft.value && agentFromWire(row.agent) === agentFromWire(modelDraft.agent))

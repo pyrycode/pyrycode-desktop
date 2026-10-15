@@ -190,7 +190,7 @@ test('an unpublished action is greyed out and sends nothing, by click or by Ente
   await unavailable.click({ force: true })
   await expect(panel).toBeVisible()
   expect(sent).toHaveLength(0)
-  await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveCount(0)
+  await expect(page.locator('[data-thread-role="user"]')).toHaveCount(0)
 
   // --- 4. ENTER ON THE FOCUSED ROW SENDS NOTHING EITHER (AC1) — the other half of "picking it". The row
   // is reached with the arrows, which also proves the roving tabindex is NOT stuck on it: a `disabled`
@@ -296,5 +296,5 @@ test('a session without slash commands greys every command row, and a pick sends
   await page.keyboard.press('Enter')
   await expect(panel).toBeVisible()
   expect(sent).toHaveLength(0)
-  await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveCount(0)
+  await expect(page.locator('[data-thread-role="user"]')).toHaveCount(0)
 })

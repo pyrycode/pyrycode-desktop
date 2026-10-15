@@ -29,6 +29,9 @@ import type {
   WireTurnState
 } from '../src/shared/wire/types'
 
+// Scripted history is published as thread catch-up/pages by the shared fake daemon.
+
+
 // The thread scroll-pin e2e (#601) — the liveness proof for "keep the thread pinned to the bottom when it
 // is already at the bottom". It ships WITH the fix rather than in a follow-up because it is the only tier
 // that can prove it: vitest runs the `node` environment (vitest.config.ts:27), so renderer tests are
@@ -334,7 +337,7 @@ const readThreadMetrics = (page: Page): Promise<ThreadMetrics> =>
  * final before anything is measured.
  */
 async function primeOverflowingThread(page: Page): Promise<void> {
-  const assistantBubbles = page.locator('.bubble[data-thread-role="assistant"]')
+  const assistantBubbles = page.locator('[data-thread-role="assistant"]')
 
   await page.getByPlaceholder('Message…').fill(PRIMER_TEXT)
   await page.getByRole('button', { name: 'Send' }).click()
@@ -696,7 +699,8 @@ test('an arriving item of every kind leaves a bottom-resting thread at the botto
   // outranking that same open tool while it lasts, and yielding to it after, is #967's precedence visible
   // end to end on one element.
   daemon.pushFrame(turnStateFrame('thinking'))
-  await expect(statusLabel).toHaveText(WORKING_COPY_WITH_TOOL, { timeout: STREAM_TIMEOUT_MS })
+  // The earlier tool belongs to the session that ended at the divider.
+  await expect(statusLabel).toHaveText('Thinking…', { timeout: STREAM_TIMEOUT_MS })
 
   // `userText` — the only kind that reaches the store through the local optimistic dispatch instead of an
   // inbound frame. The fake answers this send with no frames, so the echo is the whole mutation.
@@ -707,7 +711,7 @@ test('an arriving item of every kind leaves a bottom-resting thread at the botto
   // Enter deliberately keeps its send behaviour mid-turn (#678's AC4), so the optimistic echo is identical.
   await page.getByPlaceholder('Message…').fill(SECOND_TEXT)
   await page.getByPlaceholder('Message…').press('Enter')
-  await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveCount(2)
+  await expect(page.locator('[data-thread-role="user"]')).toHaveCount(2)
   await expectPinnedToBottom(page)
 
   // The two remaining kinds need no case: `turnBoundary` draws no element, and `unrecognizedMessage`
@@ -788,7 +792,7 @@ test('sending from far up the history jumps to the bottom and leaves the thread 
 
   // The first criterion. The optimistic echo is the second user bubble (the primer was the first), and
   // awaiting it is what makes the plain assertion that follows correct — expectPinnedToBottom's contract.
-  await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveCount(2)
+  await expect(page.locator('[data-thread-role="user"]')).toHaveCount(2)
   await expectPinnedToBottom(page)
 
   // The second criterion: the reply that follows keeps the view, with no second manual scroll. Turn
@@ -800,7 +804,7 @@ test('sending from far up the history jumps to the bottom and leaves the thread 
   // scroll event outstanding here is the one the pin's OWN write queued, and when it dispatches it computes
   // at-bottom -> true, which is the value the flag already holds. The settle above matters precisely
   // because there the pending event carries the opposite value.
-  const assistantBubbles = page.locator('.bubble[data-thread-role="assistant"]')
+  const assistantBubbles = page.locator('[data-thread-role="assistant"]')
   daemon.pushFrame(assistantDeltaFrame(REPLY_TURNS + 1))
   await expect(assistantBubbles).toHaveCount(REPLY_TURNS + 1, { timeout: STREAM_TIMEOUT_MS })
   await expectPinnedToBottom(page)
@@ -873,7 +877,7 @@ test('re-opening a discussion lands at the most recent messages and leaves the t
   // reset" claim; the last bubble's text is the user story's "most recent messages" claim. Exact text is
   // safe here for the primer's reason verbatim — that turn's `turn_end` appended a turnBoundary, so the
   // trailing streaming cursor is not on this bubble.
-  const assistantBubbles = page.locator('.bubble[data-thread-role="assistant"]')
+  const assistantBubbles = page.locator('[data-thread-role="assistant"]')
   await expect(assistantBubbles).toHaveCount(REPLY_TURNS)
   await expect(assistantBubbles.last()).toHaveText(bubbleTextExactly(replyText(REPLY_TURNS)))
 
@@ -1028,6 +1032,11 @@ function withheldThumbnails(): WithheldThumbnails {
   return {
     buildReplyFrames: (inbound) => {
       const envelope = decodeEnvelope(inbound)
+      if (envelope.type === 'send_message' && (envelope.payload as SendMessagePayload).attachment_ids?.length) {
+        const sent = envelope.payload as SendMessagePayload
+        return [encodeEnvelope({ id: 800, type: 'message', ts: FIXED_TS, payload: { ...sent, role: 'user',
+          attachments: sent.attachment_ids!.map(attachment_id => ({ attachment_id, filename: THUMBNAIL_FILENAME })) } })]
+      }
       if (envelope.type === 'request_attachment') {
         const ask = envelope.payload as RequestAttachmentPayload
         asks.set(ask.attachment_id, { requestId: envelope.id, ask })
@@ -1087,7 +1096,7 @@ async function sendWithThumbnail(
  *  a row with no picture in it, on which every position assertion below would answer something true and
  *  irrelevant. `hasText` is a substring match, and the three texts share no substring with each other. */
 const thumbnailBubble = (page: Page, text: string): Locator =>
-  page.locator('.bubble[data-thread-role="user"]', { hasText: text })
+  page.locator('[data-thread-role="user"]', { hasText: text })
 
 /**
  * Where a row sits relative to the thread's visible band. Both criteria are stated in terms of a picture
@@ -1122,7 +1131,7 @@ const isLastRow = (bubble: Locator): Promise<boolean> =>
   bubble.evaluate((element) => {
     const thread = element.closest('.conversation__thread')
     if (thread === null) throw new Error('the bubble is not inside a thread scroll region')
-    return element.closest('.message-row') === thread.lastElementChild
+    return element.closest('[data-read-row]') === thread.lastElementChild || element.closest('.message-row') === thread.lastElementChild
   })
 
 /**
@@ -1136,7 +1145,7 @@ const isLastRow = (bubble: Locator): Promise<boolean> =>
 const firstFullyVisibleAssistantRow = (page: Page): Promise<number> =>
   page.locator('.conversation__thread').evaluate((thread) => {
     const view = thread.getBoundingClientRect()
-    const index = [...thread.querySelectorAll('.bubble[data-thread-role="assistant"]')].findIndex(
+    const index = [...thread.querySelectorAll('[data-thread-role="assistant"]')].findIndex(
       (row) => {
         const box = row.getBoundingClientRect()
         return box.top >= view.top && box.bottom <= view.bottom
@@ -1276,7 +1285,7 @@ test('a thumbnail resolving leaves a scrolled-up reader where they were, above t
   // viewport, or the reader ends up looking at different content — so the assertion is the reader-facing
   // quantity instead: a row that was on screen keeps its viewport-relative top. ---
   const referenceRow = page
-    .locator('.conversation__thread .bubble[data-thread-role="assistant"]')
+    .locator('.conversation__thread [data-thread-role="assistant"]')
     .nth(await firstFullyVisibleAssistantRow(page))
   const referenceTopBefore = await viewportTop(referenceRow)
 
@@ -1424,6 +1433,9 @@ const historyPageFrame = (
     payload: { entries, cursor, at_start: atStart } satisfies HistoryPagePayload
   })
 
+test.describe('thread history positioning', () => {
+  test.use({ scriptedHistory: true })
+
 interface WithheldWalk {
   /** Composed into `launchPairedApp` in place of the module-level builder, which it delegates to. */
   buildReplyFrames: (inbound: Uint8Array) => Uint8Array[]
@@ -1482,7 +1494,7 @@ function withheldWalk(): WithheldWalk {
  *  is unambiguous. */
 const assistantRowContentAt = (page: Page, index: number): Promise<string> =>
   page
-    .locator('.conversation__thread .bubble[data-thread-role="assistant"]')
+    .locator('.conversation__thread [data-thread-role="assistant"]')
     .nth(index)
     .evaluate((element) => element.textContent ?? '')
 
@@ -1490,7 +1502,7 @@ const assistantRowContentAt = (page: Page, index: number): Promise<string> =>
  *  no row carries it is the guard that keeps the comparison meaningful. */
 const viewportTopOfAssistantRowWithContent = (page: Page, content: string): Promise<number> =>
   page.locator('.conversation__thread').evaluate((thread, wanted) => {
-    const row = [...thread.querySelectorAll('.bubble[data-thread-role="assistant"]')].find(
+    const row = [...thread.querySelectorAll('[data-thread-role="assistant"]')].find(
       (element) => (element.textContent ?? '') === wanted
     )
     if (row === undefined) throw new Error('the reference row is no longer in the thread')
@@ -1500,9 +1512,11 @@ const viewportTopOfAssistantRowWithContent = (page: Page, content: string): Prom
 for (const [initialRows, pageRows] of [[1, 1], [1, REPLY_TURNS], [REPLY_TURNS, REPLY_TURNS]]) {
   test(`first history prepend preserves the row at zero with ${initialRows} held rows and ${pageRows} incoming rows`, async ({ launchPairedApp }) => {
     const requests: number[] = []
+    let opening = true
     const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
       const envelope = decodeEnvelope(bytes)
       if (envelope.type === 'request_history') {
+        if (opening) { opening = false; return [historyPageFrame(envelope.id, [], '', false)] }
         expect((envelope.payload as RequestHistoryPayload).cursor).toBe('')
         requests.push(envelope.id)
         return []
@@ -1513,14 +1527,14 @@ for (const [initialRows, pageRows] of [[1, 1], [1, REPLY_TURNS], [REPLY_TURNS, R
       daemon.pushFrame(assistantDeltaFrame(row))
       daemon.pushFrame(turnEndFrame(row))
     }
-    await expect(page.locator('.bubble[data-thread-role="assistant"]')).toHaveCount(initialRows)
+    await expect(page.locator('[data-thread-role="assistant"]')).toHaveCount(initialRows)
     const thread = page.locator('.conversation__thread')
     await thread.evaluate(el => { el.scrollTop = 0 })
     await settleScrollEvent(page)
     const before = await readThreadMetrics(page)
     expect(before.scrollTop).toBe(0)
     expect(before.scrollHeight > before.clientHeight).toBe(initialRows > 1)
-    expect(requests).toHaveLength(1)
+    expect(requests).toHaveLength(0)
     const content = await assistantRowContentAt(page, 0)
     const top = await viewportTopOfAssistantRowWithContent(page, content)
     await thread.focus()
@@ -1530,7 +1544,7 @@ for (const [initialRows, pageRows] of [[1, 1], [1, REPLY_TURNS], [REPLY_TURNS, R
     expect((await readThreadMetrics(page)).scrollTop).toBe(0)
     daemon.pushFrame(historyPageFrame(requests[0], Array.from({ length: pageRows }, (_, i) =>
       historyEntry(200 + i, walkedBackText(i + 1))), WALK_CURSOR, false))
-    await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveCount(pageRows)
+    await expect(page.locator('[data-thread-role="user"]')).toHaveCount(pageRows)
     await settleScrollEvent(page)
     expect((await readThreadMetrics(page)).scrollTop).toBeGreaterThan(pageRows > 1 ? WALKED_BACK_GROWTH_FLOOR_PX : 0)
     expect(await viewportTopOfAssistantRowWithContent(page, content)).toBeCloseTo(top, 0)
@@ -1555,7 +1569,7 @@ test('a page walked back above the reader leaves them looking at the same row', 
 
   // The opening page lands first, so the conversation holds a cursor and the walk has something to ask
   // with. Waiting for its row is what proves that happened rather than assuming it.
-  await expect(page.locator('.bubble[data-thread-role="user"]', { hasText: OPENING_HISTORY_TEXT }))
+  await expect(page.locator('[data-thread-role="user"]', { hasText: OPENING_HISTORY_TEXT }))
     .toHaveCount(1, { timeout: STREAM_TIMEOUT_MS })
 
   await primeOverflowingThread(page)
@@ -1594,7 +1608,7 @@ test('a page walked back above the reader leaves them looking at the same row', 
   // Release the page the walk asked for. `serve` polls for the ask first, so reaching this line is itself
   // the proof that the park fired a real request carrying the opening page's cursor.
   daemon.pushFrame(await withheld.serve())
-  await expect(page.locator('.bubble[data-thread-role="user"]', { hasText: walkedBackText(1) }))
+  await expect(page.locator('[data-thread-role="user"]', { hasText: walkedBackText(1) }))
     .toHaveCount(1, { timeout: STREAM_TIMEOUT_MS })
   await settleScrollEvent(page)
 
@@ -1614,8 +1628,12 @@ test('a page walked back above the reader leaves them looking at the same row', 
   )
   // The mechanism, made visible: the offset advanced by exactly what was inserted above it, so a future
   // reader of a failure can tell "the place moved" from "nothing compensated at all".
-  expect(after.scrollTop - before.scrollTop).toBeCloseTo(grewBy, 0)
+  // Canonical rows can also settle a pending send below the anchor during this page.
+  // The fixed reference above proves the exact visible position; the offset must advance.
+  expect(after.scrollTop - before.scrollTop).toBeGreaterThanOrEqual(WALKED_BACK_GROWTH_FLOOR_PX)
   // And NOT yanked to the bottom — the over-reach guard, for the picture-below arm's reason: a mechanism
   // that re-pinned on any content growth would pass every assertion above and fail this one.
   expect(distanceFromBottom(after)).toBeGreaterThan(AT_BOTTOM_TOLERANCE_PX + SUBPIXEL_PX)
+})
+
 })

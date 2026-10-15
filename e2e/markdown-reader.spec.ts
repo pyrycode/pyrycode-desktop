@@ -100,7 +100,7 @@ test('a markdown link in a reply opens the note in the reader, refetched on ever
   await page.getByPlaceholder('Message…').fill('where is the plan?')
   await page.getByRole('button', { name: 'Send' }).click()
 
-  const assistant = page.locator('.bubble[data-thread-role="assistant"]')
+  const assistant = page.locator('[data-thread-role="assistant"]')
   const planLink = assistant.getByRole('button', { name: 'the plan' })
   await expect(planLink).toBeVisible({ timeout: TIMEOUT_MS })
   // The path is in no attribute of the rendered reply.

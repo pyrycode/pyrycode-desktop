@@ -16,6 +16,8 @@ const frames = (inbound: Uint8Array): Uint8Array[] => {
   const payload = envelope.payload as SendMessagePayload
   const turnId = payload.message_id
   return [
+    encodeEnvelope({ id: 19, type: 'message', ts: TS, payload: { ...payload, role: 'user',
+      attachments: payload.attachment_ids?.map(id => ({ attachment_id: id, filename: 'report.pdf' })) } }),
     encodeEnvelope({ id: 20, type: 'assistant_delta', ts: TS, payload: {
       conversation_id: SEEDED_ROW.id, turn_id: turnId, seq: 0, text: payload.text
     } }),
@@ -100,7 +102,7 @@ test('copy and reply do not increase short or multi-line bubble heights or neigh
         button.style.removeProperty('min-height')
       })
     })
-    await page.locator('.bubble[data-thread-role="user"]').last().scrollIntoViewIfNeeded()
+    await page.locator('[data-thread-role="user"]').last().scrollIntoViewIfNeeded()
     await page.screenshot({ path: `/tmp/builder-1896/messages-${width}.png`, animations: 'disabled' })
   }
 })
@@ -130,7 +132,7 @@ test('copy and reply hover layers surround only the pointed glyph without changi
     await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 800), width)
     await expect.poll(() => page.evaluate(() => innerWidth)).toBe(width)
     for (const role of ['user', 'assistant']) {
-      const bubble = page.locator(`.bubble[data-thread-role="${role}"]`)
+      const bubble = page.locator(`[data-thread-role="${role}"]`)
       const row = bubble.locator('..')
       const copy = row.getByRole('button', { name: 'Copy message' })
       const reply = row.getByRole('button', { name: 'Reply to message' })
@@ -197,8 +199,8 @@ test('side copy and row cap retain sizing while metadata expands on hover and fo
     await expect(page.locator('.bubble__markdown').last()).toHaveText(text)
     await expect(page.locator('.bubble__cursor')).toHaveCount(0)
   }
-  const users = page.locator('.bubble[data-thread-role="user"]')
-  const assistants = page.locator('.bubble[data-thread-role="assistant"]')
+  const users = page.locator('[data-thread-role="user"]')
+  const assistants = page.locator('[data-thread-role="assistant"]')
   for (const width of [800, 1280, 1800]) {
     await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 1000), width)
     await expect.poll(() => page.evaluate(() => innerWidth)).toBe(width)

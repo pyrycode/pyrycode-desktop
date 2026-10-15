@@ -1,3 +1,5 @@
+import { threadRuntime } from '../../store/threadRuntime'
+import { threadLiveInputs } from '../conversation/threadLiveInputs'
 import { sendConversationCommand } from '../conversation/conversationActionAvailability'
 import { useStore } from 'zustand'
 import { createStore } from 'zustand/vanilla'
@@ -2310,8 +2312,10 @@ function appRows(serverId: string, state: HostedAppsDisplayState | undefined, pa
  * server-renders as `idle`.
  */
 function ConversationStatusDotControl({ row }: { row: ConversationSummary & { serverId?: string | null } }): JSX.Element {
-  const threadMode = useStore(conversationReadRouteStore, s => s.epochFor(row.serverId, row.id) !== undefined)
+  const threadMode = useStore(conversationReadRouteStore, s => typeof row.serverId === 'string' || s.epochFor(row.serverId, row.id) !== undefined)
   const conversationId = row.id
+  const live = useStore(threadRuntime.live(row.serverId ?? '', row.id), s => s)
+  const input = live.binding?.sessionId ? threadLiveInputs(live) : null
   const promptPending = useModalStore(selectHasOutstandingFor(conversationId))
   // #1700: a pending question batch waits on the operator exactly as a prompt does. The selector returns
   // a plain boolean, value-stable under `Object.is`, never the held batch or a fresh object.
@@ -2324,8 +2328,8 @@ function ConversationStatusDotControl({ row }: { row: ConversationSummary & { se
   return (
     <ConversationStatusDot
       status={resolveConversationStatus(
-        promptPending || questionPending,
-        activity,
+        input?.hasOutstanding ?? (promptPending || questionPending),
+        input?.activity ?? activity,
         isConversationUnread(timeline, lastRead, row, threadMode)
       )}
     />

@@ -9,6 +9,9 @@ import type {
   RequestHistoryPayload
 } from '../src/shared/wire/types'
 
+// Scripted history is published as thread catch-up/pages by the shared fake daemon.
+test.use({ scriptedHistory: true })
+
 // #1260 — scrolling back through a thread walks its history until the log's start. The DECISION is a pure
 // function of the conversation's held reading plus one boolean and is unit-tested in
 // `historyPageBridge.test.ts`; the geometry is `isNearTop` and is unit-tested beside `isAtBottom`. What
@@ -214,9 +217,18 @@ test('scrolling back walks the thread page by page and stops at the start of the
   launchPairedApp
 }, testInfo) => {
   const captured: Envelope[] = []
-  const { page, app, servers } = await launchPairedApp({ buildReplyFrames: walkingFake(captured) })
+  const { page, app, servers } = await launchPairedApp({ buildReplyFrames: walkingFake(captured) }, { onLaunched: async app => {
+    const page = await app.firstWindow()
+    await page.evaluate(() => {
+      (window as any).__walkFinals = []
+      window.pyry.onDaemonEvent(event => {
+        if (event.type === 'threadReply' && event.reply.type === 'thread_items' && event.reply.payload.final)
+          (window as any).__walkFinals.push(event.correlation.in_reply_to)
+      })
+    })
+  } })
 
-  const userBubbles = page.locator('.bubble[data-thread-role="user"]')
+  const userBubbles = page.locator('[data-thread-role="user"]')
   const thread = page.locator('.conversation__thread')
   const geometry = () => thread.evaluate(el => ({
     offset: el.scrollTop, height: el.scrollHeight, viewport: el.clientHeight,
@@ -229,12 +241,17 @@ test('scrolling back walks the thread page by page and stops at the start of the
   // A saved coverage change proves receipt/admission even for an empty page with no DOM mutation.
   // The main-process round trip then fences commands already sent by that renderer delivery.
   const received = async (cursor: string, atStart: boolean, count: number) => {
+    const request = captured.filter(event => event.type === 'request_history')[count - 1]
+    await expect.poll(() => page.evaluate(id => (window as any).__walkFinals.includes(id), request.id)).toBe(true)
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
     await expect.poll(() => page.evaluate(async ({ serverId, conversationId }) => {
-      const saved = await window.pyry.chatHistory({ operation: 'readTimeline', serverId, conversationId })
-      return saved.status === 'stored' && saved.snapshot.kind === 'timeline' ? saved.snapshot.coverage : null
+      const saved = await window.pyry.chatHistory({ operation: 'readThread', serverId, conversationId })
+      return saved.status === 'stored' && saved.snapshot.kind === 'daemon-items'
+        ? { complete: saved.snapshot.thread.repair === null && saved.snapshot.thread.checkpoint === saved.snapshot.thread.version,
+          older: saved.snapshot.thread.olderAvailable } : null
     }, { serverId: servers[0].serverId, conversationId: SEEDED_ROW.id }), {
       timeout: ROUNDTRIP_TIMEOUT_MS
-    }).toEqual({ status: 'received', cursor, atStart })
+    }).toEqual({ complete: true, older: !atStart })
     await app.evaluate(() => {})
     expect(historyAsks(captured)).toHaveLength(count)
   }
@@ -257,13 +274,13 @@ test('scrolling back walks the thread page by page and stops at the start of the
     await walkBackUntilAskFor(page, captured, CURSOR_AFTER_EMPTY)
 
     // A short page must commit its row, retain its cursor and wait for fresh input too.
-    await expect(page.locator('.bubble[data-thread-role="user"]', { hasText: SHORT_PAGE_TEXT })).toHaveCount(
+    await expect(page.locator('[data-thread-role="user"]', { hasText: SHORT_PAGE_TEXT })).toHaveCount(
       1, { timeout: ROUNDTRIP_TIMEOUT_MS }
     )
     await received(CURSOR_AFTER_SHORT, false, 3)
     await walkBackUntilAskFor(page, captured, CURSOR_AFTER_SHORT)
 
-    const firstRow = page.locator('.bubble[data-thread-role="user"]', { hasText: FINAL_PAGE_TEXT })
+    const firstRow = page.locator('[data-thread-role="user"]', { hasText: FINAL_PAGE_TEXT })
     await expect(firstRow).toHaveCount(1, { timeout: ROUNDTRIP_TIMEOUT_MS })
     await received('', true, 4)
 
@@ -330,7 +347,7 @@ test('an upward input asks from up to two viewport heights below the top and not
   const { page } = await launchPairedApp({ buildReplyFrames: boundaryFake(captured) })
   const thread = page.locator('.conversation__thread')
 
-  await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveCount(BOUNDARY_ENTRIES, {
+  await expect(page.locator('[data-thread-role="user"]')).toHaveCount(BOUNDARY_ENTRIES, {
     timeout: ROUNDTRIP_TIMEOUT_MS
   })
   expect(historyAsks(captured)).toHaveLength(1)
@@ -392,7 +409,7 @@ test('partially overlapping and repeated served pages contribute assistant and t
     return []
   } })
   const thread = page.locator('.conversation__thread')
-  const assistant = thread.locator('.bubble[data-thread-role="assistant"]')
+  const assistant = thread.locator('[data-thread-role="assistant"]')
   const tools = thread.locator('.tool-row:not(.tool-run__row)')
   await scrollBack(page, 0)
   await expect(assistant).toHaveCount(1)
@@ -405,7 +422,7 @@ test('partially overlapping and repeated served pages contribute assistant and t
   await walkBackUntilAskFor(page, captured, 'settled-repeat')
   await expect(assistant).toHaveCount(1)
   await expect(tools).toHaveCount(1)
-  await expect(thread.locator('.bubble[data-thread-role="user"]')).toHaveCount(OPENING_ENTRIES + 1)
+  await expect(thread.locator('[data-thread-role="user"]')).toHaveCount(OPENING_ENTRIES + 1)
   await expect(thread).toContainText('older partial overlap')
   expect(historyAsks(captured).map(ask => ask.cursor)).toEqual(['', 'repeat', 'settled-repeat'])
 })

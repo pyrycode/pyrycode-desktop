@@ -375,6 +375,65 @@ function build(
 /** Flush the microtask chain the async bootstrap runs on (fakes resolve immediately). */
 const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
+it('fences hosted work across connection lifecycle and keeps unrelated traffic runnable', async () => {
+  const ctx = build({ serverId: 'host-a' })
+  ctx.connection.start(); await tick()
+  const driver = ctx.drivers[0]
+  const ack = { ...decodeEnvelope(validHelloAck()), payload: { protocol_version: 'v2', server_id: 'srv-1', conn_id: 'conn-1', capabilities: ['hosted_apps_v1'] } }
+  driver.emit({ type: 'handshake-complete', helloAck: encodeEnvelope(ack) })
+  const view = ctx.connection.hostedResources.openView('22222222-2222-4222-8222-222222222222', '1.0.0')
+  const result = view.request({ type: 'app_asset_request', payload: { path: '/', navigation: true } })
+  const request = decodeEnvelope(driver.sent.at(-1)!)
+  driver.observations.at(-1)!({ type: 'sent', connectionId: 'conn-1' })
+  driver.emit({ type: 'message', plaintext: encodeEnvelope({ id: 901, ts: FIXED_TS, type: 'app_response', in_reply_to: request.id,
+    payload: { app_id: '22222222-2222-4222-8222-222222222222', release_version: '1.0.0', status: 200, headers: {}, size_bytes: 2, total_chunks: 2,
+      sha256: 'a12871fee210fb8619291eaea194581cbd2531e4b23759d225f6806923f63222' } }) })
+  ctx.connection.requestContextUsage('chat')
+  expect(decodeEnvelope(driver.sent.at(-1)!).type).toBe('request_context_usage')
+  driver.emit({ type: 'message', plaintext: encodeEnvelope({ id: 900, ts: FIXED_TS, type: 'message',
+    payload: { conversation_id: 'chat', message_id: 'message', role: 'assistant', text: 'barrier' } }) })
+  expect(emitted(ctx.sink).some(event => event.type === 'messageReceived')).toBe(true)
+  driver.emit({ type: 'handshake-complete', helloAck: encodeEnvelope(ack) })
+  expect(await result).toMatchObject({ ok: false, error: 'retired' })
+  expect(await view.request({ type: 'app_asset_request', payload: { path: '/', navigation: true } })).toMatchObject({ error: 'retired' })
+  const successor = ctx.connection.hostedResources.openView('22222222-2222-4222-8222-222222222222', '1.0.0')
+  const next = successor.request({ type: 'app_asset_request', payload: { path: '/', navigation: true } })
+  expect(decodeEnvelope(driver.sent.at(-1)!).id).toBeGreaterThan(request.id)
+  driver.emit({ type: 'message', plaintext: encodeEnvelope({ id: 902, ts: FIXED_TS, type: 'app_response_chunk', in_reply_to: request.id,
+    payload: { app_id: '22222222-2222-4222-8222-222222222222', index: 0, data: 'AQ==' } }) })
+  driver.emit({ type: 'relay-link-down', code: 1006 })
+  expect(await next).toMatchObject({ error: 'retired' })
+  ctx.connection.stop()
+})
+
+it.each(['reconnect', 'stop', 'terminal', 'error', 'auth', 'bad-ack', 'unsupported'] as const)('retires all hosted work on %s', async reason => {
+  const ctx = build({ serverId: 'host-a' })
+  ctx.connection.start(); await tick()
+  const driver = ctx.drivers[0], ack = decodeEnvelope(validHelloAck())
+  driver.emit({ type: 'handshake-complete', helloAck: encodeEnvelope({ ...ack,
+    payload: { ...ack.payload as object, capabilities: ['hosted_apps_v1'] } }) })
+  const first = ctx.connection.hostedResources.openView('22222222-2222-4222-8222-222222222222', '1.0.0')
+  const second = ctx.connection.hostedResources.openView('33333333-3333-4333-8333-333333333333', '2.0.0')
+  const input = { type: 'app_api_request' as const, payload: { path: '/api/data', method: 'POST' as const, headers: {}, body: '' } }
+  const a = first.request(input), request = decodeEnvelope(driver.sent.at(-1)!), b = second.request(input)
+  switch (reason) {
+    case 'reconnect': ctx.connection.reconnect(); await tick(); break
+    case 'stop': ctx.connection.stop(); break
+    case 'terminal': driver.emit({ type: 'terminal', code: 4401, reason: 'closed' }); break
+    case 'error': driver.emit({ type: 'error', reason: 'session-load-failed' }); break
+    case 'auth': driver.emit({ type: 'message', plaintext: encodeEnvelope({ id: 100, ts: FIXED_TS, type: 'error', in_reply_to: request.id,
+      payload: { code: 'auth.invalid_token', message: 'rejected', retryable: false } }) }); break
+    case 'bad-ack': driver.emit({ type: 'handshake-complete', helloAck: Buffer.from('{}') }); break
+    case 'unsupported': driver.emit({ type: 'handshake-complete', helloAck: validHelloAck() }); break
+  }
+  expect(await a).toMatchObject({ ok: false, uncertain: true })
+  expect(await b).toMatchObject({ ok: false, uncertain: true })
+  const count = driver.sent.length
+  expect(await first.request(input)).toMatchObject({ error: 'retired', uncertain: false })
+  expect(driver.sent).toHaveLength(count)
+  ctx.connection.stop()
+})
+
 /** Reach the connected window: start, resolve the bootstrap, complete the handshake. */
 async function reachConnected(): Promise<ReturnType<typeof build>> {
   const ctx = build()

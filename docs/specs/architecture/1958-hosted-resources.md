@@ -56,3 +56,6 @@ None. Size recount: approximately 340 production, 370 tests/helpers and 65 plan 
 - Threat alignment: hostile responses fail contextual validation/assembly; relay delay/drop retires work without mutation replay; safeStorage remains unchanged; compromised renderer receives no new authority. Live mutation reconciliation belongs #1929.
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-15
+
+## Revisions
+- 2026-10-15: Regression tests clarified two integration details: connection-fatal authentication/update errors must precede hosted error correlation, and queue promotion must compare the absolute enqueue deadline before sending, including when timer callbacks share a deadline. Incoming progress also checks wall-clock deadlines before resetting inactivity. Contracts and scope remain unchanged. Final written-work recount remains below 800 lines (approximately 650); three production files, three exported declarations and three consumer/test-double updates.

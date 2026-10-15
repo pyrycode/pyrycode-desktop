@@ -4,6 +4,7 @@
 // Electron, no socket.
 import { describe, expect, it, vi } from 'vitest'
 import { createConnectionRegistry } from './connectionRegistry'
+import { createHostedResources } from './transport/hostedResources'
 import type { DaemonConnection } from './daemonConnection'
 import type { PairedServerRecord, PairedServerStore } from './pairedServerStore'
 import type { SwitchAgentPayload } from '../shared/wire/types'
@@ -74,6 +75,7 @@ function createStoreFake(initial: PairedServerRecord[] = []) {
 }
 
 interface BuiltConnection {
+  hostedResources: DaemonConnection['hostedResources']
   serverId: string | null
   pairedServer: PairedServerStore
   calls: { start: number; stop: number; reconnect: number; interrupt: number }
@@ -115,7 +117,9 @@ function createFactoryFake() {
     const mcpToggles: Array<[string, string, boolean]> = []
     const taskStops: Array<[string, string]> = []
     const interrupts: string[] = []
+    const hostedResources = createHostedResources({ nextId: () => 2, now: () => '2026-10-10T18:00:03Z', connected: () => false, send: () => {} })
     built.push({
+      hostedResources,
       serverId: spec.serverId,
       pairedServer: spec.pairedServer,
       calls,
@@ -130,6 +134,7 @@ function createFactoryFake() {
     })
     const noop = (): void => {}
     return {
+      hostedResources,
       queryThread: () => {},
       requestHostSystemPrompt: () => {},
       setHostSystemPrompt: () => {},
@@ -531,6 +536,14 @@ describe('createConnectionRegistry', () => {
   // server; this answers for the one NAMED, which is the whole difference between a command reaching
   // the right daemon and reaching whichever was paired last.
   describe('the per-server accessor', () => {
+    it('exposes hosted resources only on the explicitly named host connection', async () => {
+      const { factory, registry } = harness([record('alpha'), record('beta')])
+      await settle()
+      expect(registry.connectionFor('alpha')?.hostedResources).toBe(factory.for('alpha').hostedResources)
+      expect(registry.connectionFor('beta')?.hostedResources).toBe(factory.for('beta').hostedResources)
+      expect(registry.connectionFor('alpha')?.hostedResources).not.toBe(registry.active.hostedResources)
+      expect(registry.connectionFor('missing')).toBeNull()
+    })
     it('forwards context requests only to the named host', async () => {
       const { factory, registry } = harness([record('alpha'), record('beta')])
       await settle()

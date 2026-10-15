@@ -39,6 +39,7 @@ export type ActiveConnection = Omit<DaemonConnection, 'start' | 'stop' | 'reconn
 
 /** Injected dependencies. All three are seams the tests override; none is effectful here. */
 export interface ConnectionRegistryDeps {
+  onReconciled?: () => void
   /**
    * READ-ONLY BY CONSTRUCTION: a `Pick` without `clear` or `clearServer`, so the registry cannot
    * erase a pairing however it is called. `save` is present only because `PairedServerStore` requires
@@ -346,6 +347,7 @@ export function createConnectionRegistry(deps: ConnectionRegistryDeps): Connecti
     }
 
     entries = next
+    deps.onReconciled?.()
     deps.diagnosticLog?.event({ event: 'registry-reconciled', count: entries.length })
   }
 

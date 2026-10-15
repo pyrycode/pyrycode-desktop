@@ -79,3 +79,7 @@ None. Main's existing discovery service and viewer remain the only authority; or
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-15
+
+## Revisions
+
+2026-10-15: existing geometry/order specs assumed two sections per host; update their counts and host-section stride for Apps and run all three changed specs. App dots reuse existing static status styles alongside readable state text. The main unit `copies display only and fences replacement, unpair, retired watches and reload` explicitly covers changed service identity and retired callbacks; the Electron stale-delivery case covers reconnect, remount token fencing and unpair through production IPC. No authority or lifecycle contract changed.

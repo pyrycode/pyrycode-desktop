@@ -1,4 +1,8 @@
 import { useStore } from 'zustand'
+import { createStore } from 'zustand/vanilla'
+import type { HostedAppsDisplayState } from '@shared/ipc/hostedAppsDisplay'
+import type { HostedPaneState } from '@shared/ipc/hostedPane'
+import { hostedPaneStore } from '../../HostedPane'
 import { appUpdateStore } from '../../store/appUpdateStore'
 import { AppUpdateRow } from './AppUpdateRow'
 import './channels.css'
@@ -225,6 +229,17 @@ export function ChannelList({
   // it used to wake one row. Accepted — a pairing change IS a whole-sidebar change, and the per-server
   // label reads stay inside their leaves. Status changes also update mutation availability.
   const servers = useServerInfoStore(selectServers)
+  const [appsStore] = useState(() => createStore(() => new Map<string, HostedAppsDisplayState>()))
+  const apps = useStore(appsStore)
+  const pane = useStore(hostedPaneStore, state => state.state)
+  useEffect(() => {
+    let active = true
+    appsStore.setState(new Map(), true)
+    const off = servers.map(server => window.pyry.onHostedApps(server.serverId, state => {
+      if (active) appsStore.setState(previous => new Map(previous).set(server.serverId, state), true)
+    }))
+    return () => { active = false; off.forEach(stop => stop()) }
+  }, [servers, appsStore])
   const statuses = useSessionStore((state) => state.statuses)
   const connected = (serverId: string | null | undefined): boolean =>
     typeof serverId === 'string' && statuses.get(serverId)?.type === 'connected'
@@ -356,6 +371,10 @@ export function ChannelList({
         conversations={conversations}
         statuses={statuses}
         serverIds={servers.map((server) => server.serverId)}
+        apps={apps}
+        pane={pane}
+        onOpenApp={(serverId, appId) => { void window.pyry.hostedPane({ type: 'select', serverId, appId }) }}
+        onRefreshApps={serverId => { void window.pyry.refreshHostedApps(serverId) }}
         openConversationId={openConversationId}
         onOpen={onOpen}
         onOpenSettings={onOpenSettings}
@@ -715,6 +734,10 @@ export function ChannelList({
  * host row to draw, and that row is where #1185/#1189 put the plus that starts a chat in a new workspace.
  */
 export function ChannelListView({
+  apps,
+  pane,
+  onOpenApp,
+  onRefreshApps,
   appUpdate,
   conversations,
   statuses,
@@ -734,6 +757,10 @@ export function ChannelListView({
   onRename,
   onEditChannel
 }: {
+  apps?: ReadonlyMap<string, HostedAppsDisplayState>
+  pane?: HostedPaneState
+  onOpenApp?: (serverId: string, appId: string) => void
+  onRefreshApps?: (serverId: string) => void
   appUpdate?: ReactNode
   // Widened to `ServerConversationSummary` in all but name: the rows arrive carrying their server stamp
   // (#1086), and `groupByServer`'s structural constraint is what reads it — this prop stays typed as the
@@ -843,7 +870,8 @@ export function ChannelListView({
           onRepairHost,
           onSaveAsChannel,
           onRename,
-          onEditChannel
+          onEditChannel,
+          apps, pane, onOpenApp, onRefreshApps
         )}
       </div>
       {appUpdate}
@@ -2069,7 +2097,7 @@ function HostSection({
   onCreate,
   defaultExpanded = true
 }: {
-  label: 'Channels' | 'Chats'
+  label: 'Channels' | 'Chats' | 'Apps'
   rows: readonly JSX.Element[]
   onCreate?: () => void
   defaultExpanded?: boolean
@@ -2134,7 +2162,11 @@ function renderBody(
   onRepairHost: ((serverId: string) => void) | undefined,
   onSaveAsChannel: (row: SidebarRow) => void,
   onRename: (row: SidebarRow) => void,
-  onEditChannel: (row: SidebarRow) => void
+  onEditChannel: (row: SidebarRow) => void,
+  apps?: ReadonlyMap<string, HostedAppsDisplayState>,
+  pane?: HostedPaneState,
+  onOpenApp?: (serverId: string, appId: string) => void,
+  onRefreshApps?: (serverId: string) => void
 ): JSX.Element | null {
   const { channels, discussions } = partitionActive(conversations ?? [])
   if (serverIds.length === 0 && channels.length === 0 && discussions.length === 0) return null
@@ -2145,7 +2177,7 @@ function renderBody(
     <Row
       key={row.id}
       row={row}
-      isOpen={row.id === openConversationId}
+      isOpen={(!pane || pane.type === 'closed') && row.id === openConversationId}
       onOpen={() => onOpen(row)}
       pen={typeof row.serverId === 'string' && statuses.get(row.serverId)?.type === 'connected'
         ? { ...CHANNELS_ROW_PEN, onEdit: () => onEditChannel(row) }
@@ -2156,7 +2188,7 @@ function renderBody(
     <Row
       key={row.id}
       row={row}
-      isOpen={row.id === openConversationId}
+      isOpen={(!pane || pane.type === 'closed') && row.id === openConversationId}
       onOpen={() => onOpen(row)}
       onSaveAsChannel={typeof row.serverId === 'string' && statuses.get(row.serverId)?.type === 'connected'
         ? () => onSaveAsChannel(row)
@@ -2189,6 +2221,7 @@ function renderBody(
               rows={(chatsByHost.get(host.serverId) ?? []).map(chatRow)}
               onCreate={connected ? () => onCreateChat('', host.serverId) : undefined}
             />
+            <HostSection label="Apps" rows={appRows(host.serverId, apps?.get(host.serverId), pane, onOpenApp, onRefreshApps)} />
           </CollapsibleHostGroup>
         )
       })}
@@ -2200,6 +2233,28 @@ function renderBody(
       )}
     </>
   )
+}
+
+function appRows(serverId: string, state: HostedAppsDisplayState | undefined, pane: HostedPaneState | undefined,
+  select: ((serverId: string, appId: string) => void) | undefined, refresh: ((serverId: string) => void) | undefined): JSX.Element[] {
+  if (state?.type === 'ready' && state.items.length > 0) return state.items.map(item => (
+    <div className="channel-list__row" key={item.appId}>
+      <span aria-hidden="true" className={`conversation-status-dot conversation-status-dot--${{
+        starting: 'working', running: 'new-messages', stopped: 'idle', failed: 'input-required'
+      }[item.state]}`} />
+      <button type="button" className="channel-list__row-open"
+        aria-current={pane && pane.type !== 'closed' && pane.serverId === serverId && pane.appId === item.appId ? 'true' : undefined}
+        onClick={() => select?.(serverId, item.appId)}>
+        <span className="channel-list__title">{item.title}</span>
+        <span className="channel-list__app-state">{item.state}</span>
+      </button>
+    </div>
+  ))
+  const copy = { loading: 'Loading apps…', ready: 'No apps', failed: 'Could not load apps',
+    unavailable: 'Apps disconnected', unsupported: 'Apps unsupported' }
+  return [<div key="status" className="channel-list__app-status" role="status">{copy[state?.type ?? 'loading']}
+    {state?.type === 'failed' && <button type="button" onClick={() => refresh?.(serverId)}>Retry</button>}
+  </div>]
 }
 
 /**

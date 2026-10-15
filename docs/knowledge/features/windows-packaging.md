@@ -115,7 +115,7 @@ the connection registry, flushes every window's renderer history writer, then aw
 history operations. Successful completion marks `quitDrained`, allowing the windows' close guards
 to pass. Restart then calls `quitAndInstall(true, true)` once: silent installation and forced
 relaunch. Waiting only in `before-quit` would be too late, because the library begins installing
-before its explicit `app.quit()`. See [history shutdown](chat-history.md#window-close-and-app-quit).
+before its explicit `app.quit()`. See [history shutdown](chat-history-storage.md#window-close-and-app-quit).
 
 Once that registry has stopped, an installation failure cannot leave a usable open application.
 A thrown installer call or updater error revokes verified authority, disables

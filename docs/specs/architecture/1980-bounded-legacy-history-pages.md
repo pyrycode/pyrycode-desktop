@@ -60,3 +60,12 @@ Sizing: one independently checkable paging behavior; approximately 780 written l
 - [Threat alignment] Hostile stored payloads and index mismatches reject as unreadable; exact UTF-16 ownership prevents cross-owner aliasing. Compromised renderer obtains no added capability. Relay/daemon protocol handling remains outside this main-only storage change (#1931/#1975).
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-15
+
+## Revisions
+2026-10-15: Selected-row corruption proved that the prerequisite's row ciphertext did not carry its row-key/order binding. New writes wrap each existing independently encrypted payload with its structural indexes and committed UUID; `decode` verifies these before record validation. Full reads still accept the original unwrapped representation, and no schema/plaintext column changes are needed. Paging of original records retains selected codec/index checks; full reads retain canonical whole-scope checks. This closes selected binding substitutions for newly written records without rewriting saved data during reads.
+
+2026-10-15: Gap-adjacent receipts are returned separately as `cursorAnchors`, so their anchor ids cannot become selected served/receipt memberships. Gap refused-cursor arrays remain omitted from partial projections. Contiguous replacement ordinals determine whether an older page exists; only before-boundary admission needs one extra order-only row read. No payload is decoded to discover local exhaustion.
+
+2026-10-15: Query-plan inspection showed that receipt-start selection could scan non-start members of spanning receipts. Add schema 3's partial `legacy_receipt_start` index over existing scope/entry/parent columns where kind is receipt-id and ordinal is zero. Migrate schema 2 transactionally, preserving all payloads and UUIDs; schema 1 chains through its existing migration. Security review: no new plaintext values, only copies of previously reviewed structural columns.
+
+2026-10-15: Batch selected contribution ranges into at most 100 SQL predicates per query. A single held row may carry more fragments than SQLite's expression-depth limit; the heavily fragmented row regression retains all 1,200 contributions and selected memberships. The additive index migration regression also proves rollback on selected decrypt failure and unchanged committed identity.

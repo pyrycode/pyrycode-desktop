@@ -166,7 +166,7 @@ export function createHostedApps(deps: {
     const view = deps.resources.openView(appId, record.active_release)
     const retire = (): void => { bindings.delete(view); view.retire() }
     bindings.set(view, { app: appId, release: record.active_release, retire })
-    return { ok: true as const, view: { request: view.request, retire } }
+    return { ok: true as const, view: { request: view.request, cancelRequests: view.cancelRequests, retire } }
   }
   return { read: (): HostedAppsState => structuredClone(state), refresh, openView, receive, reset,
     subscribe(listener: () => void): () => void { observers.add(listener); return () => { observers.delete(listener) } },

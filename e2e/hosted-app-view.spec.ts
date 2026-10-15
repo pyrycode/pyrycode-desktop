@@ -173,6 +173,53 @@ test('Fetch cancellation and document replacement fence late completions and for
   expect(s.seen.filter(r=>r.type==='app_api_request').slice(baseline).map(r=>r.payload.path)).toEqual(['/api/read'])
 })
 
+for (const cause of ['close', 'view-replacement', 'parent', 'document-bind', 'document-navigation', 'fetch-pagehide', 'preload-pagehide'] as const) {
+  test(`Fetch bulk cancellation never promotes a queued mutation on ${cause}`, async ({ launchPairedApp }) => {
+    const s = scenario(), { app, daemon } = await launchPairedApp(s.options)
+    await open(app, FIRST_SERVER_ID, cause === 'parent')
+    await expect.poll(() => evaluate(app, 'document.body.dataset.loaded')).toBe('first-dynamic')
+    const raw = cause === 'preload-pagehide'
+    await evaluate(app, raw
+      ? `window.pending=Array.from({length:8},()=>hostedFetch.request({url:location.origin+'/api/held',method:'GET',headers:{},body:new Uint8Array()}).result);undefined`
+      : `window.pending=Array.from({length:8},()=>fetch('/api/held').catch(e=>e.name));undefined`)
+    await expect.poll(() => s.seen.filter(r => r.type === 'app_api_request' && r.payload.path === '/api/held').length).toBe(8)
+    await evaluate(app, raw
+      ? `pending.push(hostedFetch.request({url:location.origin+'/api/must-not-write',method:'POST',headers:{},body:new Uint8Array()}).result);undefined`
+      : `pending.push(fetch('/api/must-not-write',{method:'POST',body:'never'}).catch(e=>e.name));undefined`)
+    // Ordered IPC and this native rejection prove the POST reached the admission queue.
+    expect(await evaluate(app, `hostedFetch.request({url:location.origin+'/api/%2f',method:'GET',headers:{},body:new Uint8Array()}).result.then(r=>r.error)`)).toBe('network')
+    if (cause === 'close') await app.evaluate(() => (globalThis as any).hosted.close())
+    if (cause === 'view-replacement') await open(app)
+    if (cause === 'parent') await app.evaluate(() => (globalThis as any).hostedParent.destroy())
+    if (cause === 'document-bind') await app.evaluate(({ ipcMain }) => {
+      const wc = (globalThis as any).hosted.content.webContents
+      ipcMain.emit('hosted-fetch-bind', { sender: wc, senderFrame: wc.mainFrame })
+    })
+    if (cause === 'document-navigation') await app.evaluate(async () => {
+      const view = (globalThis as any).hosted
+      // Commit a replacement without first needing a free hosted resource slot.
+      await view.content.webContents.loadURL('about:blank')
+      await view.content.webContents.loadURL(view.origin + '/')
+    })
+    if (cause.endsWith('pagehide')) {
+      // A body still serializing at pagehide must never reach the bridge afterwards.
+      await evaluate(app, `window.blob=new Blob(['later']);blob.arrayBuffer=()=>new Promise(r=>window.releaseBody=r);window.serializing=fetch('/api/must-not-write',{method:'POST',body:blob}).catch(e=>e.name);undefined`)
+      await evaluate(app, `dispatchEvent(new PageTransitionEvent('pagehide'));undefined`)
+      expect(await evaluate(app, 'Promise.all(pending).then(r=>r.length)')).toBe(9)
+      expect(await evaluate(app, `releaseBody(new Uint8Array([1]).buffer);serializing`)).toBe('TypeError')
+      expect(await evaluate(app, `hostedFetch.request({url:location.origin+'/api/must-not-write',method:'POST',headers:{},body:new Uint8Array()}).result.then(r=>r.error)`)).toBe('network')
+    }
+    const held = s.seen.filter(r => r.type === 'app_api_request' && r.payload.path === '/api/held')
+    await expect.poll(() => s.seen.filter(r => r.type === 'app_cancel' && held.some(h => h.id === r.payload.request_id)).length).toBe(8)
+    if (cause !== 'view-replacement' && cause !== 'document-navigation') await open(app)
+    await expect.poll(() => evaluate(app, 'document.body.dataset.loaded')).toBe('first-dynamic')
+    for (const frame of s.late.splice(0)) daemon.pushFrame(frame)
+    // A complete successor read is a positive barrier after cancellation and late replies.
+    expect(await evaluate(app, `fetch('/api/read?barrier=bulk').then(r=>r.status)`)).toBe(200)
+    expect(s.seen.filter(r => r.type === 'app_api_request' && r.payload.method === 'POST')).toEqual([])
+  })
+}
+
 test('Fetch reconnect reconciles committed uncertain writes without replay', async ({ launchPairedApp }) => {
   const s=scenario('first',true), { app, page, daemon }=await launchPairedApp(s.options)
   const first=await open(app)

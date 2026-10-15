@@ -6,13 +6,16 @@ import type { HostedResourceInput, HostedResourceResult } from './transport/host
 
 /** Only request semantics cross this boundary; the captured binding owns authority. */
 export function installHostedFetch(wc: WebContents, origin: string, appId: string, release: string,
-  request: (input: HostedResourceInput, signal: AbortSignal) => Promise<HostedResourceResult>, denied: () => void) {
+  request: (input: HostedResourceInput, signal: AbortSignal) => Promise<HostedResourceResult>,
+  cancelRequests: (signals: ReadonlySet<AbortSignal>) => void, denied: () => void) {
   let token = '', last = 0, retired = false
   const pending = new Map<number, AbortController>()
   const replace = (): void => {
     token = randomBytes(16).toString('hex'); last = 0
-    for (const controller of pending.values()) controller.abort()
+    const old = [...pending.values()]
     pending.clear()
+    cancelRequests(new Set(old.map(controller => controller.signal)))
+    for (const controller of old) controller.abort()
   }
   const valid = (event: IpcMainEvent): boolean => {
     if (retired || wc.isDestroyed() || event.sender !== wc || event.senderFrame !== wc.mainFrame) return false
@@ -25,7 +28,9 @@ export function installHostedFetch(wc: WebContents, origin: string, appId: strin
   }
   async function receive(event: IpcMainEvent, supplied: unknown, id: unknown, operation: unknown, input: unknown): Promise<void> {
     if (event.sender !== wc) return
-    if (!valid(event) || supplied !== token || typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1) { denied(); return }
+    if (!valid(event) || supplied !== token) { denied(); return }
+    if (operation === 'abort-document' && id === 0 && input === undefined) { replace(); return }
+    if (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1) { denied(); return }
     if (operation === 'abort') { pending.get(id)?.abort(); return }
     const document = token
     const reply = (value: unknown): void => {

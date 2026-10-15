@@ -7,10 +7,11 @@ for (const name of ['XMLHttpRequest', 'EventSource', 'WebSocket', 'Worker', 'Sha
 Object.defineProperty(navigator, 'sendBeacon', { value: () => false, writable: false, configurable: false })
 Object.defineProperty(navigator, 'serviceWorker', { value: undefined, configurable: false })
 
-// The dedicated isolated preload supplies only these two functions, with private correlations.
+// The dedicated isolated preload supplies only request/abort, with private correlations.
 ;(() => {
   const bridge = globalThis.hostedFetch
   const cap = 32768, encoder = new TextEncoder(), active = new Set()
+  let closed = false
   const failure = () => new TypeError('Failed to fetch')
   const aborted = () => new DOMException('The operation was aborted', 'AbortError')
   function text(value) {
@@ -61,6 +62,7 @@ Object.defineProperty(navigator, 'serviceWorker', { value: undefined, configurab
     throw failure() // Includes streaming uploads; there is no native/browser fallback.
   }
   async function fetch(input, init = {}) {
+    if (closed) throw failure()
     const source = input instanceof Request ? input : undefined
     const signal = init.signal ?? source?.signal
     if (signal?.aborted) throw aborted()
@@ -88,17 +90,18 @@ Object.defineProperty(navigator, 'serviceWorker', { value: undefined, configurab
     }
     if (text(JSON.stringify(Object.fromEntries(headers))).length > 4096) throw failure()
     if (signal?.aborted) throw aborted()
-    if (!bridge || active.size >= 16) throw failure()
+    if (closed || !bridge || active.size >= 16) throw failure()
     return new Promise((resolve, reject) => {
       let done = false
       const call = bridge.request({ url: url.href, method, headers: Object.fromEntries(headers), body: bytes })
       const finish = (error, response) => {
         if (done) return
-        done = true; signal?.removeEventListener('abort', cancel); active.delete(cancel)
+        done = true; signal?.removeEventListener('abort', cancel); active.delete(settleAborted)
         if (error) reject(error); else resolve(response)
       }
-      const cancel = () => { bridge.abort(call.id); finish(aborted()) }
-      active.add(cancel); signal?.addEventListener('abort', cancel, { once: true })
+      const settleAborted = () => finish(aborted())
+      const cancel = () => { bridge.abort(call.id); settleAborted() }
+      active.add(settleAborted); signal?.addEventListener('abort', cancel, { once: true })
       call.result.then(result => {
         if (done) return
         if (result.error) { finish(result.error === 'aborted' ? aborted() : failure()); return }
@@ -110,5 +113,8 @@ Object.defineProperty(navigator, 'serviceWorker', { value: undefined, configurab
     })
   }
   Object.defineProperty(globalThis, 'fetch', { value: fetch, writable: false, configurable: false })
-  addEventListener('pagehide', () => { for (const cancel of [...active]) cancel() }, { once: true })
+  addEventListener('pagehide', () => {
+    closed = true; bridge?.abort()
+    for (const settle of [...active]) settle()
+  }, { once: true })
 })()

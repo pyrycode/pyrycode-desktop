@@ -40,14 +40,15 @@ export function createHostedAppViews(registry: Pick<ConnectionRegistry, 'connect
     const wc = content.webContents, abort = new AbortController(), listeners = new Set<() => void>()
     let state: HostedAppViewState = { type: 'loading' }, retired = false, navigation = 0
     const stopFetch = installHostedFetch(wc, origin, appId, record.active_release,
-      (input, signal) => resource.request(input, signal), () => log?.event({ event: 'hosted-view', code: 'fetch-denied' }))
+      (input, signal) => resource.request(input, signal), resource.cancelRequests,
+      () => log?.event({ event: 'hosted-view', code: 'fetch-denied' }))
     const notify = (): void => {
       for (const listener of [...listeners]) { try { listener() } catch { /* Observers cannot change policy. */ } }
     }
     const event = (code: string): void => log?.event({ event: 'hosted-view', code })
     function finish(type: HostedAppViewState['type']): void {
       if (retired) return
-      retired = true; state = { type }; stopFetch(); abort.abort(); resource.retire(); off()
+      retired = true; state = { type }; resource.retire(); stopFetch(); abort.abort(); off()
       parent.removeListener('closed', onParentClosed)
       if (!parent.isDestroyed()) parent.contentView.removeChildView(content)
       if (parents.get(parent) === view) parents.delete(parent)

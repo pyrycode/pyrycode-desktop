@@ -67,8 +67,8 @@ declare global { interface Window { readWork: ReadWork } }
 // and listeners without counting React, scroll-pin work or the test oracle.
 async function instrumentReadWork(page: Page) {
   const before = page.url()
-  // firstWindow supplies a Page, not a surviving renderer execution context.
-  // Wait for the app document before evaluating document-scoped instrumentation.
+  // The fixture hands this hook a loaded app document (appWindow). Waiting for the
+  // mounted Welcome screen keeps the instrumentation after the first commit.
   await expect(page.locator('.welcome__pair')).toBeVisible()
   await page.evaluate(() => {
     const counts = { constructors: 0, discovery: 0, listeners: 0, subscriptions: 0 }

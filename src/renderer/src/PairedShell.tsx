@@ -125,7 +125,8 @@ const activateDeps: ActivateConversationDeps = {
   // on every activation, including reopening it. Each sender refuses falsy ids and sends once;
   // app-lifetime subscribers receive their replies. Read window.pyry only at activation time.
   requestConversationConfig: (conversationId) => {
-    if (connectedConversationHostNow(conversationId) === null) return
+    const owner = connectedConversationHostNow(conversationId)
+    if (owner === null || !conversationListStore.getState().byServer.get(owner)?.some(row => row.id === conversationId)) return
     requestRunConfigSnapshot(window.pyry.sendCommand, conversationId)
     requestContextUsage(window.pyry.sendCommand, conversationId)
     requestModelList(window.pyry.sendCommand, conversationId)

@@ -75,3 +75,11 @@ None. Prefer one parent-owned coordinator over duplicating viewer/discovery stat
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-15
+
+## Revisions
+
+2026-10-15: Native `View` exposes `setVisible` without a visibility getter, so the focused spec observes real native setter calls and bounds. `BrowserWindow.capturePage` excludes child views; OS capture returned “Failed to get sources.” The review image composes actual client/native captures at measured native bounds and is identified as such in the PR. This image reviews layout; geometry and native hide/restore assertions provide composition behavior proof.
+
+The parent teardown test found that accessing `parent.webContents` after destruction terminates the process. The controller now captures the client before teardown. Metadata completion uses a separate selection-identity fence so release generation changes do not drop a still-current host-label read. Recovery does not arm automatic reopening while unavailable/unsupported. Selection enters the existing shell route, with pane state passed through the pure `PairedShellView`; unmount closes the current generation.
+
+Final focused scenarios: `geometry, dialogs and selection`; `loading discovery and recovery`; `release replacement and unavailable states`; `two hosts and stale controls`; `unsupported and lost discovery retain identity without reviving pages`; `pending native load cannot complete into a successor selection`. Completed discovery diagnostics and changed authoritative labels supply positive barriers before absence assertions. A held obsolete document response followed by a same-socket authoritative update proves late completion cannot replace its successor.

@@ -212,9 +212,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * Shared decode front-half: untrusted bytes → JSON object. Decodes UTF-8 with `fatal: true` so
  * invalid byte sequences throw (not silently replaced with U+FFFD), catches every JSON.parse
  * throw (SyntaxError and RangeError from deep nesting), and requires an object at the top level.
- * Every failure becomes a category-only WireDecodeError.
+ * Every failure becomes a category-only WireDecodeError. The result supplies routing hints only;
+ * consumers must validate the original bytes before accepting an envelope or its payload.
  */
-function parseJsonObject(bytes: Uint8Array): Record<string, unknown> {
+export function parseJsonObject(bytes: Uint8Array): Record<string, unknown> {
   let text: string
   try {
     text = utf8Decoder.decode(bytes)

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import type { Envelope, HostedPayloads, HostedResourceEnvelope } from '../../shared/wire/types'
+import type { HostedPayloads, HostedResourceEnvelope } from '../../shared/wire/types'
 import type { DiagnosticLog } from '../diagnosticLog'
 import type { SendOutcome } from './sendObservation'
 import { decodeHostedResource, encodeHostedResource } from './hostedResourceCodec'
@@ -106,9 +106,10 @@ export function createHostedResources(deps: {
     for (const id of cancels.keys()) if (!cancellation) forgetCancel(id)
     enabled = supported
   }
-  function receive(bytes: Uint8Array, envelope: Envelope): boolean {
+  // Unvalidated routing hints can retire owned work; only the contextual codecs admit bytes.
+  function receive(bytes: Uint8Array, envelope: { type?: unknown; in_reply_to?: unknown }): boolean {
     const id = envelope.in_reply_to
-    if (id === undefined) return false
+    if (typeof id !== 'number') return false
     const control = cancels.get(id), p = pending.get(id)
     const resource = envelope.type === 'app_response' || envelope.type === 'app_response_chunk'
     if (!resource && envelope.type !== 'app_cancelled' && !(envelope.type === 'error' && (p || control))) return false

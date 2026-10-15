@@ -44,7 +44,7 @@ import { buildRequestMcpStatus } from './transport/requestMcpStatusEnvelope'
 import { buildMcpReconnect } from './transport/mcpReconnectEnvelope'
 import { buildMcpToggle } from './transport/mcpToggleEnvelope'
 import { buildStopBackgroundTask } from './transport/stopBackgroundTaskEnvelope'
-import { decodeEnvelope, encodeEnvelope } from './transport/codec'
+import { encodeEnvelope, parseJsonObject } from './transport/codec'
 import { buildRequestSystemPrompt } from './transport/requestSystemPromptEnvelope'
 import { buildSetSystemPrompt } from './transport/setSystemPromptEnvelope'
 import { buildSetConversationMuted } from './transport/setConversationMutedEnvelope'
@@ -1303,13 +1303,18 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       }
       case 'message': {
         try {
-          const envelope = decodeEnvelope(event.plaintext)
+          const envelope = parseJsonObject(event.plaintext)
           // Connection-fatal errors retain precedence even when they name a hosted request.
-          const error = envelope.type === 'error' ? parseInboundMessage(event.plaintext) : null
-          const fatal = error?.kind === 'daemon-error' &&
-            (error.pairingReject === 'pairing-rejected' || error.updateRequired !== undefined)
+          let fatal = false
+          if (envelope.type === 'error') {
+            try {
+              const error = parseInboundMessage(event.plaintext)
+              fatal = error?.kind === 'daemon-error' &&
+                (error.pairingReject === 'pairing-rejected' || error.updateRequired !== undefined)
+            } catch { /* Correlated malformed errors must still reach hosted validation. */ }
+          }
           if (!fatal && hostedResources.receive(event.plaintext, envelope)) return
-        } catch { /* Generic malformed frames have no trusted resource correlation. */ }
+        } catch { /* Invalid UTF-8/JSON has no identifiable hosted operation. */ }
         // Decode the decrypted app-envelope at the transport boundary, then map its narrowed result
         // onto the IPC layer — the consumer's only job (transport/ stays IPC-free).
         let inbound: InboundDaemonMessage | null

@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createConversationTimelineStore } from './conversationTimelineStore'
-import { requestOlderHistory } from './historyPageBridge'
+import { historyAskDeps, requestHistoryPage, requestOlderHistory } from './historyPageBridge'
+import { activeConversationStore } from './activeConversationStore'
+import { conversationListStore } from './conversationListStore'
+import { conversationTimelineStore } from './conversationTimelineStore'
+import { sessionStore, type ConnectionStatus } from './sessionStore'
 
 function harness() {
   const store = createConversationTimelineStore()
@@ -15,6 +19,35 @@ function harness() {
 }
 
 describe('explicit history demand', () => {
+  it('keeps one admitted host across request-state subscribers changing the selected equal ID', () => {
+    const active = activeConversationStore.getState(), lists = conversationListStore.getState()
+    const sessions = sessionStore.getState(), timelines = conversationTimelineStore.getState()
+    const send = vi.fn()
+    vi.stubGlobal('window', { pyry: { sendCommand: send } })
+    const row = { id: 'c', name: null, is_promoted: false, is_archived: false, cwd: '/',
+      last_message_ts: '', last_used_at: '', workspace_label: null }
+    const connected: ConnectionStatus = { type: 'connected', ack: {
+      protocol_version: '2', server_id: 'server', conn_id: 'connection', capabilities: ['interactive'] } }
+    let off = () => {}
+    try {
+      conversationListStore.getState().setConversations([row], 'a')
+      conversationListStore.getState().setConversations([row], 'b')
+      sessionStore.setState({ statuses: new Map([['a', connected], ['b', connected]]) })
+      const ownerB = { ...row, serverId: 'b' }, ownerA = { ...row, serverId: 'a' }
+      activeConversationStore.getState().setActiveConversation(ownerB)
+      off = conversationTimelineStore.subscribe(() => activeConversationStore.getState().setActiveConversation(ownerA))
+      requestHistoryPage(historyAskDeps, 'c', 'b-cursor', 'newest')
+      expect(conversationTimelineStore.getState().timelines.get('c')?.serverId).toBe('b')
+      expect(send).toHaveBeenCalledTimes(1)
+      expect(send).toHaveBeenCalledWith({ type: 'requestHistory', serverId: 'b',
+        payload: { conversation_id: 'c', cursor: 'b-cursor', limit: 200 } })
+    } finally {
+      off()
+      activeConversationStore.setState(active, true); conversationListStore.setState(lists, true)
+      sessionStore.setState(sessions, true); conversationTimelineStore.setState(timelines, true)
+      vi.unstubAllGlobals()
+    }
+  })
   it('requests the unknown first page once and discards pending demand', () => {
     const h = harness()
     h.ask(false)

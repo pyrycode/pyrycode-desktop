@@ -283,6 +283,8 @@ export function subscribeHistoryPage(
 
 /** Read current coverage only when a user asks; pending demand is discarded. */
 export interface HistoryAskDeps {
+  /** Capture admission and owning coordinates before any subscriber-visible mutation. */
+  capture?: (conversationId: string) => HistoryAskDeps | null
   sendCommand: (command: RendererCommand) => void
   getHeld: (conversationId: string) => Pick<ConversationSlice, 'history' | 'coverage' | 'localRead' | 'gaps' | 'served' | 'newestCursor'> | null
   markRequested: (conversationId: string, cursor?: string, purpose?: 'older' | 'newest' | 'gap' | 'gap-newest', gapId?: number | string) => void
@@ -298,6 +300,11 @@ export const HISTORY_PAGE_LIMIT = 200
 
 export function requestHistoryPage(deps: HistoryAskDeps, conversationId: string, cursor: string,
   purpose: 'older' | 'newest' | 'gap' | 'gap-newest', gapId?: number | string): void {
+  if (deps.capture) {
+    const scope = deps.capture(conversationId)
+    if (scope !== null) requestHistoryPage(scope, conversationId, cursor, purpose, gapId)
+    return
+  }
   if (deps.canRequest?.(conversationId) === false) return
   const held = deps.getHeld(conversationId)
   if (held?.localRead === 'loading' || held?.history?.status === 'requested') return
@@ -313,6 +320,11 @@ export function requestOlderHistory(
   nearTop: boolean
 ): void {
   if (!nearTop || !conversationId) return
+  if (deps.capture) {
+    const scope = deps.capture(conversationId)
+    if (scope !== null) requestOlderHistory(scope, conversationId, nearTop)
+    return
+  }
   const held = deps.getHeld(conversationId)
   if (held?.localRead === 'loading' || held?.history?.status === 'requested') return
   const coverage = held?.coverage
@@ -322,6 +334,11 @@ export function requestOlderHistory(
 
 /** A visible marker chooses one backwards step, independent of oldest-end completion. */
 export function requestGapHistory(deps: HistoryAskDeps, conversationId: string, gapId: number | string): void {
+  if (deps.capture) {
+    const scope = deps.capture(conversationId)
+    if (scope !== null) requestGapHistory(scope, conversationId, gapId)
+    return
+  }
   const held = deps.getHeld(conversationId)
   const gap = held?.gaps?.find(g => historyGapId(g) === gapId)
   if (gap === undefined) return
@@ -336,24 +353,29 @@ export function requestGapHistory(deps: HistoryAskDeps, conversationId: string, 
   requestHistoryPage(deps, conversationId, cursor ?? '', cursor === undefined ? 'gap-newest' : 'gap', gapId)
 }
 
-export const historyAskDeps: HistoryAskDeps = {
-  sendCommand: (command) => window.pyry.sendCommand(command),
-  canRequest: conversationId => {
-    const host = connectedConversationHostNow(conversationId)
-    const lists = conversationListStore.getState()
-    return activeConversationStore.getState().activeConversation?.id === conversationId && host !== null &&
-      !threadRuntime.isThread(host, conversationId) && !lists.localListReads.has(host) &&
-      lists.byServer.get(host)?.some(row => row.id === conversationId) === true
-  },
-  getHeld: (conversationId) => {
-    const host = connectedConversationHostNow(conversationId)
-    const held = conversationTimelineStore.getState().timelines.get(conversationId)
-    return held?.serverId !== undefined && held.serverId !== host ? null : held ?? null
-  },
-  markRequested: (conversationId, cursor, purpose, gapId) => {
-    const host = connectedConversationHostNow(conversationId)
-    if (host !== null) conversationTimelineStore.getState().markHistoryRequested(conversationId, host, cursor, purpose, gapId)
+function captureHistoryScope(conversationId: string): HistoryAskDeps | null {
+  const host = connectedConversationHostNow(conversationId)
+  const lists = conversationListStore.getState()
+  if (activeConversationStore.getState().activeConversation?.id !== conversationId || host === null ||
+    threadRuntime.isThread(host, conversationId) || lists.localListReads.has(host) ||
+    lists.byServer.get(host)?.some(row => row.id === conversationId) !== true) return null
+  return {
+    sendCommand: command => window.pyry.sendCommand({ ...command, serverId: host }),
+    getHeld: id => {
+      const held = conversationTimelineStore.getState().timelines.get(id)
+      return held?.serverId !== undefined && held.serverId !== host ? null : held ?? null
+    },
+    markRequested: (id, cursor, purpose, gapId) =>
+      conversationTimelineStore.getState().markHistoryRequested(id, host, cursor, purpose, gapId)
   }
+}
+
+export const historyAskDeps: HistoryAskDeps = {
+  capture: captureHistoryScope,
+  canRequest: id => captureHistoryScope(id) !== null,
+  getHeld: id => captureHistoryScope(id)?.getHeld(id) ?? null,
+  markRequested: (id, cursor, purpose, gapId) => captureHistoryScope(id)?.markRequested(id, cursor, purpose, gapId),
+  sendCommand: command => window.pyry.sendCommand(command)
 }
 
 /**

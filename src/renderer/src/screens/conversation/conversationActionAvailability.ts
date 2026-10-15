@@ -20,14 +20,14 @@ export function sendConversationCommand(command: RendererCommand, owningHost?: s
 }
 
 export function useConversationActionAvailability(conversationId: string | null, hostId?: string): boolean {
-  const selectedHost = useActiveHost(conversationId)
-  const serverId = useConversationListStore(s => hostId ?? selectedHost ?? serverIdForOpenConversation(selectConversations(s), conversationId))
+  const selectedHost = useConversationHost(conversationId)
+  const serverId = hostId ?? selectedHost
   return useSessionStore(s => serverId !== null && s.statuses.get(serverId)?.type === 'connected')
 }
 
 // Resolve again immediately before dispatch, before any optimistic state changes.
 export function connectedConversationHostNow(conversationId: string | null, hostId?: string): string | null {
-  const serverId = hostId ?? activeHost(conversationId) ?? serverIdForOpenConversation(selectConversations(conversationListStore.getState()), conversationId)
+  const serverId = hostId ?? conversationHostNow(conversationId)
   const connected = serverId !== null && sessionStore.getState().statuses.get(serverId)?.type === 'connected'
   if (typeof window !== 'undefined') {
     window.pyry?.sendDiagnostic?.({ event: 'conversation-action-availability', code: connected ? 'connected' : 'unavailable' })
@@ -35,13 +35,16 @@ export function connectedConversationHostNow(conversationId: string | null, host
   return connected ? serverId : null
 }
 
-function activeHost(conversationId: string | null): string | undefined {
+/** Selected coordinates take precedence over ambiguous flattened list ownership, including offline. */
+export function conversationHostNow(conversationId: string | null): string | null {
   const active = activeConversationStore.getState().activeConversation
-  return active?.id === conversationId && 'serverId' in active && typeof active.serverId === 'string' ? active.serverId : undefined
+  return active?.id === conversationId && 'serverId' in active && typeof active.serverId === 'string'
+    ? active.serverId : serverIdForOpenConversation(selectConversations(conversationListStore.getState()), conversationId)
 }
-function useActiveHost(conversationId: string | null): string | undefined {
-  return useActiveConversationStore(s => s.activeConversation?.id === conversationId &&
+export function useConversationHost(conversationId: string | null): string | null {
+  const selectedHost = useActiveConversationStore(s => s.activeConversation?.id === conversationId &&
     'serverId' in s.activeConversation && typeof s.activeConversation.serverId === 'string' ? s.activeConversation.serverId : undefined)
+  return useConversationListStore(s => selectedHost ?? serverIdForOpenConversation(selectConversations(s), conversationId))
 }
 
 /** Complete connected creation initialization after the authoritative list arrives, never on reconnect. */

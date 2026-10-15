@@ -74,6 +74,7 @@ function ThreadFixture() {
   const [completeThrough, setCompleteThrough] = useState(0);
   const [scope, setScope] = useState(null);
   const [taskInputs, setTaskInputs] = useState({});
+  const [backgroundTasksOpen, setBackgroundTasksOpen] = useState(false);
   const [turnRunning, setTurnRunning] = useState(false);
   const [connection, setConnection] = useState(undefined);
   const [receipts, setReceipts] = useState([]);
@@ -131,7 +132,7 @@ function ThreadFixture() {
     <output hidden data-testid="read-state">{JSON.stringify({ receipts, scope,
       marks: (rows ?? []).map(row => [row.serverId, row.id, row.read_up_to,
         isConversationUnread(null, null, row, conversationReadRouteStore.getState().epochFor(row.serverId, row.id) !== undefined)]) })}</output>
-    <ThreadItemsTimeline snapshot={snapshot} readInputs={readInputs && { ...readInputs, completeThrough }} sendInputs={{ connection, local: { ...local, hostId: scope.host, conversationId: scope.chat },
+    <ThreadItemsTimeline snapshot={snapshot} backgroundTasksOpen={backgroundTasksOpen} onBackgroundTasksOpenChange={setBackgroundTasksOpen} readInputs={readInputs && { ...readInputs, completeThrough }} sendInputs={{ connection, local: { ...local, hostId: scope.host, conversationId: scope.chat },
       onAction: (host, command) => actions.push([host, command]) }} taskInputs={taskInputs} turnRunning={turnRunning} foldTools onReply={(role, text) => replies.push(role + ':' + text)}
       onOpenMarkdownPath={path => paths.push(path)} />
     <textarea className="composer__input" aria-label="Fixture composer" onKeyDown={event => {
@@ -1015,6 +1016,9 @@ for (const width of [1280, 800]) test('supplied task controls retain lifecycle a
     await capturePairedApp(app, page, '/tmp/builder-1938/panel-' + width + '.png')
     await scope(SECOND_SERVER_ID)
     await batch([work])
+    await expect(panel).toContainText('Review races')
+    await expect(panel).not.toContainText('Review complete')
+    await panel.getByRole('button', { name: 'Close', exact: true }).click()
     await expect(panel).toHaveCount(0)
     const escapesBeforeSwitch = await page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.escapes.length)
     await thread.press('Escape')
@@ -1028,17 +1032,24 @@ for (const width of [1280, 800]) test('supplied task controls retain lifecycle a
     expect(await page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.stops))
       .toEqual([[FIRST_SERVER_ID, SEEDED_ROW.id, 'raw-task'], [SECOND_SERVER_ID, SEEDED_ROW.id, 'raw-task']])
     await scope()
+    await expect(panel).toContainText('Review complete')
+    await panel.getByRole('button', { name: 'Close', exact: true }).click()
     await expect(panel).toHaveCount(0)
     await expect(pill).toHaveCount(0)
     await page.getByRole('button', { name: 'Background tasks', exact: true }).click()
     await expect(panel).toContainText('Review complete')
     await scope(FIRST_SERVER_ID, 'another-chat')
     await batch([work])
+    await expect(panel).toContainText('Review races')
+    await panel.getByRole('button', { name: 'Close', exact: true }).click()
     await expect(panel).toHaveCount(0)
     await pill.click()
     await expect(panel).not.toContainText('Wrong host')
     await expect(stop).toHaveCount(0)
     await scope(FIRST_SERVER_ID, SEEDED_ROW.id, 'new-epoch')
+    await expect(panel).toBeVisible()
+    await expect(panel.locator('li')).toHaveCount(0)
+    await panel.getByRole('button', { name: 'Close', exact: true }).click()
     await expect(panel).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Background tasks', exact: true })).toHaveCount(0)
   } finally { await new Promise<void>((resolve, reject) => server.httpServer!.close(error => error ? reject(error) : resolve())) }

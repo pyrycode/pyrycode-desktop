@@ -33,7 +33,7 @@ import {
   selectConversationAgentFor,
   type ConversationListState
 } from '../../store/conversationListStore'
-import { connectedConversationHostNow, useConversationActionAvailability } from './conversationActionAvailability'
+import { connectedConversationHostNow, useConversationActionAvailability, useConversationHost } from './conversationActionAvailability'
 import { serverIdForOpenConversation } from './unpairAction'
 
 /** Subscribe to the conversation's owner, never the last host whose status changed. */
@@ -46,9 +46,9 @@ export function useSessionSettingsConnected(conversationId: string | null): bool
  *  host's own rows. A null id or an owner that cannot be attributed answers Claude, the wire's reading of
  *  an absent agent. It returns a primitive, so the subscription is Object.is-stable. */
 export const selectAgentForConversation =
-  (conversationId: string | null) =>
+  (conversationId: string | null, owningHost?: string | null) =>
   (s: ConversationListState): WireAgent => {
-    const serverId = serverIdForOpenConversation(selectConversations(s), conversationId)
+    const serverId = owningHost === undefined ? serverIdForOpenConversation(selectConversations(s), conversationId) : owningHost
     return serverId === null || conversationId === null
       ? 'claude'
       : selectConversationAgentFor(serverId, conversationId)(s)
@@ -57,7 +57,8 @@ export const selectAgentForConversation =
 /** The hook every settings control reads its conversation's agent through, with a useMemo-stable selector
  *  per id so a fresh closure per render does not churn the subscription. */
 export function useConversationAgent(conversationId: string | null): WireAgent {
-  const selectAgent = useMemo(() => selectAgentForConversation(conversationId), [conversationId])
+  const host = useConversationHost(conversationId)
+  const selectAgent = useMemo(() => selectAgentForConversation(conversationId, host), [conversationId, host])
   return useConversationListStore(selectAgent)
 }
 

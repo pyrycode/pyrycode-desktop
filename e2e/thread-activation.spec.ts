@@ -173,9 +173,127 @@ test('the overlay follows current thread errors, session replacement and capabil
   await expect(notice).toHaveText('Claude keeps failing to start. Your message is waiting.')
 })
 
+for (const lastHost of [0, 1]) test(`mixed routes with reused IDs scope newest, older, retry and gap history (last list ${lastHost})`, async ({ launchPairedApp }) => {
+  const requests: Envelope[][] = [[], []]
+  const rows = [{ ...SEEDED_ROW, current_session_id: 'session' }, { ...SECOND_SEEDED_ROW, id: SEEDED_ROW.id }]
+  let newest = 1
+  const historyReply = (ask: Envelope, ids: number[], cursor: string, atStart: boolean) => frame('history_page', {
+    entries: ids.map(id => ({ id, type: 'message', ts: stamp, payload: {
+      conversation_id: SEEDED_ROW.id, message_id: `legacy-${id}`, role: 'user', text: `Legacy history ${id}`
+    } })), cursor, at_start: atStart
+  }, ask.id)
+  const replies = (host: number) => (bytes: Uint8Array) => {
+    const ask = decodeEnvelope(bytes); requests[host].push(ask)
+    if (ask.type === 'list_conversations') return [seedConversationsFrame(rows[host])]
+    if (ask.type === 'thread_catch_up') return windowFrames(ask, SEEDED_ROW.id, 'Authoritative owner')
+    if (host === 1 && ask.type === 'request_history' && ask.payload.cursor === '') {
+      return [historyReply(ask, [newest], `legacy-${newest}`, newest > 1)]
+    }
+    return []
+  }
+  const { page, app, servers } = await launchPairedApp({ helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: replies(0) },
+    { secondServer: { buildReplyFrames: replies(1) } })
+  await page.getByText(SEEDED_ROW.name!, { exact: true }).first().click()
+  await expect(page.getByText('Authoritative owner', { exact: true })).toBeVisible()
+  await app.evaluate(({ ipcMain }) => {
+    (globalThis as any).historyOwners = []
+    ipcMain.on('pyry:command', (_event, command) => {
+      if (command.type === 'requestHistory') (globalThis as any).historyOwners.push(command.serverId ?? null)
+    })
+  })
+  await page.evaluate(() => { (globalThis as any).historyListReceipts = []; window.pyry.onDaemonEvent(event => {
+    if (event.type === 'conversationsReceived') (globalThis as any).historyListReceipts.push(event.serverId)
+  }) })
+  for (const host of [1 - lastHost, lastHost]) {
+    await page.evaluate(serverId => window.pyry.sendCommand({ type: 'requestConversations', serverId }), servers[host].serverId)
+    await expect.poll(() => page.evaluate(() => (globalThis as any).historyListReceipts.length)).toBe(host === 1 - lastHost ? 1 : 2)
+  }
+  servers[0].daemon.pushFrame(frame('thread_item_added', { conversation_id: SEEDED_ROW.id, epoch: 'epoch', version: 21,
+    item: item(11, 'List commit barrier') }))
+  await expect(page.getByText('List commit barrier', { exact: true })).toBeVisible()
+  const asks = () => requests[1].filter(r => r.type === 'request_history')
+  const before = asks().length
+  await page.getByText(SECOND_SEEDED_ROW.name!, { exact: true }).first().click()
+  await expect.poll(() => asks().length).toBe(before + 1)
+  expect(await app.evaluate(() => (globalThis as any).historyOwners)).toEqual(['fake-daemon-2'])
+  const thread = page.locator('.conversation__thread')
+  await expect(thread.getByText('Legacy history 1', { exact: true })).toBeVisible()
+  await thread.press('Home')
+  await expect.poll(() => asks().length).toBe(before + 2)
+  expect(asks().at(-1)?.payload.cursor).toBe('legacy-1')
+  servers[1].daemon.pushFrame(frame('error', { code: 'history.unavailable', message: 'synthetic failure' }, asks().at(-1)!.id))
+  await expect(page.getByText('Could not load older messages', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Retry', exact: true }).click()
+  await expect.poll(() => asks().length).toBe(before + 3)
+  expect(asks().at(-1)?.payload.cursor).toBe('legacy-1')
+  servers[1].daemon.pushFrame(historyReply(asks().at(-1)!, [0], 'legacy-start', true))
+  await expect(thread.getByText('Legacy history 0', { exact: true })).toBeVisible()
+  newest = 5
+  await page.getByText(SEEDED_ROW.name!, { exact: true }).first().click()
+  await expect(page.getByText('Authoritative owner', { exact: true })).toBeVisible()
+  await page.getByText(SECOND_SEEDED_ROW.name!, { exact: true }).first().click()
+  await expect.poll(() => asks().length).toBe(before + 4)
+  await expect(thread.getByText('Legacy history 5', { exact: true })).toBeVisible()
+  const gap = thread.locator('[data-history-gap]')
+  await expect(gap).toHaveText('Load earlier messages')
+  await gap.evaluate(node => node.scrollIntoView({ block: 'center' }))
+  await thread.focus()
+  await thread.press('ArrowUp')
+  await expect.poll(() => asks().length).toBe(before + 5)
+  expect(asks().at(-1)?.payload.cursor).toBe('legacy-5')
+  servers[1].daemon.pushFrame(historyReply(asks().at(-1)!, [4, 3, 2], 'gap-complete', true))
+  await expect(thread.getByText('Legacy history 2', { exact: true })).toBeVisible()
+  await expect(gap).toHaveCount(0)
+  await app.evaluate(() => {})
+  expect(await app.evaluate(() => (globalThis as any).historyOwners)).toEqual(Array(5).fill('fake-daemon-2'))
+  expect(requests[0].filter(r => r.type === 'request_history')).toHaveLength(0)
+  expect(requests[1].filter(r => r.type.startsWith('thread_'))).toHaveLength(0)
+  await expect(thread.locator('.bubble')).toHaveCount(6)
+})
+
+test('thread task drawer shares menu and count state across close and conversation switches', async ({ launchPairedApp }) => {
+  const task: ThreadItem = { ...item(12, 'Authoritative task'), kind: 'agent', status: 'running', active: true,
+    agent: 'claude', content: { task_id: 'task', tool_use_id: 'call',
+      task_link: { task_id: 'task', tool_call_id: 'call' }, input: { description: 'Authoritative task' } } }
+  const { page, app, daemon } = await launchPairedApp({ helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
+    const ask = decodeEnvelope(bytes)
+    if (ask.type === 'list_conversations') return [seedConversationsFrame({ ...SEEDED_ROW, current_session_id: 'session' })]
+    if (ask.type !== 'thread_catch_up') return []
+    return [frame('thread_items', { conversation_id: ask.payload.conversation_id, epoch: 'epoch', version: 20,
+      items: [task], final: false }, ask.id),
+      windowFrames(ask, String(ask.payload.conversation_id), '')[1]]
+  } })
+  const panel = page.getByRole('dialog', { name: 'Background tasks', exact: true })
+  const count = page.getByRole('button', { name: '1 task running', exact: true })
+  await count.click()
+  await expect(panel).toContainText('Authoritative task')
+  await panel.getByRole('button', { name: 'Close', exact: true }).click()
+  await expect(panel).toHaveCount(0)
+  await page.getByRole('button', { name: 'More actions', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Background tasks', exact: true }).click()
+  await expect(panel).toContainText('Authoritative task')
+  await expect(count).toHaveAttribute('aria-expanded', 'true')
+  daemon.pushFrame(frame('conversations', { conversations: [{ ...SEEDED_ROW, current_session_id: 'session' },
+    { ...SECOND_SEEDED_ROW, current_session_id: 'session' }] }))
+  await page.getByText(SECOND_SEEDED_ROW.name!, { exact: true }).first().click()
+  await expect(panel).toContainText('Authoritative task')
+  await page.getByText(SEEDED_ROW.name!, { exact: true }).first().click()
+  await expect(panel).toContainText('Authoritative task')
+  for (const width of [1280, 800]) {
+    await page.setViewportSize({ width, height: 800 })
+    await capturePairedApp(app, page, `/tmp/builder-1908/repaired-drawer-${width}.png`)
+  }
+  await count.click()
+  await expect(panel).toHaveCount(0)
+  await count.click()
+  await expect(panel).toBeVisible()
+  await panel.getByRole('button', { name: 'Close', exact: true }).press('Escape')
+  await expect(panel).toHaveCount(0)
+})
+
 test('reused conversation IDs keep selected metadata, content and commands on their owning host', async ({ launchPairedApp }) => {
   const requests: Envelope[][] = [[], []]
-  const rowB = { ...SECOND_SEEDED_ROW, id: SEEDED_ROW.id, current_session_id: 'session' }
+  const rowB = { ...SECOND_SEEDED_ROW, id: SEEDED_ROW.id, current_session_id: 'session', agent: 'codex' as const }
   const replies = (host: number) => (bytes: Uint8Array) => {
     const request = decodeEnvelope(bytes); requests[host].push(request)
     if (request.type === 'list_conversations') return [seedConversationsFrame(host === 0 ? { ...SEEDED_ROW, current_session_id: 'session' } : rowB)]
@@ -189,7 +307,7 @@ test('reused conversation IDs keep selected metadata, content and commands on th
   await page.getByText(SECOND_SEEDED_ROW.name!, { exact: true }).first().click()
   await expect(page.getByText('Host B content', { exact: true })).toBeVisible()
   const models = (value: string) => frame('model_list', { conversation_id: SEEDED_ROW.id, dropped_models: 0,
-    models: [{ value, display_name: value, resolved_model: `claude-${value}-5`, effort_levels: [], supports_auto_mode: false, truncated_fields: null }] }, undefined, 'session')
+    models: [{ value, display_name: value === 'haiku' ? 'Haiku' : 'Opus', resolved_model: `claude-${value}-5`, agent: value === 'haiku' ? 'codex' : 'claude', effort_levels: [], supports_auto_mode: false, truncated_fields: null }] }, undefined, 'session')
   servers[1].daemon.pushFrame(models('haiku'))
   servers[1].daemon.pushFrame(frame('model_announced', { conversation_id: SEEDED_ROW.id, model: 'claude-haiku-5', truncated: false }, undefined, 'session'))
   await page.locator('.composer__model-label').click()
@@ -235,6 +353,7 @@ test('reused conversation IDs keep selected metadata, content and commands on th
     // Use the production footer's write control with equal session IDs on both hosts.
     await expect(page.locator('.composer__permission')).toBeVisible()
     await page.locator('.composer__permission').click()
+    if (host === 1) await expect(page.getByRole('menuitem', { name: 'Auto approval', exact: true })).toHaveCount(0)
     await page.getByRole('menuitem', { name: 'Plan', exact: true }).click()
     await expect.poll(() => requests[host].filter(r => r.type === 'set_session_settings').length).toBe(before[host] + 1)
     expect(requests[1 - host].filter(r => r.type === 'set_session_settings')).toHaveLength(before[1 - host])

@@ -24,8 +24,7 @@ import type { StoreApi } from 'zustand/vanilla'
 import type { RunSettingsWriteStore } from './runSettingsWriteStore'
 import { conversationTimelineStore, type ConversationTimelineStore } from './conversationTimelineStore'
 import { activeConversationStore } from './activeConversationStore'
-import { conversationListStore, selectConversations } from './conversationListStore'
-import { serverIdForOpenConversation } from '../screens/conversation/unpairAction'
+import { conversationHostNow } from '../screens/conversation/conversationActionAvailability'
 import { requestRunConfigSnapshot } from '../screens/conversation/runConfigSnapshot'
 
 /** Compile-time exhaustiveness guard: a new SettingsChange field without a case is a type error. */
@@ -67,10 +66,7 @@ export function translateWriteEvent(event: DaemonEvent): RunSettingsWriteEvent |
 export function subscribeRunSettingsWrite(
   onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
   dispatch: (event: RunSettingsWriteEvent) => void,
-  getOwningServerId: () => string | null = () => serverIdForOpenConversation(
-    selectConversations(conversationListStore.getState()),
-    activeConversationStore.getState().activeConversation?.id ?? null
-  ),
+  getOwningServerId: () => string | null = () => conversationHostNow(activeConversationStore.getState().activeConversation?.id ?? null),
   logReconnect?: () => void
 ): () => void {
   return onDaemonEvent((event) => {

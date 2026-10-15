@@ -281,6 +281,51 @@ arrival adds a new assistant row; unchanged-membership growth is proved by the f
 Observation-root replacement within a surviving hook was source-reviewed rather than
 separately exercised in the browser.
 
+Before any adversarial geometry changes, the second case requires the exact ordered
+Markdown contents of all 100 assistant rows (`History row 0` through `History row 99`)
+within a local 15-second deadline, then requires zero streaming cursors. Its
+`feed-readiness` attachment records elapsed feed time, committed count and tail.
+`FakeDaemon.pushFrame` completion proves sending only; the subsequent six animation
+frames settle layout after the positive DOM barrier. Hook-work counting remains
+disabled until the existing measurement reset, so feed readiness cannot inflate
+the bounded-work oracle.
+
+The [feed-readiness investigation](../../specs/architecture/2033-scroll-work-feed-readiness.md#revisions)
+found the unchanged natural-scheduling baseline green on build-hp-1. An identical
+temporary 6× renderer slowdown in control and repaired runs exposed the deadline:
+the original five-second assertion failed while delivery continued, reaching all
+100 rows and the expected tail at 8257ms; the repaired run observed readiness at
+7489ms and passed the remaining geometry/cleanup checks. The timeline control ran
+1 executed, 0 passed, 1 failed, 0 skipped; the repaired comparison ran 1 executed,
+1 passed, 0 failed, 0 skipped. Both configured 2 workers and used 1, with zero
+retries and report errors. This establishes deadline
+sensitivity under slower rendering, without reproducing the original build-fractal-2
+scheduling trace or establishing a transport defect. Fifteen seconds matches the
+sibling's initial-render allowance and gives headroom above the measured 8.26-second
+completion while retaining the fixture's 60-second test limit. The slowdown and
+timeline observer are diagnostic only and do not ship.
+
+The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2034#issuecomment-6203933037)
+confirms Linux validation at implementation `bcc8400efdbe759af1e0c38283d4b70fc5aae6a0`:
+
+| Run | Executed / passed / failed / skipped | Configured / effective workers |
+| --- | --- | --- |
+| Ten separate consecutive named-case invocations | 10 / 10 / 0 / 0 | 2 / 1 each |
+| Both scroll-work cases | 2 / 2 / 0 / 0 | 2 / 1 |
+| Complete configured fake suite | 432 / 432 / 0 / 19 | 2 / 2 |
+
+The named `gaps, long hidden runs and target changes preserve a valid anchor and clean observations`
+case was present and passed in every named invocation and the full report; both
+scroll-work cases passed in the two-case and full runs. Every readiness attachment
+records 100 rows ending in `History row 99`. All runs used zero retries and had no
+report-level errors; clipboard/parallel projects stayed unchanged. The plan records
+the inherited skip reasons, JSON/stderr paths and archive hashes. Dispatcher verifier
+gate 6 independently passed the named case at evidence-only head
+`9fec6f564bd82e84242bbe8a435d76c1eb401152`: 432 executed/passed, 0 failed,
+19 skipped, zero retries and report errors, with 4 configured/effective workers.
+That gate corroborates the separate two-worker acceptance run rather than supplying
+its concurrency evidence.
+
 Recorded evidence for [#1892](../../specs/architecture/1892-bounded-scroll-anchor.md#revisions):
 
 - The recorded pre-fix main renderer at `214d15625f51495c2e07772d320003dc1eec7588`

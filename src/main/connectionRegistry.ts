@@ -244,6 +244,7 @@ export function createConnectionRegistry(deps: ConnectionRegistryDeps): Connecti
    */
   const viewOf = (resolve: () => DaemonConnection): ActiveConnection => ({
     get hostedResources() { return resolve().hostedResources },
+    get hostedApps() { return resolve().hostedApps },
     requestHostSystemPrompt: (requestId) => resolve().requestHostSystemPrompt(requestId),
     setHostSystemPrompt: (text, requestId) => resolve().setHostSystemPrompt(text, requestId),
     send: (payload) => resolve().send(payload),

@@ -144,8 +144,9 @@ it('bounds and expires cancellation bookkeeping without reviving retired targets
     const view = h.resources.openView(app, '1.0.0'), result = view.request(asset)
     view.retire(); expect(await result).toMatchObject({ error: 'retired' })
   }
-  expect(h.sent.filter(frame => frame.type === 'app_cancel')).toHaveLength(20)
-  expect(vi.getTimerCount()).toBe(16)
+  // Retain headroom for the actual control send as well as its acknowledgement.
+  expect(h.sent.filter(frame => frame.type === 'app_cancel')).toHaveLength(15)
+  expect(vi.getTimerCount()).toBe(15)
   vi.advanceTimersByTime(5000)
   expect(vi.getTimerCount()).toBe(0)
   h.receive('app_cancelled', h.sent[1].id, { request_id: h.sent[0].id, app_id: app })

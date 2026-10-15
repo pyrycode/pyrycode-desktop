@@ -5,6 +5,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createConnectionRegistry } from './connectionRegistry'
 import { createHostedResources } from './transport/hostedResources'
+import { createHostedApps } from './transport/hostedApps'
 import type { DaemonConnection } from './daemonConnection'
 import type { PairedServerRecord, PairedServerStore } from './pairedServerStore'
 import type { SwitchAgentPayload } from '../shared/wire/types'
@@ -135,6 +136,8 @@ function createFactoryFake() {
     const noop = (): void => {}
     return {
       hostedResources,
+      hostedApps: createHostedApps({ resources: hostedResources, nextId: () => 2,
+        now: () => '2026-10-10T18:00:03Z', connected: () => false }),
       queryThread: () => {},
       requestHostSystemPrompt: () => {},
       setHostSystemPrompt: () => {},
@@ -543,6 +546,8 @@ describe('createConnectionRegistry', () => {
       expect(registry.connectionFor('beta')?.hostedResources).toBe(factory.for('beta').hostedResources)
       expect(registry.connectionFor('alpha')?.hostedResources).not.toBe(registry.active.hostedResources)
       expect(registry.connectionFor('missing')).toBeNull()
+      expect(registry.connectionFor('alpha')?.hostedApps).not.toBe(registry.connectionFor('beta')?.hostedApps)
+      expect(registry.connectionFor('beta')?.hostedApps).toBe(registry.active.hostedApps)
     })
     it('forwards context requests only to the named host', async () => {
       const { factory, registry } = harness([record('alpha'), record('beta')])

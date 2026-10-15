@@ -55,7 +55,7 @@ Taken directly from mobile's `NoiseSessionPump` + `OkHttpRelayTransport`:
 Mobile relies on Kotlin runtime defaults (`encodeDefaults = true`). TS interfaces carry no runtime defaults, so "always emit defaults" (AC #3) is split by how each field is enforced:
 
 - **Literal-typed fields enforce themselves.** `InnerFrameV2.v: 2` and `HelloClientPayload.role: 'client'` are literal types — you cannot construct the object without them, so `JSON.stringify` always emits them. **No runtime injector.**
-- **Non-literal defaults need one constructor.** `makeHelloClientPayload` injects `protocol_versions: ['v2']` (reusing `PROTOCOL_VERSION` from `types.ts`) and the fixed `client_features` report below. `capabilities` is a caller argument defaulting to `[]`; production `loadDialConfig` in `daemonConnection` supplies `['interactive', 'multi_agent', 'stop_background_task']` through [hello exchange](hello-exchange.md). `interactive` enables the structured stream; `multi_agent` unlocks Codex conversations, frames and model rows on supporting v0.27.0+ daemons; `stop_background_task` detects support for that verb. The advertised set belongs at the caller: the [capability probe](real-claude-liveness-e2e.md#capability-gated-skip--the-one-check-that-runs-after-the-daemon-exists) supplies exactly its spec's required set. Optional `lastEventId` and legacy `lastSeenTs` become `last_event_id` and `last_seen_ts` only when provided, never `null`. `HelloClientPayload` is the only encode-side payload with non-literal defaults, so it has one constructor. `Envelope` has no defaulted fields; callers build it directly.
+- **Non-literal defaults need one constructor.** `makeHelloClientPayload` injects `protocol_versions: ['v2']` (reusing `PROTOCOL_VERSION` from `types.ts`) and the fixed `client_features` report below. `capabilities` is a caller argument defaulting to `[]`; production `loadDialConfig` in `daemonConnection` supplies `['interactive', 'multi_agent', 'stop_background_task', 'hosted_apps_v1']` through [hello exchange](hello-exchange.md). `interactive` enables the structured stream; `multi_agent` unlocks Codex conversations, frames and model rows on supporting v0.27.0+ daemons; `stop_background_task` detects support for that verb; `hosted_apps_v1` enables host-scoped discovery/resource negotiation with the background handlers installed. The advertised set belongs at the caller: the [capability probe](real-claude-liveness-e2e.md#capability-gated-skip--the-one-check-that-runs-after-the-daemon-exists) supplies exactly its spec's required set. Optional `lastEventId` and legacy `lastSeenTs` become `last_event_id` and `last_seen_ts` only when provided, never `null`. `HelloClientPayload` is the only encode-side payload with non-literal defaults, so it has one constructor. `Envelope` has no defaulted fields; callers build it directly.
 - **`client_version` gets an app-name prefix, added once, here.** `input.clientVersion` is the bare app version (`app.getVersion()`, e.g. `"0.1.0"`); the constructor writes `client_version` as `` `${CLIENT_APP_NAME}/${input.clientVersion}` `` (`CLIENT_APP_NAME = 'pyrycode-desktop'`), the `<app>/<MAJOR>.<MINOR>.<PATCH>` format the daemon parses (pyrycode `docs/protocol-mobile.md` § `hello`, "`client_version` format"; \#1612). The prefix is added inside this constructor rather than by the caller because the same bare `clientVersion` also feeds the relay `User-Agent` header and the session-start log banner, and prefixing it upstream would double-prefix both (see [daemon connection lifecycle](daemon-connection-lifecycle.md) `clientVersion` field). Once a daemon release enforces a minimum `client_version` it cannot parse, an unprefixed hello is rejected — desktop shipped this format ahead of that gate.
 
 ### Desktop feature report
@@ -323,8 +323,11 @@ stateless correspondence only, without a pending-operation table or ownership cl
 These validators retain no connection or assembly state. The main-process consumer,
 `src/main/transport/hostedResources.ts`, now owns admission, correlation, assembly
 and retirement. A trusted caller selects `registry.connectionFor(serverId)`, then
-uses `connection.hostedResources.openView(appId, release).request(input, signal?)`.
-Each view pins the connection, app, release, unique view scope and generation;
+uses `connection.hostedApps.openView(appId)` for a readiness-gated binding. It
+returns a view only for an authoritative running record with an active release;
+the underlying `hostedResources.openView(appId, release)` supplies the transport
+lifetime without establishing discovery readiness. Each view pins the connection,
+app, release, unique view scope and generation;
 request/credit/cancel IDs come from the connection's existing monotonic allocator.
 Only an authenticated named connection whose current acknowledgement includes
 `hosted_apps_v1` dispatches requests. Other cases settle locally as `unavailable`.
@@ -347,11 +350,14 @@ active progress timeout. Other traffic cannot extend them. Abort, view `retire()
 and owner `hostedResources.retire()` settle owned work once; connection lifecycle
 resets invalidate all views and discard partial bytes. Connected cancellation uses
 its own envelope ID, matched independently of the retired target and checked
-against the original request/app. At most sixteen cancel records survive, each
-for five seconds. Late frames cannot revive work. Failed attempted POST/PUT/PATCH/
+against the original request/app. Discovery lists/cancellations and resource
+credits/cancellations share sixteen control reservations, counting pending
+correlations and held sends separately. Cancellation correlations expire after
+five seconds; held-send reservations survive until send observation or connection
+reset. Late frames cannot revive work. Failed attempted POST/PUT/PATCH/
 DELETE requests report `uncertain: true` and are never replayed. See
 [hosted resource lifecycle](daemon-connection-lifecycle.md#hosted-resource-views)
-for cleanup, failure categories and caller retirement responsibilities.
+for cleanup, failure categories, bulk discovery-driven retirement and caller lifetimes.
 
 `onDriverEvent` routes hosted responses before `parseInboundMessage`. Using only
 `decodeEnvelope` for that routing would both erase forbidden fields and reject
@@ -365,11 +371,13 @@ authentication and update-required errors take precedence over hosted correlatio
 and retain their connection-wide effect. Unrelated traffic follows the existing
 parser and remains runnable during held transfers.
 
-Host-wide discovery reconciliation, cursor authenticity/expiry, capability
-advertisement and readiness refresh remain with
-[#1959](https://github.com/pyrycode/pyrycode-desktop/issues/1959); validators do not
-advertise `hosted_apps_v1`. The isolated viewer and its selected-view binding remain
-with [#1960](https://github.com/pyrycode/pyrycode-desktop/issues/1960), and real paired
+Host-wide discovery reconciliation, cursor expiry/restarts and readiness refresh
+now belong to `hostedApps`; connection hello construction advertises
+`hosted_apps_v1`. Validators remain stateless. See
+[hosted readiness and retirement](daemon-connection-lifecycle.md#deadlines-and-retirement)
+for atomic snapshots, contiguous updates, fixed deadlines and explicit retry. The
+isolated viewer remains with [#1960](https://github.com/pyrycode/pyrycode-desktop/issues/1960),
+Apps rows/navigation/stable links with [#1928](https://github.com/pyrycode/pyrycode-desktop/issues/1928), and real paired
 round trips/browser interaction/SQL persistence acceptance with later slices and
 [#1929](https://github.com/pyrycode/pyrycode-desktop/issues/1929). Manifest/build
 validation and asset-handle containment remain daemon-owned.
@@ -403,8 +411,10 @@ pacing, corruption, fixed deadlines, cleanup, cancellation and host/view isolati
 correlation cases, plus positive message/control processing during a held transfer;
 `connectionRegistry.test.ts` checks named-host delegation. The malformed-frame cases
 assert immediate settlement, reused active/view/reservation capacity, discarded late
-replies and cleared timers. These are background fixtures; they establish no
-production advertisement, viewer interaction or live SQL persistence.
+replies and cleared timers. `hostedApps.test.ts` adds authoritative discovery and
+readiness-driven retirement; fake-driver tests exercise production advertisement
+and fresh per-host negotiation. These background fixtures establish no viewer
+interaction or live SQL persistence.
 
 ## Configuration and usage
 

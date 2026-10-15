@@ -65,7 +65,7 @@ that answer's cursor to disappear before reading the baseline. Requiring the
 cursor to appear first prevents an absence assertion from passing before the delta
 is rendered. Keep the later replay-processing barrier before comparing rows;
 settlement and replay processing are separate observations. The
-[delivery verification](daemon-connection-lifecycle.md#delivery-verification) records
+[delivery verification](daemon-connection-disconnected-delivery.md#delivery-verification) records
 the controlled reproduction and counted automatic, explicit and terminal evidence.
 
 The footer needs a session-settings snapshot before its controls can render.

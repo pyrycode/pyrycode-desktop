@@ -1,4 +1,5 @@
 import { dispatchThreadQuery } from './threadQueryCommand'
+import { createHostedAppViews } from './hostedAppView'
 import { createAppUpdateController, registerAppUpdate, createQuitDrain } from './appUpdate'
 import { APP_UPDATE_STATE_CHANNEL } from '../shared/ipc/appUpdate'
 import { createMessageLifecycle } from './messageLifecycle'
@@ -537,6 +538,7 @@ app.whenReady().then(() => {
       }),
     diagnosticLog
   })
+  Object.defineProperty(app, 'hostedAppViews', { value: createHostedAppViews(registry, diagnosticLog) })
   // ⭐ THE STAND-IN IS RETIRED (#1129). `const connection = registry.active` stood here from #1117
   // so that call sites written for a single connection kept working while the registry held many;
   // it answered for the most recently PAIRED server, which is not a routing decision at all. Four

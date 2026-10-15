@@ -206,3 +206,35 @@ Mounted lifecycle coverage now includes `creating a fresh thread opens catch-up 
 Lifecycle regression names in `e2e/thread-activation.spec.ts`: `ordinary app selects a thread host beside a complete legacy host and resumes its saved checkpoint`; `ordinary thread submission settles authenticated identity, routes queue actions and invalidates session prompts`; `a fresh offline app draws its protected authoritative saved history`; `reconnect upgrades and downgrades the same host without mixing content writers`. Factory tests additionally reject late downgrade replies, separate offline display provenance from current capability, and reject replaced-session activity. Existing item/cache/query tests retain restore overlap, incomplete batches, epoch/generation reuse, deletion and host-isolation coverage.
 
 Live handoff: pending credentialed execution of `e2e/real-claude-thread.spec.ts`, `real-daemon-history-on-open.spec.ts`, `real-claude-phase-reconnect.spec.ts`, the queue delivery/send-now specs and the adapted permission/Codex specs. The thread/history acceptance requires a source-stamped isolated daemon binary; helpers observe actual accepted app capabilities separately from the fixture's separate-pairing probe. The dispatcher must record Desktop/binary revisions, named-scenario executed/passed/failed/skipped counts and returned JSON attachment paths. Collection supplies no execution proof. No live run or binary revision is claimed by this builder.
+
+
+## Manual documentation completion
+
+Juhana requested manual documentation and merge after the documentation dispatcher
+hit the retained-checkout refusal before starting. Documentation records current
+behaviour and the verified local evidence. Credentialed live acceptance is still
+pending and is not marked passed by this handoff or the authorised merge.
+
+- Production activation, per-host accepted capability and update-required recovery:
+  `docs/knowledge/features/thread-runtime.md`, `daemon-connection.md` and
+  `daemon-connection-lifecycle.md`.
+- Item storage, complete-checkpoint recovery, older paging, offline provenance and
+  cleanup: `thread-item-store.md`, `chat-history.md`, `chat-history-api.md`,
+  `chat-history-storage.md` and `chat-history-testing.md`.
+- Main-owned public identity IPC, device/message settlement and genuine queue
+  handles: `command-channel.md`, `composer-send.md` and `thread-runtime.md`.
+- Owning-session metadata/prompts, task controls, committed visible reads and
+  acknowledgement: `session-id-store.md`, `modal-store-bridge.md`,
+  `conversation-shell.md`, its turn/task/render/scroll topics and `channel-list.md`.
+- Required `thread`, no legacy fallback and retained reducer boundaries:
+  `thread-timeline.md`, `conversation-timeline-store.md` and `thread-runtime.md`.
+- Scripted/native fake protocol, readiness and packaging lessons:
+  `e2e-harness.md` and `chat-history-testing.md`.
+- Counted local proof and the eight unexecuted credentialed scenarios:
+  `thread-runtime.md` and `live-e2e-runbook.md`. Earlier live runs remain historical
+  and are not used as production thread acceptance.
+
+The catalog links the new runtime topic. Related activation references now point
+to production composition rather than claiming that the adapters are inactive.
+Only documentation changed after the fully tested source revision. The complete
+features-tree documentation guard and whitespace check passed.

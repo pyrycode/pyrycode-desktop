@@ -8,13 +8,14 @@ Introduced in [#1](../codebase/1.md); the thread was bound to the live [session 
 
 Renders the open chat's live timeline and composer. Messages scroll behind translucent controls across the full pane. At history start, the first row keeps its 97px header clearance and 20px horizontal inset; while following, the newest row clears the complete occupied input area. The sidebar and footer actions, context reading, attachment button, model, effort and permission selectors retain their desktop layout. Sending with Enter or the button adds an optimistic echo; see [Composer send](composer-send.md). The [Markdown reader](conversation-shell-markdown-reader.md) retains its independent overlay; its translucent adaptation remains follow-up work.
 
-The injectable `ThreadItemsTimeline` route instead combines retained daemon snapshots
-with scoped local pending rows from [Composer send](composer-send.md#data-flow).
-A separate inactive live-state adapter uses
-[summary-only session authority](session-id-store.md#summary-authority-in-the-inactive-thread-adapter)
-and projects [live status and lifecycle inputs](conversation-shell-turn-status.md#session-scoped-live-presentation)
-with [host-bound prompts](modal-store-bridge.md#session-scoped-thread-prompts).
-Production selection remains [#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
+The production `ThreadItemsTimeline` combines retained daemon snapshots with scoped
+local pending rows from [Composer send](composer-send.md#data-flow).
+The [thread runtime](thread-runtime.md) supplies
+[summary-only session authority](session-id-store.md#summary-authority-in-the-thread-runtime),
+[live status and lifecycle inputs](conversation-shell-turn-status.md#session-scoped-live-presentation)
+and [host-bound prompts](modal-store-bridge.md#session-scoped-thread-prompts).
+Every host must accept `thread`; a host without it shows the daemon update-required
+state and draws no conversation rows. There is no legacy fallback.
 After acceptance, text and valid supplied attachment facts come exclusively from the
 daemon `user_message`; local content is retired rather than matched by text or kept
 as accepted truth. No resend repairs display, and legacy echoes, `queueStore` and
@@ -181,9 +182,10 @@ The seams this screen exposes are in [Seams](conversation-shell-seams.md).
 `ThreadItemsTimeline.readInputs` supplies a received summary `row`, `completeThrough`,
 `readerOpen` and optionally an injected publisher. The view pairs them with its immutable
 `snapshot`; select the same host/conversation/epoch in `conversationReadRouteStore`.
-This is a supplied seam, with production activation and combined live-daemon proof owned by
-[#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908). Thread content does not pass
-through `reduceTimeline` or legacy row-key/history evidence.
+Production composition supplies these inputs from the selected host's runtime,
+received summaries and certified newest/catch-up completion. Thread content does
+not pass through `reduceTimeline` or legacy row-key/history evidence.
+Credentialed live acceptance remains distinct from this integration.
 
 `readTargetFor(undefined, inputs)` takes the received `last_shown_version`, never maximum
 item IDs, revisions or held `version`. Admission requires matching snapshot/summary scope,
@@ -325,6 +327,18 @@ See [verification boundaries](development-verification-what-each-test-tier-prove
 [the design](../../specs/architecture/1382-offline-conversation-actions.md).
 
 ## Edge cases and limitations
+
+The legacy timeline, roster and receipt descriptions below document retained
+implementation history. They are unhooked from paired-host production content.
+The [thread runtime](thread-runtime.md) defines current rendering and live controls.
+The authoritative view shares the screen's actual scroll pin. Its ordinary
+Background tasks menu and task-count pill control the same drawer.
+Current-session hook stops, refusals, errors and foreground tools come from
+canonical reports and live readings, so a missing legacy timeline cannot hide them.
+Tool rows with unchanged immutable source facts reuse their presentation while
+another row streams. Cache presentation only for frozen source objects; mutable
+supplied test inputs must still be reprojected.
+
 
 - An empty connected timeline keeps a focusable history scroller with `EmptyThread` inside. An empty offline chat omits `Timeline` unless a pending questionnaire, permission/trust or owned rejection needs it; its chrome and Top overlay still mount and measure.
 - Since [#179](../codebase/179.md), the timeline is the **only** thread surface — no split-brain, no empty second region. `MessageThread`/`selectMessages` are retained but unread residue.

@@ -296,11 +296,12 @@ The renderer test `restores snapshots without arrival metadata using their suppl
 held order` covers the older-snapshot fallback. These fixtures complement unfinished
 progress tests; accepting covered values must not weaken fences above checkpoint.
 
-These supplied-state tests cover cache preparation and local hydration. Production
-thread subscriptions, capability activation, actual offline screen display and
-reconnect from the saved complete checkpoint through #1902 remain
-[#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908). Existing legacy
-browser/liveness proofs below do not establish that daemon-item integration.
+These supplied-state tests cover cache preparation and local hydration.
+`e2e/thread-activation.spec.ts` exercises the production runtime's saved restore,
+reconnect, interrupted recovery, epoch replacement and cleanup. Its counted final
+fake-suite results are recorded in the [activation plan](../../specs/architecture/1908-thread-activation.md#manual-completion-shared-fake-migration-and-client-regressions).
+Existing legacy browser/liveness proofs below do not establish daemon-item live
+acceptance. Production uses the protected collection, not indexed partial paging.
 
 [`savedTimelineRestorer.test.ts`](../../../src/renderer/src/store/savedTimelineRestorer.test.ts)
 covers explicit admission, row identity metadata and coverage, equal-id host
@@ -462,3 +463,18 @@ exist on `ThreadItem`. A local `PersistedThreadItem` type omits `keyof TurnEndMe
 `turnBoundary` arm and leaves every other arm untouched, and the assertion compares against that
 instead. The fix for a live-only field belongs here, narrowing the guard's comparison type —
 never widening `DurableThreadItem` to carry a field the persistence layer must keep stripping.
+
+
+## Packaged native storage check
+
+`scripts/history-native-smoke.mjs` builds an isolated application and verifies
+protected history in the packaged Electron runtime. Dependency collection must
+use that isolated application as `projectDir`. Building from the repository root
+can package the ordinary Node database module even when the staged copy was
+rebuilt for Electron, producing a native-module ABI mismatch after packaging.
+
+The final macOS arm64 check for the thread activation passed with Electron 33.4.11,
+Node 20.18.3 and `better-sqlite3` 12.4.1. The native module was unpacked from the
+archive and the production OS keychain backend was available. A Linux
+`basic_text` backend cannot prove protected storage and must remain a failure.
+Fake encryption unit tests and an unpackaged launch are separate evidence.

@@ -98,6 +98,31 @@ cleanup, counted acceptance and the separate unresolved Welcome stall.
 Existing row regressions also re-deliver hover and observe actual `:hover` with
 exact computed treatment; those local observations retain styling sensitivity.
 
+### Scripted and native thread fixtures
+
+`launchPairedApp` defaults to `threadMode: 'scripted'`. Its test-only publisher in
+`e2e/fixtures/scriptedThread.ts` translates event scripts into daemon-authored
+items, appends, revisions, session readings and certified query replies. It never
+runs the retired renderer reducer. Each fake host owns independent conversation
+epochs, versions, queue handles and session state. Own-send identity comes from
+the authenticated fake connection; foreign message-ID collisions stay foreign.
+
+`threadMode: 'native'` preserves exact wire scripts, including unanswered queries
+and deliberate old-daemon handshakes. Native thread, activation and frame tests use
+it. Scripted compatibility aliases for `request_history` are test inputs only;
+the assembled app sends `thread_catch_up` and `thread_page`. Tests of outbound
+protocol must observe the actual request rather than count the alias invocation.
+
+History responses are split into bounded item batches and end with a separate
+completion marker. The default empty-thread wait must complete before a spec
+pushes live content. Otherwise initial recovery can erase the intended live test
+state. The pure fixture unit tests check ownership, revisions, history certificates
+and idempotent terminal reports. Tests that exclusively assert retired receipt or
+roster reconstruction remain explicitly skipped for the
+[cleanup ticket](https://github.com/pyrycode/pyrycode-desktop/issues/2020).
+The [activation plan](../../specs/architecture/1908-thread-activation.md#manual-completion-shared-fake-migration-and-client-regressions)
+lists every skipped case and final counted evidence.
+
 ### Two-server launches
 
 [#1091](https://github.com/pyrycode/pyrycode-desktop/issues/1091) gave `launchPairedApp` an opt-in

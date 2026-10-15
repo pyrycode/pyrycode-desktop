@@ -34,7 +34,7 @@ Read all callers before broadening what an empty identifier means.
 Renderer units are static `renderToStaticMarkup` in Node: they prove markup and pure decisions,
 not effects, focus, scrolling or publication. The existing `rendererFixture` in
 [`e2e/thread-items.spec.ts`](../../../e2e/thread-items.spec.ts) supplies route, immutable
-snapshot, summary, completion and reader inputs to the inactive item view. Keep
+snapshot, summary, completion and reader inputs to the isolated item view. Keep
 `ConversationListData` mounted when replacing `App`; writing a mark directly into the list
 store does not test received owning-daemon confirmation.
 
@@ -127,8 +127,9 @@ in the verdict. Any result needs its own revision/configuration, executed/failed
 named cases and setup-attachment review before native acceptance. Replacement-epoch captures at
 1280×773 and 800×773 show existing bubbles and copy/reply controls; the supplied fixture omits
 the surrounding sidebar/top/input chrome, so they do not prove integrated chrome fidelity.
-No real-Claude/live-daemon test ran or was required for this supplied seam. Production
-activation and combined live proof remain [#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
+No real-Claude/live-daemon test ran or was required for this supplied seam.
+Production activation has separate [counted fake-suite evidence](thread-runtime.md#validation-boundaries).
+Credentialed live acceptance remains pending in the live runbook.
 
 ## Hosted app link verification
 

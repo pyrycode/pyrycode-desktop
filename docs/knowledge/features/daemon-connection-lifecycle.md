@@ -267,10 +267,10 @@ including all 54 thread-query cases present and passed (54 executed, 0 failed,
 success through preload` and `initial empty-epoch catch-up reaches authenticated
 transport`. Fake-transport Playwright gate 6 recorded 386 executed/passed,
 0 failed and 3 skipped; the gate report's named `thread` selection did not run,
-so that browser count supplies no named thread-test proof. Production handshake
-and capability requests are unchanged. Coordination/checkpoint decisions belong
-to [#1902](https://github.com/pyrycode/pyrycode-desktop/issues/1902); production
-activation and integration acceptance belong to [#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
+so that browser count supplies no named thread-test proof. Production now requires
+accepted `thread` alongside its existing `interactive` request. The
+[thread runtime](thread-runtime.md) owns coordinator inputs and checkpoint recovery.
+Its counted fake-suite proof remains separate from pending credentialed live acceptance.
 
 ## `failed`, not `disconnected`
 

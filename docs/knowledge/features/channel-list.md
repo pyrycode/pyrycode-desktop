@@ -336,11 +336,11 @@ success green. See [the dot's paint contract](conversation-status-dot.md).
 
 #### Thread-route unread and attention
 
-`ConversationStatusDotControl` and the badge's `conversationStatusNow(row)` select read mode
-from `conversationReadRouteStore.epochFor(row.serverId, row.id)`. Selection is explicit and
-host/conversation scoped, with an epoch value; optional summary fields alone never select it.
-The store starts empty. The supplied authoritative view remains inactive in production until
-[#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
+`ConversationStatusDotControl` and the badge's `conversationStatusNow(row)` use
+thread read policy for every host-stamped row, including before its first snapshot
+or opening. `conversationReadRouteStore` additionally retains the accepted epoch
+for scoped read publication. Optional summary fields do not negotiate capability.
+Off-screen attention comes from that host/conversation's bound live state.
 
 On a selected thread route, unread means received `last_shown_version > read_up_to`, even
 without a held timeline. Zero is present and equality is read. Missing either field makes
@@ -352,8 +352,8 @@ can confirm reading. See [committed thread read publication](conversation-shell.
 Both local stamp paths use `stampLastReadFor`. Any explicitly selected thread with the same
 conversation ID suppresses stamping, including when its metadata is missing: local marks
 are ID-keyed, so choosing only one host's matching row would leave another path to a stamp.
-Non-thread routes retain received `latest_entry_id > read_up_to` when both fields exist,
-otherwise the existing nullable timeline/local-count fallback and stamps.
+Host-stamped production rows always suppress legacy local read stamps. Retained
+unattributed callers keep the previous history/local-count policy.
 
 The actual host-stamped row supplies read fields and mode. Attention still ranks pending
 permission/trust/questions above working, then new messages, then idle. Archived rows stay

@@ -41,3 +41,19 @@ under 100 written lines, zero exports or consumer changes.
   dispatcher-owned complete gate with a filtered passing run. No new live test or
   real-Claude check is required. Any queued native evidence is explicitly pending,
   never a pass; commit inspected evidence on return before native acceptance.
+
+## Validation evidence
+2026-10-15: candidate `0573bc79d97199427d6eebdf4f36f9d3785f7321`
+contains main `dc55fcf5dbf361c6733a6cf1c318e65b27418c21`. Install, all five
+pre-verify checks, build and docs guard passed. Units: 10,292 executed/passed,
+0 failed, 3 existing skips, 408 passing files. Logs: `/tmp/builder-1998/pre-verify.log`
+and `/tmp/builder-1998/build.log`. The scenario and configuration remain byte-for-byte
+unchanged from merged main.
+
+Native task `0234f9aa222747faa60ae91272b3c4c0a8c191f095a48b442728b5adbb6e44ce`
+targets that exact pushed candidate. It is queued, with no assigned machine or
+executed result yet. Pending reports: `/tmp/builder-1998/mac-results/desktop/`
+(`playwright.json`, `playwright.list.log`, `capture.json`, `execution.log`, returned
+configuration and setup attachments). Retrieve with `fleet-task.py await <task>
+--out /tmp/builder-1998/mac-results`, inspect the full suite and named scenario,
+then commit the counted native result here. No native pass is claimed.

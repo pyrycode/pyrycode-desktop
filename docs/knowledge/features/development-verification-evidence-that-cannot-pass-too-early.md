@@ -68,6 +68,16 @@ settlement and replay processing are separate observations. The
 [delivery verification](daemon-connection-disconnected-delivery.md#delivery-verification) records
 the controlled reproduction and counted automatic, explicit and terminal evidence.
 
+Bulk fixture feeds need a positive commit barrier too. Send completion and animation
+frames can finish while replies are still reaching the renderer; a tail-only deadline
+can reject an intact but slow feed before the geometry assertions begin.
+[`thread-scroll-work.spec.ts`](../../../e2e/thread-scroll-work.spec.ts) checks all 100
+ordered Markdown texts within a local 15-second limit, then checks cursor absence
+before mutating rows. Keep readiness outside measured hook work. Its
+[bounded-anchor verification](conversation-shell-scroll-pin.md#bounded-anchor-and-growth-verification)
+records the controlled late-completion evidence and deadline rationale; passing
+unthrottled baseline repetitions alone did not establish the cause.
+
 The footer needs a session-settings snapshot before its controls can render.
 Check the current refresh trigger. A lone idle event does not produce a transition
 from running to idle. Drive the prerequisite transition when the fixture requires it.

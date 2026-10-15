@@ -50,6 +50,11 @@ Invalid requests/limits/continuations use `invalid-request`; malformed saved met
 ## Open Questions
 None. Protected per-record envelopes are the smallest way to verify index associations without decoding unrelated records; header counts eliminate the continuation probe.
 
+## Documentation handoff
+- Pending documentation stage: `docs/knowledge/features/chat-history-api.md`, API — callable authoritative operations, additive schema-4 migration, partial page contracts and compact continuation binding/invalidation/bounds.
+- Pending documentation stage: `docs/knowledge/features/chat-history-results.md`, Results and failure preservation and Bounded page results — authoritative protected structural columns, static failures, atomic preservation and authoritative-only scoped removal.
+- Pending documentation stage: `docs/knowledge/features/thread-item-store.md`, Snapshots and completed batches and Repair and unfinished-batch checkpoint fences — selected arrival/range facts remain partial while saved checkpoint, repair and availability metadata remain unchanged.
+
 ## Revisions
 2026-10-15: Verifier finding 1 reproduced on disk: maximum-length lone-surrogate owners/epoch produce a continuation rejected by its own admission limit. Replace redundant owner/epoch token fields with `{ format: 'daemon-items', identity, before }`. The encrypted UUID is checked against the exact UTF-16LE scope lookup and validated header in one transaction; that immutable committed identity binds the owner and epoch, including after reopen. Replacement and deletion/recreation still rotate the identity. Fixed format, 36-character UUID and safe-integer boundary serialize to at most 101 ASCII bytes, independent of admitted strings; the production protection bridge expands that plaintext to at most 136 base64 bytes before OS protection. Generation and admission share the 65,536-character encoded limit; excessive injected protection overhead fails closed before returning a token. On-disk regressions use 8,192 lone surrogates per coordinate/epoch and base64-expanding protection with 0/4,096 extra bytes, follow the returned token after fresh reopen, and reject it after epoch replacement.
 

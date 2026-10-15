@@ -62,4 +62,4 @@ None.
 - Test-first: changing the existing preservation expectations failed on activation reset, exit reset and inactive deletion clearing (3 failures, 42 passes).
 - After the final merge of `origin/main` (`0d299bd26ede`), pre-verify passed all five checks: 415 unit files, 10,224 passed tests and 30 existing skips. `npm run build` and `npm run check:docs` passed.
 - Focused final navigation/cleanup units: 66 executed, 66 passed across five files.
-- Complete configured native fake-transport suite: pending managed candidate execution and returned-artifact inspection.
+- Complete configured native fake-transport suite: managed task `db47ef552e357d3da36abf43f54891dbcfc0aee1588e9a697235800c8860e37e` is queued for pushed candidate `4d695203d5035b69ba02d77f1368e2809ead676d`. Native acceptance remains pending. On return, inspect `desktop/capture.json`, `desktop/playwright.json`, `desktop/playwright.list.log`, `desktop/execution.log`, `desktop/playwright.config.ts` and every fake-daemon-setup attachment; record executed/passed/failed/skipped/retry counts and skip reasons here in an evidence commit. No native pass is claimed.

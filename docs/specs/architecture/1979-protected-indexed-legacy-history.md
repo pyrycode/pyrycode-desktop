@@ -71,3 +71,15 @@ None. A simpler shape was considered: a single encrypted timeline cell cannot su
 **Date:** 2026-10-15
 
 Size recount: approximately 760 written lines (300 backend/schema, 150 native/build/lockfile, 230 tests, 80 plan), zero existing consumer changes, at most five exported declarations, four acceptance behaviours and six classified error outcomes.
+
+## Revisions
+
+2026-10-15: Native dependency resolution adds 347 lockfile lines rather than the forecast allowance. Measured final scope is approximately 910 written lines including lockfile and plan, with two exported factories and no consumer migration. Confirmed parentage #1930 → #1973 → #1979 prohibits another split; applied needs-human:sizing and continued the one independently usable backend/runtime deliverable. Without that floor/depth restriction, native packaging infrastructure would be the potential seam; it cannot independently establish this backend's protection.
+
+Reconstruction groups child records by kind/parent to avoid repeatedly scanning every evidence record for each receipt/gap. The packaged check compares parser-normalized snapshots structurally, because JSON property order does not establish content equality. The smoke has explicit nonzero failure exit and static stage codes.
+
+Linux packaged evidence: `/tmp/builder-1979/native-linux-4/runtime.stdout`, linux/x64, Electron 33.4.11, embedded Node 20.18.3, better-sqlite3 12.4.1; packaged=true, asar=true, unpacked=true, backend=gnome_libsecret; 1 executed, 1 passed, 0 failed, 0 skipped. Host-Node focused database suite: 6 executed, 6 passed. These are distinct runtime proofs.
+
+Pending native artifact: macOS arm64 production-keychain packaged close/reopen proof, running `npm run check:history-native -- /tmp/builder-1979/native-macos-<run>` on the pushed candidate through manager admission. Retain `runtime.stdout` and `runtime.stderr` from that directory and attach counted runtime evidence to the PR. The current memory-runtime-smoke fleet recipe still clones core and runs Go; desktop-fake-suite runs the browser tier. Neither is a Desktop packaged SQLite smoke. The issue's recovery note explicitly directs recording macOS as pending in the PR; no macOS pass is claimed.
+
+To make the existing Mac manager route usable without dispatcher changes, `e2e/history-native.spec.ts` executes the isolated packaging smoke as one ordinary Playwright case and records counted runtime stdout/stderr. Request desktop-fake-suite on the exact pushed commit; its unmodified full configuration then includes this native check. This replaces the earlier pending-only delivery route. No fake encryption or new shared fixture is introduced.

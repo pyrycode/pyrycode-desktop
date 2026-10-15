@@ -28,6 +28,11 @@ files:
   - out/**
   - package.json
 
+# Keep the native adapter loadable outside asar; builder rebuilds it for each target ABI.
+asarUnpack:
+  - node_modules/better-sqlite3/**
+npmRebuild: true
+
 win:
   # The arch list is spelled out because the default is the BUILD HOST's, which is the one silent
   # way this config could hand the Surface an installer it cannot run: `electron-builder --win` on

@@ -63,6 +63,10 @@ to commit before asserting the finished marker. One shared latest-request slot c
 wrong chat because main correlates replies by request ID and suppresses repeated pending asks.
 Reply to `list_conversations` with the current roster, retaining the single-row launch seed and
 both rows afterwards; a catch-all one-row list response can silently remove quiet ownership.
+The [controlled shared-ID proof](../../specs/architecture/1936-visible-thread-read-marks.md#revisions)
+failed at the historical-child commit barrier (`0 tools`, expected `1 tool`); selecting the
+owning request passed the existing identity, finished-marker and navigation assertions. Preserve
+that barrier and request ordering when reusing the scenario to validate another platform.
 
 The [final verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/1965#issuecomment-6188903924)
 records the configured Linux gate on `20d0f07140931f3f0aaad4977f6a186c5f761727`, 2026-10-15:
@@ -76,6 +80,29 @@ The three skips are macOS-only badge/window lifecycle cases. Units recorded 10,2
 recorded 3 passed and 2 deliberately skipped by `--no-suite`, with typecheck subsequently in build.
 These results supersede the earlier red complete gates; a focused pass or a baseline comparison
 alone did not satisfy that full-suite requirement.
+
+The [connect-roster verifier](https://github.com/pyrycode/pyrycode-desktop/pull/2000#issuecomment-6189606015)
+records the unchanged scenario/configuration on `1e6cc84ce2117dd6c06a31d11af901f25ac7d6eb`,
+2026-10-15: the complete Linux gate ran **427 executed, 427 passed, 0 failed, 3 skipped,
+0 flaky**, four actual workers and zero retries. The named connect-roster scenario above was
+present and passed: **1 executed, 1 passed, 0 failed, 0 skipped**, retry 0. The skips were two
+macOS badge cases and the macOS window-reopen case. Retained reports are
+`/work/Projects/pyrycode-desktop-agents/logs/verifier-gate_#1998.pass.json` and
+`verifier-gate_#1998_6.log` (Playwright JSON) with its stderr log in that directory; shared
+verifier evidence bundle `7e872c636b8d6eb367de8e665f72659b5feea9c4cbce0cf933466bd04cf00a29`
+includes the verdict and report tail, with the full-report pointer in `pointers.json`.
+
+This Linux pass does not establish macOS acceptance. The
+[native validation plan](../../specs/architecture/1998-connect-roster-native-validation.md#validation-evidence)
+tracks managed `desktop-fake-suite` task
+`0234f9aa222747faa60ae91272b3c4c0a8c191f095a48b442728b5adbb6e44ce` for candidate
+`0573bc79d97199427d6eebdf4f36f9d3785f7321`. The last successful task read found it queued;
+no completed native report is present in the inspected ticket bundles. Native acceptance remains
+pending; documentation's managed task read also returned `Unknown task action`. The dispatcher
+must retain the complete configured suite with four workers and zero
+retries, then return reports to the builder to inspect and commit revision, launcher/configuration
+provenance, full-suite and named-case counts, skips and setup attachments. Add those inspected
+results here after that evidence commit; a filtered pass cannot replace the complete gate.
 
 Separate native/macOS evidence for older candidate `ddb9bce8db99546129037f00713b753f603562d9`
 remains unverified and handed to the dispatcher: task

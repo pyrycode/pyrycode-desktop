@@ -54,11 +54,34 @@ identical to the original macOS failure. Scenario-file SHA256:
 `5bcaa01b1d16335b5a97589e2e36a6be79ce44bca85ea4123c600872a8457a32`.
 
 Native task `0234f9aa222747faa60ae91272b3c4c0a8c191f095a48b442728b5adbb6e44ce`
-targets that exact pushed candidate. It is queued, with no assigned machine or
-executed result yet. Pending reports: `/tmp/builder-1998/mac-results/desktop/`
+targets that exact pushed candidate. At the last successful task read it was queued,
+with no assigned machine or executed result. Pending reports: `/tmp/builder-1998/mac-results/desktop/`
 (`playwright.json`, `playwright.list.log`, `capture.json`, `execution.log`, returned
 configuration and setup attachments). Retrieve with `fleet-task.py await <task>
 --out /tmp/builder-1998/mac-results`, inspect the full suite and named scenario,
 then commit the counted native result here. No native pass is claimed.
 Last task read: 2026-10-15 09:50 UTC, still queued with no assigned runner/result.
 PR #2000 carries this pending complete-native-gate handoff explicitly.
+
+The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2000#issuecomment-6189606015)
+records the complete Linux gate on `1e6cc84ce2117dd6c06a31d11af901f25ac7d6eb`:
+427 executed, 427 passed, 0 failed, 3 skipped, 0 flaky; four actual workers and zero
+retries. The named connect-roster scenario was present and passed: 1 executed,
+1 passed, 0 failed, 0 skipped, retry 0. Skips were two macOS badge cases and the
+macOS window-reopen case. Reports remain at
+`/work/Projects/pyrycode-desktop-agents/logs/verifier-gate_#1998.pass.json` and
+`verifier-gate_#1998_6.log`, with corresponding stderr logs in that directory.
+Documentation inspected the retained verifier handoff and ticket bundles on
+2026-10-15; none contains a completed native report. Both verifier and documentation
+managed task reads returned `Unknown task action`, leaving the last successful read unchanged.
+The dispatcher must return native reports to the builder for inspection and a
+counted evidence commit here before native acceptance. Linux results do not meet
+the macOS criterion. Ownership/commit-barrier guidance and current evidence are
+recorded in [development verification](../../knowledge/features/development-verification.md#authoritative-thread-read-evidence).
+
+Operator blocker: the macOS acceptance criterion still lacks an inspected result
+from the managed `desktop-fake-suite` recipe. The configured verifier command,
+`npx playwright test --reporter=json`, ran on Linux and cannot supply native proof.
+Restore managed task-result access and retrieve the existing native task's reports;
+its current execution status is unverified. Native counts and retained result
+locations can be folded into the guidance only after the builder's evidence commit.

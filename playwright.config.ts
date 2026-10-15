@@ -18,6 +18,7 @@ const CLIPBOARD_SPECS = [
   'composer-paste-image',
   'markdown-reader-menu',
   'message-copy',
+  'message-reply',
   'message-side-actions',
   'offline-conversation-actions',
   'thread-items'
@@ -61,6 +62,9 @@ export default defineConfig({
   // `(^|\/)` pins the match to a path boundary and `[^/]*` keeps it inside one segment, so the partition
   // now depends on the FILENAME alone — which is what both configs always claimed.
   testIgnore: REAL_TIER,
+  // One X display per run on Linux, whatever command started it, so a gate and an agent's own run in one
+  // container stop sharing the container's display. See e2e/fixtures/runDisplay.ts.
+  globalSetup: './e2e/fixtures/runDisplay.ts',
   // Files spread across workers; the tests inside one file still run in order in one worker. Every
   // launch already owns its own resources: a fresh `mkdtemp` user-data dir, fake relay forwarders and
   // daemons on ephemeral loopback ports (`port: 0`), and its own Electron process. The one thing every

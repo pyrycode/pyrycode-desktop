@@ -8,6 +8,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  appWindow,
   attachLaunchFate,
   createLaunchFateLog,
   expectDesktopIsolated,
@@ -59,7 +60,7 @@ const test = base.extend<{ launched: { page: Page; app: ElectronApplication } }>
         fate
       })
       try {
-        const page = await app.firstWindow()
+        const page = await appWindow(app)
         await use({ page, app })
       } finally {
         // Best-effort: a throwing finally would replace the causal error AND abort the unwind before

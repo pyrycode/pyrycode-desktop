@@ -56,3 +56,10 @@ Write changed regression expectations first and observe failures on existing beh
 ## Open Questions
 
 None.
+
+## Validation
+
+- Test-first: changing the existing preservation expectations failed on activation reset, exit reset and inactive deletion clearing (3 failures, 42 passes).
+- After the final merge of `origin/main` (`0d299bd26ede`), pre-verify passed all five checks: 415 unit files, 10,224 passed tests and 30 existing skips. `npm run build` and `npm run check:docs` passed.
+- Focused final navigation/cleanup units: 66 executed, 66 passed across five files.
+- Complete configured native fake-transport suite: pending managed candidate execution and returned-artifact inspection.

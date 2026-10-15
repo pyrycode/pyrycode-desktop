@@ -16,7 +16,7 @@ function scenario(second = false) {
       revision++; const next = record(state, title); items = [next]; return frame('app_updated', next)
     },
     remove() { revision++; items = []; return frame('app_removed', { app_id: appId, revision }) },
-    options: { helloAck: { server_id: second ? SECOND_SERVER_ID : FIRST_SERVER_ID, capabilities: ['hosted_apps_v1'] },
+    options: { helloAck: { server_id: second ? SECOND_SERVER_ID : FIRST_SERVER_ID, capabilities: ['thread', 'hosted_apps_v1'] },
       buildReplyFrames(bytes: Uint8Array) {
         const r = JSON.parse(Buffer.from(bytes).toString()); seen.push(r)
         if (r.type === 'list_conversations') return [seedConversationsFrame(second ? SECOND_SEEDED_ROW : undefined)]
@@ -144,7 +144,7 @@ test('paging and retry', async ({ launchPairedApp }) => {
 
 test('unsupported and unauthorized', async ({ launchPairedApp }) => {
   const s = scenario()
-  const { page, app, forwarder } = await launchPairedApp({ ...s.options, helloAck: { server_id: FIRST_SERVER_ID, capabilities: [] } })
+  const { page, app, forwarder } = await launchPairedApp({ ...s.options, helloAck: { server_id: FIRST_SERVER_ID, capabilities: ['thread'] } })
   await expect(host(page)).toContainText('Apps unsupported')
   await page.evaluate(server => window.pyry.refreshHostedApps(server), FIRST_SERVER_ID)
   expect(await page.evaluate(server => window.pyry.refreshHostedApps(server), 'unknown')).toEqual({ ok: false, error: 'refused' })

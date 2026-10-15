@@ -14,7 +14,7 @@ function scenario(second = false) {
   return { seen, replies, pages, frame, hold() { held = true }, holdPage(value: boolean) { holdPage = value },
     update(next = release, nextState = 'running') { release = next; state = nextState; revision++;
       title = `<App & trusted> ${revision}`; return frame('app_updated', record()) },
-    options: { helloAck: { server_id: second ? SECOND_SERVER_ID : FIRST_SERVER_ID, capabilities: ['hosted_apps_v1'] },
+    options: { helloAck: { server_id: second ? SECOND_SERVER_ID : FIRST_SERVER_ID, capabilities: ['thread', 'hosted_apps_v1'] },
       buildReplyFrames(bytes: Uint8Array) {
         const r = JSON.parse(Buffer.from(bytes).toString()); seen.push(r)
         if (r.type === 'list_conversations') return [seedConversationsFrame(second ? SECOND_SEEDED_ROW : undefined)]

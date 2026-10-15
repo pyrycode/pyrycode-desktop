@@ -622,8 +622,8 @@ export function ConversationScreen({
           rendered, so the overlay (Re-pair above all) still shows when an offline host leaves the
           Timeline nothing to draw; the region then stays empty rather than missing. */}
       <div className="conversation__message-area">
-      {authoritative && authoritativeSnapshot === null && queryState?.type === 'loading' && <p role="status">Loading messages…</p>}
-      {authoritative && authoritativeSnapshot === null && queryState?.type === 'failed' && <ComposerHistoryFailure retryable
+      {authoritative && !daemonOutdated && authoritativeSnapshot === null && queryState?.type === 'loading' && <p role="status">Loading messages…</p>}
+      {authoritative && !daemonOutdated && authoritativeSnapshot === null && queryState?.type === 'failed' && <ComposerHistoryFailure retryable
         onRetry={() => { if (selectedHost !== null) threadRuntime.query('retry', selectedHost) }} />}
       {authoritative && authoritativeSnapshot && <ThreadItemsTimeline snapshot={authoritativeSnapshot} pin={threadPin}
         backgroundTasksOpen={panelOpen} onBackgroundTasksOpenChange={setPanelOpen}

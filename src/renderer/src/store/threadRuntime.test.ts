@@ -117,7 +117,7 @@ describe('production thread composition', () => {
     expect(send.mock.calls[1][0]).toMatchObject({ serverId: 'one', query: { type: 'thread_catch_up' } })
     r.dispose()
   })
-  it('applies an uninterrupted append burst once on the next frame and flushes before any other event', async () => {
+  it('defers an uninterrupted append burst to the next frame and flushes it before any other event', async () => {
     const callbacks: (() => void)[] = []
     const frame = { request: vi.fn((callback: () => void) => callbacks.push(callback)), cancel: vi.fn() }
     const send = vi.fn()
@@ -155,6 +155,32 @@ describe('production thread composition', () => {
     expect(frame.cancel).toHaveBeenCalledTimes(2)
     callbacks.forEach(callback => callback())
     off()
+  })
+  it('applies held appends on suspend and on a burst long enough to outlast paused frames', async () => {
+    const frame = { request: vi.fn(() => 1), cancel: vi.fn() }
+    const send = vi.fn()
+    const r = createThreadRuntime({ send, read: async () => ({ status: 'missing' }), log: vi.fn(), frame })
+    r.event(connected('one', true))
+    await r.open('one', 'chat').done
+    const request = send.mock.calls[0][0]
+    for (const payload of [{ version: 1, final: false, items: [{ id: 1, rev: 1, order: 1, kind: 'assistant_message',
+      status: 'running', active: true, shown: true, summary: '', content: { text: '' } }] },
+    { version: 1, items: [], final: true, lower_order: 0, upper_order: 1, continuation: 0, older_exists: false }])
+      r.event({ type: 'threadReply', serverId: 'one', conversationId: 'chat', requestId: request.requestId,
+        correlation: { id: 1, ts: '2026-10-15T00:00:00Z' }, reply: { type: 'thread_items', payload: { conversation_id: 'chat', epoch: 'e', ...payload } } as never })
+    let rev = 1
+    const append = () => r.event({ type: 'threadUpdate', serverId: 'one', conversationId: 'chat',
+      correlation: { id: 2, ts: '2026-10-15T00:00:00Z' }, update: { type: 'thread_text_append', payload: {
+        conversation_id: 'chat', epoch: 'e', version: rev + 1, item_id: 1, base_rev: rev, rev: ++rev, text: 'x' } } })
+    const text = () => (r.items.getState().snapshot('one', 'chat')!.items[0].content as { text: string }).text
+    for (let i = 0; i < 255; i++) append()
+    expect(text()).toBe('')
+    append()
+    expect(text()).toHaveLength(256)
+    append(); append()
+    r.suspend()
+    expect(text()).toHaveLength(258)
+    r.dispose()
   })
   it('keeps offline authoritative display separate from current capability and resumes complete progress', async () => {
     const { runtime: r, read, send } = fixture()

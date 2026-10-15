@@ -753,7 +753,7 @@ function messageFor(code: string): string {
     case 'update-required':
       return 'This app is too old for this host. Update Pyrycode to reconnect.'
     case 'daemon-update-required':
-      return 'The Pyrycode daemon on this host is too old for this app. Update pyry on the host to reconnect.'
+      return 'The Pyrycode daemon on this host needs an update. Update pyry on the host to reconnect.'
     case 'not-paired':
       return 'No paired pyrybox — pair a device to connect.'
     case 'malformed-hello-ack':
@@ -1330,6 +1330,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
           parkedDriver = driver
           driver = null
           emitFailed('update-required', messageFor('daemon-update-required'), undefined, 'daemon')
+          // Messages held for this host are refused now, never delivered after a later daemon update.
+          failHeldMessages(true)
           return
         }
         authenticated = true
@@ -1346,11 +1348,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       case 'message': {
         // An outdated daemon's frames reach nothing: no rows, prompts or replies (#1908). A
         // connection-fatal error still takes precedence and ends this host's state as it always has.
-        if (parkedDriver !== null) {
-          if (!isConnectionFatalError(event.plaintext)) return
-          driver = parkedDriver
-          parkedDriver = null
-        }
+        if (parkedDriver !== null && !isConnectionFatalError(event.plaintext)) return
         try {
           const envelope = parseJsonObject(event.plaintext)
           // Connection-fatal errors retain precedence even when they name a hosted request.
@@ -1451,8 +1449,9 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               failAttachmentRetrievals()
               abandonHistoryRequests()
               generation++
-              const halted = driver
+              const halted = driver ?? parkedDriver
               driver = null
+              parkedDriver = null
               halted?.stop()
               emitFailed('update-required', undefined, inbound.updateRequired.minClientVersion)
               return
@@ -3249,7 +3248,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     try {
       if (!isRendererCommand({ type: 'sendMessage', payload })) throw new Error('Invalid message')
       const bytes = buildSendMessage({ id: nextEnvelopeId, ts: now(), payload })
-      if (stopped || heldMessages.length >= 128 || heldMessageBytes + bytes.byteLength > 1024 * 1024) {
+      if (stopped || parkedDriver !== null || heldMessages.length >= 128 || heldMessageBytes + bytes.byteLength > 1024 * 1024) {
         notifySend(observe, { type: 'dropped', reason: 'send-refused' })
         delivery(payload, 'not-sent')
         return
@@ -3478,6 +3477,13 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   }
 
   function requestHistory(payload: RequestHistoryPayload): void {
+    // Every accepted connection negotiated `thread` (#1908), so a legacy history ask is refused here
+    // as well as being unhooked in the renderer. The path below is deleted with the legacy route (#2020).
+    if (authenticated) {
+      deps.diagnosticLog?.event({ event: 'history-request-refused', code: 'thread-route' })
+      failHistoryRequest(payload.conversation_id, 'unavailable')
+      return
+    }
     if (driver === null || !authenticated) {
       failHistoryRequest(payload.conversation_id, 'unavailable')
       return

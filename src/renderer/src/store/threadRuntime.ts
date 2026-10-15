@@ -15,6 +15,7 @@ import { connectThreadLiveProjection } from './threadLiveProjection'
 import { subscribeChatHistoryRemoval } from './chatHistoryRemoval'
 
 const key = (host: string, chat: string) => JSON.stringify([host, chat])
+const MAX_HELD_APPENDS = 256
 
 /** Coalesces streamed text appends until the next animation frame (#1887 on the thread route). */
 export interface ThreadFrameScheduler {
@@ -175,7 +176,9 @@ export function createThreadRuntime(deps: {
         // An uninterrupted append burst publishes on the next frame, in arrival order with its own
         // host and conversation; the first append schedules it and later ones never postpone it.
         held.push(event)
-        if (frameHandle === undefined) frameHandle = deps.frame.request(() => { frameHandle = undefined; flush() })
+        // A window whose frames are paused (minimised) still applies a long burst, in order.
+        if (held.length >= MAX_HELD_APPENDS) flush()
+        else if (frameHandle === undefined) frameHandle = deps.frame.request(() => { frameHandle = undefined; flush() })
         return
       }
       // Any other event is an ordering boundary: earlier appends apply first.
@@ -204,9 +207,8 @@ export function createThreadRuntime(deps: {
   }
   function flush(): void {
     if (frameHandle !== undefined) { deps.frame?.cancel(frameHandle); frameHandle = undefined }
-    const batch = held
-    held = []
-    for (const event of batch) handle(event)
+    // One at a time from the front, so an event that throws leaves the later ones held, not lost.
+    while (held.length > 0) handle(held.shift()!)
   }
   function handle(event: StampedDaemonEvent): void {
     if (disposed || event.serverId === null) return

@@ -11572,7 +11572,10 @@ type MirrorsTransportEvent = DecodedHistoryEvent extends HistoryTimelineEvent ? 
 const _historyEventMirrorsBothWays: [MirrorsIpcEvent, MirrorsTransportEvent] = [true, true]
 void _historyEventMirrorsBothWays
 
-describe('createDaemonConnection — requestHistory (history page request/reply, #1222)', () => {
+// Unreachable since #1908: every accepted connection negotiated `thread`, and main refuses a legacy
+// history ask on it (see "refuses legacy history on an accepted thread connection"). The legacy route
+// and these tests are deleted together in #2020.
+describe.skip('createDaemonConnection — requestHistory (history page request/reply, #1222)', () => {
   /** The conversation the request names, and therefore the one the reply describes. */
   const CONV = 'conv-hist'
   /** A daemon-minted opaque cursor — the committed example, kept intact so a "tidying" rewrite shows. */
@@ -12829,7 +12832,8 @@ describe('update-required rejection (#1613)', () => {
 })
 
 describe('daemon without thread is update-required (#1908)', () => {
-  const DAEMON_MESSAGE = 'The Pyrycode daemon on this host is too old for this app. Update pyry on the host to reconnect.'
+  const DAEMON_MESSAGE = 'The Pyrycode daemon on this host needs an update. Update pyry on the host to reconnect.'
+  const message = (message_id: string): SendMessagePayload => ({ conversation_id: 'conv', message_id, text: message_id })
   const legacyAck = (capabilities: string[] = ['interactive', 'hosted_apps_v1']) => encodeEnvelope({ id: 2,
     type: 'hello_ack', ts: FIXED_TS, payload: { protocol_version: 'v2', server_id: 'srv-1', conn_id: 'conn-1', capabilities } })
   const list = encodeEnvelope({ id: 3, type: 'conversations', ts: FIXED_TS, payload: { conversations: [] } })
@@ -12878,7 +12882,7 @@ describe('daemon without thread is update-required (#1908)', () => {
     connection.stop()
   })
 
-  it('lets a pairing rejection from the outdated daemon end the host as before', async () => {
+  it('lets a pairing rejection from the outdated daemon end the host as before, still sending nothing', async () => {
     const { connection, sink, drivers } = build()
     connection.start()
     await tick()
@@ -12887,6 +12891,53 @@ describe('daemon without thread is update-required (#1908)', () => {
       payload: { code: 'auth.invalid_token', message: 'private', retryable: false } }) })
     expect(emitted(sink).at(-1)).toMatchObject({ type: 'failed', error: { code: 'pairing-rejected' } })
     expect(emitted(sink).at(-1)).not.toHaveProperty('cause')
+    const before = drivers[0].sent.length, events = emitted(sink).length
+    connection.requestConversations()
+    drivers[0].emit({ type: 'message', plaintext: list })
+    expect(drivers[0].sent).toHaveLength(before)
+    expect(emitted(sink)).toHaveLength(events)
+    connection.stop()
+  })
+
+  it('stops the parked driver on the app-too-old error, ending supervision for this host', async () => {
+    const { connection, sink, drivers } = build()
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: legacyAck() })
+    drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({ id: 4, type: 'error', ts: FIXED_TS,
+      payload: { code: 'client.update_required', message: 'private', retryable: false } }) })
+    expect(drivers[0].stopped).toBe(true)
+    expect(emitted(sink).at(-1)).toMatchObject({ type: 'failed', error: { code: 'update-required', retryable: false } })
+    expect(emitted(sink).at(-1)).not.toHaveProperty('cause')
+    connection.stop()
+  })
+
+  it('refuses held and new messages for the outdated host and never delivers them after the update', async () => {
+    const { connection, sink, drivers } = build()
+    connection.send(message('held'))
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: legacyAck() })
+    connection.send(message('while-outdated'))
+    const deliveries = emitted(sink).filter(event => event.type === 'messageDelivery')
+    expect(deliveries.at(-1)).toMatchObject({ messageId: 'while-outdated', status: 'not-sent' })
+    drivers[0].emit({ type: 'relay-link-down', code: 1006 })
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    expect(drivers[0].sent.map(bytes => decodeEnvelope(bytes).type)).not.toContain('send_message')
+    connection.stop()
+  })
+
+  it('refuses legacy history on an accepted thread connection and settles the ask', async () => {
+    const { log, records } = captureLog()
+    const { connection, sink, drivers } = build({ diagnosticLog: log })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    const before = drivers[0].sent.length
+    connection.requestHistory({ conversation_id: 'conv-42', cursor: '', limit: 10 })
+    expect(drivers[0].sent).toHaveLength(before)
+    expect(emitted(sink).at(-1)).toMatchObject({ type: 'historyRequestFailed', conversationId: 'conv-42' })
+    expect(records).toContainEqual({ event: 'history-request-refused', code: 'thread-route' })
     connection.stop()
   })
 

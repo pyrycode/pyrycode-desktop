@@ -985,14 +985,12 @@ app.whenReady().then(() => {
         // Direct to the connection method (mirrors sendMessage), no orchestrator — a dequeue is
         // ungated fire-and-forget. Sends dequeue_message; no reply is expected (the daemon re-broadcasts
         // its queue_state as the observable effect, #294). Inert no-op when not connected (#300).
-        (command.serverId === undefined ? routeConversation(command.payload.conversation_id, command.serverId)
-          : registry.connectionFor(command.serverId))?.dequeueMessage(command.payload)
+        routeConversation(command.payload.conversation_id, command.serverId)?.dequeueMessage(command.payload)
         return
       case 'sendQueuedNow':
         // #1726: the dequeueMessage route, verbatim — routed by conversation, fire-and-forget, inert when
         // not connected. The daemon's next queue_state and its user `message` push are the effect.
-        (command.serverId === undefined ? routeConversation(command.payload.conversation_id, command.serverId)
-          : registry.connectionFor(command.serverId))?.sendQueuedNow(command.payload)
+        routeConversation(command.payload.conversation_id, command.serverId)?.sendQueuedNow(command.payload)
         return
       case 'interrupt': {
         // ROUTED BY CONVERSATION (#1092), mirroring the newSession arm below and no longer by server —

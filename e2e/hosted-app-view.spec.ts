@@ -219,7 +219,11 @@ for (const encoding of ['Blob', 'FormData']) {
 
 for (const cause of ['close', 'view-replacement', 'parent', 'document-bind', 'document-navigation', 'fetch-pagehide', 'preload-pagehide'] as const) {
   test(`Fetch bulk cancellation never promotes a queued mutation on ${cause}`, async ({ launchPairedApp }) => {
-    const s = scenario(), { app, daemon } = await launchPairedApp(s.options)
+    const s = scenario(), { app, daemon, page } = await launchPairedApp(s.options)
+    if (cause === 'fetch-pagehide') {
+      // Keep initial app discovery active alongside the fixture's strict conversation selection.
+      await expect(page.getByRole('button', { name: 'Example running', exact: true })).toBeVisible()
+    }
     await open(app, FIRST_SERVER_ID, cause === 'parent')
     await expect.poll(() => evaluate(app, 'document.body.dataset.loaded')).toBe('first-dynamic')
     const raw = cause === 'preload-pagehide'

@@ -90,3 +90,5 @@ Lifecycle proof maps to these executed tests in `src/main/chatHistoryMigration.t
 - Unsupported database and unavailable protection: `preserves committed records and source when database admission or encryption is unavailable`.
 
 `src/main/chatHistoryHandler.test.ts` additionally executes `invalidates queued conversation work while allowing fresh identical coordinates`, including stale list replacement. Backend schema assertions now expect additive schema 5. The durable singleton completion record is the application deletion fence: every application mutation follows its commit, so source replay cannot cross a completed deletion, even if source retirement fails.
+
+2026-10-15 — Packaged proof rejected the new smoke fixture because `ThreadSnapshot.repair` is required even when null. Add explicit fixture admission before writing, retain the classified failure stage, and provide `repair: null`. Existing Linux history recording passed all ten cases independently. `keeps detached Promise backend execution callable` caught a `this` dependency introduced by the synchronous seam; Promise wrappers now close over their API and preserve detached invocation.

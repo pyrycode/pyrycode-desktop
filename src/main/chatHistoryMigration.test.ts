@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { createHistoryDatabase } from './historyDatabase'
 import { createChatHistoryStore } from './chatHistoryStore'
 import { createIndexedLegacyHistory } from './indexedLegacyHistory'
+import { createIndexedThreadHistory } from './indexedThreadHistory'
 import { createSecureStore, type SecretEncryption } from './secureStore'
 import { fileSecretPersistence } from './fileSecretPersistence'
 import { parseChatHistorySnapshot } from '../shared/chatHistory'
@@ -34,6 +35,14 @@ async function setup() {
   return { root, encryption, persistence, secureStore, log, fresh, seed }
 }
 const read = (operation = 'readTimeline', serverId = 'a') => ({ operation, serverId, conversationId: 'c' })
+
+it('keeps detached Promise backend execution callable', async () => {
+  const h = await setup(), { database } = h.fresh()
+  const { execute: legacy } = createIndexedLegacyHistory({ database, encryption: h.encryption, log: h.log })
+  const { execute: authoritative } = createIndexedThreadHistory({ database, encryption: h.encryption, log: h.log })
+  expect(await legacy(read())).toEqual({ status: 'missing' })
+  expect(await authoritative(read('readThread'))).toEqual({ status: 'missing' })
+})
 
 it('imports both exact formats once, preserves newer indexed content and never reopens the source after restart', async () => {
   const h = await setup(), first = h.fresh()

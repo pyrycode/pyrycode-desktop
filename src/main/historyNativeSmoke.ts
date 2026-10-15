@@ -32,11 +32,14 @@ void app.whenReady().then(async () => {
       items: [{ kind: 'userText', text: 'NATIVE-CONTENT-1979', attachments: [{ attachmentId: 'a', filename: 'NATIVE-ATTACHMENT-1979' }] }],
       coverage: { status: 'received', cursor: 'NATIVE-CURSOR-1979', atStart: false } }
     const thread = { version: 1, kind: 'daemon-items', serverId: 'smoke', conversationId: 'chat', thread: {
-      hostId: 'smoke', conversationId: 'chat', epoch: 'native', version: 1, checkpoint: 1, ranges: [],
+      hostId: 'smoke', conversationId: 'chat', epoch: 'native', version: 1, checkpoint: 1, ranges: [], repair: null,
       items: [{ id: 1, rev: 1, kind: 'future', content: { text: 'NATIVE-THREAD-1975' } }] } }
+    evidence.stage = 'fixture-admission'
+    parseChatHistorySnapshot(snapshot); parseChatHistorySnapshot(thread)
     await secureStore.set('chat-history', Buffer.from(JSON.stringify({ version: 1, snapshots: [snapshot, thread] })))
     evidence.stage = 'import'
     const result = await store.execute({ operation: 'readTimeline', serverId: 'smoke', conversationId: 'chat' })
+    evidence.stage = result.status === 'error' ? result.code : 'compare-import'
     if (result.status !== 'stored' || !isDeepStrictEqual(result.snapshot, parseChatHistorySnapshot(snapshot))) throw new Error('import')
     database.close()
     evidence.stage = 'reopen'

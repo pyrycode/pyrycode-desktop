@@ -9,7 +9,7 @@ import { createIndexedLegacyHistory } from './indexedLegacyHistory'
 import { createIndexedThreadHistory } from './indexedThreadHistory'
 import type Database from 'better-sqlite3'
 
-// IDs are record values, never blob names. One collection also makes scoped removal atomic.
+// Fixed migration source only; ownership ids remain record values, never blob names.
 const NAME = 'chat-history'
 function sameRecord(a: ChatHistorySnapshot, b: ChatHistorySnapshot): boolean {
   return a.serverId === b.serverId && a.kind === b.kind &&

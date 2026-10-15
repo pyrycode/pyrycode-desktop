@@ -114,9 +114,9 @@ bindings elsewhere on the same host.
 the readonly native `app.hostedAppViews` property. Trusted Fetch/chrome consumers
 call `open(parent, serverId, appId, bounds)`. The production
 [trusted pane bridge](paired-shell-routing.md#hosted-app-selection-and-trusted-chrome)
-uses this API for named-host/app selection over privileged preload/IPC. Sidebar discovery/opening
-is shipped by #2001; channel links remain #2002 and live publishing/relay/SQL acceptance remains
-\#1929. A successful open replaces the previous view under
+uses this API for named-host/app selection over privileged preload/IPC from both
+sidebar Apps rows and assistant reply links. Live publishing/relay/SQL acceptance
+remains #1929. A successful open replaces the previous view under
 that parent. Bounds are Electron rectangles in the parent's content view;
 `resize(bounds)` updates them while live and `close()` is idempotent.
 
@@ -128,6 +128,16 @@ open would retire other bindings on that host. A received discovery request is
 only dispatch evidence: readiness requires the complete response and contiguous
 updates. Wait for authoritative opening, retaining the first successful handle;
 repeated successful opens replace the content being observed.
+
+Stable channel links carry only host/app identity. Resolve the named paired host,
+then consume complete current-generation discovery and the native viewer's running
+authority; neither URL validity nor cached metadata grants readiness. Healthy opens
+reuse current discovery without refreshing. Loading, failed or reconnected discovery
+must complete before any content opens, with refresh owned by existing recovery.
+Missing/stopped/failed apps load no resources and links never start an app. The
+[shell routing](paired-shell-routing.md#hosted-app-selection-and-trusted-chrome)
+handles unknown hosts through manual pairing and uses the pane event stream for
+selection ordering; it adds no discovery or viewer lifecycle of its own.
 
 ### Pane recovery and placement
 
@@ -323,8 +333,8 @@ URLs, queries, payloads, credentials or caught exception text. See
 [ADR 0012](../decisions/0012-hosted-app-native-isolation.md) for the isolation choice.
 
 Trusted chrome/placement uses the [paired shell selection seam](paired-shell-routing.md#hosted-app-selection-and-trusted-chrome).
-Sidebar/link entry points remain [#1928](https://github.com/pyrycode/pyrycode-desktop/issues/1928), and real
-daemon/relay/SQL proof [#1929](https://github.com/pyrycode/pyrycode-desktop/issues/1929).
+Sidebar Apps rows and assistant links share that selection seam. Real daemon/relay/SQL
+proof remains [#1929](https://github.com/pyrycode/pyrycode-desktop/issues/1929).
 
 ## Deadlines and retirement
 
@@ -538,6 +548,16 @@ claimed; real SQL durability and relay acceptance remain
 [#1929](https://github.com/pyrycode/pyrycode-desktop/issues/1929).
 
 ### Trusted pane verification
+
+[`e2e/hosted-app-links.spec.ts`](../../../e2e/hosted-app-links.spec.ts) activates
+production conversation links through privileged preload/IPC, reusing these native
+readiness/retirement and Fetch boundaries. It covers held discovery/selection replies,
+two hosts sharing an app ID, unavailable/offline/unsupported recovery and draft
+restoration. Positive discovery, current-label or ordered IPC barriers precede
+absence assertions for OS handoff and forbidden resource dispatch. See
+[link verification](development-verification.md#hosted-app-link-verification)
+for the four named scenarios and counted fake-transport evidence; live publishing
+remains #1929.
 
 `e2e/hosted-content-pane.spec.ts` uses spec-local fake-daemon replies with
 `launchPairedApp` and selects through the production `window.pyry` preload/IPC

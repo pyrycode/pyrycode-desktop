@@ -6,7 +6,7 @@ import { createNewestHistoryDemand } from './store/newestHistoryDemand'
 import { historyAskDeps } from './store/historyPageBridge'
 import { createSavedListRestorer } from './store/savedListRestorer'
 import { connectedConversationHostNow, initializeCreatedConversationAfterList } from './screens/conversation/conversationActionAvailability'
-import { useEffect, useReducer, useRef, useState } from 'react'
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import type { ConversationSummary } from '@shared/wire/types'
 import { ConversationScreen } from './screens/conversation/ConversationScreen'
 import { ChannelList, hostRowLabel } from './screens/channels/ChannelList'
@@ -296,6 +296,7 @@ const PAIRING_REJECTION_NOTICE = 'Your pairing has expired or is no longer valid
  * lands from the route it was on when the flow opened, not from which control opened it.
  */
 export function PairedShellView(props: {
+  onOpenHostedApp?: (serverId: string, appId: string) => void
   hostedPane?: boolean
   recoveryServerId?: string | null
   recoveryRejected?: boolean
@@ -369,6 +370,7 @@ export function PairedShellView(props: {
             <div className="paired-shell__pane">
               {props.hostedPane ? <HostedPane /> : visibleRoute === 'thread' ? (
                 <ConversationScreen
+                  onOpenHostedApp={props.onOpenHostedApp}
                   savedTimelineTarget={props.savedTimelineTarget}
                   key={props.paneKey}
                   onRepairHost={props.onRepairHost}
@@ -513,6 +515,20 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   const statuses = useSessionStore(s => s.statuses)
   const recoveryLabel = useHostLabelStore(selectHostLabelFor(recoveryServerId))
   const recoveryStatus = recoveryServerId === null ? undefined : statuses.get(recoveryServerId)
+  const openHostedApp = useCallback((serverId: string, appId: string): void => {
+    if (!serverInfoStore.getState().servers.some(server => server.serverId === serverId)) {
+      pairingGeneration.current += 1
+      setRecoveryServerId(null)
+      if (route !== 'pairServer') setPairServerReturn(route)
+      dispatch({ type: 'openPairServer' })
+      window.pyry.sendDiagnostic({ event: 'hosted-link', code: 'unpaired' })
+      return
+    }
+    // Main owns ordering and authority; only its state stream may update the selected pane.
+    void window.pyry.hostedPane({ type: 'select', serverId, appId }).catch(() => {
+      window.pyry.sendDiagnostic({ event: 'hosted-link', code: 'refused' })
+    })
+  }, [route])
   const leaveRecovery = (): void => {
     pairingGeneration.current += 1
     setRecoveryServerId(null)
@@ -687,6 +703,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   }
   return (
     <PairedShellView
+      onOpenHostedApp={openHostedApp}
       hostedPane={hosted}
       route={route}
       savedTimelineTarget={savedTimelineTarget}

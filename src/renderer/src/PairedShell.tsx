@@ -1,3 +1,4 @@
+import { sendConversationCommand } from './screens/conversation/conversationActionAvailability'
 import './pairedShell.css'
 import { HostedPane, hostedPaneStore } from './HostedPane'
 import { useStore } from 'zustand'
@@ -127,10 +128,10 @@ const activateDeps: ActivateConversationDeps = {
   requestConversationConfig: (conversationId) => {
     const owner = connectedConversationHostNow(conversationId)
     if (owner === null || !conversationListStore.getState().byServer.get(owner)?.some(row => row.id === conversationId)) return
-    requestRunConfigSnapshot(window.pyry.sendCommand, conversationId)
-    requestContextUsage(window.pyry.sendCommand, conversationId)
-    requestModelList(window.pyry.sendCommand, conversationId)
-    requestSystemPrompt(window.pyry.sendCommand, conversationId)
+    requestRunConfigSnapshot(sendConversationCommand, conversationId)
+    requestContextUsage(sendConversationCommand, conversationId)
+    requestModelList(sendConversationCommand, conversationId)
+    requestSystemPrompt(sendConversationCommand, conversationId)
   }
 }
 
@@ -419,7 +420,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
     const state = hostedPaneStore.getState().state
     if (state.type !== 'closed') void window.pyry.hostedPane({ type: 'close', generation: state.generation })
   }
-  useEffect(() => subscribeResetContextUsage(conversationActivityStore, window.pyry.sendCommand), [])
+  useEffect(() => subscribeResetContextUsage(conversationActivityStore, sendConversationCommand), [])
   useEffect(() => createSavedListRestorer({
     lists: conversationListStore, servers: serverInfoStore,
     read: window.pyry.chatHistory, log: window.pyry.sendDiagnostic

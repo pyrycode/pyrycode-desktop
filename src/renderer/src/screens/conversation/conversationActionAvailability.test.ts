@@ -2,7 +2,8 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { activeConversationStore } from '../../store/activeConversationStore'
 import { conversationListStore } from '../../store/conversationListStore'
 import { sessionStore, type ConnectionStatus } from '../../store/sessionStore'
-import { connectedConversationHostNow, initializeCreatedConversationAfterList } from './conversationActionAvailability'
+import { connectedConversationHostNow, initializeCreatedConversationAfterList, sendConversationCommand } from './conversationActionAvailability'
+import { sessionIdStore } from '../../store/sessionIdStore'
 
 const initialRows = conversationListStore.getState()
 const initialSession = sessionStore.getState()
@@ -27,6 +28,25 @@ function waitForCreated(serverId: string | undefined) {
   cleanups.push(initializeCreatedConversationAfterList(row.id, serverId, initialize))
   return initialize
 }
+
+it('captures selected command coordinates without replacing explicit background owners', () => {
+  const send = vi.fn(), previousSession = sessionIdStore.getState().sessionId
+  vi.stubGlobal('window', { pyry: { sendCommand: send } })
+  try {
+    const selected = { ...row, serverId: 'A' }
+    activeConversationStore.getState().setActiveConversation(selected)
+    sessionIdStore.getState().setSessionId('shared-session')
+    sendConversationCommand({ type: 'requestSessionSettings', payload: { conversation_id: row.id } })
+    sendConversationCommand({ type: 'setSessionSettings', changeId: 'change', payload: { session_id: 'shared-session', permission_mode: 'plan' } })
+    sendConversationCommand({ type: 'newSession', serverId: 'B', payload: { conversation_id: row.id } })
+    sendConversationCommand({ type: 'requestSessionSettings', payload: { conversation_id: 'legacy-offscreen' } })
+    expect(send.mock.calls.map(([command]) => command.serverId)).toEqual(['A', 'A', 'B', undefined])
+  } finally {
+    if (previousSession === null) sessionIdStore.getState().clearSessionId()
+    else sessionIdStore.getState().setSessionId(previousSession)
+    vi.unstubAllGlobals()
+  }
+})
 
 it('initializes once after the creating host supplies unique ownership', () => {
   sessionStore.setState({ statuses: new Map([['owner', connected], ['other', connected]]) })

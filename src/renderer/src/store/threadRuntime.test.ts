@@ -15,6 +15,24 @@ function fixture() {
   return { runtime, send, read }
 }
 describe('production thread composition', () => {
+  it('admits cloned owning lifecycle readings without enabling competing metadata writers', async () => {
+    const { runtime: r } = fixture()
+    r.event(connected('one', true)); r.event(connected('two', true))
+    await r.open('one', 'chat').done
+    r.summary('one', { id: 'chat', current_session_id: 'A' })
+    const event: StampedDaemonEvent = { type: 'turnState', serverId: 'one', conversationId: 'chat', envelopeSessionId: 'A', state: 'thinking' }
+    r.event(event)
+    expect(r.acceptsLifecycle({ ...event })).toBe(true)
+    expect(r.acceptsSession({ ...event })).toBe(false)
+    expect(r.acceptsLifecycle({ ...event, serverId: 'two' })).toBe(false)
+    expect(r.acceptsLifecycle({ ...event, conversationId: 'other' })).toBe(false)
+    const ack: StampedDaemonEvent = { type: 'sessionSettingsUpdated', serverId: 'one', envelopeSessionId: 'A', sessionId: 'A', changeId: 'change' }
+    expect(r.acceptsLifecycle(ack)).toBe(true)
+    r.summary('one', { id: 'chat', current_session_id: 'B' })
+    expect(r.acceptsLifecycle({ ...event })).toBe(false)
+    expect(r.acceptsLifecycle(ack)).toBe(false)
+    r.dispose()
+  })
   it('successful removal cancels empty-scope work and forgets every pairing-owned adapter', async () => {
     const { runtime: r, send } = fixture()
     r.event(connected('one', true))

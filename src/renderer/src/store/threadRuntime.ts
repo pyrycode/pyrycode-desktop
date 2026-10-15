@@ -125,6 +125,15 @@ export function createThreadRuntime(deps: {
   const offRemoval = subscribeChatHistoryRemoval(host => removed => { if (removed) removeHost(host) })
   return {
     items, sends, state, live, isThread,
+    acceptsLifecycle(event: StampedDaemonEvent): boolean {
+      if (this.acceptsSession(event)) return true
+      if (!selected || event.serverId !== selected.host) return false
+      const binding = lives.get(key(selected.host, selected.chat))?.getState().binding
+      // Each contextBridge listener receives its own clone; object identity cannot prove admission.
+      if (!binding?.sessionId || event.envelopeSessionId !== binding.sessionId) return false
+      return 'conversationId' in event ? event.conversationId === binding.conversationId
+        : event.type === 'sessionSettingsUpdated' && event.sessionId === binding.sessionId
+    },
     submissionOwner(host: string, chat: string): () => boolean {
       const target = selected
       return () => selected === target && target?.host === host && target.chat === chat
@@ -216,6 +225,11 @@ export const onLegacyContentEvent: typeof window.pyry.onDaemonEvent = listener =
 
 export const onCurrentSessionEvent: typeof window.pyry.onDaemonEvent = listener => window.pyry.onDaemonEvent(event => {
   if (threadRuntime.acceptsSession(event)) listener(event)
+})
+
+/** Lifecycle consumers may observe admitted thread facts without becoming metadata writers. */
+export const onSessionLifecycleEvent: typeof window.pyry.onDaemonEvent = listener => window.pyry.onDaemonEvent(event => {
+  if (threadRuntime.acceptsLifecycle(event)) listener(event)
 })
 
 const useRuntimeEffect = typeof document === 'undefined' ? useEffect : useLayoutEffect

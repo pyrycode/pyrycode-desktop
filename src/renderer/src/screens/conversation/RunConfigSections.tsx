@@ -1,3 +1,4 @@
+import { sendConversationCommand } from './conversationActionAvailability'
 import { useMemo } from 'react'
 import { composerModelMenuModel, type ComposerModelLayers } from './ComposerModelMenu'
 import { selectDisplayedEffort } from './ComposerEffortMenu'
@@ -73,7 +74,7 @@ export function changeConnectedSetting(conversationId: string | null, change: Se
   }
   window.pyry.sendDiagnostic({ event: 'session-settings', code: 'submitted' })
   changeSetting(
-    { sessionId, sendCommand: window.pyry.sendCommand, dispatch: runSettingsWriteStore.getState().dispatch },
+    { sessionId, sendCommand: sendConversationCommand, dispatch: runSettingsWriteStore.getState().dispatch },
     change
   )
 }
@@ -823,7 +824,7 @@ function ContextWindowSection({
  * interaction; no setter is ever called during render.
  *
  * The AC5 gate is structural: `onChange` is built ONLY when a session id is known, so under SSR (session
- * id null) the controls render inert and the window.pyry.sendCommand closure is never constructed — the
+ * id null) the controls render inert and the sendConversationCommand closure is never constructed — the
  * container server-renders with no bridge mock (the LogDataSection / composer discipline).
  *
  * #975 adds `conversationId` as a PROP rather than a fifth store read, the settled house idiom

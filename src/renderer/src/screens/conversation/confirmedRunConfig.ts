@@ -14,6 +14,7 @@ export function subscribeConfirmedRunConfig(deps: {
   setSessionId: (id: string) => void
   refresh: () => void
   log: (code: string) => void
+  ownsSnapshot?: () => boolean
 }): () => void {
   let context = deps.getContext()
   let expectedSession: string | null = null
@@ -27,7 +28,7 @@ export function subscribeConfirmedRunConfig(deps: {
   const invalidate = () => {
     stop(); pending.clear(); awaiting = false
     const snapshot = deps.config.getState().snapshot
-    if (snapshot !== null) {
+    if (snapshot !== null && deps.ownsSnapshot?.() !== false) {
       const { memorySearch: _memorySearch, ...retained } = snapshot
       deps.config.getState().setSnapshot({ ...retained, permissionMode: '' })
     }
@@ -49,7 +50,7 @@ export function subscribeConfirmedRunConfig(deps: {
       expectedSession = null; resetting = false
       // Authoritative success ends outgoing readings and polling, even with identical model values.
       // A previous replacement guard describes the outgoing agent, not the fresh settings request.
-      deps.config.getState().clearSnapshot()
+      if (deps.ownsSnapshot?.() !== false) deps.config.getState().clearSnapshot()
       deps.log('invalidated')
     }
     for (const [id, change] of next.pending) {
@@ -78,7 +79,7 @@ export function subscribeConfirmedRunConfig(deps: {
           (expectedSession !== null && event.sessionId !== '' && event.sessionId !== expectedSession)) return
       const snapshot = toRunConfigSnapshot(event)
       if (snapshot === null) return
-      deps.config.getState().setSnapshot(snapshot)
+      if (deps.ownsSnapshot?.() !== false) deps.config.getState().setSnapshot(snapshot)
       deps.setSessionId(event.sessionId)
       awaiting = false
       if (target !== null && event.permissionMode === target) {

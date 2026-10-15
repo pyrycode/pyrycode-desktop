@@ -2,6 +2,22 @@ import { conversationListStore, useConversationListStore, selectConversations } 
 import { sessionStore, useSessionStore } from '../../store/sessionStore'
 import { serverIdForOpenConversation } from './unpairAction'
 import { activeConversationStore, useActiveConversationStore } from '../../store/activeConversationStore'
+import type { RendererCommand } from '@shared/ipc/commands'
+import { sessionIdStore } from '../../store/sessionIdStore'
+
+/** Capture matching selected coordinates at dispatch; explicit background/prompt owners win. */
+export function sendConversationCommand(command: RendererCommand, owningHost?: string | null): void {
+  if (owningHost === null) return
+  if (owningHost !== undefined && command.serverId === undefined) {
+    window.pyry.sendCommand({ ...command, serverId: owningHost }); return
+  }
+  const active = activeConversationStore.getState().activeConversation
+  if (command.serverId === undefined && active && 'serverId' in active && typeof active.serverId === 'string' &&
+      'payload' in command && (('conversation_id' in command.payload && command.payload.conversation_id === active.id) ||
+        (command.type === 'setSessionSettings' && command.payload.session_id === sessionIdStore.getState().sessionId))) {
+    window.pyry.sendCommand({ ...command, serverId: active.serverId })
+  } else window.pyry.sendCommand(command)
+}
 
 export function useConversationActionAvailability(conversationId: string | null, hostId?: string): boolean {
   const selectedHost = useActiveHost(conversationId)

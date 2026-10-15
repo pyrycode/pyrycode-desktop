@@ -179,6 +179,9 @@ test('reused conversation IDs keep selected metadata, content and commands on th
   const replies = (host: number) => (bytes: Uint8Array) => {
     const request = decodeEnvelope(bytes); requests[host].push(request)
     if (request.type === 'list_conversations') return [seedConversationsFrame(host === 0 ? { ...SEEDED_ROW, current_session_id: 'session' } : rowB)]
+    if (request.type === 'request_session_settings') return [frame('session_settings', {
+      session_id: 'session', model: host === 0 ? 'opus' : 'haiku', effort: 'high', yolo: false,
+      permission_mode: 'default', window_tokens: 200000, used_tokens: 10 }, request.id, 'session')]
     return request.type === 'thread_catch_up' ? windowFrames(request, SEEDED_ROW.id, host === 0 ? 'Host A content' : 'Host B content') : []
   }
   const { page, servers } = await launchPairedApp({ helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: replies(0) },
@@ -215,6 +218,121 @@ test('reused conversation IDs keep selected metadata, content and commands on th
   await page.locator('.composer__model-label').click()
   await expect(menu.getByText('Opus', { exact: true })).toBeVisible()
   await expect(menu.getByText('Haiku', { exact: true })).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await page.locator('textarea').fill('A owns this send too')
+  await page.getByRole('button', { name: 'Send', exact: true }).click()
+  await expect.poll(() => requests[0].filter(r => r.type === 'send_message').length).toBe(1)
+  expect(requests[1].filter(r => r.type === 'send_message')).toHaveLength(1)
+  expect(requests[0].find(r => r.type === 'send_message')?.payload.text).toBe('A owns this send too')
+  // Activation config requests must follow selection even when the other host claimed the ID last.
+  for (const host of [0, 1]) {
+    expect(requests[host].some(r => r.type === 'request_session_settings')).toBe(true)
+    expect(requests[host].some(r => r.type === 'request_model_list')).toBe(true)
+  }
+  for (const [host, name] of [[0, SEEDED_ROW.name!], [1, SECOND_SEEDED_ROW.name!]] as const) {
+    await page.getByText(name, { exact: true }).first().click()
+    const before = requests.map(list => list.filter(r => r.type === 'set_session_settings').length)
+    // Use the production footer's write control with equal session IDs on both hosts.
+    await expect(page.locator('.composer__permission')).toBeVisible()
+    await page.locator('.composer__permission').click()
+    await page.getByRole('menuitem', { name: 'Plan', exact: true }).click()
+    await expect.poll(() => requests[host].filter(r => r.type === 'set_session_settings').length).toBe(before[host] + 1)
+    expect(requests[1 - host].filter(r => r.type === 'set_session_settings')).toHaveLength(before[1 - host])
+  }
+})
+
+test('thread lifecycle refreshes settings after a turn and confirms permission changes', async ({ launchPairedApp }) => {
+  const requests: Envelope[] = []
+  let permission = 'default', used = 10
+  const settings = (reply?: number) => frame('session_settings', { conversation_id: SEEDED_ROW.id,
+    session_id: 'session', model: 'opus', effort: 'high', yolo: false, permission_mode: permission,
+    window_tokens: 200000, used_tokens: used }, reply, 'session')
+  const { page, daemon } = await launchPairedApp({ helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
+    const request = decodeEnvelope(bytes); requests.push(request)
+    if (request.type === 'list_conversations') return [seedConversationsFrame({ ...SEEDED_ROW, current_session_id: 'session' })]
+    if (request.type === 'thread_catch_up') return windowFrames(request, SEEDED_ROW.id, 'Lifecycle ready')
+    if (request.type === 'request_session_settings') return [settings(request.id)]
+    if (request.type === 'set_session_settings') return [frame('session_settings_updated', { session_id: 'session' }, request.id, 'session')]
+    return []
+  } })
+  await expect(page.getByText('Lifecycle ready', { exact: true })).toBeVisible()
+  await expect(page.locator('.composer__permission')).toBeVisible()
+  const initial = requests.filter(r => r.type === 'request_session_settings').length
+  daemon.pushFrame(frame('turn_state', { conversation_id: SEEDED_ROW.id, state: 'thinking' }, undefined, 'session'))
+  await expect(page.locator('.composer-status')).toContainText('Thinking')
+  used = 50
+  daemon.pushFrame(frame('turn_state', { conversation_id: SEEDED_ROW.id, state: 'idle' }, undefined, 'session'))
+  await expect.poll(() => requests.filter(r => r.type === 'request_session_settings').length).toBeGreaterThan(initial)
+  const afterTurn = requests.filter(r => r.type === 'request_session_settings').length
+  await page.locator('.composer__permission').click()
+  await page.getByRole('menuitem', { name: 'Plan', exact: true }).click()
+  await expect.poll(() => requests.some(r => r.type === 'set_session_settings')).toBe(true)
+  await expect.poll(() => requests.filter(r => r.type === 'request_session_settings').length).toBeGreaterThan(afterTurn)
+  // An acknowledgement alone retains the previous reading; polling must obtain confirmation.
+  await expect(page.locator('.composer__permission')).toContainText('Manual approval')
+  permission = 'plan'
+  await expect(page.locator('.composer__permission')).toContainText('Plan')
+  const settled = requests.filter(r => r.type === 'request_session_settings').length
+  daemon.pushFrame(frame('turn_state', { conversation_id: SEEDED_ROW.id, state: 'thinking' }, undefined, 'retired'))
+  daemon.pushFrame(frame('turn_state', { conversation_id: SEEDED_ROW.id, state: 'idle' }, undefined, 'retired'))
+  daemon.pushFrame(frame('thread_item_added', { conversation_id: SEEDED_ROW.id, epoch: 'epoch', version: 21, item: item(11, 'Lifecycle barrier') }))
+  await expect(page.getByText('Lifecycle barrier', { exact: true })).toBeVisible()
+  expect(requests.filter(r => r.type === 'request_session_settings')).toHaveLength(settled)
+})
+
+test('sending from older authoritative content resumes following the actual scroller', async ({ launchPairedApp }) => {
+  const requests: Envelope[] = []
+  const { page, daemon } = await launchPairedApp({ helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
+    const request = decodeEnvelope(bytes); requests.push(request)
+    if (request.type === 'list_conversations') return [seedConversationsFrame({ ...SEEDED_ROW, current_session_id: 'session' })]
+    if (request.type === 'thread_catch_up') return [frame('thread_items', { conversation_id: SEEDED_ROW.id, epoch: 'epoch', version: 20,
+      items: Array.from({ length: 60 }, (_, i) => item(i + 1, `Long authoritative row ${i}`)), final: false }, request.id),
+      frame('thread_items', { conversation_id: SEEDED_ROW.id, epoch: 'epoch', version: 20, items: [], final: true,
+        lower_order: 0, upper_order: 100, continuation: 0, older_exists: false }, request.id)]
+    return []
+  } })
+  const scroller = page.locator('.conversation__thread')
+  await expect(page.getByText('Long authoritative row 59', { exact: true })).toBeVisible()
+  await scroller.hover(); await page.mouse.wheel(0, -1500)
+  const distance = () => scroller.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)
+  await expect.poll(distance).toBeGreaterThan(500)
+  await page.locator('textarea').fill('Follow my submission')
+  await page.getByRole('button', { name: 'Send', exact: true }).click()
+  await expect.poll(() => requests.some(r => r.type === 'send_message')).toBe(true)
+  await expect(scroller).toContainText('Follow my submission')
+  await expect.poll(distance).toBeLessThanOrEqual(4)
+  daemon.pushFrame(frame('thread_item_added', { conversation_id: SEEDED_ROW.id, epoch: 'epoch', version: 21,
+    item: item(80, 'Continued reply\n\n'.repeat(40)) }))
+  await expect(scroller).toContainText('Continued reply')
+  await expect.poll(distance).toBeLessThanOrEqual(4)
+})
+
+test('current thread prompts remain answerable during pending and failed initial recovery', async ({ launchPairedApp }) => {
+  const requests: Envelope[] = [], foreignRequests: Envelope[] = []
+  const { page, daemon } = await launchPairedApp({ helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
+    const request = decodeEnvelope(bytes); requests.push(request)
+    if (request.type === 'list_conversations') return [seedConversationsFrame({ ...SEEDED_ROW, current_session_id: 'session' })]
+    return []
+  } }, { secondServer: { buildReplyFrames: bytes => {
+    const request = decodeEnvelope(bytes); foreignRequests.push(request)
+    return request.type === 'list_conversations' ? [seedConversationsFrame(SECOND_SEEDED_ROW)] : []
+  } } })
+  await expect.poll(() => requests.some(r => r.type === 'thread_catch_up')).toBe(true)
+  for (const phase of ['pending', 'failed']) {
+    if (phase === 'failed') {
+      const request = requests.find(r => r.type === 'thread_catch_up')!
+      daemon.pushFrame(frame('error', { code: 'thread.unavailable', message: 'Unavailable' }, request.id))
+      await expect(page.getByRole('button', { name: /Retry/ })).toBeVisible()
+    }
+    daemon.pushFrame(frame('modal_shown', { conversation_id: SEEDED_ROW.id, modal_id: phase, class: 'permission',
+      title: `${phase} recovery permission`, prompt: 'Continue?', options: [{ id: 'deny', label: 'Deny' }], default_option_id: 'deny' }, undefined, 'session'))
+    await expect(page.getByText(`${phase} recovery permission`, { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Deny', exact: true }).click()
+    await expect.poll(() => requests.some(r => r.type === 'modal_answer' && r.payload.modal_id === phase)).toBe(true)
+    await expect(page.getByText(`${phase} recovery permission`, { exact: true })).toHaveCount(0)
+  }
+  expect(requests.some(r => r.type === 'request_history')).toBe(false)
+  expect(foreignRequests.some(r => r.type === 'modal_answer')).toBe(false)
 })
 
 test('restore overlapping live content retains complete progress across an interrupted catch-up and epoch replacement', async ({ launchPairedApp }) => {

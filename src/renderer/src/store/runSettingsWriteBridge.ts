@@ -1,3 +1,4 @@
+import { sendConversationCommand } from '../screens/conversation/conversationActionAvailability'
 // The renderer data path for the Run configuration write machine — framework-free helpers plus one
 // headless App-level component, mirroring sessionIdBridge.ts. It is bidirectional: an OUTBOUND submit
 // helper (mint a correlation id → dispatch the optimistic change → send the `setSessionSettings`
@@ -291,7 +292,7 @@ export function RunSettingsWriteData(): null {
             window.pyry.sendDiagnostic({ event: 'composer-model-preference', code: 'confirmed' })
           },
           refresh: () => requestRunConfigSnapshot(
-            window.pyry.sendCommand,
+            sendConversationCommand,
             activeConversationStore.getState().activeConversation?.id ?? null
           ),
           log: code => window.pyry.sendDiagnostic({ event: 'composer-effort', code })

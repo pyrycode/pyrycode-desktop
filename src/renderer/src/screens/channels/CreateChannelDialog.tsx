@@ -121,13 +121,13 @@ export function confirmsPending(conversation: ConversationCreatedPayload, pendin
  * confirmed-channel navigation is the existing close signal. One write per create, so the
  * same-conversation ambiguity in `system-prompt-write.md` § Known limitation is never reached.
  */
-function writePrompt(conversation: ConversationCreatedPayload, pending: Pending): void {
+function writePrompt(conversation: ConversationCreatedPayload, pending: Pending, serverId: string): void {
   if (pending.type !== 'channel' || pending.systemPrompt === null) return
   if (!confirmsPending(conversation, pending)) return
   try {
     submitSystemPrompt(
       {
-        sendCommand: window.pyry.sendCommand,
+        sendCommand: command => window.pyry.sendCommand({ ...command, serverId }),
         dispatch: (event) => systemPromptWriteStore.getState().dispatch(event)
       },
       conversation.id,
@@ -196,7 +196,7 @@ export function CreateChannelDialog({ serverId, onDismiss }: {
       }
       if (pending.current.type !== 'channel') return
       if (event.type === 'conversationCreated') {
-        writePrompt(event.conversation, pending.current)
+        writePrompt(event.conversation, pending.current, serverId)
         // Unchanged and UNCONDITIONAL: AC2 keeps dismissal behaving exactly as it did before the
         // write existed, so a same-host confirmation this draft did not ask for still dismisses —
         // it just no longer carries the operator's prompt with it.

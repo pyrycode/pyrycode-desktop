@@ -346,7 +346,7 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * matching case to isRendererCommand in lockstep, or the new member is silently dropped at
  * the boundary.
  */
-export type RendererCommand =
+export type RendererCommand = (
   | { type: 'queryThread'; serverId: string; requestId: string; query: ThreadQuery }
   | { type: 'requestHostSystemPrompt'; serverId: string; requestId: string }
   | { type: 'setHostSystemPrompt'; serverId: string; requestId: string; payload: SetHostSystemPromptPayload }
@@ -389,6 +389,7 @@ export type RendererCommand =
   | { type: 'switchAgent'; payload: SwitchAgentPayload }
   | { type: 'notify'; payload: NotifyPayload }
   | { type: 'setBadgeCount'; payload: BadgeCountPayload }
+) & { serverId?: string }
 
 /**
  * Wrap already-assembled send-message fields into a well-formed command. Pure: it does NOT
@@ -517,6 +518,9 @@ export function interruptCommand(fields: InterruptCommandPayload): RendererComma
  */
 export function isRendererCommand(value: unknown): value is RendererCommand {
   if (typeof value !== 'object' || value === null || !('type' in value)) return false
+  // Conversation/session coordinates are optional for legacy callers, but never an unchecked hint.
+  if ('payload' in value && typeof value.payload === 'object' && value.payload !== null &&
+      ('conversation_id' in value.payload || 'session_id' in value.payload) && !hasValidThreadHost(value)) return false
   switch (value.type) {
     case 'queryThread': {
       const text = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 1024

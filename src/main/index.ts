@@ -801,6 +801,8 @@ app.whenReady().then(() => {
   // requestDebugBundle fails its consumer `not-connected`, emitting `debugBundleFailed: unavailable`);
   // no need to gate on did-finish-load. `will-quit` removes the exact listener, symmetric with
   // unregisterPairing.
+  const routeConversation = (id: string | undefined, host: string | undefined) =>
+    host === undefined ? router.route(id) : servers.route(host)
   const unregisterCommands = onCommand(ipcMain, (command) => {
     switch (command.type) {
       // ROUTED BY CONVERSATION (#1118). `router.route` answers the connection for the server that owns
@@ -809,7 +811,7 @@ app.whenReady().then(() => {
       // The decision itself lives in `conversationRouter.ts`, where a unit test can drive it; these
       // stay the per-case one-liners they were.
       case 'sendMessage': {
-        const connection = router.route(command.payload.conversation_id)
+        const connection = routeConversation(command.payload.conversation_id, command.serverId)
         if (connection === null) {
           messageLifecycle.drop(command.payload.message_id, command.payload.conversation_id, 'route-refused')
           emitDaemonEvent(bindServerOrigin(live.sink, command.serverId ?? null), { type: 'messageDelivery', messageId: command.payload.message_id,
@@ -826,7 +828,7 @@ app.whenReady().then(() => {
         // so the id routed by and the id sent can never be two different expressions. An absent id is
         // not a known conversation, so it refuses on the ordinary path — no separate branch is owed.
         const conversationId = command.payload?.conversation_id
-        router.route(conversationId)?.requestSessionSettings(conversationId)
+        routeConversation(conversationId, command.serverId)?.requestSessionSettings(conversationId)
         return
       }
       case 'requestModelList': {
@@ -838,40 +840,40 @@ app.whenReady().then(() => {
         // consumer, and no retry: the reply is one `model_list` the existing inbound path already lands
         // in the model-list store, unchanged and unbranched.
         const conversationId = command.payload.conversation_id
-        router.route(conversationId)?.requestModelList(conversationId)
+        routeConversation(conversationId, command.serverId)?.requestModelList(conversationId)
         return
       }
       case 'requestContextUsage': {
         // Use the same id for host lookup and sending; an unknown host never falls back.
         const conversationId = command.payload.conversation_id
-        router.route(conversationId)?.requestContextUsage(conversationId)
+        routeConversation(conversationId, command.serverId)?.requestContextUsage(conversationId)
         return
       }
       case 'requestMcpStatus': {
         // Same id for host lookup and sending, as above; an unknown host sends nothing (#1578).
         const conversationId = command.payload.conversation_id
-        router.route(conversationId)?.requestMcpStatus(conversationId)
+        routeConversation(conversationId, command.serverId)?.requestMcpStatus(conversationId)
         return
       }
       case 'reconnectMcpServer': {
         // Same id for host lookup and sending; an unknown host sends nothing (#1582). The server name is
         // passed through to the frame and nowhere else.
         const conversationId = command.payload.conversation_id
-        router.route(conversationId)?.reconnectMcpServer(conversationId, command.payload.server_name)
+        routeConversation(conversationId, command.serverId)?.reconnectMcpServer(conversationId, command.payload.server_name)
         return
       }
       case 'toggleMcpServer': {
         // Routed like the reconnect above (#1586). The requested state is the operator's, passed straight
         // through; nothing here derives it from or checks it against a status report.
         const conversationId = command.payload.conversation_id
-        router.route(conversationId)?.toggleMcpServer(conversationId, command.payload.server_name,
+        routeConversation(conversationId, command.serverId)?.toggleMcpServer(conversationId, command.payload.server_name,
           command.payload.enabled)
         return
       }
       case 'stopBackgroundTask': {
         // Routed like the toggle above (#1770): the conversation's host gets the frame, or no wire does.
         const conversationId = command.payload.conversation_id
-        const taskConnection = command.serverId === undefined ? router.route(conversationId) : registry.connectionFor(command.serverId)
+        const taskConnection = routeConversation(conversationId, command.serverId)
         taskConnection?.stopBackgroundTask(conversationId, command.payload.task_id)
         return
       }
@@ -889,7 +891,7 @@ app.whenReady().then(() => {
         // builder then reads it from, so the id routed by and the id sent cannot diverge. Direct to
         // the connection method: an on-demand page ask has no orchestrator and no consumer, and no
         // retry — the reply is one `history_page` the inbound path correlates back to this ask.
-        router.route(command.payload.conversation_id)?.requestHistory(command.payload)
+        routeConversation(command.payload.conversation_id, command.serverId)?.requestHistory(command.payload)
         return
       case 'requestHostSystemPrompt':
       case 'setHostSystemPrompt': {
@@ -919,7 +921,7 @@ app.whenReady().then(() => {
         // `conversationRouter.ts` — and NOT an emptiness check in the boundary guard or the builder,
         // both of which check type and shape as their siblings do.
         const conversationId = command.payload.conversation_id
-        router.route(conversationId)?.requestSystemPrompt(conversationId)
+        routeConversation(conversationId, command.serverId)?.requestSystemPrompt(conversationId)
         return
       }
       case 'requestConversations':
@@ -983,13 +985,13 @@ app.whenReady().then(() => {
         // Direct to the connection method (mirrors sendMessage), no orchestrator — a dequeue is
         // ungated fire-and-forget. Sends dequeue_message; no reply is expected (the daemon re-broadcasts
         // its queue_state as the observable effect, #294). Inert no-op when not connected (#300).
-        (command.serverId === undefined ? router.route(command.payload.conversation_id)
+        (command.serverId === undefined ? routeConversation(command.payload.conversation_id, command.serverId)
           : registry.connectionFor(command.serverId))?.dequeueMessage(command.payload)
         return
       case 'sendQueuedNow':
         // #1726: the dequeueMessage route, verbatim — routed by conversation, fire-and-forget, inert when
         // not connected. The daemon's next queue_state and its user `message` push are the effect.
-        (command.serverId === undefined ? router.route(command.payload.conversation_id)
+        (command.serverId === undefined ? routeConversation(command.payload.conversation_id, command.serverId)
           : registry.connectionFor(command.serverId))?.sendQueuedNow(command.payload)
         return
       case 'interrupt': {
@@ -1006,11 +1008,11 @@ app.whenReady().then(() => {
         // when nothing is connected, and when the id names a conversation no connection holds the
         // `?.` is the refusal, so no frame reaches any wire.
         const conversationId = command.payload.conversation_id
-        router.route(conversationId)?.interrupt(conversationId)
+        routeConversation(conversationId, command.serverId)?.interrupt(conversationId)
         return
       }
       case 'switchAgent':
-        router.route(command.payload.conversation_id)?.switchAgent(command.payload)
+        routeConversation(command.payload.conversation_id, command.serverId)?.switchAgent(command.payload)
         return
       case 'newSession': {
         // ROUTED BY CONVERSATION (#1217), mirroring requestModelList and NOT the interrupt arm above
@@ -1025,7 +1027,7 @@ app.whenReady().then(() => {
         // no-op when nothing is connected, and when the id names a conversation no connection holds
         // the `?.` is the refusal, so no frame reaches any wire (AC4).
         const conversationId = command.payload.conversation_id
-        router.route(conversationId)?.newSession(conversationId)
+        routeConversation(conversationId, command.serverId)?.newSession(conversationId)
         return
       }
       case 'promoteConversation':
@@ -1033,21 +1035,21 @@ app.whenReady().then(() => {
         // request has no consumer/reassembler. Sends promote_conversation; the daemon confirms with one
         // unsolicited conversation_updated broadcast → conversationUpdated event (consumed by #275).
         // Inert no-op when not connected (#273).
-        router.route(command.payload.conversation_id)?.promoteConversation(command.payload)
+        routeConversation(command.payload.conversation_id, command.serverId)?.promoteConversation(command.payload)
         return
       case 'archiveConversation':
         // Direct to the connection method (mirrors unarchiveConversation), no orchestrator — a fire-and-
         // forget request has no consumer/reassembler. Sends archive_conversation; the daemon confirms by
         // replying with a conversation_updated record, decoded by the existing path and reflected in the
         // list by #275 (consumed by #366), not correlated here. Inert no-op when not connected (#363).
-        router.route(command.payload.conversation_id)?.archiveConversation(command.payload)
+        routeConversation(command.payload.conversation_id, command.serverId)?.archiveConversation(command.payload)
         return
       case 'unarchiveConversation':
         // Direct to the connection method (mirrors promoteConversation), no orchestrator — a fire-and-
         // forget request has no consumer/reassembler. Sends unarchive_conversation; the daemon confirms by
         // replying with a conversation_updated record, not correlated here (#348 reads restored state from
         // the re-list). Inert no-op when not connected (#346).
-        router.route(command.payload.conversation_id)?.unarchiveConversation(command.payload)
+        routeConversation(command.payload.conversation_id, command.serverId)?.unarchiveConversation(command.payload)
         return
       case 'deleteConversation':
         // Direct to the connection method (mirrors unarchiveConversation), no orchestrator — a fire-and-
@@ -1055,14 +1057,14 @@ app.whenReady().then(() => {
         // distinct conversation_deleted { id } record correlated to the requester (no broadcast), NOT
         // decoded or correlated here — #367 owns the reply decode + explicit re-list. Inert no-op when not
         // connected (#364).
-        router.route(command.payload.conversation_id)?.deleteConversation(command.payload)
+        routeConversation(command.payload.conversation_id, command.serverId)?.deleteConversation(command.payload)
         return
       case 'renameConversation':
         // Direct to the connection method (mirrors unarchiveConversation), no orchestrator — a fire-and-
         // forget request has no consumer/reassembler. Sends rename_conversation; the daemon confirms by
         // replying with a conversation_updated record, decoded by the existing path and reflected in the
         // list by #275 (consumed by #360), not correlated here. Inert no-op when not connected (#359).
-        router.route(command.payload.conversation_id)?.renameConversation(command.payload)
+        routeConversation(command.payload.conversation_id, command.serverId)?.renameConversation(command.payload)
         return
       case 'changeWorkspace':
         // Direct to the connection method (mirrors renameConversation), no orchestrator — a fire-and-
@@ -1070,7 +1072,7 @@ app.whenReady().then(() => {
         // replying with the existing conversation_updated record, decoded by the existing path and
         // reflected in the list for free, not correlated here (the Workspace Picker reads the new
         // workspace from the re-list). Inert no-op when not connected (#379).
-        router.route(command.payload.conversation_id)?.changeWorkspace(command.payload)
+        routeConversation(command.payload.conversation_id, command.serverId)?.changeWorkspace(command.payload)
         return
       case 'renameWorkspace': {
         const connection = servers.route(command.serverId)
@@ -1100,7 +1102,7 @@ app.whenReady().then(() => {
         // payload's OVER-LENGTH refusal is deliberately NOT here — it lives in the connection method,
         // which can emit the rejection an operator has to see; a check at this arm would have to
         // return silently.
-        router.route(command.payload.conversation_id)?.setSystemPrompt(command.payload)
+        routeConversation(command.payload.conversation_id, command.serverId)?.setSystemPrompt(command.payload)
         return
       case 'markConversationRead':
         router.route(command.payload.conversation_id, command.serverId)?.markConversationRead?.(command.payload)
@@ -1109,7 +1111,7 @@ app.whenReady().then(() => {
         // ROUTED BY CONVERSATION (#1595), like setSystemPrompt: the frame goes to the one host that
         // claimed the id or to no wire at all. An unclaimed id still settles its attempt as rejected,
         // the renameWorkspace arm's posture, so the waiting dialog is never left pending.
-        const connection = router.route(command.payload.conversation_id)
+        const connection = routeConversation(command.payload.conversation_id, command.serverId)
         if (connection !== null) connection.setConversationMuted(command.payload, command.attemptId)
         else {
           diagnosticLog.event({ event: 'conversation-mute-failed', code: 'unavailable-host' })
@@ -1127,7 +1129,7 @@ app.whenReady().then(() => {
         // Sends set_session_settings; the daemon replies with one session_settings_updated (decoded by
         // #264, correlated by #261). The renderer-minted `changeId` rides through so main can match the
         // reply back to this change (never onto the wire). Inert no-op when not connected (#263).
-        correlations.routeSession(command.payload.session_id)?.setSessionSettings(command.payload, command.changeId)
+        (command.serverId === undefined ? correlations.routeSession(command.payload.session_id) : servers.route(command.serverId))?.setSessionSettings(command.payload, command.changeId)
         return
       case 'requestDebugBundle': {
         // ROUTED BY SERVER (#1120) — the bundle is a whole server's, so this is the one arm that needs

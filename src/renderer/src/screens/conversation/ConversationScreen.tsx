@@ -1,3 +1,4 @@
+import { sendConversationCommand } from './conversationActionAvailability'
 import { createAttachmentImageSources } from './attachmentImageSource'
 import { threadRuntime } from '../../store/threadRuntime'
 import { threadLiveInputs } from './threadLiveInputs'
@@ -472,14 +473,14 @@ export function ConversationScreen({
     if (openConversationId === null || connectedConversationHostNow(openConversationId) === null) return
     dropQueuedMessage(openConversationId, queuedMsgId, messageId, {
       diagnose: window.pyry.sendDiagnostic,
-      sendCommand: window.pyry.sendCommand,
+      sendCommand: sendConversationCommand,
       dispatch: dispatchTimeline,
       dispatchFor: dispatchTimelineFor
     })
   }, [openConversationId, selectedHost, dispatchTimeline, dispatchTimelineFor])
   const onSendQueuedNow = useCallback((queuedMsgId: number): void => {
     if (openConversationId === null || connectedConversationHostNow(openConversationId) === null) return
-    sendQueuedNow(openConversationId, queuedMsgId, { sendCommand: window.pyry.sendCommand })
+    sendQueuedNow(openConversationId, queuedMsgId, { sendCommand: sendConversationCommand })
   }, [openConversationId, selectedHost])
   // #177: the Run configuration sheet's open/closed state — a single-value screen-local boolean →
   // useState, never the store (ADR 0006). It resets to closed on remount for free, so the sheet
@@ -528,14 +529,18 @@ export function ConversationScreen({
     [openConversationId]
   )
   const prependedRows = useConversationTimelineStore(selectOpenPrependedRows)
-  const { scrollPin, followBottom, paneRef } = useThreadScrollPin(openConversationId, prependedRows)
+  const authoritativeRows = useMemo(() => authoritativeSnapshot
+    ? [...authoritativeSnapshot.items, ...(localSend?.pending ?? [])] : undefined, [authoritativeSnapshot, localSend])
+  const threadPin = useThreadScrollPin(openConversationId, authoritative ? 0 : prependedRows, !authoritative, authoritativeRows,
+    authoritative ? () => { if (selectedHost !== null) threadRuntime.query('older', selectedHost) } : undefined)
+  const { scrollPin, followBottom, paneRef } = threadPin
   // #1579: every open asks for fresh MCP status, from the handler rather than a mount effect so one open
   // is one request. The sheet shows this same `activeConversation`. #1494: the overflow menu's item and the
   // status row's MCP failure notice both call this one closure, so they open the sheet identically.
   const openChannelInfo = (): void => {
     setChannelInfoOpen(true)
-    requestMcpStatus(window.pyry.sendCommand, activeConversation?.id ?? null)
-    requestRunConfigSnapshot(window.pyry.sendCommand, activeConversation?.id ?? null)
+    requestMcpStatus(sendConversationCommand, activeConversation?.id ?? null)
+    requestRunConfigSnapshot(sendConversationCommand, activeConversation?.id ?? null)
   }
   // #1627: an open reader covers the whole pane, composer included; the sidebar is PairedShell's. The
   // thread and the Composer stay MOUNTED beneath it, hidden, never unmounted: the Composer's pending
@@ -604,7 +609,7 @@ export function ConversationScreen({
           foldQueuedRows' header — but the two row lists are now joined before they are drawn, so a message
           sent mid-turn draws once. `queuedBacklog` is the same read #1009 hoisted here, unmoved; the drop
           closure below is #1213's, unchanged, only re-hung on this prop.
-          window.pyry.sendCommand stays dereferenced INSIDE the click closure (interaction time, never
+          sendConversationCommand stays dereferenced INSIDE the click closure (interaction time, never
           render), which is what keeps a container smoke render bridge-free; the null-id guard is
           belt-and-braces, since a populated row implies an active id (the daemon queues under real ids).
           The drop's two clocks — the echo leaves at the click (#1213), the queued item leaves on the
@@ -618,16 +623,16 @@ export function ConversationScreen({
       {authoritative && authoritativeSnapshot === null && queryState?.type === 'loading' && <p role="status">Loading messages…</p>}
       {authoritative && authoritativeSnapshot === null && queryState?.type === 'failed' && <ComposerHistoryFailure retryable
         onRetry={() => { if (selectedHost !== null) threadRuntime.query('retry', selectedHost) }} />}
-      {authoritative && authoritativeSnapshot && <ThreadItemsTimeline snapshot={authoritativeSnapshot}
+      {authoritative && authoritativeSnapshot && <ThreadItemsTimeline snapshot={authoritativeSnapshot} pin={threadPin}
         onOlder={() => { if (selectedHost !== null) threadRuntime.query('older', selectedHost) }}
         readInputs={threadSummary ? { row: threadSummary, readerOpen,
           completeThrough: complete?.epoch === authoritativeSnapshot.epoch ? complete.version : 0 } : undefined}
         sendInputs={{ local: selectedHost !== null && openConversationId !== null && localSend !== null
           ? { hostId: selectedHost, conversationId: openConversationId, ...localSend } : undefined,
           connection: selectedHost !== null && threadConnection ? { hostId: selectedHost, status: threadConnection } : undefined,
-          onAction: (serverId, command) => window.pyry.sendCommand({ ...command, serverId }) }}
+          onAction: (serverId, command) => sendConversationCommand({ ...command, serverId }) }}
         taskInputs={{ connection: selectedHost !== null && threadConnection ? { hostId: selectedHost, status: threadConnection } : undefined,
-          onStopTask: (serverId, conversationId, taskId) => window.pyry.sendCommand({ type: 'stopBackgroundTask', serverId,
+          onStopTask: (serverId, conversationId, taskId) => sendConversationCommand({ type: 'stopBackgroundTask', serverId,
             payload: { conversation_id: conversationId, task_id: taskId } }) }}
         foldTools={collapseToolUses} turnRunning={isTurnRunning(phase)} onReply={replyToMessage} onOpenMarkdownPath={reader.open}
         trailing={<>
@@ -635,7 +640,6 @@ export function ConversationScreen({
           {queryState?.type === 'failed' && <ComposerHistoryFailure retryable onRetry={() => {
             if (selectedHost !== null) threadRuntime.query('retry', selectedHost)
           }} />}
-          <ThreadPromptSlot host={selectedHost} conversationId={openConversationId} />
         </>} />}
       {!authoritative && (!offline || items.length > 0 || visibleQueued.length > 0 || pendingBatch !== undefined || hasPermissionSurface) && <Timeline
         key={openConversationId}
@@ -668,6 +672,7 @@ export function ConversationScreen({
         // control is. No timeline write: the message is being delivered, so its echo stays true.
         onSendQueuedNow={actionsAvailable ? onSendQueuedNow : undefined}
       />}
+      {authoritative && <ThreadPromptSlot host={selectedHost} conversationId={openConversationId} />}
       <TopOverlayControl onRepairHost={onRepairHost} threadError={authoritative ? liveInput.sessionError?.code ?? null : undefined} />
       {/* #581: the background-task panel, reading the roster store itself, so only the conversation id goes
           down; with no active conversation the id is null and the panel reads "never observed". It mounts
@@ -1640,6 +1645,7 @@ export function Timeline({
 }
 
 type ThreadItemsProps = {
+  pin?: ThreadPin
   onOlder?: () => void
   trailing?: ReactNode
   onOpenHostedApp?: (serverId: string, appId: string) => void
@@ -1657,7 +1663,7 @@ export function ThreadItemsTimeline(props: ThreadItemsProps): JSX.Element {
   const s = props.snapshot
   return <ThreadItemsView key={JSON.stringify([s.hostId, s.conversationId, s.epoch])} {...props} />
 }
-function ThreadItemsView({ snapshot, readInputs, sendInputs, taskInputs, trailing, onOlder, turnRunning = false, foldTools = false, onReply, onOpenMarkdownPath, onOpenHostedApp }: ThreadItemsProps): JSX.Element {
+function ThreadItemsView({ pin, snapshot, readInputs, sendInputs, taskInputs, trailing, onOlder, turnRunning = false, foldTools = false, onReply, onOpenMarkdownPath, onOpenHostedApp }: ThreadItemsProps): JSX.Element {
   const tasks = useMemo(() => threadTaskPresentations(snapshot, taskInputs), [snapshot, taskInputs])
   const [tasksOpen, setTasksOpen] = useState(false)
   const activeTaskCount = tasks.filter(task => task.active).length
@@ -1683,7 +1689,9 @@ function ThreadItemsView({ snapshot, readInputs, sendInputs, taskInputs, trailin
   }, [snapshot.hostId, snapshot.conversationId])
   // Completed older pages change the immutable item list without necessarily advancing the watermark.
   const visibleItems = useMemo(() => [...snapshot.items, ...pending], [snapshot.items, pending])
-  const { scrollPin, paneRef } = useThreadScrollPin(snapshot.conversationId, 0, false, visibleItems, onOlder)
+  const localPin = useThreadScrollPin(snapshot.conversationId, 0, false, visibleItems, onOlder)
+  const scrollPin = pin?.scrollPin ?? localPin.scrollPin
+  const paneRef = localPin.paneRef
   useReadObservation(null, false, paneRef, scrollPin.ref, readInputs && { ...readInputs, snapshot })
   const [expandedTools, setTools] = useState<ReadonlySet<number>>(() => new Set())
   const [expandedRuns, setRuns] = useState<ReadonlySet<number>>(() => new Set())
@@ -4141,7 +4149,7 @@ function ChannelInfoSheet({
             ? undefined
             : () => {
                 if (connectedConversationHostNow(conversation.id) === null) return
-                requestArchiveConversation(window.pyry.sendCommand, conversation.id)
+                requestArchiveConversation(sendConversationCommand, conversation.id)
                 onClose()
               }
         }
@@ -4156,7 +4164,7 @@ function ChannelInfoSheet({
             ? undefined
             : () => {
                 if (connectedConversationHostNow(conversation.id) === null) return
-                requestDeleteConversation(window.pyry.sendCommand, conversation.id)
+                requestDeleteConversation(sendConversationCommand, conversation.id)
                 onClose()
               }
         }
@@ -4212,7 +4220,7 @@ function ChannelInfoSheet({
           onSave={(writePrompt) => {
             if (connectedConversationHostNow(conversation.id) === null) return
             writePrompt()
-            requestRenameConversation(window.pyry.sendCommand, conversation, renameName)
+            requestRenameConversation(sendConversationCommand, conversation, renameName)
             setRenameOpen(false)
           }}
           // #1438 gave this dialog its own put-away button, and a REQUIRED prop — so this sheet is a
@@ -4230,7 +4238,7 @@ function ChannelInfoSheet({
           // `canMutateHost` — the two are not interchangeable and neither is imported across.
           onArchive={() => {
             if (connectedConversationHostNow(conversation.id) === null) return
-            requestArchiveConversation(window.pyry.sendCommand, conversation.id)
+            requestArchiveConversation(sendConversationCommand, conversation.id)
             setRenameOpen(false)
             onClose()
           }}
@@ -4247,7 +4255,7 @@ function ChannelInfoSheet({
           onCancel={() => setRenameOpen(false)}
           onSave={() => {
             if (connectedConversationHostNow(conversation.id) === null) return
-            requestRenameConversation(window.pyry.sendCommand, conversation, renameName)
+            requestRenameConversation(sendConversationCommand, conversation, renameName)
             setRenameOpen(false)
           }}
           // #1440 — the archive arm, the sheet's own `onArchive` sequence verbatim one level down:
@@ -4258,7 +4266,7 @@ function ChannelInfoSheet({
           // existing `useArchivedActiveConversationExit` bridge leaves the thread on the daemon's word.
           onArchive={() => {
             if (connectedConversationHostNow(conversation.id) === null) return
-            requestArchiveConversation(window.pyry.sendCommand, conversation.id)
+            requestArchiveConversation(sendConversationCommand, conversation.id)
             setRenameOpen(false)
             onClose()
           }}
@@ -4501,7 +4509,7 @@ function Composer({
         if (!identity.ok || sessionStore.getState().statuses.get(serverId) !== connection ||
             !threadRuntime.isThread(serverId, chat) || !ownsSubmission()) { restore(); return }
         const sent = submitMessage(value, chat, { serverId, threadSend: { store: threadRuntime.sends, deviceId: identity.deviceId },
-          diagnose: window.pyry.sendDiagnostic, sendCommand: window.pyry.sendCommand,
+          diagnose: window.pyry.sendDiagnostic, sendCommand: sendConversationCommand,
           dispatch: () => {}, dispatchFor: () => {}, newMessageId: () => crypto.randomUUID(),
           now: Date.now, takeAttachments: () => take })
         if (!sent) return // submitMessage owns attachment rollback; the retained draft remains editable.
@@ -4521,7 +4529,7 @@ function Composer({
     const sent = submitMessage(value, activeConversationId, {
       serverId,
       diagnose: window.pyry.sendDiagnostic,
-      sendCommand: window.pyry.sendCommand,
+      sendCommand: sendConversationCommand,
       dispatch,
       dispatchFor: (conversationId, event) => {
         if (event.type === 'userText') dispatchLocalEcho(serverId, conversationId, event)
@@ -4563,7 +4571,7 @@ function Composer({
   // New session uses its own command, with the same current-owner gate as message sends.
   const startNewSession = (): void => {
     if (connectedConversationHostNow(activeConversationId) === null) return
-    sendNewSession(activeConversationId, { sendCommand: window.pyry.sendCommand })
+    sendNewSession(activeConversationId, { sendCommand: sendConversationCommand })
   }
 
   // Completion writes the same retained draft as typing; sending keeps its existing single path.
@@ -4647,7 +4655,7 @@ function Composer({
       // which is what stops the three ever naming different chats; `sendInterrupt` refuses a null or
       // empty id and sends nothing.
       if (connectedConversationHostNow(activeConversationId) !== null) {
-        sendInterrupt(activeConversationId, { sendCommand: window.pyry.sendCommand })
+        sendInterrupt(activeConversationId, { sendCommand: sendConversationCommand })
       }
       return
     }
@@ -4724,7 +4732,7 @@ function Composer({
           onSend={handleSubmit}
           onInterrupt={() => {
             if (connectedConversationHostNow(activeConversationId) === null) return
-            sendInterrupt(activeConversationId, { sendCommand: window.pyry.sendCommand })
+            sendInterrupt(activeConversationId, { sendCommand: sendConversationCommand })
           }}
         />
         {/* #940: the panel, last child of its anchor. It is `position: absolute`, so it is not a flex
@@ -4868,7 +4876,7 @@ export function QuestionPanelSlot({ batch }: { batch: QuestionBatch }): JSX.Elem
     if (!isCurrentQuestionBatch(batch) || question === undefined) return null
     return { multiSelect: question.multiSelect, questionBatchId: batch.questionBatchId, questionIndex }
   }
-  const deps = () => ({ sendCommand: window.pyry.sendCommand, dispatchPicks: dispatch,
+  const deps = () => ({ sendCommand: sendConversationCommand, dispatchPicks: dispatch,
     dispatchBatch: questionBatchStore.getState().dispatch })
   return <QuestionPanelView questions={batch.questions} selections={selections}
     responseAvailable={responseAvailable} canAnswer={answers !== null}
@@ -5248,7 +5256,7 @@ function ComposerErrorSlotControl({
     if (currentId === undefined || currentId !== open?.id || !offer || currentOffer !== offer || currentOffer.changeId !== undefined ||
         serverId === null || sessionStore.getState().statuses.get(serverId)?.type !== 'connected' || !isAddressableSessionId(currentSession) ||
         [...currentWrites.pending.values()].some(change => change.field === 'model')) return
-    changeSetting({ sessionId: currentSession, sendCommand: window.pyry.sendCommand,
+    changeSetting({ sessionId: currentSession, sendCommand: sendConversationCommand,
       dispatch: event => {
         if (event.type === 'changeDispatched') {
           conversationTimelineStore.getState().dispatchFor(currentId, { type: 'refusalWriteStarted', offer, changeId: event.changeId })

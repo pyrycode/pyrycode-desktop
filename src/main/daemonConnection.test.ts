@@ -375,6 +375,204 @@ function build(
 /** Flush the microtask chain the async bootstrap runs on (fakes resolve immediately). */
 const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
+it('discovers each host independently and fences reconnect readiness', async () => {
+  const a = build({ serverId: 'a' }), b = build({ serverId: 'b' })
+  const app = '22222222-2222-4222-8222-222222222222'
+  const row = { app_id: app, title: 'App', desired: 'available', state: 'running', active_release: '1.0.0', pending_release: null, last_error: null, revision: 1 }
+  const ack = (host: string, supported = true) => encodeEnvelope({ id: 1, ts: FIXED_TS, type: 'hello_ack',
+    payload: { server_id: host, conn_id: host, protocol_version: 'v2', capabilities: supported ? ['hosted_apps_v1'] : [] } })
+  a.connection.start(); b.connection.start(); await tick()
+  const da = a.drivers[0], db = b.drivers[0]
+  const material = await da.config.loadDialConfig!()
+  expect(material).not.toBeNull()
+  expect(decodeEnvelope(material!.session.hello).payload).toMatchObject({ capabilities: expect.arrayContaining(['hosted_apps_v1']) })
+  da.emit({ type: 'handshake-complete', helloAck: ack('a') })
+  db.emit({ type: 'handshake-complete', helloAck: ack('b', false) })
+  expect(db.sent).toHaveLength(0)
+  expect(b.connection.hostedApps.read().type).toBe('unsupported')
+  const first = decodeEnvelope(da.sent.at(-1)!).id
+  a.connection.requestContextUsage('chat')
+  da.emit({ type: 'message', plaintext: encodeEnvelope({ id: 90, ts: FIXED_TS, type: 'message',
+    payload: { conversation_id: 'chat', message_id: 'barrier', role: 'assistant', text: 'processed' } }) })
+  expect(emitted(a.sink).some(e => e.type === 'messageReceived')).toBe(true)
+  const page = (d: FakeDriver, request: number) => d.emit({ type: 'message', plaintext: encodeEnvelope({ id: 100,
+    ts: FIXED_TS, type: 'apps', in_reply_to: request, payload: { revision: 1, items: [row], next_cursor: null } }) })
+  page(da, first)
+  const binding = a.connection.hostedApps.openView(app)
+  if (!binding.ok) throw new Error('expected binding')
+  const pending = binding.view.request({ type: 'app_asset_request', payload: { path: '/', navigation: true } })
+  db.emit({ type: 'handshake-complete', helloAck: ack('b') }); page(db, decodeEnvelope(db.sent.at(-1)!).id)
+  expect(b.connection.hostedApps.openView(app).ok).toBe(true)
+  da.emit({ type: 'relay-link-down', code: 1006 })
+  expect(await pending).toMatchObject({ error: 'retired' })
+  expect(a.connection.hostedApps.read().type).toBe('unavailable')
+  expect(b.connection.hostedApps.read().type).toBe('ready')
+  da.emit({ type: 'handshake-complete', helloAck: ack('a') })
+  page(da, first); expect(a.connection.hostedApps.openView(app).ok).toBe(false)
+  const latest = decodeEnvelope(da.sent.at(-1)!).id
+  page(da, latest); expect(a.connection.hostedApps.openView(app).ok).toBe(true)
+  expect(await binding.view.request({ type: 'app_asset_request', payload: { path: '/', navigation: true } })).toMatchObject({ error: 'retired' })
+  da.emit({ type: 'handshake-complete', helloAck: ack('a', false) })
+  expect(a.connection.hostedApps.read().type).toBe('unsupported')
+  a.connection.stop(); b.connection.stop()
+})
+
+it('fences hosted work across connection lifecycle and keeps unrelated traffic runnable', async () => {
+  const ctx = build({ serverId: 'host-a' })
+  ctx.connection.start(); await tick()
+  const driver = ctx.drivers[0]
+  const ack = { ...decodeEnvelope(validHelloAck()), payload: { protocol_version: 'v2', server_id: 'srv-1', conn_id: 'conn-1', capabilities: ['hosted_apps_v1'] } }
+  driver.emit({ type: 'handshake-complete', helloAck: encodeEnvelope(ack) })
+  const view = ctx.connection.hostedResources.openView('22222222-2222-4222-8222-222222222222', '1.0.0')
+  const result = view.request({ type: 'app_asset_request', payload: { path: '/', navigation: true } })
+  const request = decodeEnvelope(driver.sent.at(-1)!)
+  driver.observations.at(-1)!({ type: 'sent', connectionId: 'conn-1' })
+  driver.emit({ type: 'message', plaintext: encodeEnvelope({ id: 901, ts: FIXED_TS, type: 'app_response', in_reply_to: request.id,
+    payload: { app_id: '22222222-2222-4222-8222-222222222222', release_version: '1.0.0', status: 200, headers: {}, size_bytes: 2, total_chunks: 2,
+      sha256: 'a12871fee210fb8619291eaea194581cbd2531e4b23759d225f6806923f63222' } }) })
+  ctx.connection.requestContextUsage('chat')
+  expect(decodeEnvelope(driver.sent.at(-1)!).type).toBe('request_context_usage')
+  driver.emit({ type: 'message', plaintext: encodeEnvelope({ id: 900, ts: FIXED_TS, type: 'message',
+    payload: { conversation_id: 'chat', message_id: 'message', role: 'assistant', text: 'barrier' } }) })
+  expect(emitted(ctx.sink).some(event => event.type === 'messageReceived')).toBe(true)
+  driver.emit({ type: 'handshake-complete', helloAck: encodeEnvelope(ack) })
+  expect(await result).toMatchObject({ ok: false, error: 'retired' })
+  expect(await view.request({ type: 'app_asset_request', payload: { path: '/', navigation: true } })).toMatchObject({ error: 'retired' })
+  const successor = ctx.connection.hostedResources.openView('22222222-2222-4222-8222-222222222222', '1.0.0')
+  const next = successor.request({ type: 'app_asset_request', payload: { path: '/', navigation: true } })
+  expect(decodeEnvelope(driver.sent.at(-1)!).id).toBeGreaterThan(request.id)
+  driver.emit({ type: 'message', plaintext: encodeEnvelope({ id: 902, ts: FIXED_TS, type: 'app_response_chunk', in_reply_to: request.id,
+    payload: { app_id: '22222222-2222-4222-8222-222222222222', index: 0, data: 'AQ==' } }) })
+  driver.emit({ type: 'relay-link-down', code: 1006 })
+  expect(await next).toMatchObject({ error: 'retired' })
+  ctx.connection.stop()
+})
+
+it.each([
+  ['app_response', 'session_id', 123],
+  ['app_response', 'history_entry_id', null],
+  ['app_response', 'session_state_cleared', null],
+  ['app_response_chunk', 'session_id', 123],
+  ['app_response_chunk', 'history_entry_id', null],
+  ['app_response_chunk', 'session_state_cleared', null],
+  ['error', 'session_id', 123],
+  ['error', 'history_entry_id', null],
+  ['error', 'session_state_cleared', null]
+] as const)('retires hosted %s with malformed %s before generic admission', async (type, field, value) => {
+  const ctx = build({ serverId: 'host-a' })
+  try {
+    ctx.connection.start(); await tick()
+    vi.useFakeTimers()
+    const driver = ctx.drivers[0], ack = decodeEnvelope(validHelloAck())
+    driver.emit({ type: 'handshake-complete', helloAck: encodeEnvelope({ ...ack,
+      payload: { ...ack.payload as object, capabilities: ['hosted_apps_v1'] } }) })
+    const app = '22222222-2222-4222-8222-222222222222'
+    const view = ctx.connection.hostedResources.openView(app, '1.0.0')
+    const input = { type: 'app_asset_request' as const, payload: { path: '/', navigation: true } }
+    const results = Array.from({ length: 16 }, () => view.request(input))
+    const settled = vi.fn()
+    void results[0].then(settled)
+    const requests = () => driver.sent.map(decodeEnvelope).filter(frame => frame.type === 'app_asset_request')
+    expect(requests()).toHaveLength(8)
+    driver.observations.forEach(observe => observe({ type: 'sent', connectionId: 'conn-1' }))
+    const target = requests()[0].id, other = requests()[1].id
+    const data = Buffer.alloc(32768), body = Buffer.alloc(8388608)
+    const metadata = (id: number) => ({ id: 901, ts: FIXED_TS, type: 'app_response', in_reply_to: id,
+      payload: { app_id: app, release_version: '1.0.0', status: 200, headers: {}, size_bytes: body.length,
+        total_chunks: 256, sha256: createHash('sha256').update(body).digest('hex') } })
+    const chunk = (id: number, index: number) => ({ id: 902, ts: FIXED_TS, type: 'app_response_chunk', in_reply_to: id,
+      payload: { app_id: app, index, data: data.toString('base64') } })
+    const push = (frame: object) => driver.emit({ type: 'message', plaintext: Buffer.from(JSON.stringify(frame)) })
+    push(metadata(target)); push(metadata(other)) // Exhaust the connection's assembly reservation.
+    push(chunk(target, 0))
+    driver.observations.at(-1)!({ type: 'sent', connectionId: 'conn-1' })
+    const frame = type === 'error' ? { id: 904, ts: FIXED_TS, type, in_reply_to: target,
+      payload: { code: 'app.busy', message: 'private diagnostic', retryable: true } }
+      : type === 'app_response' ? metadata(target) : chunk(target, 1)
+    const malformed = { ...frame, [field]: value }
+    expect(() => decodeEnvelope(Buffer.from(JSON.stringify(malformed)))).toThrow()
+    push(malformed)
+    await Promise.resolve()
+    expect(settled).toHaveBeenCalledTimes(1)
+    expect(settled).toHaveBeenCalledWith({ ok: false, error: 'corrupt', uncertain: false })
+    expect(requests()).toHaveLength(9) // The retired active slot immediately promotes queued work.
+    results.push(view.request(input)) // Its view admission slot is reusable too.
+    expect(await view.request(input)).toMatchObject({ error: 'limit' })
+    const promoted = requests()[8].id
+    driver.observations.at(-1)!({ type: 'sent', connectionId: 'conn-1' })
+    push(metadata(promoted)); push(chunk(promoted, 0))
+    expect(decodeEnvelope(driver.sent.at(-1)!)).toMatchObject({ type: 'app_response_credit',
+      payload: { request_id: promoted, next_index: 1 } }) // The retired 8 MiB reservation was released.
+    const sent = driver.sent.length
+    push(metadata(target))
+    for (let index = 1; index < 256; index++) push(chunk(target, index))
+    await Promise.resolve()
+    expect(driver.sent).toHaveLength(sent)
+    expect(settled).toHaveBeenCalledTimes(1)
+    ctx.connection.requestContextUsage('chat')
+    expect(decodeEnvelope(driver.sent.at(-1)!).type).toBe('request_context_usage')
+    push({ id: 903, ts: FIXED_TS, type: 'message', payload: {
+      conversation_id: 'chat', message_id: 'barrier', role: 'assistant', text: 'barrier' } })
+    expect(emitted(ctx.sink).some(event => event.type === 'messageReceived')).toBe(true)
+    ctx.connection.stop()
+    await Promise.all(results)
+    expect(vi.getTimerCount()).toBe(0)
+  } finally { ctx.connection.stop(); vi.useRealTimers() }
+})
+
+it.each(['reconnect', 'stop', 'terminal', 'error', 'auth', 'update-required', 'bad-ack', 'unsupported'] as const)('retires all hosted work on %s', async reason => {
+  const ctx = build({ serverId: 'srv-1' })
+  ctx.connection.start(); await tick()
+  const driver = ctx.drivers[0], ack = decodeEnvelope(validHelloAck())
+  driver.emit({ type: 'handshake-complete', helloAck: encodeEnvelope({ ...ack,
+    payload: { ...ack.payload as object, capabilities: ['hosted_apps_v1'] } }) })
+  expect(ctx.connection.hostedApps.read().type).toBe('loading')
+  const first = ctx.connection.hostedResources.openView('22222222-2222-4222-8222-222222222222', '1.0.0')
+  const second = ctx.connection.hostedResources.openView('33333333-3333-4333-8333-333333333333', '2.0.0')
+  const input = { type: 'app_api_request' as const, payload: { path: '/api/data', method: 'POST' as const, headers: {}, body: '' } }
+  const a = first.request(input), request = decodeEnvelope(driver.sent.at(-1)!), b = second.request(input)
+  switch (reason) {
+    case 'reconnect': ctx.connection.reconnect(); await tick(); break
+    case 'stop': ctx.connection.stop(); break
+    case 'terminal': driver.emit({ type: 'terminal', code: 4401, reason: 'closed' }); break
+    case 'error': driver.emit({ type: 'error', reason: 'session-load-failed' }); break
+    case 'auth': driver.emit({ type: 'message', plaintext: encodeEnvelope({ id: 100, ts: FIXED_TS, type: 'error', in_reply_to: request.id,
+      payload: { code: 'auth.invalid_token', message: 'rejected', retryable: false } }) }); break
+    case 'update-required': driver.emit({ type: 'message', plaintext: encodeEnvelope({ id: 100, ts: FIXED_TS, type: 'error', in_reply_to: request.id,
+      payload: { code: 'client.update_required', message: 'rejected', retryable: false, min_client_version: '1.0.0' } }) }); break
+    case 'bad-ack': driver.emit({ type: 'handshake-complete', helloAck: Buffer.from('{}') }); break
+    case 'unsupported': driver.emit({ type: 'handshake-complete', helloAck: validHelloAck() }); break
+  }
+  expect(await a).toMatchObject({ ok: false, uncertain: true })
+  expect(await b).toMatchObject({ ok: false, uncertain: true })
+  expect(ctx.connection.hostedApps.read().type).toBe(reason === 'unsupported' ? 'unsupported' : 'unavailable')
+  const count = driver.sent.length
+  expect(await first.request(input)).toMatchObject({ error: 'retired', uncertain: false })
+  expect(driver.sent).toHaveLength(count)
+  ctx.connection.stop()
+})
+
+it('retires an incomplete walk on automatic re-handshake and rejects foreign host acknowledgement', async () => {
+  const ctx = build({ serverId: 'srv-1' })
+  ctx.connection.start(); await tick()
+  const driver = ctx.drivers[0], ack = decodeEnvelope(validHelloAck())
+  const supported = encodeEnvelope({ ...ack, payload: { ...ack.payload as object, capabilities: ['hosted_apps_v1'] } })
+  driver.emit({ type: 'handshake-complete', helloAck: supported })
+  const old = decodeEnvelope(driver.sent.at(-1)!).id
+  driver.emit({ type: 'handshake-complete', helloAck: supported })
+  const current = decodeEnvelope(driver.sent.at(-1)!).id
+  expect(current).toBeGreaterThan(old)
+  driver.emit({ type: 'message', plaintext: encodeEnvelope({ id: 300, ts: FIXED_TS, type: 'apps', in_reply_to: old,
+    payload: { revision: 0, items: [], next_cursor: null } }) })
+  expect(ctx.connection.hostedApps.read().type).toBe('loading')
+  driver.emit({ type: 'relay-link-down', code: 1006 })
+  expect(ctx.connection.hostedApps.read().type).toBe('unavailable')
+  driver.emit({ type: 'handshake-complete', helloAck: encodeEnvelope({ ...ack,
+    payload: { ...ack.payload as object, server_id: 'foreign', capabilities: ['hosted_apps_v1'] } }) })
+  expect(ctx.connection.hostedApps.read().type).toBe('unsupported')
+  ctx.connection.stop()
+})
+
 /** Reach the connected window: start, resolve the bootstrap, complete the handshake. */
 async function reachConnected(): Promise<ReturnType<typeof build>> {
   const ctx = build()
@@ -800,7 +998,7 @@ describe('createDaemonConnection', () => {
     const assertHello = (hello: Uint8Array): void => {
       expect(decodeEnvelope(hello).payload).toMatchObject({
         client_features: expected,
-        capabilities: ['interactive', 'multi_agent', 'stop_background_task']
+        capabilities: ['interactive', 'multi_agent', 'stop_background_task', 'hosted_apps_v1']
       })
     }
     assertHello(drivers[0].config.session.hello)
@@ -823,7 +1021,7 @@ describe('createDaemonConnection', () => {
     // buildClientHello in isolation, so this pins the production wiring, not the codec default.
     const envelope = decodeEnvelope(drivers[0].config.session.hello)
     const payload = envelope.payload as Record<string, unknown>
-    expect(payload.capabilities).toEqual(['interactive', 'multi_agent', 'stop_background_task'])
+    expect(payload.capabilities).toEqual(['interactive', 'multi_agent', 'stop_background_task', 'hosted_apps_v1'])
   })
 
   it('decodes server_static_pubkey to the raw 32-byte key', async () => {

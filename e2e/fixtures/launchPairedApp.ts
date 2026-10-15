@@ -146,7 +146,7 @@ export type LaunchPairedAppOptions = Omit<FakeDaemonOptions, 'url'>
  *  one option, not two. Used only by the relaunch-persistence spec; absent = the default fresh-dir,
  *  full-drive behaviour every other consumer relies on. */
 export type LaunchControl = {
-  /** Install command observation before pairing or conversation activation. */
+  /** Install command observation after window readiness, before pairing or conversation activation. */
   onLaunched?: (app: ElectronApplication) => Promise<void>
   /** Return at Welcome so mounted pairing tests can control authentication delivery. */
   skipPairing?: boolean
@@ -368,8 +368,10 @@ export const test = base.extend<PairedAppFixtures>({
       // failure, so the drain below records it under this thunk's label exactly like any other step.
       teardown.push({ step: 'app', run: () => fate.closeWatched(app) })
 
-      await control.onLaunched?.(app)
       const page = await app.firstWindow()
+      // History-handler replacement must follow startup registration, which precedes createWindow.
+      // The hook still completes before pairing or opening the restored conversation.
+      await control.onLaunched?.(app)
 
       // Reuse (#466): the persisted pairing blob in the reused dir routes the app straight to the
       // ChannelList at mount (App.tsx → routeForStatus reads the persisted pairing record, not the Noise
@@ -394,6 +396,14 @@ export const test = base.extend<PairedAppFixtures>({
       // `control.hostLabel` is undefined for every caller but #834's spec, and the arrival step's third
       // parameter is optional — so the default drive is byte-identical to what it was.
       if (control.skipPairing) return { page, app, daemon, forwarder, userDataDir, servers }
+      // A shown Linux launch starts hidden until first paint. Chromium's backgrounding switches
+      // leave native-hidden windows without the frames required by Welcome click actionability.
+      const pairingWindow = await app.browserWindow(page)
+      try {
+        await pairingWindow.evaluate(window => window.webContents.setBackgroundThrottling(false))
+      } finally {
+        await pairingWindow.dispose()
+      }
       await withWelcomeDiagnostics(page, app, testInfo, launchIndex, () =>
         pairFromUnpairedLaunch(page, pairingPayloadFor(first, DUMMY_TOKEN), control.hostLabel))
 

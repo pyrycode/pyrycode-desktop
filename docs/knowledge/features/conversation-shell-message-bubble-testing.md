@@ -62,6 +62,57 @@ Queued geometry, fixture setup and counted browser/visual evidence are in
 [queued-action testing](conversation-shell-conversation-and-modals.md#queued-action-testing). Static tests establish
 the image-button markup; the row's `:focus-within` rule applies to image buttons too.
 
+### Streaming copy input readiness
+
+Visible streaming text and a cursor do not prove that Copy received an activation.
+In the [controlled diagnosis](../../specs/architecture/1976-streaming-copy-synchronization.md#revisions)
+on unchanged production at `0057a0afe824ae00594ddfd893dac2f26ca87f70`, an ordinary
+hover/down, two animation frames and up reproduced stale OS clipboard text “Hi”.
+The committed source was “Streaming partial reply” and trusted pointer-down hit
+Copy, but attachment-focus/metadata reflow moved its button 28px upward before
+release. Trusted pointer-up hit Reply and click targeted the common actions
+container, so Copy's handler never activated. The control executed 3 tests:
+0 passed, 3 failed, 0 skipped, zero retries. The same press after readiness repair
+executed/passed 3, with 0 failed/skipped and zero retries. This isolates an
+input/layout synchronization gap; it does not recover the unavailable historical
+event schedule. Green reruns alone did not establish a cause. No production change
+was justified.
+
+`side copy and row cap retain sizing while metadata expands on hover and focus`
+now checks each setup reply's committed text and cursor disappearance, including
+the attached send's third assistant reply, before injecting the independent stream.
+It requires four assistant rows and one exact streaming source with a visible
+cursor, transfers focus to its Copy button before pressing, then hovers and polls
+consecutive animation frames for identical button bounds and thread scroll
+offset/content height with both focus and hover held. Ordinary `Locator.click()`
+must produce a trusted click receipt and replace the real OS clipboard with exactly
+“Streaming partial reply”. An earlier OS readback must equal “Hi”, so stale matching
+contents from a preceding execution cannot make the final assertion pass.
+Row-cap, geometry, metadata hover/focus, attachment, queued/drop and standalone-offer
+assertions remain, as do clipboard-project serialization and
+[desktop isolation](e2e-harness-desktop-isolation.md#desktop-isolation-default-tier-launches).
+
+The [acceptance receipts](../../specs/architecture/1976-streaming-copy-synchronization.md#acceptance-receipts)
+and [verifier review](https://github.com/pyrycode/pyrycode-desktop/pull/1982#issuecomment-6180570070)
+record tested source `0406469c8a7402a58b03fea6b314e43e26223d00` on Linux/Xvfb:
+
+- Named case with retries disabled: 20 executed, 20 passed, 0 failed, 0 skipped.
+- Complete configured fake tier, without filtering: 395 executed, 395 passed,
+  0 failed, 3 skipped. The named case separately executed/passed 1, with
+  0 failed/skipped. Every result in both runs has retry index 0.
+
+The focused clipboard project used one worker; the complete tier retained four
+configured workers and clipboard serialization. Existing skips were two
+`app-badge-count.spec.ts` cases because app icon badges exist only on macOS, and
+`window-reopen-converges.spec.ts` because only macOS retains the app after its last
+window closes. No new skips or unrelated failures occurred.
+Dispatcher verifier gate 6 at `5e18a7014e34587548ae8a3d03c3c9bd9851bbe5`
+(2026-10-14, `npx playwright test --reporter=json`) independently recorded
+395 executed, 395 passed, 0 failed, 3 skipped; its per-test report confirms the
+named case was present and passed. Raw diagnosis and acceptance archives remain
+scratch evidence under `/tmp/builder-1976/`; the linked plan preserves the durable
+receipt. No real-Claude acceptance was required or claimed.
+
 ### Metadata collapse verification
 
 [`turn-stats-hover.spec.ts`](../../../e2e/turn-stats-hover.spec.ts) checks collapsed

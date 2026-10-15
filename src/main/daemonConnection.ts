@@ -21,6 +21,8 @@ import type { ThreadQuery } from '../shared/wire/thread'
 // (messageFor), the ack/plaintext bytes, or the numeric close code (that is #127's relay leg). Every
 // failure surfaces as a non-connected DaemonEvent; nothing throws out of the module.
 import { createThreadUpdateReceiver } from './transport/threadUpdates'
+import { createHostedResources } from './transport/hostedResources'
+import { createHostedApps } from './transport/hostedApps'
 import type { MessageLifecycle } from './messageLifecycle'
 import { notifySend } from './transport/sendObservation'
 import type { SendOutcome } from './transport/sendObservation'
@@ -43,7 +45,7 @@ import { buildRequestMcpStatus } from './transport/requestMcpStatusEnvelope'
 import { buildMcpReconnect } from './transport/mcpReconnectEnvelope'
 import { buildMcpToggle } from './transport/mcpToggleEnvelope'
 import { buildStopBackgroundTask } from './transport/stopBackgroundTaskEnvelope'
-import { encodeEnvelope } from './transport/codec'
+import { encodeEnvelope, parseJsonObject } from './transport/codec'
 import { buildRequestSystemPrompt } from './transport/requestSystemPromptEnvelope'
 import { buildSetSystemPrompt } from './transport/setSystemPromptEnvelope'
 import { buildSetConversationMuted } from './transport/setConversationMutedEnvelope'
@@ -285,6 +287,8 @@ interface PendingRetrieval {
  * record-reload.
  */
 export interface DaemonConnection {
+  hostedResources: ReturnType<typeof createHostedResources>
+  hostedApps: ReturnType<typeof createHostedApps>
   queryThread(query: ThreadQuery, requestId: string): void
   requestHostSystemPrompt(requestId: string): void
   setHostSystemPrompt(systemPrompt: string, requestId: string): void
@@ -905,6 +909,18 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // not consume an id (harmless either way: the daemon uses `id` for in_reply_to correlation, not
   // sequencing).
   let nextEnvelopeId = 2
+  const hostedDeps = { nextId: () => nextEnvelopeId++, now,
+    connected: () => driver !== null && authenticated && !stopped && deps.serverId !== null,
+    send: (bytes: Uint8Array, observe: (outcome: SendOutcome) => void) => {
+      if (driver === null || !authenticated || stopped) observe({ type: 'dropped', reason: 'send-refused' })
+      else driver.sendMessage(bytes, observe)
+    }, log: deps.diagnosticLog }
+  const hostedResources = createHostedResources(hostedDeps)
+  const hostedApps = createHostedApps({ ...hostedDeps, resources: hostedResources })
+  function resetHosted(supported?: boolean): void {
+    hostedResources.reset(supported)
+    hostedApps.reset(supported)
+  }
   // The single per-connection debug-bundle reassembly slot (#116). The desktop has at most ONE
   // bundle request in flight (daemon-global bundle, one UI action), so a lone slot keyed by
   // liveness — replaced on each requestDebugBundle — is the whole state model: no in_reply_to map.
@@ -1139,6 +1155,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // `minClientVersion` is the classifier's already-validated MAJOR.MINOR.PATCH (#1613), placed on the
   // event only for `update-required`, and never logged.
   function emitFailed(code: string, message = messageFor(code), minClientVersion?: string): void {
+    resetHosted()
     abandonHostPrompts()
     authenticated = false
     deliveryFailed = true
@@ -1267,8 +1284,10 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
 
   // The single choke point: RelaySessionEvent → DaemonEvent. Nothing else emits.
   function onDriverEvent(event: RelaySessionEvent): void {
+    if (stopped) return
     switch (event.type) {
       case 'handshake-complete': {
+        resetHosted()
         threadReceiver.reset()
         let ack: HelloAckPayload
         try {
@@ -1281,6 +1300,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         }
         pairingRejected = false
         authenticated = true
+        hostedResources.reset(ack.capabilities.includes('hosted_apps_v1'))
+        hostedApps.reset(ack.server_id === deps.serverId && ack.capabilities.includes('hosted_apps_v1'))
         deliveryFailed = false
         emitDaemonEvent(sink, { type: 'connected', ack })
         drainMessages()
@@ -1290,6 +1311,19 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         return
       }
       case 'message': {
+        try {
+          const envelope = parseJsonObject(event.plaintext)
+          // Connection-fatal errors retain precedence even when they name a hosted request.
+          let fatal = false
+          if (envelope.type === 'error') {
+            try {
+              const error = parseInboundMessage(event.plaintext)
+              fatal = error?.kind === 'daemon-error' &&
+                (error.pairingReject === 'pairing-rejected' || error.updateRequired !== undefined)
+            } catch { /* Correlated malformed errors must still reach hosted validation. */ }
+          }
+          if (!fatal && (hostedApps.receive(event.plaintext, envelope) || hostedResources.receive(event.plaintext, envelope))) return
+        } catch { /* Invalid UTF-8/JSON has no identifiable hosted operation. */ }
         // Decode the decrypted app-envelope at the transport boundary, then map its narrowed result
         // onto the IPC layer — the consumer's only job (transport/ stays IPC-free).
         let inbound: InboundDaemonMessage | null
@@ -2978,6 +3012,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         emitDaemonEvent(sink, { type: 'relayLinkChanged', status: 'connected' })
         return
       case 'relay-link-down': {
+        resetHosted()
         threadReceiver.reset()
         abandonHostPrompts()
         pendingSwitchAgents.clear()
@@ -3004,6 +3039,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         return
       }
       case 'terminal':
+        resetHosted()
         threadReceiver.reset()
         abandonHostPrompts()
         // A stream interrupted by a socket drop resolves the consumer (no hang, no lingering bytes).
@@ -3025,6 +3061,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         emitFailed('connection-closed', `The connection to pyrybox was closed (code ${event.code}).`)
         return
       case 'error':
+        resetHosted()
         threadReceiver.reset()
         // Same teardown net for a connection-level driver error mid-stream.
         failBundleStream()
@@ -3085,7 +3122,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // Advertise `multi_agent` too (#1657): without it the daemon withholds Codex conversations,
       // their frames and Codex model rows, all of which the window now decodes per agent (#1649).
       // Advertise `stop_background_task` (#1770), detection only: the echo says the daemon takes the verb.
-      capabilities: [CAPABILITY_INTERACTIVE, CAPABILITY_MULTI_AGENT, CAPABILITY_STOP_BACKGROUND_TASK]
+      capabilities: [CAPABILITY_INTERACTIVE, CAPABILITY_MULTI_AGENT, CAPABILITY_STOP_BACKGROUND_TASK, 'hosted_apps_v1']
     })
     return {
       connection: {
@@ -4370,6 +4407,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
 
   // The single fresh-connect path both start() and reconnect() funnel through.
   function dial(): void {
+    resetHosted()
     threadReceiver.reset()
     abandonHostPrompts()
     authenticated = false
@@ -4461,6 +4499,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     stop(): void {
       if (stopped) return
       stopped = true
+      resetHosted()
+      hostedApps.dispose()
       threadReceiver.reset()
       authenticated = false
       failHeldMessages(true)
@@ -4470,6 +4510,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // `stopped` guard above (step 7) prevents it from ever being constructed.
       driver?.stop()
     },
+    hostedResources,
+    hostedApps,
     send,
     requestSessionSettings,
     requestModelList,

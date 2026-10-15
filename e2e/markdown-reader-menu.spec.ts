@@ -210,14 +210,35 @@ const readerGeometry = (page: Page) => page.evaluate(() => {
     padding: parseFloat(getComputedStyle(body).paddingTop), scrollTop: body.scrollTop }
 })
 
+// Reply focus reveals metadata and changes row height. Let the growth observer and
+// native scroll anchoring finish before taking a baseline or delivering a click.
+const settledThreadPosition = (page: Page) => page.evaluate(async () => {
+  const thread = document.querySelector<HTMLElement>('.conversation__thread')!
+  const link = document.querySelector('.markdown-link')!
+  let previous = ''
+  let stableFrames = 0
+  for (let frame = 0; frame < 120; frame += 1) {
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+    const box = link.getBoundingClientRect()
+    const sample = JSON.stringify([thread.scrollTop, thread.scrollHeight, thread.clientHeight,
+      box.x, box.y, box.width, box.height])
+    stableFrames = sample === previous ? stableFrames + 1 : 0
+    previous = sample
+    if (stableFrames === 20) return thread.scrollTop
+  }
+  throw new Error('Reply geometry did not settle')
+})
+
 for (const size of [{ width: 1280, height: 800 }, { width: 800, height: 600 }]) {
-  test(`reader scrolls under sharp chrome with dynamic clearance and input at ${size.width}`, async ({ launchPairedApp }) => {
+  test(`reader scrolls under sharp chrome with dynamic clearance and input at ${size.width}`, async ({ launchPairedApp }, testInfo) => {
     test.setTimeout(60_000)
     serve = 'ok'
     version = 0
     longNote = true
+    const readRequests: { id: number; serve: string; version: number }[] = []
     const { page, app } = await launchPairedApp({ buildReplyFrames: bytes => {
       const env = decodeEnvelope(bytes)
+      if (env.type === 'read_workspace_file') readRequests.push({ id: env.id, serve, version })
       if (env.type !== 'send_message') return buildReplyFrames(bytes)
       const history = Array.from({ length: 12 }, (_, i) => [
         encodeEnvelope({ id: 200 + i, type: 'assistant_delta', ts: FIXED_TS,
@@ -246,8 +267,6 @@ for (const size of [{ width: 1280, height: 800 }, { width: 800, height: 600 }]) 
     await expect(link).toBeVisible({ timeout: TIMEOUT_MS })
     await composer.fill('Draft survives the reader')
     await link.click()
-    const threadPosition = await page.locator('.conversation__thread').evaluate(node => node.scrollTop)
-    expect(threadPosition).toBeGreaterThan(0)
     const reader = page.locator('.markdown-reader')
     const body = reader.locator('.markdown-reader__body')
     const trigger = reader.getByRole('button', { name: 'Note actions', exact: true })
@@ -255,6 +274,10 @@ for (const size of [{ width: 1280, height: 800 }, { width: 800, height: 600 }]) 
     const menu = page.getByRole('menu', { name: 'Note actions', exact: true })
     const item = (name: string) => menu.getByRole('menuitem', { name, exact: true })
     await expect(reader.locator('h1')).toHaveText('Plan version 1')
+    // Back's focus closes the covered reply's metadata before the preservation baseline.
+    await back.focus()
+    const threadPosition = await settledThreadPosition(page)
+    expect(threadPosition).toBeGreaterThan(0)
     let b = await readerGeometry(page)
     // Fails on the old below-header scroller, before querying any new markup.
     expect(b.body.top).toBe(b.pane.top)
@@ -386,8 +409,25 @@ for (const size of [{ width: 1280, height: 800 }, { width: 800, height: 600 }]) 
     await expect(reader).toHaveCount(0)
     await expect(composer).toHaveValue('Draft survives the reader')
     expect(await page.locator('.conversation__thread').evaluate(node => node.scrollTop)).toBe(threadPosition)
-    await link.click()
-    await expect(reader.locator('h1')).toBeVisible()
+    // A bare click can measure coordinates before hover reveals metadata and the
+    // bottom pin moves the link. Focus holds those details open while geometry settles.
+    await link.focus()
+    await expect(link).toBeFocused()
+    await settledThreadPosition(page)
+    const readsBeforeReopen = readRequests.length
+    try {
+      await link.click()
+      await expect(reader.locator('h1')).toHaveText('Plan version 3')
+      expect(readRequests).toHaveLength(readsBeforeReopen + 1)
+      expect(readRequests.at(-1)).toMatchObject({ serve: 'ok', version: 2 })
+      expect(new Set(readRequests.map(request => request.id)).size).toBe(readRequests.length)
+    } finally {
+      await testInfo.attach('reopen-diagnostics', { contentType: 'application/json', body: JSON.stringify({
+        readRequests,
+        readerCount: await reader.count(), heading: await reader.locator('h1').allTextContents(),
+        notices: await page.locator('.conversation__banner').allTextContents()
+      }, null, 2) })
+    }
     await back.focus()
     await back.press('Enter')
     await expect(reader).toHaveCount(0)

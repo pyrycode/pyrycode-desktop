@@ -51,7 +51,7 @@ keeps the head for the next handshake; other failures remove it and report
 appends reentrant submissions behind the remainder. Accepted rekey-buffered sends
 belong solely to `noiseSession`, and written messages are never automatically
 retried. `written` establishes a socket write, not daemon acknowledgement.
-The [connection lifecycle](daemon-connection-lifecycle.md#disconnected-composer-message-delivery)
+The [connection lifecycle](daemon-connection-disconnected-delivery.md#disconnected-composer-message-delivery)
 owns pairing comparison, terminal-failure recovery through unchanged-pairing
 Reconnect, permanent release and shutdown. Holds do not survive restart.
 

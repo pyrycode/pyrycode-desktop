@@ -52,7 +52,7 @@ retaining refused sends for same-pairing recovery and emitting client-owned deli
 status for the existing echo. Written messages leave the FIFO permanently; socket
 write is not daemon acknowledgement. Terminal failures remain visible and retained
 for explicit Reconnect, while pairing replacement/removal and disposal release holds.
-See [connection lifecycle](daemon-connection-lifecycle.md#disconnected-composer-message-delivery)
+See [connection lifecycle](daemon-connection-disconnected-delivery.md#disconnected-composer-message-delivery)
 for bounds and lifetime, and [outbound send path](outbound-send-path.md) for routing,
 envelope IDs and independent diagnostics. The hold is specific to composer messages;
 control requests below do not inherit retries.

@@ -31,10 +31,10 @@ for resubmission. Host-stamped updates also reach inactive retained threads; a
 matching queue snapshot or user receipt clears local status and settles the existing
 row without changing its original metadata. Written clears the label but does not
 acknowledge daemon receipt. See [composer status and settlement](composer-send-internals.md#2-local-delivery-status-and-receipt-settlement)
-and [connection lifecycle](daemon-connection-lifecycle.md#disconnected-composer-message-delivery)
+and [connection lifecycle](daemon-connection-disconnected-delivery.md#disconnected-composer-message-delivery)
 for ownership, bounded in-memory holding and unchanged-pairing recovery.
 
-The [recorded fake-transport evidence](daemon-connection-lifecycle.md#delivery-verification)
+The [recorded fake-transport evidence](daemon-connection-disconnected-delivery.md#delivery-verification)
 includes the automatic, explicit and terminal scenarios, readable waiting captures
 at 1280×800 and 800×800, and terminal Not sent treatment. No new real-Claude
 acceptance is required for these statuses.

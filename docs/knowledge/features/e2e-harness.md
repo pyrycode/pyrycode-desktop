@@ -33,6 +33,27 @@ Playwright's `_electron` API launches the project's **own** `electron` binary an
 Build before launching and leave `out/` unchanged until Electron tests finish. A concurrent
 rebuild replaces the renderer assets and can invalidate launch evidence.
 
+### Launch-hook readiness
+
+`launchPairedApp` awaits `app.firstWindow()` before invoking
+`LaunchControl.onLaunched`, then awaits the hook before the fixture pairs or
+activates a conversation. Production registers the saved-history IPC handler
+before creating that window, so the hook can replace an existing handler before
+the restored conversation's first timeline read. Installing immediately after
+process launch could instead claim the channel before startup registers it and
+prevent window creation; see the [startup-registration diagnosis](e2e-harness-launch-fate.md#startup-registration-failure-before-window-creation).
+
+The restored-identity cases in
+[`queued-own-settlement.spec.ts`](../../../e2e/queued-own-settlement.spec.ts)
+check one discovered window, desktop isolation and an original saved-history
+handler before replacement. They wait for `Saved answer` before expanding the
+tool run, parent and child. Startup readiness does not acknowledge later event
+processing: each update still waits for its rendered `Live update receipt barrier`
+or `Older history prepend` before checking retained DOM handles, expanded state
+and visible child result, in both event orders. Keep these
+[positive processing barriers](development-verification-evidence-that-cannot-pass-too-early.md)
+when changing setup.
+
 ### Deterministic teardown
 
 Teardown must run on **every** exit path — success, test failure, and a failure raised after a resource (the Electron process, its `--user-data-dir`) came up but before `use()` returns. The naive shape (cleanup code placed textually after `await use(...)`) only covers the first two: Playwright's fixture lifecycle runs that code on pass and fail alike, but a setup-time throw — say `firstWindow()` rejecting — never reaches it, so the process and dir both leak. A leaked launch then sits there for the rest of its worker's run, competing with every later launch.

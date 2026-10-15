@@ -109,3 +109,69 @@ fetch was unavailable; the verdict used the retained reference. Outer windows we
 These are recorded scratch evidence paths. Original paths, revision and comparison
 results are retained in [PR #1801](https://github.com/pyrycode/pyrycode-desktop/pull/1801).
 
+## Reader reopen input verification
+
+The [diagnosis](https://github.com/pyrycode/pyrycode-desktop/issues/1970#issuecomment-6180262603)
+and [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1981#issuecomment-6180406848)
+record the test-only repair reviewed on 2026-10-14 at
+`62fc391be9ad3dd10c534ca93f80ff1ea792702f`. The reader and protocol were unchanged.
+
+Historical observations come from the
+[refinement evidence](https://github.com/pyrycode/pyrycode-desktop/issues/1970#issuecomment-6180068699):
+the gate at `58caf4cd0c` executed 395 tests, with 394 passed, 1 failed and 3 skipped,
+four workers and zero retries. The exact 800px layout case failed its final heading
+assertion after pointer Back at the unchanged 5,000ms timeout; its 1280px sibling
+was present and passed. The unchanged targeted 800px rerun executed/passed 1,
+failed 0, skipped 0, retry 0. Original log references are
+`/work/Projects/pyrycode-desktop-agents/logs/verifier-gate_#1964_6.log` and
+`/work/Projects/pyrycode-desktop-agents/logs/2026-10-14T21-42-47-639Z_verifier-gate-rerun_#1964.log`.
+Those remote logs and the missing original snapshot were not inspected locally;
+neither the rerun nor the absent heading establishes the original event sequence.
+
+The controlled 800px failure measured the link before hover, moved the real pointer
+to its recorded center, let two animation frames process layout, then clicked there.
+Metadata reveal and bottom pinning moved the link's y from 372 to 344 and scrollTop
+from 1461 to 1489. Hit-testing and pointer down/up/click identified the timestamp span.
+Only reads 9, 10 and 11 reached the synthetic host; no reopen read arrived, the reader
+count stayed zero and the heading assertion failed at 5,000ms. This establishes a
+stale-coordinate input mechanism consistent with the historical failure, without
+claiming its unavailable trace proves that sequence. A preceding control also exposed
+an unsettled preservation baseline: 1489 immediately after open versus 1461 after Back.
+
+After [focus normalization and measured geometry settlement](development-verification-layout-and-input.md#layout-and-input),
+the same recorded-coordinate control held y=344, hit the link button, received fresh
+read 12 and rendered Plan version 3. Temporary control code was removed. Retained
+fake-transport reports under `/tmp/builder-1970/` give these counts:
+
+| Report | Executed | Passed | Failed | Skipped | Flaky |
+| --- | --- | --- | --- | --- | --- |
+| `stale-pointer-normalized.json` | 1 | 0 | 1 intentional | 0 | 0 |
+| `controlled-repair.json` | 1 | 1 | 0 | 0 | 0 |
+| `final-repeat.json` | 20 | 20 | 0 | 0 | 0 |
+| `reader-specs.json` | 4 | 4 | 0 | 0 | 0 |
+
+Every result used retry 0. Both exact titles were present and passed ten times each
+in `final-repeat.json` with four concurrent workers:
+
+- `reader scrolls under sharp chrome with dynamic clearance and input at 1280`
+- `reader scrolls under sharp chrome with dynamic clearance and input at 800`
+
+The repeat-only scratch config lifts the clipboard project's one-worker cap only for
+these clipboard-write-only cases; repository clipboard isolation is unchanged.
+`reader-specs.json` contains all three menu-spec cases and the reader spec's refetch/Back
+case, each executed and passed. The native 1280×800 and 800×600 cases retain resize/zoom,
+dynamic clearance, positive menu overlap and input, draft/thread-position preservation,
+injected external-open/save failures, fresh content/read correlation and keyboard Back.
+
+The verifier verdict supplies the full-suite counts absent from the dispatcher's
+unstructured gate report: 397 executed/passed, 0 failed, 1 skipped. It confirms all
+four reader tests were present, executed and passed at the reviewed commit. This is
+fake-transport evidence; no live-Claude run was required or claimed.
+
+Controlled patches are `controlled-failure.patch` and `controlled-repair.patch`;
+their reports retain geometry/pointer/read diagnostics and the failure error-context.
+Result directories are `stale-pointer-normalized-results/`, `controlled-repair-results/`,
+`final-repeat-results/` and `reader-specs-results/` alongside the reports. Logs and
+`repeat.config.ts` remain there too. The retained bundle is
+`/tmp/builder-1970-evidence.tar.gz`. These are scratch evidence locations, not committed
+assets or new test executions by the documentation stage.

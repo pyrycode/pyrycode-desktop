@@ -21,6 +21,23 @@ allow queued events to run; they do not acknowledge a particular scroll handler.
 Held-reader checks additionally need stable offset, content height and viewport height
 after the corresponding rendered effect.
 
+For streaming message copy, settle the attached send's completed assistant reply
+before injecting an independent delta. Locate the intended source explicitly and
+assert its exact committed text and cursor; a cursor on a dynamic last row can
+belong to another turn. Transfer focus before pressing, then hover and require
+identical button bounds and thread scroll offset/content height across consecutive
+animation frames with focus and hover held. A trusted pointer-down is insufficient:
+metadata reflow during the press can move Copy so release hits Reply and click
+lands on their common container. Require a trusted click on Copy itself, followed
+by exact OS clipboard readback. First verify a different value from an earlier
+ordinary activation so a stale matching clipboard cannot satisfy the assertion.
+Keep ordinary activation, clipboard serialization and desktop isolation intact.
+See [streaming copy readiness and counted evidence](conversation-shell-message-bubble-testing.md#streaming-copy-input-readiness)
+for the controlled 28px movement and distinction from the unrecorded historical
+schedule. Retain readiness samples even when polling or activation fails; the
+current side-actions spec attaches them only after activation reaches its
+receipt/readback `try/finally`, a nonblocking diagnostic limitation noted by review.
+
 The supplied-agent regression in [`thread-items.spec.ts`](../../../e2e/thread-items.spec.ts)
 registers its target scroll listener after React's listener, so its count and offset
 acknowledge processing after `rememberTop`. Settle native Home before parking row 100;
@@ -95,6 +112,16 @@ helpers local; readiness uses measured animation-frame stability without extra
 trusted keys, sleeps, test retries or larger timeouts. See
 [the gap testing contract](chat-history-testing.md#demand-and-snapshot-contracts)
 and [controlled failure evidence](development-verification-history.md#known-gap-recovery-verification).
+
+Retry focus can also reset the thread to scrollTop 0 after a marker was parked.
+Re-park the loading marker after retry focus/layout settles, then take the
+immutable anchor baseline. Otherwise a named row below the viewport's top can
+move when older rows arrive while the actual visible top anchor correctly stays
+put. Retain exact cursor/request counts and the <2px preservation assertion. The
+[native-view recovery plan](../../specs/architecture/1991-native-hosted-view.md#revisions)
+records controlled focus-time movement and retry geometry; the
+[counted full-suite evidence](daemon-connection-hosted-resource-views.md#native-viewer-verification)
+does not establish the cause of the separate unrecovered history-walk failure.
 
 Protected-restoration joins need an explicit pre-input history-demand position. After
 restored tool expansion and settled focus/hover, park at half the measured
@@ -220,6 +247,20 @@ Retain keyboard activation, focus, Escape and outside-click checks. Inject exter
 and save failures at the IPC handler seam so layout proof invokes neither OS apps nor
 Downloads writes. Draft/thread-position checks and an upload completing while the reader
 is open distinguish a hidden covered conversation from one accidentally unmounted.
+
+Reader reopen input needs geometry stability after focus changes, too. Playwright's
+pre-click stability check can precede hover revealing `.bubble__meta--details`;
+bottom pinning then moves the link before pointer delivery. In
+[`markdown-reader-menu.spec.ts`](../../../e2e/markdown-reader-menu.spec.ts),
+`settledThreadPosition` requires 20 consecutive equal frame comparisons of thread
+offset, content/viewport height and link x/y/width/height, rejecting after 120 sampled
+frames. Focus Back before the first preservation baseline and focus the link before
+the final pointer click. Keep the exact Back position assertion before this new
+focus/settlement so preparation cannot overwrite the preservation proof. Retain
+fresh-content and request-count assertions, diagnostic attachments and keyboard Back;
+there is no click retry, fixed sleep or timeout increase. The
+[controlled failure and repaired input](development-verification-layout-evidence.md#reader-reopen-input-verification)
+establish the setup race; unchanged green repetitions alone cannot establish its cause.
 
 Stacking levels are relative to ancestor contexts. The message area's level 0
 contains rows, pills and drawer; sharp top/input chrome at level 1 keeps controls

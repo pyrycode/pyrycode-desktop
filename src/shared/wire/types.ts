@@ -4083,6 +4083,13 @@ export type HostedControlEnvelope = {
     & (K extends 'apps' | 'app_cancelled' | 'error' ? { in_reply_to: number } : { in_reply_to?: never })
 }['list_apps' | 'apps' | 'app_updated' | 'app_removed' | 'app_cancel' | 'app_cancelled' | 'error']
 
+/** Per-frame resource validation only; pending ownership and assembly remain consumer-owned. */
+export type HostedResourceEnvelope = {
+  [K in 'app_asset_request' | 'app_api_request' | 'app_response' | 'app_response_chunk' | 'app_response_credit']:
+    Pick<Envelope, 'id' | 'ts'> & { type: K; payload: HostedPayloads[K] }
+    & (K extends 'app_response' | 'app_response_chunk' ? { in_reply_to: number } : { in_reply_to?: never })
+}['app_asset_request' | 'app_api_request' | 'app_response' | 'app_response_chunk' | 'app_response_credit']
+
 /** QR pairing payload: relay address, server id, pairing token, server static key. */
 export interface QrPayload {
   server: string

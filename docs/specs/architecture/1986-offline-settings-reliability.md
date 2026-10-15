@@ -68,3 +68,33 @@ comparison and retain causal evidence in Revisions and the issue comment.
 Sizing: one deliverable, four criteria; approximately 240 written lines, zero new
 exported APIs or consumer migrations, no new application reject branches. Ceiling
 and floor checks pass.
+
+## Revisions
+2026-10-15 — Recovered occurrence evidence changes the repair boundary before
+implementation. The verifier review on PR #1985, comment
+https://github.com/pyrycode/pyrycode-desktop/pull/1985#issuecomment-6181985199,
+identifies the sole offline-settings failure at
+`df4ce98b9ac7786599c003dd03544ff81c128242` as a Welcome pairing-button click
+timeout, before this spec's menu/event scenario. Its gate recorded 394 passed,
+one failed, three skipped and zero retries; the isolated rerun passed once.
+This establishes the failed boundary, not its technical cause. The raw occurrence
+logs remain unavailable, including the Welcome diagnostic attachment.
+
+Unchanged candidate source at `af90e0d7fe326ab9f50ae61a47d8f3cd9c6b41cc`
+(plus this plan) passed fresh focused runs: ten of ten with one worker and forty
+of forty with four workers, all with retries disabled, no failures or skips.
+Commands: `npx playwright test e2e/offline-session-settings.spec.ts --grep
+'pre-opened composer menus' --repeat-each=10 --workers=1 --retries=0 --reporter=json`
+and the same command with `--repeat-each=40 --workers=4`. Reports are
+`/tmp/builder-1986-baseline.json` and `/tmp/builder-1986-baseline-parallel.json`.
+These passing runs do not explain the Welcome timeout or prove a repair.
+
+The root cause remains open. Menu input/index and IPC acknowledgement weaknesses
+are source observations only; no causal connection to this occurrence has been
+established. Do not implement them as a purported fix for the Welcome timeout.
+Return for refinement to authorize diagnosis/repair at the demonstrated
+`pairFromUnpairedLaunch` / `observeWelcomeClick` boundary, currently outside the
+ticket's spec-local/menu scope. No existing open issue specifically owns that
+Welcome timeout; do not create a duplicate of this ticket's recorded failure.
+No implementation, product change, full-spec acceptance or dispatcher gate is
+claimed complete.

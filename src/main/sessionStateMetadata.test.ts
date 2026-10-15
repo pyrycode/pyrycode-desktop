@@ -62,7 +62,7 @@ async function connected(serverId = 'host') {
   })
   connection.start(); await vi.waitFor(() => expect(configs).toHaveLength(1))
   configs[0].onEvent({ type: 'handshake-complete', helloAck: frame('hello_ack', {
-    protocol_version: 'v2', server_id: 'host', conn_id: 'connection', capabilities: []
+    protocol_version: 'v2', server_id: 'host', conn_id: 'connection', capabilities: ['thread']
   }) })
   const emit = (bytes: Uint8Array) => configs.at(-1)!.onEvent({ type: 'message', plaintext: bytes })
   function request(type: string): number {

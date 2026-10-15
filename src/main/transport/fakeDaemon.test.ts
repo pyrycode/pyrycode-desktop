@@ -515,7 +515,7 @@ describe('in-process Noise_IK fake daemon round-trip', () => {
       protocol_version: 'v2',
       server_id: 'fake-daemon',
       conn_id: 'conn-1',
-      capabilities: []
+      capabilities: ['thread']
     })
 
     // One sealed transport round-trip (AC2). A crossed Split mapping MAC-fails HERE (AC4): the
@@ -1057,7 +1057,7 @@ describe('in-process Noise_IK fake daemon round-trip', () => {
         protocol_version: 'v2',
         server_id: 'fake-daemon',
         conn_id: 'conn-1',
-        capabilities: []
+        capabilities: ['thread']
       })
 
       // AC3: reconnectResendFrames streams `canned` sealed under the NEW send cipher, right after the

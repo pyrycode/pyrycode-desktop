@@ -12,14 +12,24 @@ type EvidenceWindow = typeof window & {
 
 type Fiber = { tag: number; memoizedProps: Record<string, unknown> | null; flags: number; child: Fiber | null; sibling: Fiber | null }
 
+// #1887's proof on the production route (#1908): the thread is drawn from daemon-built items, so the
+// burst is `thread_text_append` updates to one streaming assistant item, and the mounted runtime is
+// what must publish them on the next frame.
+const route = { conversation_id: SEEDED_ROW.id, epoch: 'frame-epoch' }
+const streaming = { id: 10, rev: 1, order: 10, kind: 'assistant_message', status: 'running', active: true,
+  shown: true, summary: '', content: { text: 'start,' }, session: 'session' }
+
 test('the mounted bridge publishes a delta-only burst on its first frame with one React commit', async ({ launchPairedApp }) => {
   const { page, daemon } = await launchPairedApp({
     buildReplyFrames: bytes => {
       const request = decodeEnvelope(bytes)
       if (request.type === 'list_conversations') return [seedConversationsFrame()]
-      if (request.type === 'request_history') return [encodeEnvelope({ id: 1, type: 'history_page',
-        ts: '2026-10-08T00:00:00Z', in_reply_to: request.id,
-        payload: { entries: [], cursor: '', at_start: true } })]
+      if (request.type === 'thread_catch_up') return [
+        encodeEnvelope({ id: 1, type: 'thread_items', ts: '2026-10-08T00:00:00Z', in_reply_to: request.id,
+          payload: { ...route, version: 20, items: [streaming], final: false } }),
+        encodeEnvelope({ id: 1, type: 'thread_items', ts: '2026-10-08T00:00:00Z', in_reply_to: request.id,
+          payload: { ...route, version: 20, items: [], final: true, lower_order: 0, upper_order: 11,
+            continuation: 0, older_exists: false } })]
       return []
     }
   }, {
@@ -53,12 +63,15 @@ test('the mounted bridge publishes a delta-only burst on its first frame with on
             const visit = (fiber: Fiber | null): void => {
               if (fiber === null) return
               const props = fiber.memoizedProps
-              // Identify Timeline by its input contract, independent of minified function names.
-              if (fiber.tag === 0 && props && 'items' in props && 'scrollPin' in props && 'onDropQueued' in props &&
-                  (fiber.flags & 1) !== 0 && holding) commits++
+              // Identify the item view by its input contract, independent of minified function names.
+              if (fiber.tag === 0 && props && 'snapshot' in props && 'sendInputs' in props && 'taskInputs' in props &&
+                  (fiber.flags & 1) !== 0) worked = true
               visit(fiber.child); visit(fiber.sibling)
             }
+            let worked = false
             visit(root.current)
+            // Count React commits that redrew the item view, not the fibers inside one commit.
+            if (worked && holding) commits++
           },
           onCommitFiberUnmount: () => {},
           checkDCE: () => {}
@@ -67,7 +80,7 @@ test('the mounted bridge publishes a delta-only burst on its first frame with on
         ;(window as EvidenceWindow).deltaFrames = {
           begin: () => {
             delivered = 0; requests = 0; commits = 0; holding = true
-            off = window.pyry.onDaemonEvent(event => { if (event.type === 'assistantDelta') delivered++ })
+            off = window.pyry.onDaemonEvent(event => { if (event.type === 'threadUpdate') delivered++ })
           },
           read: () => ({ delivered, requests, commits, pending: callbacks.size, injected }),
           release: () => {
@@ -81,15 +94,17 @@ test('the mounted bridge publishes a delta-only burst on its first frame with on
       await page.reload()
     }
   })
+  // The streamed paragraph, without the running reply's caret.
+  const bubble = page.locator('[data-thread-role="assistant"] p')
+  await expect(bubble).toHaveText('start,')
   await page.evaluate(() => new Promise<void>(resolve => setTimeout(resolve, 100)))
   await page.evaluate(() => (window as EvidenceWindow).deltaFrames.begin())
   const read = () => page.evaluate(() => (window as EvidenceWindow).deltaFrames.read())
   try {
     for (let seq = 0; seq < 12; seq++) {
       daemon.pushFrame(encodeEnvelope({
-        id: seq + 10, type: 'assistant_delta', history_entry_id: seq + 1,
-        ts: `2026-10-08T00:00:${String(seq).padStart(2, '0')}Z`,
-        payload: { conversation_id: SEEDED_ROW.id, turn_id: 'frame-turn', seq, text: `${seq},` }
+        id: seq + 10, type: 'thread_text_append', ts: `2026-10-08T00:00:${String(seq).padStart(2, '0')}Z`,
+        payload: { ...route, version: seq + 21, item_id: 10, base_rev: seq + 1, rev: seq + 2, text: `${seq},` }
       }))
       // Each delivery runs in a separate task, so React cannot hide per-arrival redraws.
       await expect.poll(async () => (await read()).delivered).toBe(seq + 1)
@@ -98,9 +113,9 @@ test('the mounted bridge publishes a delta-only burst on its first frame with on
     expect((await read()).requests).toBe(1)
     expect((await read()).pending).toBe(1)
     expect((await read()).commits).toBe(0)
-    await expect(page.locator('[data-thread-role="assistant"]')).toHaveCount(0)
+    await expect(bubble).toHaveText('start,')
     await page.evaluate(() => (window as EvidenceWindow).deltaFrames.release())
-    await expect(page.locator('[data-thread-role="assistant"] .bubble__markdown')).toHaveText('0,1,2,3,4,5,6,7,8,9,10,11,')
+    await expect(bubble).toHaveText('start,0,1,2,3,4,5,6,7,8,9,10,11,')
     expect((await read()).commits).toBe(1)
     expect((await read()).pending).toBe(0)
   } finally {

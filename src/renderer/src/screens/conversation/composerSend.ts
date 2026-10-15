@@ -272,6 +272,14 @@ export function composerAvailability(status: ConnectionStatus): ComposerAvailabi
   }
 }
 
+/** The host's daemon lacks `thread` (#1908): its copy names the daemon, never this app. */
+export function isDaemonUpdateRequired(status: ConnectionStatus | undefined): boolean {
+  return status?.type === 'error' && status.error.code === 'update-required' && status.error.cause === 'daemon'
+}
+
+/** Client-owned copy for that state; no download link, since the app is not what needs updating. */
+export const DAEMON_UPDATE_REQUIRED_COPY = 'The Pyrycode daemon on this host needs an update. Update pyry on the host to reconnect.'
+
 /** Only an explicit pairing rejection establishes that re-pairing can help. */
 export function shouldOfferRepair(status: ConnectionStatus): boolean {
   return status.type === 'error' && !status.error.retryable && status.error.code === 'pairing-rejected'

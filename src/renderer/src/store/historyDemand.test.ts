@@ -19,7 +19,7 @@ function harness() {
 }
 
 describe('explicit history demand', () => {
-  it('keeps one admitted host across request-state subscribers changing the selected equal ID', () => {
+  it('sends no legacy history for a selected conversation, since every host is a thread host (#1908)', () => {
     const active = activeConversationStore.getState(), lists = conversationListStore.getState()
     const sessions = sessionStore.getState(), timelines = conversationTimelineStore.getState()
     const send = vi.fn()
@@ -27,22 +27,17 @@ describe('explicit history demand', () => {
     const row = { id: 'c', name: null, is_promoted: false, is_archived: false, cwd: '/',
       last_message_ts: '', last_used_at: '', workspace_label: null }
     const connected: ConnectionStatus = { type: 'connected', ack: {
-      protocol_version: '2', server_id: 'server', conn_id: 'connection', capabilities: ['interactive'] } }
-    let off = () => {}
+      protocol_version: '2', server_id: 'server', conn_id: 'connection', capabilities: ['interactive', 'thread'] } }
     try {
-      conversationListStore.getState().setConversations([row], 'a')
       conversationListStore.getState().setConversations([row], 'b')
-      sessionStore.setState({ statuses: new Map([['a', connected], ['b', connected]]) })
-      const ownerB = { ...row, serverId: 'b' }, ownerA = { ...row, serverId: 'a' }
-      activeConversationStore.getState().setActiveConversation(ownerB)
-      off = conversationTimelineStore.subscribe(() => activeConversationStore.getState().setActiveConversation(ownerA))
+      sessionStore.setState({ statuses: new Map([['b', connected]]) })
+      const owner = { ...row, serverId: 'b' }
+      activeConversationStore.getState().setActiveConversation(owner)
       requestHistoryPage(historyAskDeps, 'c', 'b-cursor', 'newest')
-      expect(conversationTimelineStore.getState().timelines.get('c')?.serverId).toBe('b')
-      expect(send).toHaveBeenCalledTimes(1)
-      expect(send).toHaveBeenCalledWith({ type: 'requestHistory', serverId: 'b',
-        payload: { conversation_id: 'c', cursor: 'b-cursor', limit: 200 } })
+      requestOlderHistory(historyAskDeps, 'c', true)
+      expect(send).not.toHaveBeenCalled()
+      expect(conversationTimelineStore.getState().timelines.get('c')?.history).toBeUndefined()
     } finally {
-      off()
       activeConversationStore.setState(active, true); conversationListStore.setState(lists, true)
       sessionStore.setState(sessions, true); conversationTimelineStore.setState(timelines, true)
       vi.unstubAllGlobals()

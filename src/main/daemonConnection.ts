@@ -752,6 +752,8 @@ function messageFor(code: string): string {
       return 'Your pairing has expired or is no longer valid. Enter a new pairing code to reconnect.'
     case 'update-required':
       return 'This app is too old for this host. Update Pyrycode to reconnect.'
+    case 'daemon-update-required':
+      return 'The Pyrycode daemon on this host is too old for this app. Update pyry on the host to reconnect.'
     case 'not-paired':
       return 'No paired pyrybox — pair a device to connect.'
     case 'malformed-hello-ack':
@@ -836,7 +838,10 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   let stopped = false
   let driver: NoiseRelayDriver | null = null
   let authenticated = false
-  let threadNegotiated = false
+  // A daemon whose accepted handshake lacks `thread` (#1908). Its driver is parked rather than stopped:
+  // every outbound method sees no driver and stays inert, inbound frames are dropped, and the parked
+  // driver's own supervisor keeps re-dialling after a drop, so a daemon update clears the state.
+  let parkedDriver: NoiseRelayDriver | null = null
   let deliveryFailed = false
   let drainingMessages = false
   const heldMessages: { payload: SendMessagePayload; size: number; observe?: (outcome: SendOutcome) => void }[] = []
@@ -1155,7 +1160,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
 
   // `minClientVersion` is the classifier's already-validated MAJOR.MINOR.PATCH (#1613), placed on the
   // event only for `update-required`, and never logged.
-  function emitFailed(code: string, message = messageFor(code), minClientVersion?: string): void {
+  function emitFailed(code: string, message = messageFor(code), minClientVersion?: string,
+    cause?: 'daemon'): void {
     resetHosted()
     abandonHostPrompts()
     authenticated = false
@@ -1168,7 +1174,10 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
     const version = code === 'update-required' && minClientVersion !== undefined
       ? { min_client_version: minClientVersion } : {}
-    emitDaemonEvent(sink, { type: 'failed', error: { code, message, retryable: false, ...version } })
+    // The daemon-too-old cause keeps supervision, so it is the one retryable failure.
+    const daemon = code === 'update-required' && cause === 'daemon'
+    emitDaemonEvent(sink, { type: 'failed', error: { code, message, retryable: daemon, ...version },
+      ...(daemon ? { cause } : {}) })
     // The single failure choke point (all five classifications) shadows onto the log — the static
     // `code` only, never the `message` param (which interpolates the numeric close code, #127's leg).
     deps.diagnosticLog?.event({ event: 'daemon-failed', code })
@@ -1283,6 +1292,16 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     return undefined
   }
 
+  /** A sealed pairing rejection or app-too-old error: the two errors that end a connection. */
+  function isConnectionFatalError(plaintext: Uint8Array): boolean {
+    try {
+      if (parseJsonObject(plaintext).type !== 'error') return false
+      const error = parseInboundMessage(plaintext)
+      return error?.kind === 'daemon-error' &&
+        (error.pairingReject === 'pairing-rejected' || error.updateRequired !== undefined)
+    } catch { return false }
+  }
+
   // The single choke point: RelaySessionEvent → DaemonEvent. Nothing else emits.
   function onDriverEvent(event: RelaySessionEvent): void {
     if (stopped) return
@@ -1300,8 +1319,20 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
           return
         }
         pairingRejected = false
+        // The parked driver re-dialled on its own; take it back for this handshake's outcome.
+        if (driver === null && parkedDriver !== null) { driver = parkedDriver; parkedDriver = null }
+        if (!ack.capabilities.includes('thread')) {
+          // The app requires the daemon-built thread (#1908): a host without it gets the update-required
+          // failure with the daemon cause, decided here on the accepted handshake and for this host only.
+          // No `connected` is emitted, so the window requests nothing from it.
+          hostedResources.reset(false)
+          hostedApps.reset(false)
+          parkedDriver = driver
+          driver = null
+          emitFailed('update-required', messageFor('daemon-update-required'), undefined, 'daemon')
+          return
+        }
         authenticated = true
-        threadNegotiated = ack.capabilities.includes('thread')
         hostedResources.reset(ack.capabilities.includes('hosted_apps_v1'))
         hostedApps.reset(ack.server_id === deps.serverId && ack.capabilities.includes('hosted_apps_v1'))
         deliveryFailed = false
@@ -1313,17 +1344,18 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         return
       }
       case 'message': {
+        // An outdated daemon's frames reach nothing: no rows, prompts or replies (#1908). A
+        // connection-fatal error still takes precedence and ends this host's state as it always has.
+        if (parkedDriver !== null) {
+          if (!isConnectionFatalError(event.plaintext)) return
+          driver = parkedDriver
+          parkedDriver = null
+        }
         try {
           const envelope = parseJsonObject(event.plaintext)
           // Connection-fatal errors retain precedence even when they name a hosted request.
-          let fatal = false
-          if (envelope.type === 'error') {
-            try {
-              const error = parseInboundMessage(event.plaintext)
-              fatal = error?.kind === 'daemon-error' &&
-                (error.pairingReject === 'pairing-rejected' || error.updateRequired !== undefined)
-            } catch { /* Correlated malformed errors must still reach hosted validation. */ }
-          }
+          // Correlated malformed errors must still reach hosted validation.
+          const fatal = isConnectionFatalError(event.plaintext)
           if (!fatal && (hostedApps.receive(event.plaintext, envelope) || hostedResources.receive(event.plaintext, envelope))) return
         } catch { /* Invalid UTF-8/JSON has no identifiable hosted operation. */ }
         // Decode the decrypted app-envelope at the transport boundary, then map its narrowed result
@@ -3446,10 +3478,6 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   }
 
   function requestHistory(payload: RequestHistoryPayload): void {
-    if (threadNegotiated) {
-      deps.diagnosticLog?.event({ event: 'history-request-refused', code: 'thread-route' })
-      return
-    }
     if (driver === null || !authenticated) {
       failHistoryRequest(payload.conversation_id, 'unavailable')
       return
@@ -4431,6 +4459,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // this is a no-op.
     driver?.stop()
     driver = null
+    parkedDriver?.stop()
+    parkedDriver = null
     // Each hello still uses id 1. Keep app IDs monotonic across dials so delayed history
     // replies cannot match a successor query after the old pending state is released.
     // Reset the modal-answer correlation window (#248): a fresh connection starts with no outstanding
@@ -4520,6 +4550,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // Idempotent driver teardown. If the bootstrap has not yet constructed the driver, the
       // `stopped` guard above (step 7) prevents it from ever being constructed.
       driver?.stop()
+      parkedDriver?.stop()
     },
     hostedResources,
     hostedApps,

@@ -103,6 +103,8 @@ import {
   COMPOSER_RECONNECT_BUTTON_COPY,
   shouldShowBanner,
   CONNECTION_BANNER_COPY,
+  DAEMON_UPDATE_REQUIRED_COPY,
+  isDaemonUpdateRequired,
   COMPOSER_ERROR_CHIP_COPY,
   COMPOSER_MESSAGE_DELIVERY_COPY,
   COMPOSER_ERROR_CHIP_PREFIX_COPY,
@@ -312,9 +314,11 @@ export function ConversationScreen({
     ? savedTimelineTarget.serverId
     : activeConversation !== null && 'serverId' in activeConversation &&
       typeof activeConversation.serverId === 'string' ? activeConversation.serverId : null
-  const authoritative = useStore(threadRuntime.state, () => threadRuntime.isThread(selectedHost, openConversationId))
-  const authoritativeSnapshot = useStore(threadRuntime.items, s => selectedHost === null || openConversationId === null
-    ? null : s.hosts.get(selectedHost)?.get(openConversationId)?.snapshot ?? null)
+  const authoritative = threadRuntime.isThread(selectedHost, openConversationId)
+  // A host whose daemon lacks `thread` is update-required (#1908) and draws no rows, saved ones included.
+  const daemonOutdated = useSessionStore(s => selectedHost !== null && isDaemonUpdateRequired(s.statuses.get(selectedHost)))
+  const authoritativeSnapshot = useStore(threadRuntime.items, s => selectedHost === null || openConversationId === null ||
+    daemonOutdated ? null : s.hosts.get(selectedHost)?.get(openConversationId)?.snapshot ?? null)
   const threadLive = useMemo(() => threadRuntime.live(selectedHost ?? '', openConversationId ?? ''), [selectedHost, openConversationId])
   const liveState = useStore(threadLive, s => s)
   const localSend = useStore(threadRuntime.sends, s => selectedHost === null || openConversationId === null
@@ -673,7 +677,7 @@ export function ConversationScreen({
         // control is. No timeline write: the message is being delivered, so its echo stays true.
         onSendQueuedNow={actionsAvailable ? onSendQueuedNow : undefined}
       />}
-      {authoritative && authoritativeSnapshot === null && <ThreadPromptSlot host={selectedHost} conversationId={openConversationId} />}
+      {authoritative && !daemonOutdated && authoritativeSnapshot === null && <ThreadPromptSlot host={selectedHost} conversationId={openConversationId} />}
       <TopOverlayControl onRepairHost={onRepairHost} threadError={authoritative ? liveInput.sessionError?.code ?? null : undefined} />
       {/* #581: the background-task panel, reading the roster store itself, so only the conversation id goes
           down; with no active conversation the id is null and the panel reads "never observed". It mounts
@@ -4918,7 +4922,7 @@ export function ConnectionBanner({ status }: { status: ConnectionStatus }): JSX.
     <p className="conversation__banner" role="status">
       {status.type === 'error' && status.error.code === 'pairing-rejected'
         ? 'Your pairing has expired or is no longer valid. Enter a new pairing code to reconnect.'
-        : CONNECTION_BANNER_COPY}
+        : isDaemonUpdateRequired(status) ? DAEMON_UPDATE_REQUIRED_COPY : CONNECTION_BANNER_COPY}
     </p>
   )
 }
@@ -5619,7 +5623,7 @@ export function daemonLeg(status: ConnectionStatus): ConnectionLeg {
       return { category: 'down', label: 'Pyrycode Offline' }
     case 'error':
       return { category: 'down', label: status.error.code === 'pairing-rejected'
-        ? 'Pyrycode Pairing rejected' : 'Pyrycode Offline' }
+        ? 'Pyrycode Pairing rejected' : isDaemonUpdateRequired(status) ? 'Pyrycode Daemon update needed' : 'Pyrycode Offline' }
   }
 }
 

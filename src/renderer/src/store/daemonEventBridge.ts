@@ -75,7 +75,8 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
         error: {
           code: event.error.code,
           message: event.error.message,
-          retryable: event.error.retryable
+          retryable: event.error.retryable,
+          ...(event.cause === 'daemon' ? { cause: 'daemon' as const } : {})
         },
         serverId: originOf(event)
       }

@@ -144,10 +144,9 @@ test('a synchronous bridge failure keeps the draft recoverable and rolls back it
   await expect(page.locator('textarea')).toHaveValue('')
 })
 
-test('the overlay follows current thread errors, session replacement and capability changes', async ({ launchPairedApp }) => {
-  const capabilities = ['interactive']
+test('the overlay follows current thread errors and session replacement', async ({ launchPairedApp }) => {
   let session = 'A'
-  const { page, daemon, forwarder } = await launchPairedApp({ helloAck: { capabilities }, buildReplyFrames: bytes => {
+  const { page, daemon } = await launchPairedApp({ helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
     const request = decodeEnvelope(bytes)
     if (request.type === 'list_conversations') return [seedConversationsFrame({ ...SEEDED_ROW, current_session_id: session })]
     return request.type === 'thread_catch_up' ? windowFrames(request, SEEDED_ROW.id, 'Error route ready') : []
@@ -155,11 +154,10 @@ test('the overlay follows current thread errors, session replacement and capabil
   const error = (code: string, owner = session) => frame('session_error', { conversation_id: SEEDED_ROW.id,
     code, message: 'Private synthetic detail' }, undefined, owner)
   const notice = page.locator('.top-overlay-pill--error').filter({ hasText: 'Claude' })
-  daemon.pushFrame(error('session.child_crashing'))
-  await expect(notice).toHaveText('Claude keeps failing to start. Your message is waiting.')
-  capabilities.push('thread'); forwarder.dropClientLeg()
   await expect(page.getByText('Error route ready', { exact: true })).toBeVisible()
   await expect(notice).toHaveCount(0)
+  daemon.pushFrame(error('session.child_crashing'))
+  await expect(notice).toHaveText('Claude keeps failing to start. Your message is waiting.')
   daemon.pushFrame(error('session.blocked'))
   await expect(notice).toHaveText('Claude did not pick up your last message. It was not delivered.')
   session = 'B'
@@ -171,84 +169,6 @@ test('the overlay follows current thread errors, session replacement and capabil
   await expect(notice).toHaveCount(0)
   daemon.pushFrame(error('session.child_crashing'))
   await expect(notice).toHaveText('Claude keeps failing to start. Your message is waiting.')
-})
-
-for (const lastHost of [0, 1]) test(`mixed routes with reused IDs scope newest, older, retry and gap history (last list ${lastHost})`, async ({ launchPairedApp }) => {
-  const requests: Envelope[][] = [[], []]
-  const rows = [{ ...SEEDED_ROW, current_session_id: 'session' }, { ...SECOND_SEEDED_ROW, id: SEEDED_ROW.id }]
-  let newest = 1
-  const historyReply = (ask: Envelope, ids: number[], cursor: string, atStart: boolean) => frame('history_page', {
-    entries: ids.map(id => ({ id, type: 'message', ts: stamp, payload: {
-      conversation_id: SEEDED_ROW.id, message_id: `legacy-${id}`, role: 'user', text: `Legacy history ${id}`
-    } })), cursor, at_start: atStart
-  }, ask.id)
-  const replies = (host: number) => (bytes: Uint8Array) => {
-    const ask = decodeEnvelope(bytes); requests[host].push(ask)
-    if (ask.type === 'list_conversations') return [seedConversationsFrame(rows[host])]
-    if (ask.type === 'thread_catch_up') return windowFrames(ask, SEEDED_ROW.id, 'Authoritative owner')
-    if (host === 1 && ask.type === 'request_history' && ask.payload.cursor === '') {
-      return [historyReply(ask, [newest], `legacy-${newest}`, newest > 1)]
-    }
-    return []
-  }
-  const { page, app, servers } = await launchPairedApp({ helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: replies(0) },
-    { secondServer: { buildReplyFrames: replies(1) } })
-  await page.getByText(SEEDED_ROW.name!, { exact: true }).first().click()
-  await expect(page.getByText('Authoritative owner', { exact: true })).toBeVisible()
-  await app.evaluate(({ ipcMain }) => {
-    (globalThis as any).historyOwners = []
-    ipcMain.on('pyry:command', (_event, command) => {
-      if (command.type === 'requestHistory') (globalThis as any).historyOwners.push(command.serverId ?? null)
-    })
-  })
-  await page.evaluate(() => { (globalThis as any).historyListReceipts = []; window.pyry.onDaemonEvent(event => {
-    if (event.type === 'conversationsReceived') (globalThis as any).historyListReceipts.push(event.serverId)
-  }) })
-  for (const host of [1 - lastHost, lastHost]) {
-    await page.evaluate(serverId => window.pyry.sendCommand({ type: 'requestConversations', serverId }), servers[host].serverId)
-    await expect.poll(() => page.evaluate(() => (globalThis as any).historyListReceipts.length)).toBe(host === 1 - lastHost ? 1 : 2)
-  }
-  servers[0].daemon.pushFrame(frame('thread_item_added', { conversation_id: SEEDED_ROW.id, epoch: 'epoch', version: 21,
-    item: item(11, 'List commit barrier') }))
-  await expect(page.getByText('List commit barrier', { exact: true })).toBeVisible()
-  const asks = () => requests[1].filter(r => r.type === 'request_history')
-  const before = asks().length
-  await page.getByText(SECOND_SEEDED_ROW.name!, { exact: true }).first().click()
-  await expect.poll(() => asks().length).toBe(before + 1)
-  expect(await app.evaluate(() => (globalThis as any).historyOwners)).toEqual(['fake-daemon-2'])
-  const thread = page.locator('.conversation__thread')
-  await expect(thread.getByText('Legacy history 1', { exact: true })).toBeVisible()
-  await thread.press('Home')
-  await expect.poll(() => asks().length).toBe(before + 2)
-  expect(asks().at(-1)?.payload.cursor).toBe('legacy-1')
-  servers[1].daemon.pushFrame(frame('error', { code: 'history.unavailable', message: 'synthetic failure' }, asks().at(-1)!.id))
-  await expect(page.getByText('Could not load older messages', { exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Retry', exact: true }).click()
-  await expect.poll(() => asks().length).toBe(before + 3)
-  expect(asks().at(-1)?.payload.cursor).toBe('legacy-1')
-  servers[1].daemon.pushFrame(historyReply(asks().at(-1)!, [0], 'legacy-start', true))
-  await expect(thread.getByText('Legacy history 0', { exact: true })).toBeVisible()
-  newest = 5
-  await page.getByText(SEEDED_ROW.name!, { exact: true }).first().click()
-  await expect(page.getByText('Authoritative owner', { exact: true })).toBeVisible()
-  await page.getByText(SECOND_SEEDED_ROW.name!, { exact: true }).first().click()
-  await expect.poll(() => asks().length).toBe(before + 4)
-  await expect(thread.getByText('Legacy history 5', { exact: true })).toBeVisible()
-  const gap = thread.locator('[data-history-gap]')
-  await expect(gap).toHaveText('Load earlier messages')
-  await gap.evaluate(node => node.scrollIntoView({ block: 'center' }))
-  await thread.focus()
-  await thread.press('ArrowUp')
-  await expect.poll(() => asks().length).toBe(before + 5)
-  expect(asks().at(-1)?.payload.cursor).toBe('legacy-5')
-  servers[1].daemon.pushFrame(historyReply(asks().at(-1)!, [4, 3, 2], 'gap-complete', true))
-  await expect(thread.getByText('Legacy history 2', { exact: true })).toBeVisible()
-  await expect(gap).toHaveCount(0)
-  await app.evaluate(() => {})
-  expect(await app.evaluate(() => (globalThis as any).historyOwners)).toEqual(Array(5).fill('fake-daemon-2'))
-  expect(requests[0].filter(r => r.type === 'request_history')).toHaveLength(0)
-  expect(requests[1].filter(r => r.type.startsWith('thread_'))).toHaveLength(0)
-  await expect(thread.locator('.bubble')).toHaveCount(6)
 })
 
 test('thread task drawer shares menu and count state across close and conversation switches', async ({ launchPairedApp }) => {
@@ -632,8 +552,8 @@ test('queued acknowledgement recovery, successful unpair and deletion retire the
   expect(otherRequests.filter(r => r.type === 'thread_catch_up' || r.type === 'send_message' || r.type === 'modal_answer')).toHaveLength(0)
 })
 
-test('ordinary app selects a thread host beside a complete legacy host and resumes its saved checkpoint', async ({ launchPairedApp }) => {
-  const requests: Envelope[] = [], legacyRequests: Envelope[] = []
+test('ordinary app resumes a thread host from its saved checkpoint and pages older items', async ({ launchPairedApp }) => {
+  const requests: Envelope[] = []
   const row = { ...SEEDED_ROW, current_session_id: 'session', last_shown_version: 20, read_up_to: 0 }
   const replies = (bytes: Uint8Array): Uint8Array[] => {
     const request = decodeEnvelope(bytes); requests.push(request)
@@ -653,18 +573,14 @@ test('ordinary app selects a thread host beside a complete legacy host and resum
     return []
   }
   const { page, app, daemon, forwarder } = await launchPairedApp({ helloAck: { capabilities: ['interactive', 'thread'] },
-    buildReplyFrames: replies }, { secondServer: { buildReplyFrames: bytes => {
-      const request = decodeEnvelope(bytes); legacyRequests.push(request)
-      return request.type === 'list_conversations' ? [seedConversationsFrame(SECOND_SEEDED_ROW)] : []
-    } } })
-  await page.getByText(SEEDED_ROW.name!, { exact: true }).first().click()
+    buildReplyFrames: replies })
   await expect(page.getByText('Authoritative saved answer', { exact: true })).toBeVisible()
   for (const width of [1280, 800]) {
     await page.setViewportSize({ width, height: 800 })
     await capturePairedApp(app, page, `/tmp/builder-1908/thread-${width}.png`)
   }
   expect(requests.some(r => r.type === 'thread_catch_up')).toBe(true)
-  // Commit a later authoritative row after deliberately supplied legacy traffic, then check exclusions.
+  // Commit a later authoritative row after deliberately supplied raw legacy traffic, then check exclusions.
   daemon.pushFrame(frame('assistant_delta', { conversation_id: row.id, turn_id: 'raw', seq: 1, text: 'Legacy duplicate' }))
   row.last_shown_version = 21
   daemon.pushFrame(seedConversationsFrame(row))
@@ -681,11 +597,6 @@ test('ordinary app selects a thread host beside a complete legacy host and resum
   await page.locator('.conversation__thread').press('Home')
   await expect.poll(() => requests.filter(r => r.type === 'thread_page').length).toBeGreaterThan(0)
   expect(requests.filter(r => r.type === 'request_history')).toHaveLength(0)
-  await page.getByText(SECOND_SEEDED_ROW.name!, { exact: true }).first().click()
-  await expect.poll(() => legacyRequests.filter(r => r.type === 'request_history').length).toBeGreaterThan(0)
-  expect(legacyRequests.some(r => r.type === 'thread_catch_up')).toBe(false)
-  await page.getByText(SEEDED_ROW.name!, { exact: true }).first().click()
-  await expect(page.getByText('Authoritative saved answer', { exact: true })).toBeVisible()
   const before = requests.filter(r => r.type === 'thread_catch_up').length
   forwarder.dropClientLeg()
   await expect.poll(() => requests.filter(r => r.type === 'thread_catch_up').length).toBeGreaterThan(before)
@@ -772,25 +683,59 @@ test('a fresh offline app draws its protected authoritative saved history', asyn
   await expect(second.page.getByText('Offline. Showing saved messages.', { exact: true })).toBeVisible()
 })
 
-test('reconnect upgrades and downgrades the same host without mixing content writers', async ({ launchPairedApp }) => {
-  const capabilities = ['interactive'], requests: Envelope[] = []
-  const { page, daemon, forwarder } = await launchPairedApp({ helloAck: { capabilities }, buildReplyFrames: bytes => {
-    const request = decodeEnvelope(bytes); requests.push(request)
-    if (request.type === 'list_conversations') return [seedConversationsFrame(SEEDED_ROW)]
-    if (request.type !== 'thread_catch_up') return []
-    const route = { conversation_id: SEEDED_ROW.id, epoch: 'upgraded', version: 10 }
-    return [frame('thread_items', { ...route, items: [item(1, 'Upgraded thread content')], final: false }, request.id),
-      frame('thread_items', { ...route, items: [], final: true, lower_order: 0, upper_order: 11, continuation: 0, older_exists: false }, request.id)]
-  } })
-  daemon.pushFrame(frame('assistant_delta', { conversation_id: SEEDED_ROW.id, turn_id: 'legacy', seq: 1, text: 'Original legacy content' }))
-  await expect(page.getByText('Original legacy content', { exact: true })).toBeVisible()
-  capabilities.push('thread'); forwarder.dropClientLeg()
-  await expect(page.getByText('Upgraded thread content', { exact: true })).toBeVisible()
-  await expect(page.getByText('Original legacy content', { exact: true })).toHaveCount(0)
+const DAEMON_UPDATE_COPY = 'The Pyrycode daemon on this host needs an update. Update pyry on the host to reconnect.'
+
+test('a host without thread beside a thread host is update-required alone and clears on a later thread handshake', async ({ launchPairedApp }) => {
+  const requests: Envelope[][] = [[], []]
+  const capabilities = ['interactive', 'thread']
+  const rows = [{ ...SEEDED_ROW, current_session_id: 'session' }, { ...SECOND_SEEDED_ROW, current_session_id: 'session' }]
+  const replies = (host: number) => (bytes: Uint8Array) => {
+    const request = decodeEnvelope(bytes); requests[host].push(request)
+    if (request.type === 'list_conversations') return [seedConversationsFrame(rows[host])]
+    if (request.type === 'thread_catch_up') return windowFrames(request, rows[host].id, host === 0 ? 'First host thread' : 'Second host thread')
+    return []
+  }
+  const { page, servers } = await launchPairedApp({ helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: replies(0) },
+    { secondServer: { helloAck: { capabilities }, buildReplyFrames: replies(1) } })
+  const hosts = page.locator('.channel-list__host')
+  await expect(hosts).toHaveCount(2)
+  await page.getByText(SECOND_SEEDED_ROW.name!, { exact: true }).first().click()
+  await expect(page.getByText('Second host thread', { exact: true })).toBeVisible()
+  // The second daemon loses `thread`: its next accepted handshake is update-required for that host only.
   capabilities.splice(capabilities.indexOf('thread'), 1)
-  forwarder.dropClientLeg()
-  await expect.poll(() => requests.filter(r => r.type === 'request_history').length).toBeGreaterThan(1)
-  daemon.pushFrame(frame('assistant_delta', { conversation_id: SEEDED_ROW.id, turn_id: 'fallback', seq: 1, text: 'Downgraded legacy barrier' }))
-  await expect(page.getByText('Downgraded legacy barrier', { exact: true })).toBeVisible()
-  await expect(page.getByText('Upgraded thread content', { exact: true })).toHaveCount(0)
+  servers[1].forwarder.dropClientLeg()
+  await expect(hosts.nth(1)).toHaveClass(/channel-list__host--failed/)
+  await expect(page.getByText(DAEMON_UPDATE_COPY, { exact: true })).toBeVisible()
+  await expect(page.getByText('Second host thread', { exact: true })).toHaveCount(0)
+  const quiet = requests[1].length
+  // Frames the outdated daemon sends are processed before its own later socket drop, and add nothing.
+  servers[1].daemon.pushFrame(frame('thread_item_added', { conversation_id: rows[1].id, epoch: 'epoch', version: 21,
+    item: item(11, 'Outdated daemon row') }))
+  servers[1].daemon.pushFrame(frame('assistant_delta', { conversation_id: rows[1].id, turn_id: 'raw', seq: 1, text: 'Outdated raw content' }))
+  await page.locator('textarea').fill('Not for the outdated host')
+  await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled()
+  // The thread host is unaffected and keeps drawing and requesting on its own connection.
+  await page.getByText(SEEDED_ROW.name!, { exact: true }).first().click()
+  await expect(page.getByText('First host thread', { exact: true })).toBeVisible()
+  await expect(hosts.nth(0)).not.toHaveClass(/channel-list__host--failed/)
+  servers[0].daemon.pushFrame(frame('thread_item_added', { conversation_id: rows[0].id, epoch: 'epoch', version: 21,
+    item: item(11, 'First host still live') }))
+  await expect(page.getByText('First host still live', { exact: true })).toBeVisible()
+  await page.getByText(SECOND_SEEDED_ROW.name!, { exact: true }).first().click()
+  await expect(page.getByText(DAEMON_UPDATE_COPY, { exact: true })).toBeVisible()
+  await expect(page.locator('.conversation__thread .bubble')).toHaveCount(0)
+  // Nothing reached the outdated daemon while it was update-required.
+  expect(requests[1]).toHaveLength(quiet)
+  // A daemon update: the socket drops again and the next handshake carries `thread`.
+  capabilities.push('thread')
+  servers[1].forwarder.dropClientLeg()
+  await expect(page.getByText('Second host thread', { exact: true })).toBeVisible()
+  await expect(hosts.nth(1)).not.toHaveClass(/channel-list__host--failed/)
+  await expect(page.getByText(DAEMON_UPDATE_COPY, { exact: true })).toHaveCount(0)
+  // Its reconnect resumes ordinary requests, and the frames it sent while outdated drew nothing.
+  expect(requests[1].length).toBeGreaterThan(quiet)
+  await expect(page.getByText('Outdated daemon row', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('Outdated raw content', { exact: true })).toHaveCount(0)
+  expect(requests[1].some(r => r.type === 'request_history')).toBe(false)
+  expect(requests[0].some(r => r.type === 'request_history')).toBe(false)
 })

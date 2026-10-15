@@ -48,7 +48,7 @@ describe('production thread composition', () => {
     beginChatHistoryRemoval('one')(true)
     expect(live.getState().binding).toBeNull()
     expect(r.sends.getState().select('one', 'empty').pending).toHaveLength(0)
-    expect(r.state.getState().routes.has('one')).toBe(false)
+    expect(r.state.getState().linked.has('one')).toBe(false)
     expect(r.state.getState().queries.size).toBe(0)
     r.event(connected('one', true))
     r.event({ type: 'threadReply', serverId: 'one', conversationId: 'empty', requestId: request.requestId,
@@ -92,22 +92,69 @@ describe('production thread composition', () => {
     expect(modelListStore.getState().lists.has('chat')).toBe(false)
     off(); r.dispose(); activeConversationStore.getState().clearActiveConversation()
   })
-  it('selects each negotiated host independently and retires work on downgrade', async () => {
+  it('links only hosts with an accepted thread handshake and retires work when one is lost', async () => {
     const { runtime: r, send } = fixture()
     r.event(connected('one', true)); r.event(connected('two', false))
+    expect(r.state.getState().linked).toEqual(new Set(['one']))
+    await r.open('two', 'chat').done
+    // An update-required host is still drawn through the item view, but nothing is requested from it.
+    expect(r.isThread('two', 'chat')).toBe(true)
+    expect(send).not.toHaveBeenCalled()
     await r.open('one', 'chat').done
-    expect(r.isThread('one', 'chat')).toBe(true)
-    expect(r.isThread('two', 'chat')).toBe(false)
-    expect(send.mock.calls[0][0].query.type).toBe('thread_catch_up')
+    expect(send.mock.calls[0][0]).toMatchObject({ serverId: 'one', query: { type: 'thread_catch_up' } })
     const request = send.mock.calls[0][0]
-    r.event(connected('one', false))
+    r.event({ type: 'failed', serverId: 'one', cause: 'daemon',
+      error: { code: 'update-required', message: 'daemon', retryable: true } })
     r.event({ type: 'threadReply', serverId: 'one', conversationId: 'chat', requestId: request.requestId,
       correlation: { id: 1, ts: '2026-10-15T00:00:00Z' },
       reply: { type: 'thread_items', payload: { conversation_id: 'chat', epoch: 'late', version: 10,
         items: [], final: true, lower_order: 0, upper_order: 10, continuation: 0, older_exists: false } } })
     expect(r.items.getState().snapshot('one', 'chat')).toBeNull()
-    expect(r.isThread('one', 'chat')).toBe(false)
+    expect(send).toHaveBeenCalledTimes(1)
+    // A later accepted handshake with `thread` clears the state and loads the thread.
+    r.event(connected('one', true))
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(send.mock.calls[1][0]).toMatchObject({ serverId: 'one', query: { type: 'thread_catch_up' } })
     r.dispose()
+  })
+  it('applies an uninterrupted append burst once on the next frame and flushes before any other event', async () => {
+    const callbacks: (() => void)[] = []
+    const frame = { request: vi.fn((callback: () => void) => callbacks.push(callback)), cancel: vi.fn() }
+    const send = vi.fn()
+    const r = createThreadRuntime({ send, read: async () => ({ status: 'missing' }), log: vi.fn(), frame })
+    r.event(connected('one', true))
+    await r.open('one', 'chat').done
+    const request = send.mock.calls[0][0]
+    const reply = (payload: object) => r.event({ type: 'threadReply', serverId: 'one', conversationId: 'chat',
+      requestId: request.requestId, correlation: { id: 1, ts: '2026-10-15T00:00:00Z' }, reply: payload as never })
+    reply({ type: 'thread_items', payload: { conversation_id: 'chat', epoch: 'e', version: 1, final: false,
+      items: [{ id: 1, rev: 1, order: 1, kind: 'assistant_message', status: 'running', active: true, shown: true,
+        summary: '', content: { text: '' } }] } })
+    reply({ type: 'thread_items', payload: { conversation_id: 'chat', epoch: 'e', version: 1, items: [], final: true,
+      lower_order: 0, upper_order: 1, continuation: 0, older_exists: false } })
+    const text = () => (r.items.getState().snapshot('one', 'chat')!.items[0].content as { text: string }).text
+    let publications = 0
+    const off = r.items.subscribe(() => { publications++ })
+    const append = (seq: number) => r.event({ type: 'threadUpdate', serverId: 'one', conversationId: 'chat',
+      correlation: { id: 2, ts: '2026-10-15T00:00:00Z' }, update: { type: 'thread_text_append', payload: {
+        conversation_id: 'chat', epoch: 'e', version: seq + 2, item_id: 1, base_rev: seq + 1, rev: seq + 2, text: `${seq},` } } })
+    for (let seq = 0; seq < 3; seq++) append(seq)
+    expect(frame.request).toHaveBeenCalledOnce()
+    expect(publications).toBe(0)
+    callbacks.shift()!()
+    expect(text()).toBe('0,1,2,')
+    expect(publications).toBe(3)
+    // A boundary event applies earlier pending appends first and cancels their frame.
+    append(3)
+    r.event({ type: 'disconnected', serverId: 'one' })
+    expect(text()).toBe('0,1,2,3,')
+    expect(frame.cancel).toHaveBeenCalledOnce()
+    // Teardown cancels a scheduled frame and later callbacks change nothing.
+    r.event(connected('one', true)); append(4)
+    r.dispose()
+    expect(frame.cancel).toHaveBeenCalledTimes(2)
+    callbacks.forEach(callback => callback())
+    off()
   })
   it('keeps offline authoritative display separate from current capability and resumes complete progress', async () => {
     const { runtime: r, read, send } = fixture()

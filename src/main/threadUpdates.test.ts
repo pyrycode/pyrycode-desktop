@@ -38,7 +38,7 @@ async function connected(serverId = 'host') {
     createDriver: config => { configs.push(config); return { sendMessage: bytes => { sent.push(bytes) }, stop: () => {} } }
   })
   connection.start(); await vi.waitFor(() => expect(configs).toHaveLength(1))
-  const ack = encodeEnvelope({ id: 1, type: 'hello_ack', ts: 'stamp', payload: { protocol_version: 'v2', server_id: 'host', conn_id: 'connection', capabilities: [] } })
+  const ack = encodeEnvelope({ id: 1, type: 'hello_ack', ts: 'stamp', payload: { protocol_version: 'v2', server_id: 'host', conn_id: 'connection', capabilities: ['thread'] } })
   const emit = (plaintext: Uint8Array) => configs.at(-1)!.onEvent({ type: 'message', plaintext })
   configs[0].onEvent({ type: 'handshake-complete', helloAck: ack })
   return { connection, configs, events, emit, ack, sent }

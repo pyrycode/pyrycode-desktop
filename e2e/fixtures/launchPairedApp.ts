@@ -13,7 +13,7 @@ import {
 } from '../../src/main/transport/fakeRelayForwarder'
 import type { FakeDaemon, FakeDaemonOptions } from '../../src/main/transport/fakeDaemon'
 import { startFakeDaemonForTest } from './fakeDaemonSetup'
-import { encodeEnvelope } from '../../src/main/transport/codec'
+import { decodeEnvelope, encodeEnvelope } from '../../src/main/transport/codec'
 import { LOOPBACK_RELAY_ENV_FLAG } from '../../src/main/relayPolicy'
 import { TEST_SECRET_BACKEND_ENV_FLAG } from '../../src/main/secretBackend'
 import {
@@ -28,7 +28,8 @@ import { withWelcomeDiagnostics } from './welcomeDiagnostics'
 import type {
   ConversationSummary,
   ConversationsPayload,
-  QrPayload
+  QrPayload,
+  Envelope
 } from '../../src/shared/wire/types'
 
 // The shared fake-daemon pairing harness (#433). It stands up the in-process fake relay forwarder
@@ -134,6 +135,14 @@ export function seedConversationsFrame(row: ConversationSummary = SEEDED_ROW): U
     ts: '2026-07-07T12:00:00.000Z',
     payload: { conversations: [row] } satisfies ConversationsPayload
   })
+}
+
+/** A complete, empty first window answering a `thread_catch_up`, for specs with no thread content. */
+export function emptyThreadWindow(request: Envelope): Uint8Array {
+  const payload = request.payload as { conversation_id?: unknown }
+  return encodeEnvelope({ id: 1, type: 'thread_items', ts: '2026-07-07T12:00:00.000Z', in_reply_to: request.id,
+    payload: { conversation_id: payload.conversation_id, epoch: 'fixture-epoch', version: 1, items: [], final: true,
+      lower_order: 0, upper_order: 1, continuation: 0, older_exists: false } })
 }
 
 /** Reply-scripting options passed straight through to `startFakeDaemon`. `url` is fixture-supplied
@@ -310,9 +319,14 @@ export const test = base.extend<PairedAppFixtures>({
         teardown.push({ step: steps.forwarder, run: () => forwarder.close() })
         const daemon = await startFakeDaemonForTest({
           url: forwarder.url,
-          buildReply: () => seedConversationsFrame(
-            serverId === SECOND_SERVER_ID ? SECOND_SEEDED_ROW : SEEDED_ROW
-          ),
+          // The app requires `thread` (#1908), which the fake daemon negotiates by default, so the
+          // default reply also completes a conversation's first catch-up with an empty window.
+          buildReply: bytes => {
+            const request = decodeEnvelope(bytes)
+            return request.type === 'thread_catch_up' ? emptyThreadWindow(request) : seedConversationsFrame(
+              serverId === SECOND_SERVER_ID ? SECOND_SEEDED_ROW : SEEDED_ROW
+            )
+          },
           ...serverOptions
         })
         teardown.push({ step: steps.daemon, run: () => daemon.close() })

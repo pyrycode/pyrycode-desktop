@@ -44,6 +44,27 @@ it('keeps detached Promise backend execution callable', async () => {
   expect(await authoritative(read('readThread'))).toEqual({ status: 'missing' })
 })
 
+it('commits a saturated receipt replacement through handler admission and preserves it across fresh owners', async () => {
+  const h = await setup(), first = h.fresh()
+  const ids = Array.from({ length: 200 }, (_, i) => i)
+  const original = { ...timeline(), served: { ids, highestId: 199,
+    receipts: Array.from({ length: 500 }, (_, i) => ({ ids, cursor: `page-${i}`, atStart: false })) } }
+  await h.seed([original, thread()])
+  const handler = createChatHistoryHandler({ store: first.store, log: h.log,
+    pairedServers: { loadById: async () => ({ server: 'a', relay: '', token: '', server_static_pubkey: '' }) } })
+  expect(await handler(null, read())).toEqual({ status: 'stored', snapshot: original })
+  const repeated = { ...original, served: { ...original.served, receipts: [...original.served.receipts.slice(1),
+    { ids, cursor: 'repeat', atStart: false }] } }
+  const saving = handler(null, { ...read('replaceTimeline'), snapshot: repeated })
+  const queuedRead = handler(null, read())
+  expect(await saving).toEqual({ status: 'ok' })
+  expect(await queuedRead).toEqual({ status: 'stored', snapshot: repeated })
+  first.database.close()
+  const next = h.fresh()
+  expect(await next.store.execute(read())).toEqual({ status: 'stored', snapshot: repeated })
+  expect(await next.store.execute(read('readThread'))).toEqual({ status: 'stored', snapshot: thread() })
+}, 60_000)
+
 it('imports both exact formats once, preserves newer indexed content and never reopens the source after restart', async () => {
   const h = await setup(), first = h.fresh()
   const indexed = createIndexedLegacyHistory({ database: first.database, encryption: h.encryption, log: h.log })

@@ -91,3 +91,25 @@ CodeGraph sidecars are already untracked by merged main. Obtain the complete
 native fake suite for the pushed candidate, preserving its configured workers,
 projects and retries; inspect all returned results and setup attachments.
 Recount: under 700 total written lines, no additional exports or consumers.
+
+Implementation evidence: the fixture's fallback also answered unrelated commands
+with a one-row list, removing quiet ownership. Answer only `list_conversations`
+with the current list, retaining single-row startup for `launchPairedApp` and both
+rows after launch. With quiet's request positively observed, the shared reply ID
+fails the historical-child commit barrier (`0 tools`, expected `1 tool`). Selecting
+the seeded host/conversation request passes the unchanged finished-marker and
+identity/navigation assertions: 1 executed, 1 passed on Linux. This changes only
+the scenario-local fake and adds no IPC or production surface; the committed
+security verdict remains applicable. #1969 and #1976 are now closed with their
+repairs merged, so no stale re-observation comment is needed.
+
+## Documentation handoff
+- Pending documentation stage: `docs/knowledge/features/channel-list.md`, unread
+  and attention guidance — explicit thread-route selection, received shown/read
+  comparison, missing metadata and local-stamp suppression; preserve legacy rules.
+- Pending documentation stage: `docs/knowledge/features/conversation-shell.md`,
+  read publication guidance — immutable committed `readInputs`, supplied completion
+  progress, checkpoint/repair fences, visibility exclusions and evidenced retries.
+- Pending documentation stage: `docs/knowledge/features/development-verification.md`,
+  mounted evidence guidance — receipt/commit barriers, attempted versus delivered
+  versus confirmed commands, final gate counts and #1908's production/live handoff.

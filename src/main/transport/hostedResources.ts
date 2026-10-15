@@ -17,7 +17,7 @@ type Pending = {
   scope: symbol; request: Request; resolve: (result: HostedResourceResult) => void
   active: boolean; attempted: boolean; granted: number; index: number; offset: number; expires: number; idleExpires?: number
   metadata?: HostedPayloads['app_response']; bytes?: Buffer
-  deadline: ReturnType<typeof setTimeout>; idle?: ReturnType<typeof setTimeout>; cleanup: () => void
+  deadline: ReturnType<typeof setTimeout>; idle?: ReturnType<typeof setTimeout>; cleanup: () => void; signal?: AbortSignal
 }
 
 /** Trusted main-only API. A view captures authority; no byte channel reaches the renderer. */
@@ -110,12 +110,15 @@ export function createHostedResources(deps: {
       }
     } finally { pumping = false }
   }
-  function retireViews(views: Iterable<{ retire(): void }>): void {
+  function withoutPromotion(action: () => void): void {
     const wasPumping = pumping
-    // No queued request may start until every affected scope has been retired.
+    // Remove the entire affected set before any freed slot can promote queued work.
     pumping = true
-    try { for (const view of views) view.retire() }
+    try { action() }
     finally { pumping = wasPumping; pump() }
+  }
+  function retireViews(views: Iterable<{ retire(): void }>): void {
+    withoutPromotion(() => { for (const view of views) view.retire() })
   }
   function reset(supported = false, cancellation = false): void {
     // Remove the queue before callbacks can promote old work during teardown.
@@ -203,10 +206,14 @@ export function createHostedResources(deps: {
         } catch { log('invalid'); return failure('invalid') }
         return new Promise(resolve => {
           const abort = (): void => fail(p, 'aborted')
-          const p: Pending = { scope, request, resolve, active: false, attempted: false, granted: -1, index: 0, offset: 0, expires: enqueued + 30000,
+          const p: Pending = { scope, request, resolve, signal, active: false, attempted: false, granted: -1, index: 0, offset: 0, expires: enqueued + 30000,
             deadline: setTimeout(() => fail(p, 'timeout'), Math.max(0, enqueued + 30000 - Date.now())), cleanup: () => signal?.removeEventListener('abort', abort) }
           pending.set(request.id, p); signal?.addEventListener('abort', abort, { once: true }); log('enqueued'); pump()
         })
+      },
+      cancelRequests(signals: ReadonlySet<AbortSignal>): void {
+        const old = [...pending.values()].filter(p => p.scope === scope && p.signal && signals.has(p.signal))
+        withoutPromotion(() => { for (const p of old) fail(p, 'aborted') })
       },
       retire(): void {
         retired = true

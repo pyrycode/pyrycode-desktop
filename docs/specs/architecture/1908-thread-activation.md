@@ -24,15 +24,17 @@ Design context and screenshot reviewed. Retain the fixed sidebar beside the conv
 
 ## Context
 
-All Desktop and daemon prerequisites named by the current issue are merged. The adapters are inactive in ordinary app composition. Activate them while preserving host-local legacy compatibility for one release. No new ADR is needed. Remote branch overlap: #1544 modifies independent configuration-request invalidation in `daemonConnection.ts`; keep this change local to negotiation and recovery.
+All Desktop and daemon prerequisites named by the current issue are merged. The adapters are inactive in ordinary app composition. Activate them as the only conversation route. Since the 2026-10-15 scope change the app requires `thread`: a host whose accepted handshake lacks it gets #1613's `update-required` failure with a daemon cause, and there is no legacy event/history fallback. Several daemons at once stay supported, so routing stays per host. No new ADR is needed; the decision is recorded in the vault design note's "No legacy fallback" section. Remote branch overlap: #1544 modifies independent configuration-request invalidation in `daemonConnection.ts`; keep this change local to negotiation and recovery.
 
 Sizing follows the issue's explicit floor exception: approximately 1500 written lines (450 production, 950 tests/fixtures, 100 plan/log), roughly 14 production files, five observable acceptance criteria. The 700-line ceiling overage is retained because separating the composition from its regression proof would create a preparatory slice with only this consumer. Reuse existing exported adapter types and signatures; introduce only the composition surface and narrow identity result.
 
 ## Design
 
-- Advertise `thread` with existing capabilities. Select each host's route solely from its accepted connection capabilities, replacing the selection on every handshake. Retained offline provenance may choose saved display only, never network capability.
-- Add an app-lifetime composition layer owning authoritative item/send stores and query coordination. Selection, restore, connection state and daemon replies feed the existing adapters; teardown retires queries, restores and subscriptions. Capability downgrade retires authoritative network work before legacy demand resumes.
-- Restore authoritative snapshots through `readThread` and supply the existing writer's optional thread source. Preserve legacy `readTimeline`/timeline saves separately. Resume from saved epoch/checkpoint, never applied or unfinished versions.
+- Advertise `thread` with existing capabilities. Main decides on each accepted handshake: without `thread`, `createDaemonConnection` emits `failed` with code `update-required`, `cause: 'daemon'`, `retryable: true` and static daemon copy, and emits no `connected`. The driver is parked rather than stopped, so every outbound method is inert, inbound frames are dropped (a sealed pairing rejection or app-too-old error still ends the host as before), and the driver's own supervisor re-dials after a drop. A later accepted handshake with `thread` takes the driver back and connects normally. The renderer draws the existing failed host row, a banner and daemon leg label naming the daemon, no conversation rows and no app download link.
+- Add an app-lifetime composition layer owning authoritative item/send stores and query coordination. Every selected host and conversation draws through the item view; only hosts with an accepted `thread` handshake are linked and queried. Selection, restore, connection state and daemon replies feed the existing adapters; teardown retires queries, restores and subscriptions.
+- Restore authoritative snapshots through `readThread` and supply the existing writer's optional thread source. A saved legacy timeline is never read for display. Resume from saved epoch/checkpoint, never applied or unfinished versions.
+- Unhook the legacy route without deleting it (#2020): legacy content writers receive no paired host's events, `PairedShell` issues no newest-history demand, and the history ask deps capture no scope for a selected conversation. Main's legacy `requestHistory` stays as on main, unreachable from production renderer paths.
+- Publish streamed `thread_text_append` bursts once per animation frame in the runtime (#1887's contract on the production route): appends are held in arrival order with their own host and conversation, the first schedules the frame, any other event flushes them first, and suspend/dispose flush or cancel.
 - Expose a no-argument typed device-identity IPC operation returning only the hexadecimal public identifier or a static failure. Derive it in main from the same keypair used by the connection. Capture it for each thread submission; retain the existing legacy send path.
 - Render `ThreadItemsTimeline` on the authoritative route with existing send, queued-action and task inputs. Preserve the ordinary composer, connection/account chrome, reader and existing loading/retry controls. Legacy content, history, queue and roster projections cannot write authoritative rows or launch content recovery.
 - Bind `createThreadLiveState` from current owning summaries, consume `threadLiveInputs` for current-session UI and route prompt answers to their retained host. Session transitions and saved items cannot establish binding.
@@ -46,7 +48,7 @@ Host routing is explicit and independent. Every restore captures route/selection
 
 | Event | Regression coverage to write |
 | --- | --- |
-| Mixed hosts, upgrade/downgrade, repeated reconnect | production thread integration spec: route and owning requests |
+| Host without `thread` beside a thread host, later handshake with `thread` | production thread integration spec: update-required on that host only, zero requests from it, thread host unaffected, state clears |
 | Offline restore, reopen, restore/live overlap | production thread integration spec: saved rows and checkpoint |
 | Interrupted batch, epoch replacement and repeated session reset | production thread integration spec: retained complete progress and prompt invalidation |
 | Queued acknowledgement and terminal delivery | production thread integration spec: device/message settlement and genuine queue handle |
@@ -56,11 +58,11 @@ Host routing is explicit and independent. Every restore captures route/selection
 
 ## Error handling
 
-Reuse existing typed query/cache failures and static retry copy. Identity IPC returns a typed static error without key material or caught details. Missing capability selects legacy compatibility and never counts as thread proof. Failed/abandoned queries retain complete checkpoint fences. Log only static lifecycle/reason codes, never daemon content, device identifiers, keys, tokens or saved bodies.
+Reuse existing typed query/cache failures and static retry copy. Identity IPC returns a typed static error without key material or caught details. A missing `thread` capability is the update-required failure with a daemon cause, never a fallback and never thread proof. Failed/abandoned queries retain complete checkpoint fences. Log only static lifecycle/reason codes, never daemon content, device identifiers, keys, tokens or saved bodies.
 
 ## Testing strategy
 
-Write failing identity/composition tests before implementation and observe their intended failure. Extend existing fake-transport Electron fixtures for ordinary-app mixed-route, restore/query/send/session/read transitions; use positive receipt and React-commit barriers before absence assertions. Run changed focused specs, final main merge, pre-verify and build. Extend existing real-daemon/live-Claude evidence to observe negotiated thread facts alongside its legacy oracle and assert capabilities on the actual app connection. Per the current issue, credentialed counted execution and binary/Desktop revision artifacts are pending the dispatcher's live gate; no builder live pass is claimed. Capture existing integrated chrome at 1280 and 800 widths.
+Write failing identity/composition tests before implementation and observe their intended failure. Fake-transport fixtures negotiate `thread` by default (`startFakeDaemon`), and the default fixture reply completes a first catch-up with an empty window. Extend existing fake-transport Electron fixtures for ordinary-app update-required, restore/query/send/session/read transitions; use positive receipt and React-commit barriers before absence assertions. Run changed focused specs, final main merge, pre-verify and build. Extend existing real-daemon/live-Claude evidence to observe negotiated thread facts and assert capabilities on the actual app connection; a live daemon without `thread` is a setup failure. Per the current issue, credentialed counted execution and binary/Desktop revision artifacts are pending the dispatcher's live gate; no builder live pass is claimed. Capture existing integrated chrome at 1280 and 800 widths.
 
 ## Open Questions
 
@@ -83,7 +85,25 @@ Resolved: identity is lowercase hexadecimal public key, matching daemon `connSen
 
 **Reviewer:** builder (self-review per `builder/security-review.md`). **Date:** 2026-10-15.
 
+### Security review revision, 2026-10-15 scope change
+
+**Verdict:** PASS
+
+- [Trust boundaries] No findings. The `thread` decision reads only the parsed `hello_ack` capabilities in `createDaemonConnection`'s `handshake-complete` arm, for that connection only. The renderer cannot choose a route; `isThread` is no longer a capability input, and saved provenance still chooses offline display only.
+- [Tokens, secrets] No findings. The failure copy is static, carries no version, token or wire text, and the diagnostic is the existing `daemon-failed` code.
+- [File and storage] No findings. A saved legacy timeline is never read for display; protected thread snapshots keep their existing validated reader.
+- [Electron attack surface] No findings. No new IPC channel. The failed event gains a closed optional `cause: 'daemon'`, copied field by field in `translateDaemonEvent`.
+- [Cryptography] No findings. The Noise session is untouched; the parked driver keeps its own session and nonces, and a superseding `dial()` stops it before dialling, so two sockets never stack.
+- [Network and I/O] SHOULD FIX, addressed: an outdated daemon's socket stays open. Parking the driver makes every outbound method see no driver, so nothing beyond the handshake reaches it, and inbound frames are dropped before parsing except the two connection-fatal errors, which keep their precedence. Reconnects use the existing supervisor backoff; no new loop is added.
+- [Errors, logs] No findings. No content, identifiers or caught details are logged.
+- [Concurrency] No findings. `dial()`, `stop()` and a fatal error release the parked driver; a re-handshake takes it back before the capability check. Appends held for the next frame keep their arrival host and conversation, flush before any other event, and are cancelled by dispose; late callbacks after dispose are inert.
+- [Threat alignment] A hostile or old daemon withholding `thread` gets no requests and draws nothing; a hostile relay can delay the handshake but cannot make a host without `thread` look like a thread host. Deleting the unhooked legacy code is #2020.
+
 ## Revisions
+
+2026-10-15 scope change, finished by hand on PR #2003: Juhana dropped the legacy fallback ("We won't have old daemons running around"). Removed: per-connection route selection between thread and legacy, saved legacy timeline display, the legacy newest-history demand, the mixed-route and upgrade/downgrade fake specs, the legacy saved-display unit tests and the branch's legacy history-host unit test. Added: main's handshake decision with the parked driver and `cause: 'daemon'`, daemon copy in the banner and daemon leg label, an update-required beside thread host fake spec, the runtime's per-frame append batching, and `thread` as the fake daemon's default capability. Kept: per-host routing for several daemons (every request carries its owning host), owning-host capture for item, page, gap and retry requests (the coordinator's `queryThread` carries `serverId`), shared shell task drawer state, agent identity from the selected host. The old reducer, history matching modules and their tests stay for #2020.
+
+Frame batching: the native gate's `timeline-frame-deltas` failure (12 commits before the held frame) observed the legacy Timeline, which no production host mounts now. The spec moved to the production route with its assertions unchanged (one scheduled frame, zero commits while held, one commit after release). On the thread route each `thread_text_append` committed the item view separately, the #1887 regression the cutover would otherwise ship; the runtime now holds appends to the next frame. Without the runtime scheduler the ported spec fails (no frame requested, commits per append).
 
 2026-10-15 recovery native gate **FAIL**: task `e8461d752cc080f4d7ca840fa0f332d15e0f146127928fb023963290702f7aaa`, run `363ed947e68c551d6c508863fb54fcb49ec2ef2c18c02c9dc3e4a1b7b7023d16`, executed exact source `f84b9a9126df5217962a47b7af7a49a1bba635ae`. Independently inspected all 456 records: 455 executed, 453 passed, two failed, one existing never-shown-window pointer skip; zero retries/flaky, global errors and setup attachments empty. All 17 activation cases passed. Original configuration is byte-identical (SHA256 `f2868e97d72733c286ff8c3098f09adc62e2e8bfa3ad9393e000eebf9a429d5a`), four workers, both projects, repeatEach 1, retries 0. Artifacts retained at `/tmp/builder-1908/native-f84b9a91/desktop/`; original directory `/Users/juhanailmoniemi/.local/share/pyry-fleet/supervisor/desktop-captures/e8461d752cc080f4d7ca840fa0f332d15e0f146127928fb023963290702f7aaa/desktop/`. Report SHA256 `ca24f9a9b70bf9127e12304f9d47d5bc990f7fd5b68a419e2a9c878f9f6d2907`, capture `913d77608bbdbfd6949e11aeae80355f1639ca1bed2ebc5efb650f292aeae719`, execution log `0b18d1b88a310c3f1a7d02873a3592f31dc2a93ac22fd42ef99a0e12b1a4e830`. Full inspection summary is `/tmp/builder-1908/native-f84b9a91-summary.json`.
 

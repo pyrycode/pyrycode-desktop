@@ -5,6 +5,16 @@
 // observed failure reported `runningAtOutcome: true`, `exitCode: 0` and no teardown failures. Off
 // CI `retries` is 0, so one such read turns a green branch red with no `flaky` line to mark it.
 //
+// THE MESSAGE IS NOT ABOUT A NAVIGATION. Playwright replaces every protocol error from an evaluation
+// that is neither a JavaScript exception nor a closed session with that one sentence, in Electron's
+// main process too, which never navigates. Diagnosed 2026-10-15 with the original error kept: in the
+// agent image at four workers, all 11 losses reproduced from `app.evaluate` and `browserWindow().evaluate`
+// were V8's `Runtime.callFunctionOn: Promise was collected`, raised while the renderer document had long
+// since loaded. V8 reports that when the promise it awaits for the evaluation's result is garbage
+// collected before it settles, so the evaluated function may well have run. That promise is the
+// inspector's own and the harness holds no reference to it, so waiting for the window to load
+// (`appWindow` in desktopIsolation.ts) does not replace this helper.
+//
 // ONLY COUNT READS MAY RETRY. CONTROL ACTIONS MUST NEVER BE REPLAYED. A retried mutation is a
 // second mutation: re-running the `app.evaluate` that wraps an ipcMain handler would wrap the
 // wrapper, and re-running a click or a pushed frame would double the thing under test. Nothing in

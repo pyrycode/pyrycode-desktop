@@ -17,6 +17,9 @@ export default defineConfig({
   // 66 specs under this config, and the 2 fake-tier failures it reported were specs that had no business
   // being collected here at all. Keep this pattern byte-identical to playwright.config.ts's.
   testMatch: /(^|\/)real-[^/]*\.spec\.ts$/,
+  // The same per-run X display as the default tier (e2e/fixtures/runDisplay.ts): the live gate runs in
+  // the background beside builders and the verifier gate, in the same container.
+  globalSetup: './e2e/fixtures/runDisplay.ts',
   fullyParallel: false,
   workers: 1,
   forbidOnly: !!process.env.CI,

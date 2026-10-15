@@ -17,7 +17,7 @@ named-host reconnect can re-dial an unchanged pairing through the separate entry
 
 **`start()` and `reconnect()` both funnel through a private `dial()`** — the single fresh-connect path. `dial()`:
 
-1. Reset hosted resource views and the shared thread receiver, settle pending resource work, interrupt pending queries and release assembly; `++generation` then bumps the connection fence (see below), superseding any prior dial.
+1. Reset hosted resources, then discovery, and the shared thread receiver; retire old views, clear readiness, settle pending resource work, interrupt pending queries and release assembly. `++generation` then bumps the connection fence (see below), superseding any prior dial.
 2. `driver?.stop()` then `driver = null` — tear down any live driver before dialing the next, so two sockets never stack and only the fresh server is dialed (**AC3**). The old driver's stop-terminal carries the *old* gen, so the per-dial `onEvent` wrapper drops it — no spurious `failed`. Null before the first dial (or after a not-paired boot), where this is a no-op.
 3. Keep `nextEnvelopeId` monotonic across dials. Each hello still uses id 1; app IDs begin at 2 and are never recycled by reconnect. Clearing pending state alone would let a delayed history marker match a successor request that reused its ID.
 4. `emitDaemonEvent(sink, { type: 'connecting' })` — synchronous, before any `await` (**AC2**).
@@ -112,127 +112,50 @@ renderer or log field.
 
 ## Disconnected composer message delivery
 
-Each host connection owns a main-memory FIFO of copied `SendMessagePayload` values,
-including the original conversation, message ID, text and attachment IDs. Accepted
-submissions during initial bootstrap, handshake or reconnect wait here. The existing
-offline composer Send gate remains; the FIFO closes the renderer/main disconnect race.
-It stores payloads rather than ciphertext and rebuilds envelopes for the current dial.
-
-Admission validates the message and encodes it against `MAX_PLAINTEXT_BYTES`, the
-existing per-frame plaintext bound. The FIFO permits at most 128 messages and 1 MiB
-of encoded envelope bytes per host. Invalid/oversized payloads and incoming overflow
-emit `not-sent`; overflow never evicts an older entry. A synchronous draining guard
-keeps reentrant submissions behind the existing remainder. Keep the draining head's
-count and bytes reserved until the driver accepts it: removing it before handoff
-would admit an extra message if a reentrant submission arrived and the head was refused.
-
-Drain only after `parseHelloAck` validates the authenticated handshake, on automatic
-or explicit reconnect as well as initial connect. A synchronous `send-refused`
-observation leaves the head in place, marks it waiting and stops draining. A later
-successful handshake resumes the never-written remainder in submission order.
-Other send failures emit `not-sent` and remove that entry from automatic retry.
-An accepted send without an immediate observation belongs to `noiseSession`'s rekey
-buffer; main removes it from its FIFO and lets the eventual observation report its
-outcome. Holding it in both places would duplicate delivery.
-
-`messageDelivery` IPC carries only conversation/message IDs and the closed status
-`waiting | not-sent | written`, with the existing host stamp. Its observer works
-independently of `MessageLifecycle.sending`, which may supply no diagnostic observer
-and records only one attempt. Local holding does not report a diagnostic drop;
-final acceptance/failure or permanent release completes that observation.
-`written` means `WebSocket.send` returned, not daemon acknowledgement. Written
-messages leave the FIFO permanently; a missing receipt or repeated connected
-notification cannot trigger a resend. See [composer delivery and settlement](composer-send-internals.md#2-local-delivery-status-and-receipt-settlement).
-
-Terminal connection failure marks retained echoes `not-sent` while keeping their
-payloads. Existing explicit Reconnect changes them back to waiting and retries after
-authentication only if the pairing is unchanged. Compare `server`, `relay`, `token`
-and `server_static_pubkey` on every dial reload, using the copied replay-pairing
-snapshot above. Initial bootstrap adopts the first pairing. Missing or changed
-pairing fails and releases the old FIFO; registry removal and connection `stop()`
-also fail and release it before driver teardown. Surviving echoes remain Not sent,
-and no old payload reaches a replacement pairing. Holds survive thread switches,
-but app shutdown releases them; there is no disk outbox or restart delivery.
-
-### Delivery verification
-
-`daemonConnection.test.ts` covers admission limits, initial holding, ordered/reentrant
-draining, repeated handshakes, a second refusal, terminal recovery, pairing removal/
-replacement/disposal and deferred rekey observations. Store/composer tests cover
-synchronous status-before-send, bridge rollback and host-owned inactive echoes.
-The mounted `e2e/disconnected-message-delivery.spec.ts` checks fake-daemon decoded
-frames and visible waiting/failed rows, running-turn queue correlation, ordered
-settlement and replay stability, with automatic, explicit and terminal recovery.
-
-During the disconnected gap, both accepted commands must report waiting while a
-main-process `WebSocket.send` counter remains unchanged and no decoded send reaches
-the fake daemon. The counter must increase after authenticated delivery, so the
-no-write assertion cannot pass with a disconnected observer. Instrumentation counts
-calls without inspecting frame arguments; teardown restores the socket method, IPC
-listeners and pairing reader and releases the blocked read in `finally`.
-
-Visible assistant text does not establish settlement. Each scripted answer first
-renders with `.bubble__cursor`; only then does the fake send its `turn_end`, and the
-test waits for that answer's cursor to disappear before recording the replay baseline.
-Otherwise normal cursor removal can fail whole-row equality despite correct delivery.
-Keep both the streaming and settled observations: cursor absence alone could pass
-before the delta arrived. See [positive processing barriers](development-verification-evidence-that-cannot-pass-too-early.md#evidence-that-cannot-pass-too-early).
-
-Recorded evidence for #1853 at `cfa9de8b`: verifier gate 6 executed 335 fake-transport
-tests, with 335 passed, 0 failed and 4 skipped. The [verifier PASS verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1855#issuecomment-6036469849)
-confirms that all three named “accepted disconnected messages drain and settle:
-automatic”, “accepted disconnected messages drain and settle: explicit” and
-“accepted disconnected messages drain and settle: terminal” scenarios were present
-and passed, as did the repaired switch-agent regression. The same verdict records
-9,343 unit tests executed/passed, 0 failed and 3 skipped. This client delivery
-regression requires no new real-Claude acceptance; these counts establish fake
-transport and unit evidence only.
-
-For #1967 at `3d5278633668`, the [diagnosis](https://github.com/pyrycode/pyrycode-desktop/issues/1967#issuecomment-6179663671)
-records a controlled delayed-`turn_end` reproduction: 1 executed, 0 passed, 1 failed,
-0 skipped. The existing replay equality expected `Answer 1` with its streaming cursor
-and received the settled row without it; earlier waiting, FIFO, payload and receipt
-checks passed. The original gate logs were unavailable, so their failing assertion
-remains unknown. Disabled Stop preceding the automatic pairing read was a valid
-disconnected backoff phase, not evidence of a delivery defect.
-
-The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1972#issuecomment-6179920114)
-confirms these counted fake-transport runs:
-
-| Command | Executed | Passed | Failed | Skipped |
-| --- | ---: | ---: | ---: | ---: |
-| `xvfb-run -a npx playwright test e2e/disconnected-message-delivery.spec.ts --grep 'settle: automatic' --repeat-each=20 --retries=0 --reporter=json` | 20 | 20 | 0 | 0 |
-| `xvfb-run -a npx playwright test e2e/disconnected-message-delivery.spec.ts --retries=0 --reporter=json` (subsequent run) | 3 | 3 | 0 | 0 |
-| Dispatcher full `npx playwright test --reporter=json` | 395 | 394 | 1 | 3 |
-| Dispatcher rerun of the unrelated chat-history receipt-saturation failure | 1 | 1 | 0 | 0 |
-
-The automatic case passed all 20 repetitions; the subsequent three-case run and
-the full dispatcher run each contained and passed all three named “accepted
-disconnected messages drain and settle: automatic”, “accepted disconnected messages
-drain and settle: explicit” and “accepted disconnected messages drain and settle:
-terminal” tests. The verifier accepted the full gate plus unrelated rerun under the
-dispatcher's flaky-test policy; the initial full run was not failure-free. No
-real-Claude evidence is required or claimed for this client-only repair.
+See [disconnected composer delivery](daemon-connection-disconnected-delivery.md#disconnected-composer-message-delivery)
+for the bounded per-host payload hold, pairing lifetime and
+[delivery verification](daemon-connection-disconnected-delivery.md#delivery-verification).
 
 # Hosted resource views
 
-`DaemonConnection.hostedResources` is a trusted main-process API backed by
-`src/main/transport/hostedResources.ts`. Select a host with
-`registry.connectionFor(serverId)` (null for an unknown host), then call
-`connection.hostedResources.openView(appId, release)`. The returned handle offers
-`request(input, signal?)` and `retire()`. Input discriminates `app_asset_request`
-and `app_api_request`, with wire payload fields except `app_id`/`release_version`:
-the closure pins those identities, its connection, a unique view scope and the
-current resource generation. Callers supply no envelope ID or response routing
-authority. Resource, credit and cancel IDs share `nextEnvelopeId`, which stays
-monotonic across dials.
+Select a named host with `registry.connectionFor(serverId)` (null for an unknown
+host). Its trusted main-process `hostedApps` API, backed by
+`src/main/transport/hostedApps.ts`, owns discovery independently of conversations:
 
-Dispatch requires a named paired host, authenticated driver and `hosted_apps_v1`
-in the current validated acknowledgement. Unavailable/unsupported connections
-settle locally. Every handshake invalidates old handles before parsing its ack,
-including automatic re-handshake on the same driver; open a fresh view after
-negotiation. Advertisement and discovery-driven readiness/view replacement remain with
-[#1959](https://github.com/pyrycode/pyrycode-desktop/issues/1959).
+- `read()` returns a structured copy of `HostedAppsState`: `type` is `unavailable`,
+  `unsupported`, `loading`, `failed` with static `error`, or `ready` with `revision`
+  and `items: HostedAppRecord[]`. Find the current app in those copied items;
+  mutating the copy cannot change authority. Records retain every desired/observed
+  state, including stopped or failed apps and nullable releases/error summaries.
+- `subscribe(listener)` observes invalidation and status/record changes and returns
+  an unsubscribe function. Listeners read the current copy; listener exceptions
+  cannot escape into dispatch.
+- `refresh()` invalidates readiness and starts a new authoritative walk. Calls
+  during an active refresh coalesce. Unavailable/unsupported hosts send no discovery
+  requests.
+- `openView(appId)` returns `{ ok: true, view }` only from a complete current
+  snapshot plus contiguous updates, for a running record with non-null
+  `active_release`. Otherwise it returns `{ ok: false, error: 'unconfirmed' }`
+  locally. The caller cannot authorize a binding with a cached record or release.
+
+The hello advertises `hosted_apps_v1` with the background handlers installed.
+Discovery support requires that capability in the current validated acknowledgement
+and `ack.server_id` matching the named paired host. Each supported initial
+connection, automatic re-handshake and explicit reconnect starts fresh discovery;
+cached running state grants no readiness. Capability downgrade or a foreign host
+acknowledgement leaves discovery unsupported. Identical app IDs on different hosts
+have independent records and bindings.
+
+The successful binding's `view` offers `request(input, signal?)` and `retire()`.
+The underlying `hostedResources.openView(appId, release)` remains the lower-level
+transport seam, backed by `src/main/transport/hostedResources.ts`; it checks
+authentication/capability and pins identities, but does not establish discovery
+readiness. Native consumers use `hostedApps.openView` for that authority. Request
+input discriminates `app_asset_request` and `app_api_request`, with wire payload
+fields except `app_id`/`release_version`: the closure pins those identities, its
+connection, unique view scope and resource generation. Callers supply no envelope
+ID or response routing authority. Discovery, resource, credit and cancel IDs share
+`nextEnvelopeId`, which stays monotonic across dials.
 
 The synchronous owner queues at most sixteen pending operations per view,
 including active work, with at most eight active per connection. Metadata reserves
@@ -255,50 +178,112 @@ an empty buffer. Failure categories are `unavailable`, `retired`, `aborted`,
 `limit`, `invalid`, `timeout`, `corrupt`, `bridge` and `send-failed`.
 Diagnostics contain static event/code only. Bytes stay in main on the existing
 encrypted transport, without HTTP access or persistence. Isolated viewer delivery
-belongs to [#1960](https://github.com/pyrycode/pyrycode-desktop/issues/1960); real
-round trips and SQL acceptance remain with
+belongs to [#1960](https://github.com/pyrycode/pyrycode-desktop/issues/1960);
+Apps rows, navigation and stable links belong to
+[#1928](https://github.com/pyrycode/pyrycode-desktop/issues/1928). Daemon production
+activation, real round trips and SQL acceptance remain with
 [#1929](https://github.com/pyrycode/pyrycode-desktop/issues/1929).
 
 ## Deadlines and retirement
 
-The thirty-second deadline starts at enqueue and never resets. Active work also
-has a five-second progress timeout, refreshed only by its accepted metadata/chunks.
-Unrelated traffic extends neither. Queue promotion checks the absolute enqueue
-deadline before sending; incoming progress checks both absolute deadlines before
-refreshing inactivity. Timer callback ordering can otherwise dispatch expired work
-or let a late frame rescue it.
+Discovery walks one pending `list_apps` request per connection, with at most
+16 records per page and 256 records per host. App IDs must increase strictly
+within and across pages at one snapshot revision. Publish only a complete atomic
+snapshot, including an empty result. During the walk, buffer at most 256 newer
+`app_updated`/`app_removed` notifications. Discard revisions at or below the
+snapshot and apply newer whole records or removal tombstones contiguously before
+publishing. Ready-state notifications use the same contiguous rule. A correlated
+`apps.changed` error (including cursor expiry), page revision/order drift, revision
+gap or notification overflow discards the incomplete walk and coalesces a restart.
+Malformed owned traffic fails discovery; stale, foreign and cross-generation
+replies cannot certify readiness.
 
-Abort retires one operation. View `retire()` permanently invalidates that handle
-and settles its pending work; owner `hostedResources.retire()` invalidates every
-view on that connection. Trusted callers must use these on app/release/view or
-host replacement; discovery does not yet invoke them automatically. All terminals
-settle once, remove timers/abort listeners, release reservations and partial bytes,
-then promote eligible queued work. Invalid correlated responses, bridge errors
-and send/drop failures affect only their own operation.
+A refresh has a fixed thirty-second deadline from enqueue, including all its
+restarts, and a five-second inactivity limit refreshed only by an accepted list
+page. Restart errors and unrelated notifications cannot extend inactivity. Expiry,
+admission exhaustion, invalid traffic, other bridge errors and request/send failure
+leave `failed` with static `timeout`, `limit`, `invalid`, `bridge` or `send-failed`.
+That state grants no readiness and stays failed until a trusted caller requests
+`refresh()` or a new supported connection starts discovery. Daemon retry hints
+alone do not authorize another attempt. Completion/failure releases walk buffers
+and deadline/restart timers; reset also clears cancellation bookkeeping.
 
-Retirement, abort, timeout and response failure send scoped `app_cancel` for
-attempted work while connected. Its independently allocated ID owns the
-`app_cancelled.in_reply_to`; acknowledgement must also match the original target
-request and app. Target settlement does not wait for acknowledgement. At most
-sixteen cancellation records remain, each expiring after five seconds, with the
-oldest removed on overflow; acknowledgement, invalid reply or send failure clears
-its record. Cancellation cannot revive a target.
+Resource operations separately keep their thirty-second enqueue deadline and
+five-second active progress timeout, refreshed only by accepted metadata/chunks.
+Queue promotion checks enqueue expiry before sending; inbound progress checks
+both deadlines before refreshing inactivity. Timer callback ordering must not
+dispatch expired work or let a late frame rescue it.
+
+Loss of authoritative discovery retires all discovery bindings before notifying
+observers. Release change, removal or non-running state retires just the affected
+app's bindings; unaffected apps and hosts remain usable. `hostedResources.retireViews`
+holds shared queue promotion until the entire affected binding set is retired,
+preserving an existing pump guard. Retiring handles sequentially without that
+barrier would let an active read settling in the first scope dispatch a queued
+stale mutation in another affected scope. Queued mutations that were never sent
+settle with `uncertain: false`; eligible unaffected work resumes after the barrier.
+
+Abort retires one resource operation. View `retire()` permanently invalidates that
+handle, unregisters its discovery binding and settles its pending work; owner
+`hostedResources.retire()` invalidates every resource view on the connection.
+Rediscovery permits fresh bindings and reads, never revival of old handles or
+replay of uncertain mutations. Resource terminals settle once, remove timers/abort
+listeners and release reservations/partial bytes. Invalid correlated resource
+responses, bridge errors and send/drop failures affect their own operation.
+
+Discovery lists/cancellations and resource credits/cancellations share sixteen
+control reservations per connection. Pending correlations and held sends reserve
+separately, so fewer than sixteen cancellations may be admitted. A held send's
+reservation survives target or acknowledgement expiry until its send observation
+or connection reset: releasing it earlier would allow repeated refreshes to grow
+the Noise rekey buffer. Exhaustion fails the affected work locally with `limit`.
+
+Retire obsolete pending list work immediately and, while connected and capacity
+permits, send `app_cancel` with the target `request_id` and no `app_id`. Resource
+retirement, abort, timeout and response failure cancel attempted work with app
+scope. Each cancellation has its own allocated envelope ID matched by
+`app_cancelled.in_reply_to`; its payload must match the target request and scope
+(app omitted for a list). Target settlement and fresh discovery never wait for
+the acknowledgement. Cancellation correlations expire independently after five
+seconds; acknowledgement, malformed/wrong-target reply or send failure releases
+only that cancellation's bookkeeping, without reviving the target. Held-send
+reservations retain their independent lifetime.
 
 Relay drop, handshake, explicit reconnect, authentication/update-required failure,
-driver error/terminal and stop reset the resource owner and its cancellation state.
-They advance the resource generation without sending old-session cancels through a
-successor handshake. Old handles stay retired even if host/app/release names match;
+driver error/terminal and stop reset resources before discovery. Unpair removes
+and stops the host; pairing replacement reconnects it. Reset resources first so
+discovery retirement cannot send old-session resource cancels during re-handshake;
+observers run only after both authorities are invalidated. Reset advances resource
+generation and releases controls, timers and buffers. Old handles stay retired even
+if host/app/release names match;
 the dial fence rejects superseded-driver callbacks and the shared allocator prevents
 reused IDs across redials. Unknown/late metadata/chunks allocate nothing. Failed
 POST/PUT/PATCH/DELETE operations become `uncertain: true` once sending is attempted,
 including a thrown/refused send; queued operations never attempted remain certain.
 No mutation is automatically replayed.
 
-Hosted dispatch precedes generic envelope admission and validates original bytes.
+Hosted dispatch preserves fatal authentication/update-required precedence, then
+routes discovery-owned list/cancel replies before resource-owned replies and
+generic envelope admission. It validates original bytes through the hosted codecs.
 Unvalidated `parseJsonObject` hints may locate and retire owned work even when
 `decodeEnvelope` would reject it; they never authorize byte acceptance. Valid fatal
 authentication/update errors retain precedence. See the
 [wire boundary lesson and focused coverage](wire-codec.md#consumer-obligations-and-testing).
+
+`hostedApps.test.ts` covers complete/empty walks, interleaved updates/removal,
+restart/deadline/control bounds, copied reads, cancellation correlation and bulk
+retirement. `daemonConnection.test.ts` exercises advertisement, per-host support,
+re-handshake/downgrade and identical app IDs on two hosts. Its held walk uses a
+positively processed unrelated message/control request as the dispatch barrier;
+silence alone would not prove unrelated traffic remains runnable.
+
+The [verifier PASS verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1990#issuecomment-6183913898)
+at `f27ef45f` records 10,274 unit tests executed/passed, 0 failed and 3 skipped,
+and 398 fake-transport Playwright tests executed/passed, 0 failed and 1 skipped.
+Its PASS review confirms all seven `retires affected bindings before queue promotion`
+variants were present and passed: release, removal, non-running state, refresh,
+gap, invalid notification and reset, with queued POSTs unsent and unaffected work
+completing. This is fake transport evidence; live acceptance remains with #1929.
 
 # How it works
 
@@ -308,7 +293,7 @@ authentication/update errors retain precedence. See the
 
 1. Guard: if already `started` or already `stopped`, no-op (single explicit connect).
 2. Emit `{ type: 'connecting' }` **synchronously** via `emitDaemonEvent`, before any `await` (AC3).
-3. `const dc = await loadDialConfig()` — load the pairing, ensure the device static keypair, decode the server key as exactly **32 bytes**, compare the replay pairing snapshot, then build a fresh hello with `id: 1`, `ts: now()`, identity, token, `capabilities: ['interactive', 'multi_agent', 'stop_background_task']` and optional `lastEventId`. `lastSeenTs` is omitted. The provider checks stopped/generation fences after both awaits and returns the assembled `{ connection, session }` or `null` for an absent record or cancellation.
+3. `const dc = await loadDialConfig()` — load the pairing, ensure the device static keypair, decode the server key as exactly **32 bytes**, compare the replay pairing snapshot, then build a fresh hello with `id: 1`, `ts: now()`, identity, token, `capabilities: ['interactive', 'multi_agent', 'stop_background_task', 'hosted_apps_v1']` and optional `lastEventId`. `lastSeenTs` is omitted. The provider checks stopped/generation fences after both awaits and returns the assembled `{ connection, session }` or `null` for an absent record or cancellation.
 4. Check `if (stopped || gen !== generation) return` before the null-result branch. Only a current, active bootstrap interprets `dc === null` as `failed('not-paired')`. A cancelled successful load must emit no post-stop renderer event or diagnostic; checking only for driver construction misses this stale-failure path.
 5. If `stopped` or superseded since step 2, return without constructing the driver (`if (stopped || gen !== generation) return` — closes the start/stop and reconnect-supersede races).
 6. `createDriver({ connection: dc.connection, session: dc.session, loadDialConfig, onEvent: fenced })` and retain the handle. The driver dials on construction; `loadDialConfig` is threaded so the driver's *automatic* reconnects re-source the record.
@@ -354,7 +339,7 @@ the same connection-bound sink.
 
 | `RelaySessionEvent` | Action |
 |---|---|
-| `handshake-complete{helloAck}` | Reset hosted views and thread state, then `parseHelloAck` → authenticated `connected{ack}`, enable hosted resources only for negotiated `hosted_apps_v1`, then drain held composer messages; a `parseHelloAck` throw → `failed('malformed-hello-ack')` (the caught `WireDecodeError` is dropped — its message could echo the ack bytes) |
+| `handshake-complete{helloAck}` | Reset hosted resources, discovery and thread state, then `parseHelloAck` → authenticate, enable resources for negotiated `hosted_apps_v1`, start discovery only when the ack also matches the paired host, emit `connected{ack}` and drain held composer messages; a `parseHelloAck` throw → `failed('malformed-hello-ack')` (the caught `WireDecodeError` is dropped — its message could echo the ack bytes) |
 | `message{plaintext}` | Hosted receive first (see [hosted views](#hosted-resource-views)); otherwise [`parseInboundMessage`](inbound-message-decode.md) → `messageReceived{message}` / `messagesReceived{messages}` / `runConfigReceived{sessionId,model,effort,yolo,used_tokens,window_tokens}` (#491/#500, superseding the `snapshotReceived{model,effort,yolo,used_tokens,window_tokens}` arm #180 originally emitted from the `case 'snapshot'` kind below, extended with the two usage ints by #191; that arm and its `case 'snapshot':` emit were removed outright by [#621](../codebase/621.md), and [#622](../codebase/622.md) removed the decode itself in turn — `inboundMessage.ts` no longer produces a `snapshot` kind at all, so a `screen_snapshot` frame now falls to `parseInboundMessage`'s tolerant `default` arm before this switch is ever reached) / `conversationsReceived{conversations}` (#139, no field dropped) / `turnState{state}` (#214, only `conversation_id` dropped) / `stallDetected{conversationId}` (#315, at ship time **nullary** — `StallPayload`'s only field, `conversation_id`, was dropped; [#732](../codebase/732.md) widened the arm to carry it onward by name, the id stopping at the renderer timeline bridge) / `apiRetry{active,current,total}` (#492, only `conversation_id` dropped — the not-onset-only, not-deduped peer of `stallDetected`; a fresh named-field literal copied by name, never a spread of the decoded payload) / `compacting{active}` (#495, only `conversation_id` dropped — `apiRetry`'s banner-only peer, carrying exactly one bool; same fresh-named-field-literal, never-a-spread discipline) / `toolUse{turnId,toolUseId,name,inputSummary}` (#217, only `conversation_id` dropped) / `modalShown{modalId,class,title,prompt,options,defaultOptionId}` / `modalDismissed{modalId,outcome,source}` (#201, at ship time **nothing dropped — a modal carried no `conversation_id`** on either frame; [#871](../codebase/871.md) widened `modalShown` to carry `conversationId` onward by name, decoded by [#870](../codebase/870.md) — outbound scoping only, `modalId` stays the sole answering correlation key; `modalDismissed` is unaffected) / `toolResult{turnId,toolUseId,isError,resultSummary}` (#229, only `conversation_id` dropped) / `conversationCreated{conversation}` (#241, verbatim passthrough — nothing dropped, like `conversations`) / `sessionTransition{newSessionId}` (#254, only `newSessionId` carried — `previous_session_id`/`reason`/`occurred_at`/`workspace_cwd` dropped here, the #180 content-drop model's second application) / `sessionSettingsUpdated{sessionId}` (#264, verbatim passthrough — nothing to drop, the reply has only the one field) / `backgroundTaskStarted{conversationId,taskId,toolCallId,description,taskType,truncatedFields}` (#564, **`conversation_id` KEPT as `conversationId`** — unlike every turn-stream arm above, this frame carries no `turn_id` and opens/closes no turn, so it follows the `queueState` #720 daemon-state rule; a fresh named-field literal copied by name, never a spread) / `backgroundTaskUpdated{conversationId,taskId,patch,status,summary,truncatedFields}` (#565, the subset twin of the arm above — four fields not six at ship time; [#1560](https://github.com/pyrycode/pyrycode-desktop/issues/1560) added `status`/`summary`, crossing verbatim, `''` included, so today it is six fields too — but a DIFFERENT six from the sibling's, `conversation_id` likewise KEPT, and performs **no join** against `backgroundTaskStarted`: ordering is claude's, not the daemon's, so an update for a never-opened task still emits; both new fields ship dormant, unread by any bridge until [#1561](https://github.com/pyrycode/pyrycode-desktop/issues/1561)/[#1246](https://github.com/pyrycode/pyrycode-desktop/issues/1246)) / `backgroundTaskRoster{conversationId,tasks,droppedTasks}` (#566, the **aggregate peer** of the two arms above — a snapshot, not a delta, whose empty `tasks` is the positive "nothing is alive" signal; `conversation_id` likewise KEPT, `tasks` passed through **by reference** from the already-narrowed row array, snake_case, the `queueState` nested-array precedent; no join, no dedup, no snapshot diff against a held previous roster) / `modelAnnounced{model,truncated}` (#587, **only `conversation_id` dropped** — an identity report, not a turn-stream item; fresh named-field literal copied by name, never a spread; deliberately stateless like `apiRetry`/`compacting`, so a verbatim repeat still emits); a throw (oversized/malformed/mistyped) → **drop** the frame and reset shared thread state (pending queries emit static `interrupted` failures; the caught `WireDecodeError` is discarded because its message could echo plaintext); an unmodeled envelope type (`null`) → **ignore**. The transport helper owns the wire boundary; this arm does only the IPC map. **Filled in [#68](../codebase/68.md)**, extended with the `snapshot` kind in [#180](../codebase/180.md), again with `used_tokens`/`window_tokens` in [#191](../codebase/191.md), again with the `conversations` kind in [#139](../codebase/139.md), again with the `turnState` kind in [#214](../codebase/214.md), again with the `stall` kind in [#315](../codebase/315.md) (not compile-forced — this inner switch has no `assertNever` default, so the round-trip test is the guard, not the compiler), again with the `api-retry` kind in [#492](../codebase/492.md) (same not-compile-forced posture), again with the `compacting` kind in [#495](../codebase/495.md) (same not-compile-forced posture), again with the `toolUse` kind in [#217](../codebase/217.md), again with the `modalShown`/`modalDismissed` kinds in [#201](../codebase/201.md), again with the `toolResult` kind in [#229](../codebase/229.md), again with the `conversation-created` kind in [#241](../codebase/241.md), again with the `session-transition` kind in [#254](../codebase/254.md), and again with the `session-settings-updated` kind in [#264](../codebase/264.md), and again with the `background-task-started` kind in [#564](../codebase/564.md) (same not-compile-forced posture), and again with the `background-task-updated` kind in [#565](../codebase/565.md) (same not-compile-forced posture), and again with the `background-task-roster` kind in [#566](../codebase/566.md) (same not-compile-forced posture), and again with the `model-announced` kind in [#587](../codebase/587.md) (same not-compile-forced posture) |
 | `terminal{code, reason}` | if `stopped` → **suppress** (clean local teardown); else `failed('connection-closed', "…code ${code}")`. The supervisor `reason` string is **not** forwarded (conservative) |
 | `error{reason}` | `failed(reason)` — the driver's reason is a static enum string, safe as the category `code` |
@@ -455,11 +440,11 @@ control and its integrated proof belong to
 
 # State + concurrency model
 
-- **Main-process state.** Driver/lifecycle handles, generation, the pairing-scoped replay cursor, composer payload FIFO and hosted resource views/assemblies stay here. Renderer session state lives in the [session store](session-store.md); replay position and hosted bytes are never IPC fields.
+- **Main-process state.** Driver/lifecycle handles, generation, the pairing-scoped replay cursor, composer payload FIFO, hosted discovery records/status and resource views/assemblies stay here. Renderer session state lives in the [session store](session-store.md); replay position, discovery authority and hosted bytes are never IPC fields.
 - **The `start()`/`stop()` race** is closed by checking `stopped` after asynchronous dial loads, before null classification and immediately before synchronous driver construction. JS yields only at `await`: a stop during load/key ensure cancels output; a stop after construction tears down the held driver.
 - **`stopped` does double duty** — it is both the start/stop race guard *and* the "suppress the clean-stop terminal" flag, so no separate `stopping` boolean is needed.
 - **`generation` is a second, orthogonal fence for `reconnect()`** ([#82](../codebase/82.md)) — it supersedes an in-flight dial when a fresh one begins, dropping the old driver's stop-terminal and aborting a stale `bootstrap`. `stop()` deliberately does not bump it (permanent teardown stays `stopped`'s job), so the pre-`createDriver` guard checks both. Full model in § Connect-on-pair.
-- **Transient reconnects retain the driver.** The supervisor absorbs transient drops and re-dials the *same* driver without surfacing `terminal`; relay-link-down still interrupts pending thread queries and retires hosted views. On reconnect the driver **re-sources the record via `loadDialConfig`** ([#83](../codebase/83.md)) then runs a fresh handshake and fires another `handshake-complete` → this re-emits `connected`, resets shared thread assembly/query state and invalidates hosted views before negotiating resource support again. During the gap the UI stays on its last session status. (This is distinct from `reconnect()`, which **replaces** the driver entirely — see § Connect-on-pair.)
+- **Transient reconnects retain the driver.** The supervisor absorbs transient drops and re-dials the *same* driver without surfacing `terminal`; relay-link-down still interrupts pending thread queries, retires hosted views and clears discovery authority. On reconnect the driver **re-sources the record via `loadDialConfig`** ([#83](../codebase/83.md)) then runs a fresh handshake and fires another `handshake-complete` → this re-emits `connected`, resets shared thread assembly/query state and invalidates hosted views/discovery before negotiating support and starting fresh discovery. During the gap the UI stays on its last session status. (This is distinct from `reconnect()`, which **replaces** the driver entirely — see § Connect-on-pair.)
 
 # Per-server routing
 

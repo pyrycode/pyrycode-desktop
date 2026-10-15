@@ -296,7 +296,7 @@ before its reply rather than remain pinned below later content. Settled duplicat
 receipts cannot move it again. Host and inactive-conversation isolation belongs to
 the [composer delivery bridge](composer-send-internals.md#2-local-delivery-status-and-receipt-settlement).
 `localMessageDelivery.test.ts` covers these sidecar transitions and original metadata;
-[mounted delivery evidence](daemon-connection-lifecycle.md#delivery-verification)
+[mounted delivery evidence](daemon-connection-disconnected-delivery.md#delivery-verification)
 checks decoded fake-daemon frames and visible waiting/failure/settlement behavior.
 
 **`TurnEndMetrics` ([#1565](https://github.com/pyrycode/pyrycode-desktop/issues/1565)) is a

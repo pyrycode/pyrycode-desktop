@@ -1,16 +1,50 @@
 import { afterEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { WebSocketServer } from 'ws'
+import { WebSocket, WebSocketServer } from 'ws'
 import * as daemonModule from '../../src/main/transport/fakeDaemon'
 import * as noiseModule from '../../src/main/transport/noiseLib'
 import { NoiseLoadError } from '../../src/main/transport/noiseLib'
 import { startFakeDaemonForTest } from './fakeDaemonSetup'
+import { startFakeRelayForwarder } from '../../src/main/transport/fakeRelayForwarder'
+import { createNoiseSession, type NoiseSession, type NoiseSessionEvent } from '../../src/main/transport/noiseSession'
+import { base64StdDecode, base64StdEncode, decodeInnerFrame, encodeInnerFrame } from '../../src/main/transport/codec'
+import { buildClientHello } from '../../src/main/transport/helloExchange'
 
 afterEach(() => vi.restoreAllMocks())
 
 describe('paired fake daemon setup diagnostics', () => {
-  it('recovers one real pre-open reset and frees each attempt before teardown', async () => {
+  it.each([
+    [Object.assign(new Error('private-sentinel'), { code: 'ECONNRESET' }), 'ECONNRESET', 2],
+    [new Error('Unexpected server response: 400'), 'HTTP 400', 1],
+    [new Error('private-sentinel', { cause: new Error('private-cause') }), 'unclassified', 1]
+  ])('captures each attempt without exposing arbitrary inputs or claiming an unseen responder', async (failure, failureClass, count) => {
+    const forwarder = await startFakeRelayForwarder()
+    try {
+      const start = vi.spyOn(daemonModule, 'startFakeDaemon').mockRejectedValue(failure)
+      const records: unknown[] = []
+      const error = await startFakeDaemonForTest({ url: 'ws://private-sentinel' }, {
+        snapshot: () => forwarder.setupDiagnostics(),
+        record: attempt => { records.push(attempt) }
+      }).catch(error => error)
+      expect(start).toHaveBeenCalledTimes(count)
+      expect(records).toHaveLength(count)
+      expect(records).toEqual(Array.from({ length: count }, (_, index) => ({
+        attempt: index + 1,
+        outcome: failureClass === 'ECONNRESET' && index === 0 ? 'retry-reset' : 'failed',
+        failureClass,
+        responder: 'unobserved',
+        parserObserved: false, upgradeObserved: false, upgradeRejected: false, connectionObserved: false,
+        parserClass: 'none', methodValid: false, upgradeValid: false, keyValid: false, versionValid: false
+      })))
+      expect(JSON.stringify(records)).not.toContain('private')
+      expect(error.cause).toBeUndefined()
+    } finally {
+      await forwarder.close()
+    }
+  })
+
+  it.each(['reset', 'HTTP 400'])('releases a real pre-open %s attempt before fresh setup and teardown', async boundary => {
     const lib = await noiseModule.loadNoiseLib()
     const frees: MockInstance<() => void>[] = []
     vi.spyOn(noiseModule, 'loadNoiseLib').mockResolvedValue({
@@ -25,10 +59,15 @@ describe('paired fake daemon setup diagnostics', () => {
     let upgrades = 0
     const server = createServer()
     const wss = new WebSocketServer({ noServer: true })
+    let resolveRejectedClose: () => void = () => {}
+    const rejectedClosed = new Promise<void>(resolve => { resolveRejectedClose = resolve })
     server.on('upgrade', (request, socket, head) => {
       upgrades += 1
-      if (upgrades === 1) socket.destroy()
-      else wss.handleUpgrade(request, socket, head, ws => wss.emit('connection', ws, request))
+      if (upgrades === 1) {
+        socket.once('close', resolveRejectedClose)
+        if (boundary === 'reset') socket.destroy()
+        else socket.end('HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n')
+      } else wss.handleUpgrade(request, socket, head, ws => wss.emit('connection', ws, request))
     })
     server.listen(0, '127.0.0.1')
     await once(server, 'listening')
@@ -36,7 +75,14 @@ describe('paired fake daemon setup diagnostics', () => {
     try {
       const address = server.address()
       if (address === null || typeof address === 'string') throw new Error('missing test listener')
+      if (boundary === 'HTTP 400') {
+        await expect(startFakeDaemonForTest({ url: `ws://127.0.0.1:${address.port}` }))
+          .rejects.toThrow('Fake daemon setup failed before Electron launch: HTTP 400')
+        expect(upgrades).toBe(1) // HTTP rejection is not retried inside setup.
+        expect(frees[0]).toHaveBeenCalledOnce()
+      }
       daemon = await startFakeDaemonForTest({ url: `ws://127.0.0.1:${address.port}` })
+      await rejectedClosed
       expect(upgrades).toBe(2)
       expect(daemon.staticPublicKey).toHaveLength(32)
       expect(frees).toHaveLength(2)
@@ -50,6 +96,61 @@ describe('paired fake daemon setup diagnostics', () => {
       for (const client of wss.clients) client.terminate()
       await new Promise<void>(resolve => wss.close(() => resolve()))
       await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+    }
+  })
+
+  it('captures an opened owning forwarder and yields an encrypted round-trip', async () => {
+    const forwarder = await startFakeRelayForwarder()
+    const records: unknown[] = []
+    let daemon: daemonModule.FakeDaemon | undefined
+    let client: WebSocket | undefined
+    let session: NoiseSession | undefined
+    try {
+      daemon = await startFakeDaemonForTest({ url: forwarder.url }, {
+        snapshot: () => forwarder.setupDiagnostics(), record: attempt => { records.push(attempt) }
+      })
+      expect(records).toEqual([{
+        attempt: 1, outcome: 'opened', failureClass: null, responder: 'opened',
+        parserObserved: false, upgradeObserved: true, upgradeRejected: false, connectionObserved: true,
+        parserClass: 'none', methodValid: true, upgradeValid: true, keyValid: true, versionValid: true
+      }])
+      client = new WebSocket(`${forwarder.url}/v1/client`)
+      await once(client, 'open')
+      await forwarder.whenReady()
+      const socket = client
+      const lib = await noiseModule.loadNoiseLib()
+      let first = true
+      let onEvent: (event: NoiseSessionEvent) => void = () => {}
+      session = await createNoiseSession({
+        staticPrivateKey: lib.CreateKeyPair(lib.constants.NOISE_DH_CURVE25519)[0],
+        remoteStaticPublicKey: daemon.staticPublicKey,
+        prologue: new Uint8Array(),
+        hello: buildClientHello({ id: 1, ts: '2026-10-15T00:00:00Z', deviceName: 'test', clientVersion: '0', token: 'dummy' }),
+        sendFrame: raw => {
+          socket.send(encodeInnerFrame({ v: 2, type: first ? 'noise_init' : 'noise_msg', data: base64StdEncode(raw) }))
+          first = false
+        },
+        onEvent: event => onEvent(event)
+      })
+      const initiator = session
+      socket.on('message', data => {
+        const bytes = Array.isArray(data) ? Buffer.concat(data) : new Uint8Array(data as ArrayBuffer)
+        const frame = decodeInnerFrame(bytes)
+        initiator.onFrame(base64StdDecode(frame.data), frame.type)
+      })
+      const handshake = new Promise<NoiseSessionEvent>(resolve => { onEvent = resolve })
+      session.start()
+      expect((await handshake).type).toBe('handshake-complete')
+      const received = new Promise<NoiseSessionEvent>(resolve => { onEvent = resolve })
+      const probe = new TextEncoder().encode('usable fake')
+      session.sendMessage(probe)
+      expect(await received).toEqual({ type: 'message', plaintext: probe })
+      expect(await daemon.whenSettled()).toEqual({ ok: true })
+    } finally {
+      session?.close()
+      client?.terminate()
+      await daemon?.close()
+      await forwarder.close()
     }
   })
 

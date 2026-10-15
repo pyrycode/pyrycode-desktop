@@ -16,6 +16,25 @@
 // console.log in shared test infra pollutes every consumer's output.
 import { WebSocket, WebSocketServer } from 'ws'
 import type { RawData } from 'ws'
+import { Server, STATUS_CODES } from 'node:http'
+
+const PARSER_CODES = [
+  'HPE_INVALID_METHOD', 'HPE_INVALID_URL', 'HPE_INVALID_VERSION',
+  'HPE_INVALID_HEADER_TOKEN', 'HPE_HEADER_OVERFLOW', 'HPE_UNEXPECTED_CONTENT_LENGTH'
+] as const
+
+/** Content-free, per-forwarder counters. Reading returns an independent snapshot. */
+export interface FakeRelaySetupDiagnostics {
+  parserErrors: number
+  parserClass: typeof PARSER_CODES[number] | 'none' | 'other'
+  upgradeRequests: number
+  upgradeRejections: number
+  connections: number
+  methodValid: boolean
+  upgradeValid: boolean
+  keyValid: boolean
+  versionValid: boolean
+}
 
 /** The two-leg, content-blind forwarder handle. */
 export interface FakeRelayForwarder {
@@ -23,6 +42,7 @@ export interface FakeRelayForwarder {
    *  path itself: `${url}/v1/client` for the real client, `${url}/v1/server` for the fake
    *  daemon. */
   url: string
+  setupDiagnostics(): FakeRelaySetupDiagnostics
   /**
    * Resolves once BOTH legs are registered server-side — the readiness gate that closes the
    * 101-response-before-handler-registration race. Rejects with a static message after
@@ -107,7 +127,43 @@ const DEFAULT_READY_TIMEOUT_MS = 1000
  * network, so it runs unconditionally under `npm test`.
  */
 export function startFakeRelayForwarder(): Promise<FakeRelayForwarder> {
-  const wss = new WebSocketServer({ port: 0 })
+  const diagnostics: FakeRelaySetupDiagnostics = {
+    parserErrors: 0, parserClass: 'none', upgradeRequests: 0, upgradeRejections: 0,
+    connections: 0, methodValid: false, upgradeValid: false, keyValid: false, versionValid: false
+  }
+  // Observing emit without installing a clientError listener preserves Node's default
+  // response and socket cleanup (which depend on emit returning false).
+  class SetupHttpServer extends Server {
+    override emit(event: string, ...args: unknown[]): boolean {
+      if (event === 'clientError') {
+        diagnostics.parserErrors += 1
+        const error = args[0]
+        const code = error instanceof Error && 'code' in error ? error.code : undefined
+        diagnostics.parserClass = PARSER_CODES.find(known => known === code) ?? 'other'
+      }
+      return super.emit(event, ...args)
+    }
+  }
+  const http = new SetupHttpServer((_request, response) => {
+    // Match ws's internally owned HTTP server, including its ordinary HTTP response.
+    const body = STATUS_CODES[426] ?? 'Upgrade Required'
+    response.writeHead(426, { 'Content-Length': body.length, 'Content-Type': 'text/plain' })
+    response.end(body)
+  })
+  const wss = new WebSocketServer({ server: http })
+  // Registered AFTER ws's synchronous handler: observe its result without installing
+  // wsClientError, which would suppress ws's own rejection response.
+  http.on('upgrade', (request, socket) => {
+    diagnostics.upgradeRequests += 1
+    diagnostics.methodValid = request.method === 'GET'
+    diagnostics.upgradeValid = request.headers.upgrade?.toLowerCase() === 'websocket'
+    const key = request.headers['sec-websocket-key']
+    diagnostics.keyValid = typeof key === 'string' && /^[+/0-9A-Za-z]{22}==$/.test(key)
+    const version = Number(request.headers['sec-websocket-version'])
+    diagnostics.versionValid = version === 8 || version === 13
+    if (socket.writableEnded) diagnostics.upgradeRejections += 1
+  })
+  http.listen(0)
 
   let clientLeg: WebSocket | null = null
   let serverLeg: WebSocket | null = null
@@ -138,6 +194,7 @@ export function startFakeRelayForwarder(): Promise<FakeRelayForwarder> {
   }
 
   wss.on('connection', (socket, request) => {
+    diagnostics.connections += 1
     const leg = legFor(request.url)
     // Unknown path, or a duplicate on an already-filled leg: terminate; never fill a slot.
     // Defensive — test infrastructure never does this.
@@ -225,7 +282,9 @@ export function startFakeRelayForwarder(): Promise<FakeRelayForwarder> {
     }
     if (clientLeg !== null) clientLeg.terminate()
     if (serverLeg !== null) serverLeg.terminate()
-    closePromise = new Promise<void>((resolve) => wss.close(() => resolve()))
+    closePromise = new Promise<void>((resolve) => {
+      wss.close(() => http.close(() => resolve()))
+    })
     return closePromise
   }
 
@@ -234,12 +293,13 @@ export function startFakeRelayForwarder(): Promise<FakeRelayForwarder> {
       const address = wss.address()
       if (address === null || typeof address === 'string') {
         // An ephemeral loopback bind always yields an AddressInfo; narrow rather than cast.
-        wss.close()
+        void close()
         reject(new Error('fake relay: server address unavailable'))
         return
       }
       resolve({
         url: `ws://127.0.0.1:${address.port}`,
+        setupDiagnostics: () => ({ ...diagnostics }),
         whenReady,
         dropClientLeg,
         closeClientLeg,

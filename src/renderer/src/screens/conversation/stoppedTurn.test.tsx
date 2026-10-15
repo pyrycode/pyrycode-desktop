@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { Timeline, stoppedTurnText, ComposerErrorSlot } from './ConversationScreen'
+import { TimelineRow, stoppedTurnText, ComposerErrorSlot } from './ConversationScreen'
 import { initialTimelineState, reduceTimeline, type ThreadEvent } from '../../store/threadTimeline'
 import { translateTimelineEvent } from '../../store/timelineBridge'
 import { reduceHistoryPage } from '../../store/historyPageBridge'
@@ -9,11 +9,9 @@ import { createConversationTimelineStore } from '../../store/conversationTimelin
 const end = { type: 'turnEnd' as const, turnId: 't', stopReason: 'end_turn', outcome: 'success', isError: true, terminalReason: 'prompt_too_long' }
 const boundary = { kind: 'turnBoundary' as const, turnId: 't', stopReason: 'end_turn', isError: true }
 describe('stopped turn presentation', () => {
-  it('separates tool stacks with a visible stopped record', () => {
-    const tool = { kind: 'toolCall' as const, turnId: 't', toolUseId: 'u', name: 'Read', inputSummary: '', result: null }
-    const html = renderToStaticMarkup(<Timeline items={[tool, boundary, { ...tool, turnId: 'next', toolUseId: 'next' }]} />)
+  it('renders a visible stopped record', () => {
+    const html = renderToStaticMarkup(<TimelineRow inProgress={false} item={boundary} />)
     expect(html).toContain('Stopped: error')
-    expect(html).not.toContain('tool-group-row--joined-')
   })
   it.each([
     ['max_turns', 'Stopped: turn limit reached'], ['budget_exhausted', 'Stopped: budget exhausted'],
@@ -36,7 +34,7 @@ describe('stopped turn presentation', () => {
   })
   it('appends reported categories and renders hostile text only as bounded escaped text', () => {
     expect(stoppedTurnText({ ...boundary, outcome: 'success', errorCategory: 'overloaded' })).toBe('Stopped: API error (Claude reported: overloaded)')
-    const html = renderToStaticMarkup(<Timeline items={[{ ...boundary, terminalReason: '<img>\nfuture\u0000', errorCategory: '<b>bad</b>' }]} />)
+    const html = renderToStaticMarkup(<TimelineRow inProgress={false} item={{ ...boundary, terminalReason: '<img>\nfuture\u0000', errorCategory: '<b>bad</b>' }} />)
     expect(html).toContain('Stopped: &lt;img&gt;future')
     expect(html).not.toContain('<img>')
     expect(html).not.toContain('\u0000')
@@ -46,11 +44,11 @@ describe('stopped turn presentation', () => {
     const item = { ...boundary, outcome: 'success', errorCategory: 'overloaded' }
     expect(stoppedTurnText(item, 'codex')).toBe('Stopped: API error (Codex reported: overloaded)')
     expect(stoppedTurnText(item, 'claude')).toBe('Stopped: API error (Claude reported: overloaded)')
-    const html = renderToStaticMarkup(<Timeline agent="codex" items={[item]} />)
+    const html = renderToStaticMarkup(<TimelineRow agent="codex" inProgress={false} item={item} />)
     expect(html).toContain('Stopped: API error (Codex reported: overloaded)')
     expect(html).not.toContain('Claude')
-    expect(renderToStaticMarkup(<Timeline agent="claude" items={[item]} />))
-      .toBe(renderToStaticMarkup(<Timeline items={[item]} />))
+    expect(renderToStaticMarkup(<TimelineRow agent="claude" inProgress={false} item={item} />))
+      .toBe(renderToStaticMarkup(<TimelineRow inProgress={false} item={item} />))
   })
   it('carries live translation and history records', () => {
     const event = translateTimelineEvent({ ...end, conversationId: 'c' })

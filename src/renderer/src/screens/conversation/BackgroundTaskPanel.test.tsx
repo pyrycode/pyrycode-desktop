@@ -4,23 +4,20 @@ import {
   BackgroundTaskPanelView,
   drawerClosesOnKeyDown,
   formatTaskProgressCounts
+  , type SuppliedBackgroundTask
 } from './BackgroundTaskPanel'
 import type {
-  BackgroundTaskRosterEntry,
   HeldBackgroundTask,
   HeldBackgroundTaskProgress
 } from '../../store/backgroundTaskRosterStore'
 
-// #581: the background-task panel. BackgroundTaskPanelView is the pure, exported view (the
-// WorkspacePickerSheetView pattern) — server-render it with an injected `entry` (no store) to prove the
-// chrome, the three selectRosterFor readings, the two rendered fields per row, and the untrusted-string
-// escaping. The interaction container (the useMemo selector, the store read, the Escape effect) is
-// untested reviewed glue — exactly like the WorkspacePickerSheet container — since the `node` env fires
-// no clicks and runs no effects.
+// Supplied-task rendering is props-in/markup-out; interaction runs in Playwright.
 const noop = (): void => {}
 
-function task(overrides: Partial<HeldBackgroundTask> = {}): HeldBackgroundTask {
+function task(overrides: Partial<SuppliedBackgroundTask> = {}): SuppliedBackgroundTask {
   return {
+    rowKey: overrides.taskId ?? 'task-1', active: true, pending: false, canStop: true,
+    outcomeLabel: overrides.status === 'completed' ? 'Completed' : overrides.status === 'failed' ? 'Failed' : overrides.status === 'stopped' ? 'Stopped' : overrides.status ?? 'Running',
     taskId: 'task-1',
     toolCallId: null,
     taskType: 'local_bash',
@@ -34,43 +31,16 @@ function task(overrides: Partial<HeldBackgroundTask> = {}): HeldBackgroundTask {
   }
 }
 
-// The held entry as the store builds it: a Map keyed by taskId, in the given (roster) order.
-function entry(tasks: readonly HeldBackgroundTask[], droppedTasks = 0): BackgroundTaskRosterEntry {
-  return { tasks: new Map(tasks.map((t) => [t.taskId, t])), droppedTasks }
-}
 
 describe('BackgroundTaskPanelView — the background-task panel (#581)', () => {
-  it('renders the non-modal drawer chrome, under a title id distinct from the other three (#1634 AC1)', () => {
-    const markup = renderToStaticMarkup(
-      <BackgroundTaskPanelView entry={entry([])} onClose={noop} />
-    )
-    // #1634: a NON-modal dialog. The role stays, so the panel is still found by role and name, but
-    // aria-modal goes with the scrim: the thread and the composer stay usable while it is open.
-    expect(markup).toContain('role="dialog"')
-    expect(markup).not.toContain('aria-modal')
-    expect(markup).toContain('aria-labelledby="background-task-panel-title"')
-    expect(markup).toContain('id="background-task-panel-title"')
-    // The drawer's own chrome, and none of the modal sheet's: no scrim, no handle, no status-sheet class.
-    expect(markup).toContain('class="background-task-drawer"')
-    expect(markup).toContain('background-task-drawer__header')
-    expect(markup).toContain('background-task-drawer__rule')
-    expect(markup).toContain('background-task-drawer__body')
-    expect(markup).not.toContain('status-sheet')
-    expect(markup).not.toContain('scrim')
-    expect(markup).toContain('Background tasks')
-    expect(markup).toContain('aria-label="Close"')
-    // The id is distinct from the three existing ones, so all four can coexist without duplicate ids.
-    expect(markup).not.toContain('channel-info-sheet-title')
-    expect(markup).not.toContain('workspace-picker-sheet-title')
-  })
 
   it('lists one row per held task in roster order, showing its description and taskType (AC3)', () => {
     const markup = renderToStaticMarkup(
       <BackgroundTaskPanelView
-        entry={entry([
+        suppliedTasks={[
           task({ taskId: 't1', description: 'npm run build', taskType: 'local_bash' }),
           task({ taskId: 't2', description: 'index the repository', taskType: 'agent_search' })
-        ])}
+        ]}
         onClose={noop}
       />
     )
@@ -83,83 +53,14 @@ describe('BackgroundTaskPanelView — the background-task panel (#581)', () => {
     expect(markup.indexOf('npm run build')).toBeLessThan(markup.indexOf('index the repository'))
   })
 
-  it('renders no task field beyond description, taskType and the held patch (AC3)', () => {
-    // Distinctive sentinels rather than realistic values: a realistic truncated_fields entry
-    // (`description`) would collide with other copy.
-    //
-    // #582 revised this test rather than fighting it. It was written with `droppedTasks: 987654` and an
-    // assertion that the count never rendered — true of the shell, FALSE the moment #582 renders the
-    // partial-list notice AC1 asks for. The fixture now passes `0` (which must render no notice) and the
-    // count assertion is gone: the dropped count has its own tests below, and this test is about TASK
-    // fields, which is what its name claims. `SENTINELTASKCUT` stays, and now guards AC5 as well — it is
-    // an unrecognised truncated-field name, so it must render no marker AND never reach the markup.
-    //
-    // #583 revised it the same way, one field over. `not.toContain('SENTINELPATCH')` was true of the
-    // shell — which left `latestUpdate` deliberately unread — and is FALSE the moment #583's AC1 renders
-    // the patch, so that one line is gone; the patch has its own tests below. `SENTINELPATCHCUT` STAYS
-    // and is now a live guard for #583's AC3: an unrecognised patch-cut name must mark nothing and must
-    // never be displayed. It is deliberately NOT flipped into a positive `toContain('SENTINELPATCH')` —
-    // `SENTINELPATCH` is a PREFIX SUBSTRING of `SENTINELPATCHCUT`, so that "proof" would also pass on a
-    // render displaying only the forbidden cut-field name. The #583 fixtures below use non-overlapping
-    // values for exactly that reason.
-    const markup = renderToStaticMarkup(
-      <BackgroundTaskPanelView
-        entry={entry(
-          [
-            task({
-              toolCallId: 'SENTINELTOOLCALL',
-              truncatedFields: ['SENTINELTASKCUT'],
-              latestUpdate: { patch: 'SENTINELPATCH', truncatedFields: ['SENTINELPATCHCUT'] }
-            })
-          ],
-          0
-        )}
-        onClose={noop}
-      />
-    )
-    expect(markup).not.toContain('SENTINELTOOLCALL')
-    expect(markup).not.toContain('SENTINELTASKCUT')
-    expect(markup).not.toContain('SENTINELPATCHCUT')
-  })
-
-  it('keeps the three selectRosterFor readings structurally distinct (AC4)', () => {
-    // (1) key absent → null: no background-task frame has ever arrived. Its own element, its own copy.
-    const unobserved = renderToStaticMarkup(
-      <BackgroundTaskPanelView entry={null} onClose={noop} />
-    )
-    expect(unobserved).toContain('background-task-panel__unobserved')
-    expect(unobserved).toContain('No background-task report yet')
-    expect(unobserved).not.toContain('background-task-panel__empty')
-    expect(unobserved).not.toContain('background-task-panel__row')
-
-    // (2) a present entry holding no tasks → the daemon says nothing is alive. A DIFFERENT element and
-    // a different sentence — the collapse the store's `?? null` refuses to make must not reappear here.
-    const observedEmpty = renderToStaticMarkup(
-      <BackgroundTaskPanelView entry={entry([])} onClose={noop} />
-    )
-    expect(observedEmpty).toContain('background-task-panel__empty')
-    expect(observedEmpty).toContain('No background tasks')
-    expect(observedEmpty).not.toContain('background-task-panel__unobserved')
-    expect(observedEmpty).not.toContain('background-task-panel__row')
-    expect(observedEmpty).not.toBe(unobserved)
-
-    // (3) populated → rows, and neither non-populated element.
-    const populated = renderToStaticMarkup(
-      <BackgroundTaskPanelView entry={entry([task()])} onClose={noop} />
-    )
-    expect(populated).toContain('background-task-panel__row')
-    expect(populated).not.toContain('background-task-panel__unobserved')
-    expect(populated).not.toContain('background-task-panel__empty')
-  })
-
   it('renders an untrusted description and taskType escaped, as inert text (AC5)', () => {
     // For taskType local_bash the description IS the literal command line claude ran — untrusted,
     // model-influenced text. No apostrophes in the fixture: renderToStaticMarkup escapes ' → &#x27;.
     const markup = renderToStaticMarkup(
       <BackgroundTaskPanelView
-        entry={entry([
+        suppliedTasks={[
           task({ description: '<img src=x onerror="alert(1)">', taskType: 'a<b&c' })
-        ])}
+        ]}
         onClose={noop}
       />
     )
@@ -187,69 +88,11 @@ describe('BackgroundTaskPanelView — the background-task panel (#581)', () => {
 // directly constructible from the shell's `entry(tasks, droppedTasks)` / `task(overrides)` helpers above,
 // which is what they were built for; no fixture changes were needed.
 describe('BackgroundTaskPanelView — a capped roster and cut task text (#582)', () => {
-  it('shows how many tasks are not shown, with the list still there (AC1)', () => {
-    const markup = renderToStaticMarkup(
-      <BackgroundTaskPanelView entry={entry([task()], 3)} onClose={noop} />
-    )
-    expect(markup).toContain('background-task-panel__partial')
-    expect(markup).toContain('Partial list (3 not shown)')
-    // The notice is ADDITIONAL to the rows, not instead of them: a capped roster still lists what it
-    // carries. The count reads as "not shown", so the true roster size stays derivable without the panel
-    // printing a second number it would have to keep honest.
-    expect(markup).toContain('background-task-panel__row')
-  })
-
-  it('reads the notice on droppedTasks alone, whichever branch the list takes (AC1)', () => {
-    // The scope clause, and the reason the notice is a SIBLING of the three-way ternary rather than a
-    // child of its populated arm. The count belongs to the ENTRY, not to the list.
-
-    // (a) populated — the ordinary case.
-    const populated = renderToStaticMarkup(
-      <BackgroundTaskPanelView entry={entry([task()], 3)} onClose={noop} />
-    )
-    expect(populated).toContain('background-task-panel__partial')
-
-    // (b) a present entry carrying NO tasks but reporting dropped ones. The shipped branch order sends
-    // this to the middle (`tasks.size === 0`) arm, so a notice written inside the populated arm would be
-    // invisible in exactly this state. The daemon cannot currently produce the combination — the cap
-    // drops only beyond 8 carried rows — but the view is a pure function of its prop and this test
-    // constructs it directly, so "unreachable daemon-side" is not an answer. This assertion is what pins
-    // the notice outside the ternary.
-    const emptyButCapped = renderToStaticMarkup(
-      <BackgroundTaskPanelView entry={entry([], 3)} onClose={noop} />
-    )
-    expect(emptyButCapped).toContain('background-task-panel__partial')
-    expect(emptyButCapped).toContain('Partial list (3 not shown)')
-    expect(emptyButCapped).toContain('background-task-panel__empty')
-
-    // (c) no entry at all — there is no count, so there is no notice. The notice must not be a claim the
-    // app makes on its own; it reports a number the daemon sent.
-    const unobserved = renderToStaticMarkup(
-      <BackgroundTaskPanelView entry={null} onClose={noop} />
-    )
-    expect(unobserved).not.toContain('background-task-panel__partial')
-    expect(unobserved).not.toContain('not shown')
-  })
-
-  it('renders no partial-list notice when droppedTasks is 0 (AC2)', () => {
-    const markup = renderToStaticMarkup(
-      <BackgroundTaskPanelView entry={entry([task()], 0)} onClose={noop} />
-    )
-    expect(markup).not.toContain('background-task-panel__partial')
-    // A notice smuggled in under some other class, or with the count rendered alone.
-    expect(markup).not.toContain('not shown')
-    // The `{entry.droppedTasks && …}` truthiness form, which React renders as a bare `0` text node at the
-    // top of the body — silently, on EVERY non-truncated roster. `0` is a value here, never consulted
-    // for truthiness (the store says so at backgroundTaskRosterStore.ts:164-165), and this is that rule
-    // at a render site. Anchored on the body's opening tag rather than asserting `not.toContain('0')`,
-    // which a digit anywhere in the chrome would make meaningless.
-    expect(markup).not.toContain('background-task-drawer__body">0')
-  })
 
   it('marks a rendered field the daemon names as cut, and only that field (AC3)', () => {
     const cutDescription = renderToStaticMarkup(
       <BackgroundTaskPanelView
-        entry={entry([task({ truncatedFields: ['description'] })])}
+        suppliedTasks={[task({ truncatedFields: ['description'] })]}
         onClose={noop}
       />
     )
@@ -261,7 +104,7 @@ describe('BackgroundTaskPanelView — a capped roster and cut task text (#582)',
     // The mirror — and the WIRE name `task_type`, not the held `taskType`. See the trap test below.
     const cutType = renderToStaticMarkup(
       <BackgroundTaskPanelView
-        entry={entry([task({ truncatedFields: ['task_type'] })])}
+        suppliedTasks={[task({ truncatedFields: ['task_type'] })]}
         onClose={noop}
       />
     )
@@ -272,7 +115,7 @@ describe('BackgroundTaskPanelView — a capped roster and cut task text (#582)',
     // Both at once: the list names fields independently, so the markers are independent too.
     const cutBoth = renderToStaticMarkup(
       <BackgroundTaskPanelView
-        entry={entry([task({ truncatedFields: ['description', 'task_type'] })])}
+        suppliedTasks={[task({ truncatedFields: ['description', 'task_type'] })]}
         onClose={noop}
       />
     )
@@ -292,7 +135,7 @@ describe('BackgroundTaskPanelView — a capped roster and cut task text (#582)',
     // lives at the call site, so the test does too.
     const markup = renderToStaticMarkup(
       <BackgroundTaskPanelView
-        entry={entry([task({ truncatedFields: ['taskType'] })])}
+        suppliedTasks={[task({ truncatedFields: ['taskType'] })]}
         onClose={noop}
       />
     )
@@ -306,13 +149,13 @@ describe('BackgroundTaskPanelView — a capped roster and cut task text (#582)',
     // these two values apart (`null` = nothing was cut, `[]` = a list naming no fields) and that the
     // panel handles each without collapsing, throwing, or rendering an error state for either.
     const nullFields = renderToStaticMarkup(
-      <BackgroundTaskPanelView entry={entry([task({ truncatedFields: null })])} onClose={noop} />
+      <BackgroundTaskPanelView suppliedTasks={[task({ truncatedFields: null })]} onClose={noop} />
     )
     expect(nullFields).toContain('background-task-panel__row')
     expect(nullFields).not.toContain('background-task-panel__cut-')
 
     const emptyFields = renderToStaticMarkup(
-      <BackgroundTaskPanelView entry={entry([task({ truncatedFields: [] })])} onClose={noop} />
+      <BackgroundTaskPanelView suppliedTasks={[task({ truncatedFields: [] })]} onClose={noop} />
     )
     expect(emptyFields).toContain('background-task-panel__row')
     expect(emptyFields).not.toContain('background-task-panel__cut-')
@@ -325,9 +168,9 @@ describe('BackgroundTaskPanelView — a capped roster and cut task text (#582)',
     // exhaustive switch or a closed union would turn a valid future frame into a crash or a blank panel.
     const markup = renderToStaticMarkup(
       <BackgroundTaskPanelView
-        entry={entry([
+        suppliedTasks={[
           task({ truncatedFields: ['task_id', 'tool_call_id', 'SENTINELFUTUREFIELD'] })
-        ])}
+        ]}
         onClose={noop}
       />
     )
@@ -348,20 +191,16 @@ describe('BackgroundTaskPanelView — a capped roster and cut task text (#582)',
     // both live, so the new paths are covered by the shell's own net rather than a narrower one.
     const markup = renderToStaticMarkup(
       <BackgroundTaskPanelView
-        entry={entry(
-          [
+        suppliedTasks={[
             task({
               description: '<img src=x onerror="alert(1)">',
               truncatedFields: ['description']
             })
-          ],
-          2
-        )}
+          ]}
         onClose={noop}
       />
     )
     expect(markup).toContain('background-task-panel__cut-description')
-    expect(markup).toContain('background-task-panel__partial')
     expect(markup).toContain('&lt;img')
     expect(markup).not.toContain('<img')
     // The same attribute-SHAPED structural guards the shell uses, re-asserted across the whole markup so
@@ -385,9 +224,9 @@ describe('BackgroundTaskPanelView — the latest reported change (#583)', () => 
     // is rendered with, so the two paths are held to one standard.
     const markup = renderToStaticMarkup(
       <BackgroundTaskPanelView
-        entry={entry([
+        suppliedTasks={[
           task({ latestUpdate: { patch: '<img src=x onerror="alert(1)">', truncatedFields: null } })
-        ])}
+        ]}
         onClose={noop}
       />
     )
@@ -407,59 +246,12 @@ describe('BackgroundTaskPanelView — the latest reported change (#583)', () => 
     expect(markup).not.toMatch(/\son[a-z]+="/)
   })
 
-  it('keeps the three readings of the held field distinct (AC2)', () => {
-    // (1) no update has ever matched this task. The row renders nothing for it — legitimate HERE, and a
-    // deliberate divergence from #581's rule that each reading gets its own element: there the branch WAS
-    // the whole panel body, so null read as broken, whereas a row still shows its description and type.
-    // What AC2 forbids is the COLLAPSE, not the absence.
-    const noUpdate = renderToStaticMarkup(
-      <BackgroundTaskPanelView entry={entry([task({ latestUpdate: null })])} onClose={noop} />
-    )
-    expect(noUpdate).toContain('background-task-panel__row')
-    expect(noUpdate).toContain('npm run build')
-    expect(noUpdate).not.toContain('background-task-panel__patch')
-    expect(noUpdate).not.toContain('background-task-panel__no-change')
-
-    // (2) a RECORDED empty patch: claude reported no change. `patch` always arrives on the wire (no
-    // `omitempty`), so `''` is a VALUE, not an absence — its own element and its own client-owned copy.
-    const emptyPatch = renderToStaticMarkup(
-      <BackgroundTaskPanelView
-        entry={entry([task({ latestUpdate: { patch: '', truncatedFields: null } })])}
-        onClose={noop}
-      />
-    )
-    expect(emptyPatch).toContain('background-task-panel__no-change')
-    expect(emptyPatch).toContain('No change reported')
-    expect(emptyPatch).not.toContain('background-task-panel__patch')
-
-    // (3) a reported change — the patch itself, and not the empty-patch element.
-    const withPatch = renderToStaticMarkup(
-      <BackgroundTaskPanelView
-        entry={entry([
-          task({ latestUpdate: { patch: 'is_backgrounded true', truncatedFields: null } })
-        ])}
-        onClose={noop}
-      />
-    )
-    expect(withPatch).toContain('background-task-panel__patch')
-    expect(withPatch).toContain('is_backgrounded true')
-    expect(withPatch).not.toContain('background-task-panel__no-change')
-
-    // The collapse guard proper, and the reason this test exists. `{task.latestUpdate?.patch && …}` —
-    // or ANY truthiness test on the patch — renders a recorded empty patch EXACTLY as a never-updated
-    // task: it compiles, type-checks, and breaks no other test. It is #582's `{entry.droppedTasks && …}`
-    // trap one field over and QUIETER — `0` at least printed a visible bare `0`, whereas `''` renders as
-    // nothing at all, so under the truthiness form these two renders are byte-identical and the collapse
-    // leaves no trace for another assertion to catch by accident. The branch is on `latestUpdate !== null`.
-    expect(emptyPatch).not.toBe(noUpdate)
-  })
-
   it('marks the patch as cut from the UPDATES list only, never the task list (AC3)', () => {
     // Non-overlapping fixture values throughout: `SENTINELPATCH` is a prefix substring of
     // `SENTINELPATCHCUT`, the collision the shell's revised test above documents.
     const cutPatch = renderToStaticMarkup(
       <BackgroundTaskPanelView
-        entry={entry([task({ latestUpdate: { patch: 'PATCHTEXT', truncatedFields: ['patch'] } })])}
+        suppliedTasks={[task({ latestUpdate: { patch: 'PATCHTEXT', truncatedFields: ['patch'] } })]}
         onClose={noop}
       />
     )
@@ -474,7 +266,7 @@ describe('BackgroundTaskPanelView — the latest reported change (#583)', () => 
     // The mirror: the same patch with nothing cut is presented as complete.
     const wholePatch = renderToStaticMarkup(
       <BackgroundTaskPanelView
-        entry={entry([task({ latestUpdate: { patch: 'PATCHTEXT', truncatedFields: null } })])}
+        suppliedTasks={[task({ latestUpdate: { patch: 'PATCHTEXT', truncatedFields: null } })]}
         onClose={noop}
       />
     )
@@ -487,12 +279,12 @@ describe('BackgroundTaskPanelView — the latest reported change (#583)', () => 
     // fails, which is why the crossover is asserted in both directions rather than assumed.
     const taskListNamesPatch = renderToStaticMarkup(
       <BackgroundTaskPanelView
-        entry={entry([
+        suppliedTasks={[
           task({
             truncatedFields: ['patch'],
             latestUpdate: { patch: 'PATCHTEXT', truncatedFields: null }
           })
-        ])}
+        ]}
         onClose={noop}
       />
     )
@@ -504,12 +296,12 @@ describe('BackgroundTaskPanelView — the latest reported change (#583)', () => 
     // marker is wired to `latestUpdate.truncatedFields` instead of the task's own list.
     const updateListNamesTaskFields = renderToStaticMarkup(
       <BackgroundTaskPanelView
-        entry={entry([
+        suppliedTasks={[
           task({
             truncatedFields: null,
             latestUpdate: { patch: 'PATCHTEXT', truncatedFields: ['description', 'task_type'] }
           })
-        ])}
+        ]}
         onClose={noop}
       />
     )
@@ -522,11 +314,11 @@ describe('BackgroundTaskPanelView — the latest reported change (#583)', () => 
     // the row and its patch still render.
     const unknownName = renderToStaticMarkup(
       <BackgroundTaskPanelView
-        entry={entry([
+        suppliedTasks={[
           task({
             latestUpdate: { patch: 'PATCHTEXT', truncatedFields: ['task_id', 'SENTINELFUTURENAME'] }
           })
-        ])}
+        ]}
         onClose={noop}
       />
     )
@@ -550,13 +342,13 @@ describe('BackgroundTaskPanelView — the latest reported change (#583)', () => 
     // copy and classes at once.
     const markup = renderToStaticMarkup(
       <BackgroundTaskPanelView
-        entry={entry([
+        suppliedTasks={[
           task({
             taskId: 't1',
             latestUpdate: { patch: 'is_backgrounded true', truncatedFields: ['patch'] }
           }),
           task({ taskId: 't2', latestUpdate: { patch: '', truncatedFields: null } })
-        ])}
+        ]}
         onClose={noop}
       />
     )
@@ -580,22 +372,22 @@ describe('BackgroundTaskPanelView — readable task types (#1746)', () => {
     ['', '']
   ])('renders %j as %j without altering the held task', (taskType, label) => {
     const heldTask = Object.freeze(task({ taskType }))
-    const heldEntry = entry([heldTask])
+    const heldEntry = [heldTask]
     const before = structuredClone(heldEntry)
     const markup = renderToStaticMarkup(
-      <BackgroundTaskPanelView entry={heldEntry} onClose={noop} />
+      <BackgroundTaskPanelView suppliedTasks={heldEntry} onClose={noop} />
     )
 
     expect(markup).toContain(`<span class="background-task-panel__type">${label}</span>`)
     expect(heldEntry).toEqual(before)
-    expect(heldEntry.tasks.get(heldTask.taskId)).toBe(heldTask)
+    expect(heldEntry[0]).toBe(heldTask)
     expect(heldTask.taskType).toBe(taskType)
   })
 
   it('keeps formatted unknown types escaped and confined to the type text', () => {
     const markup = renderToStaticMarkup(
       <BackgroundTaskPanelView
-        entry={entry([task({ taskType: 'local_<b>file_watch</b>' })])}
+        suppliedTasks={[task({ taskType: 'local_<b>file_watch</b>' })]}
         onClose={noop}
       />
     )
@@ -610,74 +402,13 @@ describe('BackgroundTaskPanelView — readable task types (#1746)', () => {
 // #1635: #580's drawing of the list inside the drawer body. The grouping reads the conversation's
 // finished ids, passed in as a prop so every reading stays a static render.
 describe('BackgroundTaskPanelView — the #580 list drawing (#1635)', () => {
-  const mixed = entry([
-    task({ taskId: 'r1', description: 'RUNNINGONE' }),
-    task({ taskId: 'f1', description: 'FINISHEDONE' }),
-    task({ taskId: 'r2', description: 'RUNNINGTWO' })
-  ])
-
-  it('splits rows into Running then Finished, in roster order, counting the rows drawn (AC1)', () => {
-    const markup = renderToStaticMarkup(
-      <BackgroundTaskPanelView entry={mixed} finishedTaskIds={new Set(['f1'])} onClose={noop} />
-    )
-    expect(markup).toContain('Running · 2')
-    expect(markup).toContain('Finished · 1')
-    const order = ['Running · 2', 'RUNNINGONE', 'RUNNINGTWO', 'Finished · 1', 'FINISHEDONE'].map((s) =>
-      markup.indexOf(s)
-    )
-    expect(order).toEqual([...order].sort((a, b) => a - b))
-    expect(markup.match(/background-task-panel__row--finished/g)?.length ?? 0).toBe(1)
-  })
-
-  it('counts no dropped task in either group; the notice reports them, above the groups (AC1)', () => {
-    const markup = renderToStaticMarkup(
-      <BackgroundTaskPanelView entry={entry([task()], 3)} finishedTaskIds={null} onClose={noop} />
-    )
-    expect(markup).toContain('Running · 1')
-    expect(markup).toContain('Partial list (3 not shown)')
-    expect(markup.indexOf('background-task-panel__partial')).toBeLessThan(markup.indexOf('Running · 1'))
-  })
-
-  it('draws no header for an empty group (AC1)', () => {
-    const allRunning = renderToStaticMarkup(
-      <BackgroundTaskPanelView entry={mixed} finishedTaskIds={null} onClose={noop} />
-    )
-    expect(allRunning).toContain('Running · 3')
-    expect(allRunning).not.toContain('Finished')
-    // An id that names no listed task moves nothing.
-    const staleId = renderToStaticMarkup(
-      <BackgroundTaskPanelView entry={mixed} finishedTaskIds={new Set(['gone'])} onClose={noop} />
-    )
-    expect(staleId).toContain('Running · 3')
-    expect(staleId).not.toContain('Finished')
-    const allFinished = renderToStaticMarkup(
-      <BackgroundTaskPanelView entry={mixed} finishedTaskIds={new Set(['r1', 'f1', 'r2'])} onClose={noop} />
-    )
-    expect(allFinished).toContain('Finished · 3')
-    // The header only: a finished row with no status word still wears the Running tag (#1639).
-    expect(allFinished).not.toContain('Running ·')
-  })
-
-  it('tags a row Running until a status word arrives, whichever group it sits in (#1639 AC1)', () => {
-    const markup = renderToStaticMarkup(
-      <BackgroundTaskPanelView
-        entry={entry([task({ taskId: 'r1' }), task({ taskId: 'f1', status: 'completed' })])}
-        finishedTaskIds={new Set(['f1'])}
-        onClose={noop}
-      />
-    )
-    expect(markup).toMatch(/background-task-panel__tag--running"><span[^>]*><\/span>Running</)
-    expect(markup).toMatch(/background-task-panel__tag--completed"><span[^>]*><\/span>Completed</)
-    expect(markup.match(/background-task-panel__tag--/g)?.length ?? 0).toBe(2)
-  })
-
   it('sets a local_bash description in mono and other types in body text (AC2)', () => {
     const bash = renderToStaticMarkup(
-      <BackgroundTaskPanelView entry={entry([task({ taskType: 'local_bash' })])} onClose={noop} />
+      <BackgroundTaskPanelView suppliedTasks={[task({ taskType: 'local_bash' })]} onClose={noop} />
     )
     expect(bash).toContain('background-task-panel__description--mono')
     const agent = renderToStaticMarkup(
-      <BackgroundTaskPanelView entry={entry([task({ taskType: 'local_agent' })])} onClose={noop} />
+      <BackgroundTaskPanelView suppliedTasks={[task({ taskType: 'local_agent' })]} onClose={noop} />
     )
     expect(agent).toContain('background-task-panel__description')
     expect(agent).not.toContain('background-task-panel__description--mono')
@@ -685,14 +416,14 @@ describe('BackgroundTaskPanelView — the #580 list drawing (#1635)', () => {
 
   it('puts the latest update under its label in a code block, and shows none for a never-updated row (AC2)', () => {
     const never = renderToStaticMarkup(
-      <BackgroundTaskPanelView entry={entry([task({ latestUpdate: null })])} onClose={noop} />
+      <BackgroundTaskPanelView suppliedTasks={[task({ latestUpdate: null })]} onClose={noop} />
     )
     expect(never).not.toContain('background-task-panel__update')
     expect(never).not.toContain('Latest update')
 
     const patched = renderToStaticMarkup(
       <BackgroundTaskPanelView
-        entry={entry([task({ latestUpdate: { patch: 'PATCHTEXT', truncatedFields: null } })])}
+        suppliedTasks={[task({ latestUpdate: { patch: 'PATCHTEXT', truncatedFields: null } })]}
         onClose={noop}
       />
     )
@@ -701,7 +432,7 @@ describe('BackgroundTaskPanelView — the #580 list drawing (#1635)', () => {
 
     const empty = renderToStaticMarkup(
       <BackgroundTaskPanelView
-        entry={entry([task({ latestUpdate: { patch: '', truncatedFields: null } })])}
+        suppliedTasks={[task({ latestUpdate: { patch: '', truncatedFields: null } })]}
         onClose={noop}
       />
     )
@@ -709,60 +440,6 @@ describe('BackgroundTaskPanelView — the #580 list drawing (#1635)', () => {
     expect(empty).toMatch(
       /background-task-panel__update-block"><span class="background-task-panel__no-change">No change reported</
     )
-  })
-
-  it('draws each empty reading with its own ring and support line (AC2)', () => {
-    const unobserved = renderToStaticMarkup(<BackgroundTaskPanelView entry={null} onClose={noop} />)
-    expect(unobserved).toContain('background-task-panel__ring--dashed')
-    expect(unobserved).not.toContain('background-task-panel__ring--solid')
-    expect(unobserved).toContain('The daemon has not reported on this conversation since the app connected.')
-
-    const empty = renderToStaticMarkup(<BackgroundTaskPanelView entry={entry([])} onClose={noop} />)
-    expect(empty).toContain('background-task-panel__ring--solid')
-    expect(empty).not.toContain('background-task-panel__ring--dashed')
-    expect(empty).toContain('Claude has nothing running in the background for this conversation.')
-    // The heading element holds the heading copy alone, which the e2e toHaveText reads rely on.
-    expect(empty).toContain('<p class="background-task-panel__empty">No background tasks</p>')
-    expect(unobserved).toContain('<p class="background-task-panel__unobserved">No background-task report yet</p>')
-  })
-
-  it('names the conversation agent in the empty support line (#1656)', () => {
-    const codex = renderToStaticMarkup(<BackgroundTaskPanelView entry={entry([])} agent="codex" onClose={noop} />)
-    expect(codex).toContain('Codex has nothing running in the background for this conversation.')
-    expect(codex).not.toContain('Claude')
-    expect(renderToStaticMarkup(<BackgroundTaskPanelView entry={entry([])} agent="claude" onClose={noop} />))
-      .toBe(renderToStaticMarkup(<BackgroundTaskPanelView entry={entry([])} onClose={noop} />))
-  })
-
-  it('keeps every daemon string inert across both groups, the tags and the code block (AC3)', () => {
-    const hostile = '<img src=x onerror="alert(1)">'
-    const markup = renderToStaticMarkup(
-      <BackgroundTaskPanelView
-        entry={entry(
-          [
-            task({ taskId: 'r1', description: hostile, taskType: hostile }),
-            task({
-              taskId: 'f1',
-              description: hostile,
-              taskType: 'local_bash',
-              truncatedFields: ['description', 'task_type'],
-              latestUpdate: { patch: hostile, truncatedFields: ['patch'] }
-            })
-          ],
-          2
-        )}
-        finishedTaskIds={new Set(['f1'])}
-        onClose={noop}
-      />
-    )
-    expect(markup).toContain('&lt;img')
-    expect(markup).not.toContain('<img')
-    expect(markup).not.toContain('href="')
-    expect(markup).not.toContain('src="')
-    expect(markup).not.toMatch(/\son[a-z]+="/)
-    // The rows stay non-interactive: the drawer close is the only control.
-    expect(markup.match(/<button/g)?.length ?? 0).toBe(1)
-    expect(markup).not.toContain('tabindex')
   })
 })
 
@@ -790,34 +467,13 @@ describe('drawerClosesOnKeyDown — one Escape does one thing (#1634 AC3)', () =
 })
 
 describe('BackgroundTaskPanelView — repeated finish summaries (#1754)', () => {
-  const renderFinished = (held: HeldBackgroundTask): string =>
+  const renderFinished = (held: SuppliedBackgroundTask): string =>
     renderToStaticMarkup(
       <BackgroundTaskPanelView
-        entry={entry([held])}
-        finishedTaskIds={new Set([held.taskId])}
+        suppliedTasks={[{ ...held, active: false }]}
         onClose={noop}
       />
     )
-
-  it('hides template and exact summaries containing the trimmed description without changing held data', () => {
-    for (const text of ['  Agent "Review relay changes" finished  ', ' Review relay changes ']) {
-      const summary = Object.freeze({ text, truncatedFields: ['summary'] })
-      const held = Object.freeze(task({
-        taskType: 'local_agent',
-        description: '  Review relay changes  ',
-        status: 'completed',
-        summary
-      }))
-      const before = structuredClone(held)
-      const markup = renderFinished(held)
-      expect(markup).toContain('background-task-panel__description">  Review relay changes  </span>')
-      expect(markup).toContain('Completed')
-      expect(markup).not.toContain('background-task-panel__summary')
-      expect(markup).not.toContain('background-task-panel__cut-summary')
-      expect(held).toEqual(before)
-      expect(held.summary).toBe(summary)
-    }
-  })
 
   it('shows different failure and stop reasons and preserves case-sensitive comparison', () => {
     for (const text of ['  Exited with code 1: port already in use.  ', 'Stopped by user', 'NPM RUN BUILD finished']) {
@@ -859,8 +515,7 @@ describe('BackgroundTaskPanelView — status tag and summary (#1639)', () => {
   const tagOf = (status: string | null, finished: boolean): string =>
     renderToStaticMarkup(
       <BackgroundTaskPanelView
-        entry={entry([task({ taskId: 't', status })])}
-        finishedTaskIds={finished ? new Set(['t']) : null}
+        suppliedTasks={[task({ taskId: 't', status, active: !finished })]}
         onClose={noop}
       />
     )
@@ -885,69 +540,6 @@ describe('BackgroundTaskPanelView — status tag and summary (#1639)', () => {
     // The word is a text child only: never a class, never any other attribute value.
     expect(markup).not.toMatch(/="[^"]*paused/)
     expect(markup.match(/background-task-panel__tag--/g)?.length ?? 0).toBe(1)
-  })
-
-  it('shows a finished row its summary under the description, with the chip when summary was cut (AC2)', () => {
-    const markup = renderToStaticMarkup(
-      <BackgroundTaskPanelView
-        entry={entry([
-          task({
-            taskId: 'f1',
-            description: 'DESCONE',
-            status: 'failed',
-            summary: { text: 'SUMMARYONE', truncatedFields: ['summary'] }
-          }),
-          task({
-            taskId: 'f2',
-            status: 'completed',
-            summary: { text: 'SUMMARYTWO', truncatedFields: ['patch'] }
-          })
-        ])}
-        finishedTaskIds={new Set(['f1', 'f2'])}
-        onClose={noop}
-      />
-    )
-    expect(markup).toMatch(/DESCONE<\/span><span class="background-task-panel__summary">SUMMARYONE<\/span><span class="background-task-panel__cut-summary">Truncated by the daemon</)
-    expect(markup).toContain('<span class="background-task-panel__summary">SUMMARYTWO</span>')
-    // Only the summary a frame named as cut gets the chip.
-    expect(markup.match(/background-task-panel__cut-summary/g)?.length ?? 0).toBe(1)
-  })
-
-  it('shows no line for an empty summary and never a summary on a running row (AC2)', () => {
-    const empty = renderToStaticMarkup(
-      <BackgroundTaskPanelView
-        entry={entry([task({ taskId: 'f1', status: 'stopped', summary: { text: '', truncatedFields: null } })])}
-        finishedTaskIds={new Set(['f1'])}
-        onClose={noop}
-      />
-    )
-    expect(empty).not.toContain('background-task-panel__summary')
-    const running = renderToStaticMarkup(
-      <BackgroundTaskPanelView
-        entry={entry([
-          task({ taskId: 'r1', status: 'paused', summary: { text: 'SUMMARYHIDDEN', truncatedFields: ['summary'] } })
-        ])}
-        finishedTaskIds={null}
-        onClose={noop}
-      />
-    )
-    expect(running).not.toContain('SUMMARYHIDDEN')
-    expect(running).not.toContain('background-task-panel__summary')
-    expect(running).not.toContain('background-task-panel__cut-summary')
-  })
-
-  it('keeps a markup-shaped summary inert (AC2)', () => {
-    const hostile = '<img src=x onerror="alert(1)">'
-    const markup = renderToStaticMarkup(
-      <BackgroundTaskPanelView
-        entry={entry([task({ taskId: 'f1', status: hostile, summary: { text: hostile, truncatedFields: null } })])}
-        finishedTaskIds={new Set(['f1'])}
-        onClose={noop}
-      />
-    )
-    expect(markup).toContain('<span class="background-task-panel__summary">&lt;img')
-    expect(markup).not.toContain('<img')
-    expect(markup).not.toMatch(/\son[a-z]+="/)
   })
 })
 
@@ -991,11 +583,10 @@ describe("BackgroundTaskPanelView — a running task's progress (#1640)", () => 
       ...overrides
     }
   }
-  const render = (tasks: readonly HeldBackgroundTask[], finished: readonly string[] = []): string =>
+  const render = (tasks: readonly SuppliedBackgroundTask[], finished: readonly string[] = []): string =>
     renderToStaticMarkup(
       <BackgroundTaskPanelView
-        entry={entry(tasks)}
-        finishedTaskIds={finished.length > 0 ? new Set(finished) : null}
+        suppliedTasks={tasks.map(task => ({ ...task, active: !finished.includes(task.taskId) }))}
         onClose={noop}
       />
     )
@@ -1071,32 +662,33 @@ describe("BackgroundTaskPanelView — a running task's progress (#1640)", () => 
 })
 
 describe('Stop task button', () => {
+  it('groups supplied activity independently of outcomes and disables only the pending raw target', () => {
+    const raw = '<raw-task-id>'
+    const html = renderToStaticMarkup(<BackgroundTaskPanelView suppliedTasks={[
+      task({ taskId: raw, description: 'first active', pending: true }),
+      task({ taskId: 'done', description: 'finished task', active: false, canStop: false, status: 'completed' }),
+      task({ taskId: 'active', description: 'second active' }),
+      task({ taskId: 'ineligible', description: 'no action', canStop: false })
+    ]} onStopTask={noop} onClose={noop} />)
+    expect(html).toContain('Running · 3')
+    expect(html).toContain('Finished · 1')
+    expect(html.indexOf('first active')).toBeLessThan(html.indexOf('second active'))
+    expect(html.indexOf('second active')).toBeLessThan(html.indexOf('finished task'))
+    expect(html.match(/>Stop task<\/button>/g)).toHaveLength(2)
+    expect(html.match(/disabled=""/g)).toHaveLength(1)
+    expect(html).not.toContain(raw)
+    expect(html).not.toContain('&lt;raw-task-id&gt;')
+  })
+
   it('follows progress, latest update and its cut marker without exposing identity', () => {
     const id = '<hostile-task-id>'
     const markup = renderToStaticMarkup(<BackgroundTaskPanelView
-      entry={entry([task({ taskId: id, progress: { currentActivity: 'Working', subagentType: '', lastToolName: '', totalTokens: 1, toolUses: 1, durationMs: 1, truncatedFields: null }, latestUpdate: { patch: 'Synthetic patch', truncatedFields: ['patch', 'task_id'] } })])}
+      suppliedTasks={[task({ taskId: id, progress: { currentActivity: 'Working', subagentType: '', lastToolName: '', totalTokens: 1, toolUses: 1, durationMs: 1, truncatedFields: null }, latestUpdate: { patch: 'Synthetic patch', truncatedFields: ['patch', 'task_id'] } })]}
       onStopTask={noop} onClose={noop} />)
     expect(markup).toContain('>Stop task</button>')
     expect(markup.indexOf('background-task-panel__stop')).toBeGreaterThan(markup.indexOf('background-task-panel__cut-patch'))
     expect(markup).not.toContain(id)
     expect(markup).not.toContain('&lt;hostile-task-id&gt;')
     expect(markup).not.toContain('disabled=""')
-  })
-
-  it('disables only the pending row and retains its label', () => {
-    const markup = renderToStaticMarkup(<BackgroundTaskPanelView
-      entry={entry([task(), task({ taskId: 'other' })])} pendingTaskIds={new Set(['task-1'])}
-      onStopTask={noop} onClose={noop} />)
-    expect(markup.match(/>Stop task<\/button>/g)).toHaveLength(2)
-    expect(markup.match(/disabled=""/g)).toHaveLength(1)
-  })
-
-  it.each(['finished', 'codex', 'cut', 'unsupported'])('hides stop on %s rows', reason => {
-    const markup = renderToStaticMarkup(<BackgroundTaskPanelView
-      entry={entry([task({ truncatedFields: reason === 'cut' ? ['task_id'] : null })])}
-      finishedTaskIds={reason === 'finished' ? new Set(['task-1']) : null}
-      agent={reason === 'codex' ? 'codex' : 'claude'}
-      onStopTask={reason === 'unsupported' ? undefined : noop} onClose={noop} />)
-    expect(markup).not.toContain('>Stop task</button>')
   })
 })

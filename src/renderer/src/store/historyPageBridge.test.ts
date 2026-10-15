@@ -42,6 +42,24 @@ function liveKeysFor(...entries: HistoryTimelineEntry[]): ReadonlySet<string> {
 }
 
 describe('reduceHistoryPage', () => {
+  it('replays newest-first history through the actual bridge and preserves attribution', () => {
+    const items = reduceHistoryPage([
+      entry(2, { type: 'toolResult', turnId: 't', toolUseId: 'c', parentToolUseId: undefined, isError: false, resultSummary: 'done' }),
+      entry(1, { type: 'toolUse', turnId: 't', toolUseId: 'c', parentToolUseId: 'p', name: 'Read', inputSummary: '' })
+    ])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ parentToolUseId: 'p', result: { resultSummary: 'done' } })
+  })
+
+  it('preserves assistant history attribution through the real history bridge', () => {
+    const items = reduceHistoryPage([
+      entry(2, { type: 'assistantDelta', turnId: 't', seq: 0, text: 'reply', parentToolUseId: 'owner' }),
+      entry(1, { type: 'toolUse', turnId: 't', toolUseId: 'owner', name: 'Agent', inputSummary: '' })
+    ])
+    expect(items).toHaveLength(2)
+    expect(items[1]).toMatchObject({ kind: 'assistantText', text: 'reply', parentToolUseId: 'owner' })
+  })
+
   it('reduces a newest-first page oldest-first', () => {
     // Served newest-first: the SECOND delta of turn t is the page's first element.
     const items = reduceHistoryPage([

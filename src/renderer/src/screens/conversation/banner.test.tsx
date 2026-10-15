@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { ComposerBannerReport, ComposerErrorSlot, ConversationScreen, Timeline } from './ConversationScreen'
+import { ComposerBannerReport, ComposerErrorSlot, ConversationScreen, TimelineRow } from './ConversationScreen'
 import { activeConversationStore } from '../../store/activeConversationStore'
 import { conversationTimelineStore, createConversationTimelineStore } from '../../store/conversationTimelineStore'
 import { sessionStore } from '../../store/sessionStore'
@@ -11,7 +11,7 @@ import { usageLimitStore } from '../../store/usageLimitStore'
 afterEach(() => vi.restoreAllMocks())
 
 const report = { level: 'warning', text: 'hook blocked', stopsTurn: true, truncated: false }
-const row = (value = report) => renderToStaticMarkup(<Timeline items={[{ kind: 'banner', ...value }]} />)
+const row = (value = report) => renderToStaticMarkup(<TimelineRow inProgress={false} item={{ kind: 'banner', ...value }} />)
 
 describe('banner display surfaces', () => {
   it.each(['notice', 'suggestion', '', 'future', '__proto__', 'warning'])('renders level %j as a fixed muted or warning class', level => {
@@ -20,9 +20,7 @@ describe('banner display surfaces', () => {
     expect(html.includes('claude-banner--warning')).toBe(level === 'warning')
     expect(html).toContain('session-delimiter__title claude-banner')
     if (level === 'future' || level === '__proto__') expect(html).not.toContain(level)
-    const threadOpening = '<div class="conversation__thread" aria-label="Conversation history" tabindex="0">'
-    expect(html.startsWith(threadOpening)).toBe(true)
-    expect(html.slice(threadOpening.length)).not.toMatch(/data-thread-role|title=|aria-label=/)
+    expect(html).not.toMatch(/data-thread-role|title=|aria-label=/)
   })
   it('hides info only from the timeline, including empty stopping reports', () => {
     const value = { ...report, level: 'info', text: '' }
@@ -39,14 +37,14 @@ describe('banner display surfaces', () => {
   })
   it('names the conversation agent on both surfaces (#1656)', () => {
     const codex = [
-      renderToStaticMarkup(<Timeline agent="codex" items={[{ kind: 'banner', ...report }]} />),
+      renderToStaticMarkup(<TimelineRow agent="codex" inProgress={false} item={{ kind: 'banner', ...report }} />),
       renderToStaticMarkup(<ComposerBannerReport report={report} agent="codex" />)
     ]
     for (const html of codex) {
       expect(html).toContain('Codex: hook blocked')
       expect(html).not.toContain('Claude:')
     }
-    expect(renderToStaticMarkup(<Timeline agent="claude" items={[{ kind: 'banner', ...report }]} />)).toBe(row())
+    expect(renderToStaticMarkup(<TimelineRow agent="claude" inProgress={false} item={{ kind: 'banner', ...report }} />)).toBe(row())
     expect(renderToStaticMarkup(<ComposerBannerReport report={report} agent="claude" />))
       .toBe(renderToStaticMarkup(<ComposerBannerReport report={report} />))
   })

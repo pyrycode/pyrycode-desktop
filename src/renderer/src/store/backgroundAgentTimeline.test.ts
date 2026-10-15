@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import { createBackgroundTaskRosterStore, selectLiveTaskCountFor } from './backgroundTaskRosterStore'
-import { groupToolRows } from '../screens/conversation/groupToolRows'
 import type { ThreadItem } from './threadTimeline'
 
 const start = (taskId = 'a', toolCallId = taskId, taskType = 'local_agent') => ({
@@ -18,8 +17,6 @@ describe('background agent timeline evidence', () => {
       { kind: 'toolCall', turnId: 'turn', toolUseId: 'a', name: 'Agent', inputSummary: 'work', result: null },
       { kind: 'userText', text: 'newer message' }
     ]
-    const project = () => groupToolRows(items, store.getState().agentTimeline.get('c'))
-    const ordinary = groupToolRows(items)
     store.getState().setRoster({ ...roster(['t']), tasks: [
       { task_id: 't', task_type: 'local_bash', description: 'work', truncated_fields: null }
     ] })
@@ -27,12 +24,9 @@ describe('background agent timeline evidence', () => {
     expect(store.getState().rosters.get('c')?.tasks.get('t')?.taskType).toBe('local_agent')
     expect(store.getState().agentTimeline.get('c')?.size).toBe(0)
     store.getState().setStartedTask(start('t', 'a'))
-    expect(project()).toEqual(ordinary)
     expect(store.getState().agentTimeline.get('c')?.get('t')?.confirmed).toBe(false)
     expect(selectLiveTaskCountFor('c')(store.getState())).toBe(1)
     store.getState().setRoster(roster(['t']))
-    expect(project().map(row => [row.index, row.marker === true]))
-      .toEqual([[0, true], [1, false], [0, false]])
     expect(store.getState().rosters.get('c')?.tasks.size).toBe(1)
     expect(selectLiveTaskCountFor('c')(store.getState())).toBe(1)
   })

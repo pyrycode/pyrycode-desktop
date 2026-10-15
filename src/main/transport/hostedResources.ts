@@ -26,12 +26,25 @@ export function createHostedResources(deps: {
   send: (bytes: Uint8Array, observe: (outcome: SendOutcome) => void) => void; log?: DiagnosticLog
 }) {
   const pending = new Map<number, Pending>()
-  const cancels = new Map<number, { target: number; app: string; timer: ReturnType<typeof setTimeout> }>()
+  const cancels = new Map<number, { target: number; app: string; release: () => void; timer: ReturnType<typeof setTimeout> }>()
   let enabled = false, generation = 0, reserved = 0, pumping = false
+  const controls = new Set<symbol>()
+  function reserveControl(): (() => void) | undefined {
+    if (controls.size >= 16) return undefined
+    const token = Symbol(); controls.add(token)
+    return () => { controls.delete(token) }
+  }
+  function sendControl(bytes: Uint8Array, observe: (outcome: SendOutcome) => void): boolean {
+    const release = reserveControl()
+    if (!release) return false
+    try { deps.send(bytes, outcome => { release(); observe(outcome) }) }
+    catch { release(); observe({ type: 'dropped', reason: 'send-failed' }) }
+    return true
+  }
   const log = (code: string): void => deps.log?.event({ event: 'hosted-resource', code })
   const available = (): boolean => enabled && deps.connected()
   function forgetCancel(id: number): void {
-    clearTimeout(cancels.get(id)?.timer); cancels.delete(id)
+    clearTimeout(cancels.get(id)?.timer); cancels.get(id)?.release(); cancels.delete(id)
   }
   function cancel(p: Pending): void {
     if (!p.attempted || !available()) return
@@ -39,13 +52,15 @@ export function createHostedResources(deps: {
       const oldest = cancels.keys().next().value
       if (oldest !== undefined) forgetCancel(oldest)
     }
+    const release = reserveControl()
+    if (!release) { log('limit'); return }
     const id = deps.nextId(), target = p.request.id, app = p.request.payload.app_id
-    cancels.set(id, { target, app, timer: setTimeout(() => forgetCancel(id), 5000) })
+    cancels.set(id, { target, app, release, timer: setTimeout(() => forgetCancel(id), 5000) })
     try {
-      deps.send(encodeHostedControl({ id, ts: deps.now(), type: 'app_cancel',
+      if (!sendControl(encodeHostedControl({ id, ts: deps.now(), type: 'app_cancel',
         payload: { request_id: target, app_id: app } }, 'client-to-daemon'), outcome => {
         if (outcome.type === 'dropped') { forgetCancel(id); log('send-failed') }
-      })
+      })) { forgetCancel(id); log('limit') }
     } catch { forgetCancel(id); log('send-failed') }
   }
   function finish(p: Pending, result: HostedResourceResult, cancellation = false): void {
@@ -70,11 +85,13 @@ export function createHostedResources(deps: {
   }
   function write(p: Pending, bytes: Uint8Array, granted: number): void {
     try {
-      deps.send(bytes, outcome => {
+      const observe = (outcome: SendOutcome): void => {
         if (pending.get(p.request.id) !== p) return
         if (outcome.type === 'dropped') fail(p, 'send-failed')
         else p.granted = granted
-      })
+      }
+      if (granted > 0) { if (!sendControl(bytes, observe)) fail(p, 'limit') }
+      else deps.send(bytes, observe)
     } catch { fail(p, 'send-failed') }
   }
   function pump(): void {
@@ -104,6 +121,7 @@ export function createHostedResources(deps: {
       fail(p, 'retired', false)
     }
     for (const id of cancels.keys()) if (!cancellation) forgetCancel(id)
+    if (!cancellation) controls.clear()
     enabled = supported
   }
   // Unvalidated routing hints can retire owned work; only the contextual codecs admit bytes.
@@ -192,5 +210,5 @@ export function createHostedResources(deps: {
       }
     }
   }
-  return { openView, receive, reset, retire: (): void => reset(enabled, true) }
+  return { openView, receive, reset, reserveControl, sendControl, retire: (): void => reset(enabled, true) }
 }

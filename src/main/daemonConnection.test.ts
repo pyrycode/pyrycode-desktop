@@ -375,6 +375,48 @@ function build(
 /** Flush the microtask chain the async bootstrap runs on (fakes resolve immediately). */
 const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
+it('discovers each host independently and fences reconnect readiness', async () => {
+  const a = build({ serverId: 'a' }), b = build({ serverId: 'b' })
+  const app = '22222222-2222-4222-8222-222222222222'
+  const row = { app_id: app, title: 'App', desired: 'available', state: 'running', active_release: '1.0.0', pending_release: null, last_error: null, revision: 1 }
+  const ack = (host: string, supported = true) => encodeEnvelope({ id: 1, ts: FIXED_TS, type: 'hello_ack',
+    payload: { server_id: host, conn_id: host, protocol_version: 'v2', capabilities: supported ? ['hosted_apps_v1'] : [] } })
+  a.connection.start(); b.connection.start(); await tick()
+  const da = a.drivers[0], db = b.drivers[0]
+  const material = await da.config.loadDialConfig!()
+  expect(material).not.toBeNull()
+  expect(decodeEnvelope(material!.session.hello).payload).toMatchObject({ capabilities: expect.arrayContaining(['hosted_apps_v1']) })
+  da.emit({ type: 'handshake-complete', helloAck: ack('a') })
+  db.emit({ type: 'handshake-complete', helloAck: ack('b', false) })
+  expect(db.sent).toHaveLength(0)
+  expect(b.connection.hostedApps.read().type).toBe('unsupported')
+  const first = decodeEnvelope(da.sent.at(-1)!).id
+  a.connection.requestContextUsage('chat')
+  da.emit({ type: 'message', plaintext: encodeEnvelope({ id: 90, ts: FIXED_TS, type: 'message',
+    payload: { conversation_id: 'chat', message_id: 'barrier', role: 'assistant', text: 'processed' } }) })
+  expect(emitted(a.sink).some(e => e.type === 'messageReceived')).toBe(true)
+  const page = (d: FakeDriver, request: number) => d.emit({ type: 'message', plaintext: encodeEnvelope({ id: 100,
+    ts: FIXED_TS, type: 'apps', in_reply_to: request, payload: { revision: 1, items: [row], next_cursor: null } }) })
+  page(da, first)
+  const binding = a.connection.hostedApps.openView(app)
+  if (!binding.ok) throw new Error('expected binding')
+  const pending = binding.view.request({ type: 'app_asset_request', payload: { path: '/', navigation: true } })
+  db.emit({ type: 'handshake-complete', helloAck: ack('b') }); page(db, decodeEnvelope(db.sent.at(-1)!).id)
+  expect(b.connection.hostedApps.openView(app).ok).toBe(true)
+  da.emit({ type: 'relay-link-down', code: 1006 })
+  expect(await pending).toMatchObject({ error: 'retired' })
+  expect(a.connection.hostedApps.read().type).toBe('unavailable')
+  expect(b.connection.hostedApps.read().type).toBe('ready')
+  da.emit({ type: 'handshake-complete', helloAck: ack('a') })
+  page(da, first); expect(a.connection.hostedApps.openView(app).ok).toBe(false)
+  const latest = decodeEnvelope(da.sent.at(-1)!).id
+  page(da, latest); expect(a.connection.hostedApps.openView(app).ok).toBe(true)
+  expect(await binding.view.request({ type: 'app_asset_request', payload: { path: '/', navigation: true } })).toMatchObject({ error: 'retired' })
+  da.emit({ type: 'handshake-complete', helloAck: ack('a', false) })
+  expect(a.connection.hostedApps.read().type).toBe('unsupported')
+  a.connection.stop(); b.connection.stop()
+})
+
 it('fences hosted work across connection lifecycle and keeps unrelated traffic runnable', async () => {
   const ctx = build({ serverId: 'host-a' })
   ctx.connection.start(); await tick()
@@ -479,11 +521,12 @@ it.each([
 })
 
 it.each(['reconnect', 'stop', 'terminal', 'error', 'auth', 'update-required', 'bad-ack', 'unsupported'] as const)('retires all hosted work on %s', async reason => {
-  const ctx = build({ serverId: 'host-a' })
+  const ctx = build({ serverId: 'srv-1' })
   ctx.connection.start(); await tick()
   const driver = ctx.drivers[0], ack = decodeEnvelope(validHelloAck())
   driver.emit({ type: 'handshake-complete', helloAck: encodeEnvelope({ ...ack,
     payload: { ...ack.payload as object, capabilities: ['hosted_apps_v1'] } }) })
+  expect(ctx.connection.hostedApps.read().type).toBe('loading')
   const first = ctx.connection.hostedResources.openView('22222222-2222-4222-8222-222222222222', '1.0.0')
   const second = ctx.connection.hostedResources.openView('33333333-3333-4333-8333-333333333333', '2.0.0')
   const input = { type: 'app_api_request' as const, payload: { path: '/api/data', method: 'POST' as const, headers: {}, body: '' } }
@@ -502,9 +545,31 @@ it.each(['reconnect', 'stop', 'terminal', 'error', 'auth', 'update-required', 'b
   }
   expect(await a).toMatchObject({ ok: false, uncertain: true })
   expect(await b).toMatchObject({ ok: false, uncertain: true })
+  expect(ctx.connection.hostedApps.read().type).toBe(reason === 'unsupported' ? 'unsupported' : 'unavailable')
   const count = driver.sent.length
   expect(await first.request(input)).toMatchObject({ error: 'retired', uncertain: false })
   expect(driver.sent).toHaveLength(count)
+  ctx.connection.stop()
+})
+
+it('retires an incomplete walk on automatic re-handshake and rejects foreign host acknowledgement', async () => {
+  const ctx = build({ serverId: 'srv-1' })
+  ctx.connection.start(); await tick()
+  const driver = ctx.drivers[0], ack = decodeEnvelope(validHelloAck())
+  const supported = encodeEnvelope({ ...ack, payload: { ...ack.payload as object, capabilities: ['hosted_apps_v1'] } })
+  driver.emit({ type: 'handshake-complete', helloAck: supported })
+  const old = decodeEnvelope(driver.sent.at(-1)!).id
+  driver.emit({ type: 'handshake-complete', helloAck: supported })
+  const current = decodeEnvelope(driver.sent.at(-1)!).id
+  expect(current).toBeGreaterThan(old)
+  driver.emit({ type: 'message', plaintext: encodeEnvelope({ id: 300, ts: FIXED_TS, type: 'apps', in_reply_to: old,
+    payload: { revision: 0, items: [], next_cursor: null } }) })
+  expect(ctx.connection.hostedApps.read().type).toBe('loading')
+  driver.emit({ type: 'relay-link-down', code: 1006 })
+  expect(ctx.connection.hostedApps.read().type).toBe('unavailable')
+  driver.emit({ type: 'handshake-complete', helloAck: encodeEnvelope({ ...ack,
+    payload: { ...ack.payload as object, server_id: 'foreign', capabilities: ['hosted_apps_v1'] } }) })
+  expect(ctx.connection.hostedApps.read().type).toBe('unsupported')
   ctx.connection.stop()
 })
 
@@ -933,7 +998,7 @@ describe('createDaemonConnection', () => {
     const assertHello = (hello: Uint8Array): void => {
       expect(decodeEnvelope(hello).payload).toMatchObject({
         client_features: expected,
-        capabilities: ['interactive', 'multi_agent', 'stop_background_task']
+        capabilities: ['interactive', 'multi_agent', 'stop_background_task', 'hosted_apps_v1']
       })
     }
     assertHello(drivers[0].config.session.hello)
@@ -956,7 +1021,7 @@ describe('createDaemonConnection', () => {
     // buildClientHello in isolation, so this pins the production wiring, not the codec default.
     const envelope = decodeEnvelope(drivers[0].config.session.hello)
     const payload = envelope.payload as Record<string, unknown>
-    expect(payload.capabilities).toEqual(['interactive', 'multi_agent', 'stop_background_task'])
+    expect(payload.capabilities).toEqual(['interactive', 'multi_agent', 'stop_background_task', 'hosted_apps_v1'])
   })
 
   it('decodes server_static_pubkey to the raw 32-byte key', async () => {

@@ -55,3 +55,6 @@ None. The bounded native result is the explicit failed discovery state; refresh/
 - [Threat model] Relay delay/flood is bounded by deadlines/caps; hostile daemon responses fail validation/correlation. Disk token theft remains covered by existing safeStorage; compromised renderer receives no new authority. Live daemon activation remains #1929.
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-15
+
+## Revisions
+2026-10-15: Reset the resource owner before discovery on connection boundaries, so retiring discovery bindings cannot send old-session resource cancels during re-handshake. No observer runs until both authorities are invalidated. Shared control reservations conservatively count both pending correlations and held sends; send reservations survive target timeout until observed or connection reset, preventing rekey-buffer accumulation. This may admit fewer than sixteen cancellation acknowledgements. Restart errors do not renew inactivity; only an accepted page does. Tests: `does not extend inactivity for restart errors or unrelated notifications` and `keeps held control sends bounded even after their target and acknowledgement expire`.

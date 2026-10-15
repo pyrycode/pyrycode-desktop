@@ -1,6 +1,7 @@
 import { dispatchThreadQuery } from './threadQueryCommand'
 import { createHostedAppViews } from './hostedAppView'
 import { registerHostedPane } from './hostedPane'
+import { registerHostedAppsDisplay } from './hostedAppsDisplay'
 import { createAppUpdateController, registerAppUpdate, createQuitDrain } from './appUpdate'
 import { APP_UPDATE_STATE_CHANNEL } from '../shared/ipc/appUpdate'
 import { createMessageLifecycle } from './messageLifecycle'
@@ -516,6 +517,7 @@ app.whenReady().then(() => {
     diagnosticLog
   })
   const registry = createConnectionRegistry({
+    onReconciled: () => hostedAppsDisplay.reconcile(),
     store: pairedServerStore,
     createConnection: ({ serverId, pairedServer }) =>
       createDaemonConnection({
@@ -544,6 +546,8 @@ app.whenReady().then(() => {
   const hostedAppViews = createHostedAppViews(registry, diagnosticLog)
   Object.defineProperty(app, 'hostedAppViews', { value: hostedAppViews })
   const hostedPane = registerHostedPane(hostedAppViews, registry, serverId => hostLabelStore.loadFor(serverId), diagnosticLog)
+  const hostedAppsDisplay = registerHostedAppsDisplay(registry, diagnosticLog)
+  app.on('will-quit', () => hostedAppsDisplay.dispose())
   app.on('will-quit', () => hostedPane.dispose())
   // ⭐ THE STAND-IN IS RETIRED (#1129). `const connection = registry.active` stood here from #1117
   // so that call sites written for a single connection kept working while the registry held many;
@@ -705,6 +709,7 @@ app.whenReady().then(() => {
   const openWindow = (): void => {
     const window = createWindow(windowPresentation)
     hostedPane.attach(window)
+    hostedAppsDisplay.attach(window)
     const windowId = window.webContents.id
     let closeDrained = false
     let closing = false

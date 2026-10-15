@@ -62,8 +62,18 @@ Indexed legacy operations validate only the affected scope(s), as described in
 schema migration share one SQLite transaction. An insertion/deletion, encryption,
 decryption or validation failure rolls back changes and preserves the last committed
 snapshot; later operations remain usable. Even reads can commit the schema-1 key
-migration, but cannot commit it if reconstruction fails. Unreadable data and
+migration and schema-3 receipt-start index, but cannot commit them if selected
+validation or full reconstruction fails. Unreadable data and
 unsupported schemas are never recreated or overwritten as recovery.
+
+New indexed writes encrypt an envelope containing `indexedLegacyRecord: 1`, the
+committed `snapshotId` and the complete structural record with its payload. Decode
+compares the UUID and kind/order/parent/evidence indexes before record validation.
+The original row ciphertext held no row-key/order binding: validating a selected
+row's shape alone could accept ciphertext substituted under another structural
+identity. The encrypted envelope closes that substitution for new writes.
+Original unwrapped records remain readable, using selected codec/index checks for
+pages and canonical whole-scope checks for full reads. Reads do not rewrite them.
 
 Each indexed `payload` is protected by main-process `SecretEncryption` before it
 reaches SQLite, including header coverage/cursors, rows, attachment metadata, raw
@@ -78,7 +88,7 @@ unencrypted columns are:
 | `legacy_records` ownership | `scope`: committed-snapshot UUID referencing `legacy_scopes.identity`. |
 | Record selection/order | `kind`: `header`, `row`, `served`, `receipt`, `receipt-id`, `display`, `gap`, `gap-key` or `gap-refused`; `ordinal`, `parent`: nonnegative array positions (zero for unparented records). |
 | Evidence indexes | `entry_id`, `last_id`, `older_id`, `newer_id`: nonnegative safe integers or null; `row_key`: signed safe integer or null. |
-| Schema/index metadata | `user_version`: integer 2 after creation/migration; indexes duplicate only the reviewed ownership and structural columns. |
+| Schema/index metadata | `user_version`: integer 3 after successful operation migration (base creation uses 2); indexes, including the partial `legacy_receipt_start`, duplicate only the reviewed ownership and structural columns. |
 
 `payload` is a ciphertext BLOB. Timestamps, join strings, opaque cursors, attachment
 fields, message text and raw unknown objects never become plaintext lookup/order
@@ -106,3 +116,31 @@ code, unexpected results report `remove-failed`, and thrown IPC failures report
 protected store's prior content and retains stale-save suppression; daemon
 confirmation alone does not prove local cleanup succeeded. There is no automatic
 removal retry, but another confirmed receipt can retry it.
+
+## Bounded page results
+
+The [main-only page methods](chat-history-api.md#main-only-bounded-legacy-pages)
+return distinct `newest-page` and `before-page` successes, with ordered selected
+items/keys, `savedCoverage`, partial evidence and a local continuation or null.
+These are page results, never `stored` snapshots. Only newest lookup can return
+`missing`; a newest lookup of a saved-empty scope succeeds with empty arrays.
+`savedCoverage` remains scope-level evidence; receipt/gap `partial: true` projections and separate
+`cursorAnchors` certify no additional daemon coverage. Local exhaustion, short
+pages and empty pages do not establish daemon completeness.
+
+Malformed requests, invalid limits and malformed, cross-owner, wrong-format,
+invalid-boundary or stale continuations return only
+`{ status: 'error', code: 'invalid-request' }`. A before-page scope deleted since
+the preceding read is also invalid. Selected decryption, decoding, record/index
+association or row/contribution binding failures return `unreadable` without
+content. Existing `encryption-unavailable` and `unsupported-version` classifications
+remain intact. Unselected payloads are not read or validated by paging, so a
+successful page does not certify the entire saved scope as readable. Full reads,
+replacement and removal retain their whole-scope validation contract.
+
+Each page and its evidence come from one transaction and committed UUID. Failed
+selected reads preserve saved records and roll back any schema migration; they
+never repair or discard data. Diagnostics use the existing static storage events:
+operation codes `readTimelineNewestPage`/`readTimelineBeforePage` and result code
+`stored` on success or a static error code. Requests, coordinates, continuations,
+payloads and caught exceptions never enter diagnostics.

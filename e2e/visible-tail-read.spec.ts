@@ -27,8 +27,30 @@ async function focus(app: ElectronApplication, page: Page) {
   await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.show(); w.focus() })
   await page.evaluate(() => {
     delete (document as any).hasFocus
-    window.dispatchEvent(new Event('focus'))
   })
+  await expect.poll(() => page.evaluate(() => document.hasFocus())).toBe(true)
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+}
+
+async function readState(page: Page, commands: Envelope[]) {
+  const state = await page.evaluate(() => {
+    const region = document.querySelector('.conversation__thread')
+    const tail = region?.querySelector('[data-read-row]:last-child') ??
+      [...(region?.querySelectorAll('[data-read-row]') ?? [])].at(-1)
+    const rect = tail?.getBoundingClientRect()
+    const viewport = region?.getBoundingClientRect()
+    const top = Math.max(viewport?.top ?? 0,
+      document.querySelector('.conversation__top-chrome')?.getBoundingClientRect().bottom ?? 0)
+    const bottom = Math.min(viewport?.bottom ?? 0,
+      document.querySelector('.conversation__input-chrome')?.getBoundingClientRect().top ?? Infinity)
+    return { url: location.href, ready: document.readyState, focused: document.hasFocus(),
+      visible: document.visibilityState, reader: document.querySelector('.markdown-reader') !== null,
+      key: tail?.getAttribute('data-read-row'), top, bottom, viewportBottom: viewport?.bottom,
+      tailTop: rect?.top, tailBottom: rect?.bottom, height: rect?.height,
+      eligible: rect !== undefined && rect.height > 0 && rect.bottom > top && rect.bottom <= bottom,
+      committed: tail?.textContent?.includes('Reader-covered addition.') ?? false }
+  })
+  return { ...state, targets: targets(commands) }
 }
 
 type ReadWork = {
@@ -44,6 +66,10 @@ declare global { interface Window { readWork: ReadWork } }
 // the pin observer starts with the pane. Callback identity attributes subscriptions
 // and listeners without counting React, scroll-pin work or the test oracle.
 async function instrumentReadWork(page: Page) {
+  const before = page.url()
+  // firstWindow supplies a Page, not a surviving renderer execution context.
+  // Wait for the app document before evaluating document-scoped instrumentation.
+  await expect(page.locator('.welcome__pair')).toBeVisible()
   await page.evaluate(() => {
     const counts = { constructors: 0, discovery: 0, listeners: 0, subscriptions: 0 }
     const observers: ReadWork['observers'] = []
@@ -105,6 +131,9 @@ async function instrumentReadWork(page: Page) {
     window.readWork = { counts, observers, listeners, subscriptions,
       reset: () => { for (const key of Object.keys(counts)) counts[key as keyof typeof counts] = 0 } }
   })
+  await test.info().attach('read-work-document', { body: JSON.stringify({ before,
+    installed: await page.evaluate(() => ({ url: location.href, ready: document.readyState,
+      timeOrigin: performance.timeOrigin, instrumented: window.readWork !== undefined })) }), contentType: 'application/json' })
 }
 
 test('read setup is reused across committed same-row deltas on short and long threads', async ({ launchPairedApp }) => {
@@ -131,7 +160,7 @@ test('read setup is reused across committed same-row deltas on short and long th
       listeners: [...window.readWork.listeners.values()].reduce((sum, targets) => sum + targets.size, 0),
       subscriptions: window.readWork.subscriptions.size
     }))
-    expect(await active()).toEqual({ observers: 1, connected: true, listeners: 2, subscriptions: 1 })
+    await expect.poll(active).toEqual({ observers: 1, connected: true, listeners: 2, subscriptions: 1 })
     await page.evaluate(() => window.readWork.reset())
     const geometry = () => page.locator('.conversation__thread > :last-child').evaluate(el => {
       const r = el.getBoundingClientRect()
@@ -159,22 +188,22 @@ test('read setup is reused across committed same-row deltas on short and long th
     await expect.poll(() => targets(commands).at(-1)).toBe(size + 7)
     await settle(page)
     expect((await geometry()).key).not.toBe(before.key)
-    expect(await active()).toEqual({ observers: 1, connected: true, listeners: 2, subscriptions: 1 })
+    await expect.poll(active).toEqual({ observers: 1, connected: true, listeners: 2, subscriptions: 1 })
     await page.getByRole('button', { name: 'the note', exact: true }).last().click()
     await expect(page.locator('.markdown-reader')).toBeVisible()
     await settle(page)
-    expect(await active()).toEqual({ observers: 0, connected: true, listeners: 0, subscriptions: 0 })
+    await expect.poll(active).toEqual({ observers: 0, connected: true, listeners: 0, subscriptions: 0 })
     await page.getByRole('button', { name: 'Back', exact: true }).click()
     await settle(page)
-    expect(await active()).toEqual({ observers: 1, connected: true, listeners: 2, subscriptions: 1 })
+    await expect.poll(active).toEqual({ observers: 1, connected: true, listeners: 2, subscriptions: 1 })
     await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
     await page.getByRole('menuitem', { name: 'Archive', exact: true }).click()
     await settle(page)
-    expect(await active()).toEqual({ observers: 0, connected: true, listeners: 0, subscriptions: 0 })
+    await expect.poll(active).toEqual({ observers: 0, connected: true, listeners: 0, subscriptions: 0 })
     await page.locator('.archive__back').click()
     await page.getByRole('button', { name: 'Seeded discussion', exact: true }).click()
     await settle(page)
-    expect(await active()).toEqual({ observers: 1, connected: true, listeners: 2, subscriptions: 1 })
+    await expect.poll(active).toEqual({ observers: 1, connected: true, listeners: 2, subscriptions: 1 })
   }
 })
 
@@ -293,19 +322,58 @@ test('committed folded tails require focus, uncovered viewport and a closed read
   daemon.pushFrame(delta(36, 3, '\n\nWhile above the tail.'))
   await expect(page.locator('.bubble').last()).toContainText('While above the tail.')
   await settle(page); expect(targets(commands).at(-1)).toBe(35)
+  // A tail within the thread can still be covered by the measured input chrome.
+  const input = page.locator('.conversation__input-chrome')
+  await input.evaluate(el => { (el as HTMLElement).style.transform = 'translateY(-80px)' })
   await thread.evaluate(el => { el.scrollTop = el.scrollHeight })
+  await expect.poll(async () => {
+    const s = await readState(page, commands)
+    return s.tailBottom !== undefined && s.viewportBottom !== undefined &&
+      s.tailBottom <= s.viewportBottom && s.tailBottom > s.bottom
+  }).toBe(true)
+  const contextAsks = commands.filter(c => c.type === 'request_context_usage').length
+  await page.evaluate(conversationId => {
+    window.dispatchEvent(new Event('focus'))
+    // The focus observer publishes synchronously. This later command crosses
+    // the same ordered IPC/transport path, so its daemon receipt drains any mark.
+    window.pyry.sendCommand({ type: 'requestContextUsage', payload: { conversation_id: conversationId } })
+  }, row.id)
+  await expect.poll(() => commands.filter(c => c.type === 'request_context_usage').length).toBe(contextAsks + 1)
+  expect(targets(commands).at(-1)).toBe(35)
+  await test.info().attach('chrome-excluded-after-drain', { body: JSON.stringify({
+    ...await readState(page, commands), barrier: commands.at(-1)
+  }), contentType: 'application/json' })
+  await input.evaluate(el => { (el as HTMLElement).style.removeProperty('transform') })
+  // A CSS transform does not resize the observed chrome: drive the callback
+  // explicitly after restoring it, just as in the covered measurement above.
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
   await expect.poll(() => targets(commands).at(-1)).toBe(36)
   daemon.pushFrame(end(37))
   await expect.poll(() => targets(commands).at(-1)).toBe(37)
   await page.getByRole('button', { name: 'the note', exact: true }).click()
   await expect(page.locator('.markdown-reader')).toBeVisible()
+  await test.info().attach('reader-open', { body: JSON.stringify(await readState(page, commands)), contentType: 'application/json' })
   daemon.pushFrame(delta(38, 4, '\n\nReader-covered addition.'))
-  await settle(page); expect(targets(commands).at(-1)).toBe(37)
+  // Receipt/commit, focus and geometry are independent of reader dismissal.
+  await expect(page.locator('.bubble').last()).toContainText('Reader-covered addition.')
+  await test.info().attach('reader-committed', { body: JSON.stringify(await readState(page, commands)), contentType: 'application/json' })
+  // Clicking the older link can scroll away from the trailing edge. Establish
+  // eligible geometry while the reader still excludes publication.
+  await thread.evaluate(el => { el.scrollTop = el.scrollHeight })
+  await focus(app, page)
+  await expect.poll(async () => {
+    const s = await readState(page, commands)
+    return { focused: s.focused, visible: s.visible, reader: s.reader, committed: s.committed, eligible: s.eligible }
+  }).toEqual({ focused: true, visible: 'visible', reader: true, committed: true, eligible: true })
+  expect(targets(commands).at(-1)).toBe(37)
+  await test.info().attach('reader-eligible', { body: JSON.stringify(await readState(page, commands)), contentType: 'application/json' })
   await page.getByRole('button', { name: 'Back', exact: true }).click()
+  await expect(page.locator('.markdown-reader')).toHaveCount(0)
   await expect.poll(() => targets(commands).at(-1)).toBe(38)
+  await test.info().attach('reader-dismissed', { body: JSON.stringify(await readState(page, commands)), contentType: 'application/json' })
   daemon.pushFrame(markReply(38))
   await expect(dot).toHaveClass(/--idle/)
-  await page.screenshot({ path: '/tmp/builder-1826/read-tail-1280.png' })
+  await page.screenshot({ path: test.info().outputPath('read-tail-1280.png') })
 })
 
 test('ID-less replay stays unknown until independently admitted history, and unseen live content restores attention', async ({ launchPairedApp }) => {

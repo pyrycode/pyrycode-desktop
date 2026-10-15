@@ -37,6 +37,8 @@ All database work is synchronous inside transactions, with no await across a rea
 | Host/conversation removal failure | rollback and subsequent recovery |
 | Unreadable/unsupported storage | preserve original bytes |
 | Unavailable encryption | reject before mutation |
+| Distinct UTF-16 owners through reopen/replacement/removal | isolates every UTF-16 %s across restart, replacement and removal |
+| Schema migration failure, unreadable payload and retry | migrates version-1 ownership keys atomically without changing payloads or snapshot identities |
 
 ## Error handling
 
@@ -51,6 +53,12 @@ Run focused Vitest, pre-verify and build after the final main merge. The package
 ## Open Questions
 
 None. A simpler shape was considered: a single encrypted timeline cell cannot support indexed evidence selection and violates the required follow-up seam. A shared typed record table avoids separate near-identical persistence implementations.
+
+## Documentation handoff
+
+- Pending for the documentation stage: `docs/knowledge/features/chat-history.md` § Storage and concurrency — database owner/lifetime, indexed evidence, snapshot identities and native rebuild/packaging; § Snapshot contract — unchanged timeline admission and lossless ownership.
+- Pending: `docs/knowledge/features/chat-history-api.md` § API — callable backend operations and atomic schema migration; `chat-history-results.md` § Results and failure preservation — rollback and reviewed plaintext ownership columns.
+- Pending: `docs/knowledge/features/chat-history-testing.md` § Demand and snapshot contracts — focused disk/isolation/failure tests and counted packaged Linux/macOS proof. Binding/import, authoritative storage, paging and partial writes remain with their assigned follow-ups.
 
 ## Security review
 
@@ -97,3 +105,14 @@ To make the existing Mac manager route usable without dispatcher changes, `e2e/h
 The focused case passed in 12.043 seconds; its stderr attachment is empty. Full returned reports are retained at `/tmp/builder-1979/mac-results-1/desktop/` (`playwright.json`, `playwright.list.log`, `capture.json`, `execution.log`). The report embeds the complete native stdout/stderr attachments. Native scratch on Mac: `/var/folders/k0/gc07w9ws319b07n0plnw6y8r0000gn/T/pyry-history-native-UKlAWb`.
 
 Inspected the full suite: 408 executed, 407 passed, 1 failed, 1 skipped, 0 retries; four workers, original configuration byte-identical (SHA256 f2868e97d72733c286ff8c3098f09adc62e2e8bfa3ad9393e000eebf9a429d5a). The single failure is the existing composer-status-spacing case, before Electron launch, classified HTTP 404 by `startFakeDaemonForTest`; it happened before the new native case started. Reuse #1983's open setup-reliability investigation for this additional HTTP rejection occurrence; no setup/product transport code changed here. The existing desktop-isolation skip says a never-shown window receives no pointer. Fake-daemon-setup attachment inventory is empty. The full suite is not claimed green; both required packaged-native checks passed independently. Final pre-verify: 406 unit files, 10,280 passed, 3 existing skips; production build and docs guard passed.
+
+2026-10-15 (rework verification): Pushed candidate `f2ef9815571c2ce773a0d736e0ec32d0f26b776a` passed pre-verify after the final main merge: 407 unit files, 10,284 passed, 3 existing skips; production build and docs guard passed. Focused rework: 10 executed, 10 passed. Both required packaged production-encryption checks passed on this candidate:
+
+```json
+{"platform":"linux","architecture":"x64","electron":"33.4.11","node":"20.18.3","adapter":"12.4.1","packaged":true,"backend":"gnome_libsecret","asar":true,"unpacked":true,"stage":"complete","executed":1,"passed":1,"failed":0,"skipped":0}
+{"platform":"darwin","architecture":"arm64","electron":"33.4.11","node":"20.18.3","adapter":"12.4.1","packaged":true,"backend":"os-keychain","asar":true,"unpacked":true,"stage":"complete","executed":1,"passed":1,"failed":0,"skipped":0}
+```
+
+Linux runtime files: `/tmp/pyry-history-native-oIcJN0/runtime.stdout` and `runtime.stderr`; focused Playwright case passed in 17.5 seconds. Mac managed task `3e410b97e50a5471f7ce4e37030f5781e4ad1f84b12f515c8520d95a72e515e8`, run `9297b2992b3b45cb013a6c5f392611eb5e33ca3e7526636e4eb6853acefc73cd`: native case passed in 8.899 seconds, stderr attachment empty. Returned reports and complete stdout/stderr attachments are retained at `/tmp/builder-1979/rework-54c52c4c/mac-results/desktop/`; native Mac scratch is `/var/folders/k0/gc07w9ws319b07n0plnw6y8r0000gn/T/pyry-history-native-7dvgvL`.
+
+Inspected all returned results: original configuration SHA256 `f2868e97d72733c286ff8c3098f09adc62e2e8bfa3ad9393e000eebf9a429d5a`, four workers, 408 executed, 406 passed, 2 failed, 1 existing skip, 0 retries. `hosted-app-view.spec.ts` → `native view retires on unpair` failed before Electron launch with HTTP 404; reuse #1983. `tool-groups.spec.ts` → `connect roster Agents appear before history and keep identity through live and historical launches` could not find the finished `connect-b` marker; filed #1998 in Backlog with priority:low after duplicate searches. These unchanged application scenarios do not call this unbound backend; no out-of-scope repair or added skip was made. The existing desktop-isolation skip requires a shown window for pointer input; fake-daemon-setup attachment inventory is empty. The full suite is not green. Both required native checks, pre-verify, build and docs guard are green. Windows native execution/NSIS packaging were not run; the explicit x64/arm64 packaging configuration is unchanged.

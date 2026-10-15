@@ -9,20 +9,24 @@ const record = (release = '1.0.0') => ({ app_id: appId, title: 'Example', state:
   active_release: release, pending_release: null, last_error: null, revision: 1 })
 function scenario(label = 'first') {
   const seen: any[] = [], chunks = new Map<number, { app: string; bytes: Buffer[] }>()
-  const late: Uint8Array[] = []
-  let id = 1000, release = '1.0.0', revision = 1
+  const late: Uint8Array[] = [], discovery: Uint8Array[] = []
+  let id = 1000, release = '1.0.0', revision = 1, holdDiscovery = false
   const frame = (type: string, payload: unknown, reply?: number) => Buffer.from(JSON.stringify({
     id: id++, type, ts: '2026-10-15T10:00:00Z', ...(reply === undefined ? {} : { in_reply_to: reply }), payload }))
   const part = (request: number, index: number) => {
     const c = chunks.get(request)!
     return frame('app_response_chunk', { app_id: c.app, index, data: c.bytes[index].toString('base64') }, request)
   }
-  return { seen, frame, late, update(next: string, state = 'running') { release = next; revision++;
+  return { seen, frame, late, discovery, holdDiscovery() { holdDiscovery = true }, update(next: string, state = 'running') { release = next; revision++;
     return frame('app_updated', { ...record(release), state, revision }) },
   options: { helloAck: { server_id: label === 'second' ? SECOND_SERVER_ID : FIRST_SERVER_ID, capabilities: ['hosted_apps_v1'] }, buildReplyFrames(bytes: Uint8Array) {
     const r = JSON.parse(Buffer.from(bytes).toString()); seen.push(r)
     if (r.type === 'list_conversations') return [seedConversationsFrame(label === 'second' ? SECOND_SEEDED_ROW : undefined)]
-    if (r.type === 'list_apps') return [frame('apps', { revision, items: [{ ...record(release), revision }], next_cursor: null }, r.id)]
+    if (r.type === 'list_apps') {
+      const reply = frame('apps', { revision, items: [{ ...record(release), revision }], next_cursor: null }, r.id)
+      if (holdDiscovery) { discovery.push(reply); return [] }
+      return [reply]
+    }
     if (r.type === 'app_response_credit') return [part(r.payload.request_id, r.payload.next_index)]
     if (r.type === 'app_cancel') return [frame('app_cancelled', r.payload, r.id)]
     if (!['app_asset_request', 'app_api_request'].includes(r.type)) return []
@@ -53,17 +57,39 @@ function scenario(label = 'first') {
   } } }
 }
 async function open(app: ElectronApplication, server = FIRST_SERVER_ID, separate = false) {
-  return app.evaluate(({ BrowserWindow, app }, { server, appId, separate }) => {
-    const controller = (app as any).hostedAppViews
-    const parent = separate ? new BrowserWindow({ show: false }) : BrowserWindow.getAllWindows().find(w => w.webContents.getURL().includes('index.html'))!
-    const result = controller.open(parent, server, appId, { x: 400, y: 60, width: 600, height: 600 })
-    if (!result.ok) throw new Error(JSON.stringify(result))
-    ;(globalThis as any).hosted = result.view
-    ;(globalThis as any).hostedParent = parent
-    ;(globalThis as any).hostedStates = [result.view.read().type]
-    result.view.subscribe(() => (globalThis as any).hostedStates.push(result.view.read().type))
-    return { origin: result.view.origin, id: result.view.content.webContents.id }
-  }, { server, appId, separate })
+  const parentId = await app.evaluate(({ BrowserWindow }, separate) => (separate ? new BrowserWindow({ show: false }) :
+    BrowserWindow.getAllWindows().find(w => w.webContents.getURL().includes('index.html'))!).id, separate)
+  let opened: { origin: string; id: number } | undefined
+  let unexpected: unknown
+  await expect.poll(async () => {
+    if (opened) return true // Retain the first successful native handle; never replace it while polling.
+    const result = await app.evaluate(({ BrowserWindow, app }, { server, appId, parentId }) => {
+      const controller = (app as any).hostedAppViews
+      const parent = BrowserWindow.fromId(parentId)!
+      const result = controller.open(parent, server, appId, { x: 400, y: 60, width: 600, height: 600 })
+      if (!result.ok) { (globalThis as any).hostedOpenRefusal = result; return result }
+      ;(globalThis as any).hosted = result.view
+      ;(globalThis as any).hostedParent = parent
+      ;(globalThis as any).hostedStates = [result.view.read().type]
+      result.view.subscribe(() => (globalThis as any).hostedStates.push(result.view.read().type))
+      return { ok: true as const, origin: result.view.origin, id: result.view.content.webContents.id }
+    }, { server, appId, parentId })
+    if (!result.ok) {
+      if (result.error === 'unconfirmed' && result.state.type === 'loading') return false
+      unexpected = result; return true
+    }
+    opened = { origin: result.origin, id: result.id }
+    return true
+  }).toBe(true)
+  expect(unexpected).toBeUndefined()
+  if (!opened) throw new Error('authoritative open did not complete')
+  return opened
+}
+async function expectDiscoveryPending(app: ElectronApplication) {
+  expect(await app.evaluate(({ app, BrowserWindow }, { appId, server }) => app.hostedAppViews!.open(
+    BrowserWindow.getAllWindows().find(w => w.webContents.getURL().includes('index.html'))!, server,
+    appId, { x: 400, y: 60, width: 600, height: 600 }), { appId, server: FIRST_SERVER_ID }))
+    .toEqual({ ok: false, error: 'unconfirmed', state: { type: 'loading' } })
 }
 async function evaluate(app: ElectronApplication, script: string) {
   return app.evaluate(async (_, script) => (globalThis as any).hosted.content.webContents.executeJavaScript(script), script)
@@ -71,8 +97,18 @@ async function evaluate(app: ElectronApplication, script: string) {
 
 test('native resources load modules, SPA navigation, binary bytes and HTTP semantics', async ({ launchPairedApp }) => {
   const s = scenario()
-  const { app } = await launchPairedApp(s.options)
-  const v = await open(app)
+  s.holdDiscovery()
+  const { app, daemon } = await launchPairedApp(s.options)
+  await expect.poll(() => s.discovery.length).toBe(1)
+  await expectDiscoveryPending(app)
+  const opening = open(app).then(view => ({ view }), error => ({ error: String(error) }))
+  await expect.poll(() => app.evaluate(() => (globalThis as any).hostedOpenRefusal))
+    .toEqual({ ok: false, error: 'unconfirmed', state: { type: 'loading' } })
+  for (const frame of s.discovery.splice(0)) daemon.pushFrame(frame)
+  const result = await opening
+  expect(result).toHaveProperty('view')
+  if (!('view' in result)) throw new Error(result.error)
+  const v = result.view
   expect(v.origin).toMatch(/^https:\/\/app-[a-f0-9]{32}\.invalid$/)
   await expect.poll(() => evaluate(app, 'document.body.dataset.loaded')).toBe('first-dynamic')
   expect(await app.evaluate(() => (globalThis as any).hostedStates)).toEqual(['loading', 'ready'])
@@ -239,6 +275,7 @@ for (const cause of ['removed', 'discovery-gap', 'rehandshake', 'unpair', 'paren
       await evaluate(app, `window.pending = fetch('/api/held').catch(() => 'retired'); undefined`)
       await expect.poll(() => s.seen.filter(r => r.type === 'app_api_request' && r.payload.path === '/api/held').length).toBe(1)
     }
+    if (cause === 'discovery-gap' || cause === 'rehandshake') s.holdDiscovery()
     if (cause === 'removed') daemon.pushFrame(s.frame('app_removed', { app_id: appId, revision: 2 }))
     if (cause === 'discovery-gap') daemon.pushFrame(s.frame('app_removed', { app_id: appId, revision: 900 }))
     if (cause === 'rehandshake') await page.evaluate(server => window.pyry.reconnectServer(server), FIRST_SERVER_ID)
@@ -259,7 +296,9 @@ for (const cause of ['removed', 'discovery-gap', 'rehandshake', 'unpair', 'paren
         .toEqual(['ready', true])
     }
     if (cause === 'discovery-gap' || cause === 'rehandshake') {
-      await expect.poll(() => s.seen.filter(r => r.type === 'list_apps').length).toBe(2)
+      await expect.poll(() => s.discovery.length).toBe(1)
+      await expectDiscoveryPending(app)
+      for (const frame of s.discovery.splice(0)) daemon.pushFrame(frame)
       const next = await open(app)
       expect(next.origin).not.toBe(initial.origin)
       await expect.poll(() => evaluate(app, 'document.body.dataset.loaded')).toBe('first-dynamic')

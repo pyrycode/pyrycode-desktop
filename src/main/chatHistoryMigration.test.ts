@@ -77,6 +77,30 @@ it('rolls back an interrupted two-format import and retries without duplicates',
   expect(await next.store.execute(read('readThread'))).toEqual({ status: 'stored', snapshot: thread() })
 })
 
+it.each(['timeline', 'daemon-items'])('classifies an outer %s replacement commit failure and preserves the committed snapshot', async kind => {
+  const h = await setup(), first = h.fresh()
+  const operation = kind === 'timeline' ? 'replaceTimeline' : 'replaceThread'
+  const reading = kind === 'timeline' ? 'readTimeline' : 'readThread'
+  const before = kind === 'timeline' ? timeline() : thread()
+  const replacement = kind === 'timeline' ? timeline('a', 'newer') : { ...thread(), thread: { ...thread().thread, epoch: 'fresh' } }
+  expect(await first.store.execute({ ...read(operation), snapshot: before })).toEqual({ status: 'ok' })
+  first.database.transaction(db => db.exec(`
+    CREATE TABLE commit_parent (id INTEGER PRIMARY KEY);
+    CREATE TABLE commit_child (id INTEGER REFERENCES commit_parent(id) DEFERRABLE INITIALLY DEFERRED);
+    CREATE TRIGGER fail_outer_commit AFTER INSERT ON ${kind === 'timeline' ? 'legacy_scopes' : 'thread_scopes'}
+      BEGIN INSERT INTO commit_child VALUES (1); END;
+  `))
+  // A deferred constraint passes nested backend savepoints and fails the store's actual COMMIT.
+  expect(await first.store.execute({ ...read(operation), snapshot: replacement })).toEqual({ status: 'error', code: 'write-failed' })
+  expect(await first.store.execute(read(reading))).toEqual({ status: 'stored', snapshot: before })
+  first.database.close()
+  const next = h.fresh()
+  expect(await next.store.execute(read(reading))).toEqual({ status: 'stored', snapshot: before })
+  next.database.transaction(db => db.exec('DROP TRIGGER fail_outer_commit'))
+  expect(await next.store.execute({ ...read(operation), snapshot: replacement })).toEqual({ status: 'ok' })
+  expect(await next.store.execute(read(reading))).toEqual({ status: 'stored', snapshot: replacement })
+})
+
 it.each(['invalid', 'version', 'decrypt'])('preserves an unreadable %s source and recovers without poisoning the queue', async mode => {
   const h = await setup(); await h.seed(mode === 'invalid' ? [{ ...thread(), thread: null }] : [thread()], mode === 'version' ? 9 : 1)
   const before = await h.persistence.read('chat-history'), decrypt = h.encryption.decrypt

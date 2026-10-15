@@ -116,11 +116,17 @@ export function createChatHistoryStore(deps: {
     let reading = true
     try {
       const result = database.transaction((db): ChatHistoryResult => {
-        if (operation === 'readTimeline' || operation === 'replaceTimeline') return requireSuccess(legacy.executeSync(request))
+        if (operation === 'readTimeline' || operation === 'replaceTimeline') {
+          const result = requireSuccess(legacy.executeSync(request))
+          reading = operation === 'readTimeline'
+          return result
+        }
         if (operation === 'readThread' || operation === 'replaceThread') {
           const result = threads.executeSync(request)
           if (result.status === 'page') throw INVALID_CHAT_HISTORY
-          return requireSuccess(result)
+          requireSuccess(result)
+          reading = operation === 'readThread'
+          return result
         }
         const saved = list(db, serverId)
         if (operation === 'readList') return saved === null ? { status: 'missing' } : { status: 'stored', snapshot: saved }

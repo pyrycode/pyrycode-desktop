@@ -243,18 +243,35 @@ Repeated-page persistence needs separate receipt and save barriers. Restored row
 and enabled Send can precede the newest reply; focusing the thread creates no
 history demand. Install `observeCommands` and a `historyPageReceived` listener
 before opening the saved chat, match the host/conversation/expected cursor, then
-await delivery before polling the actual protected `readTimeline` snapshot. The
-receipt is not proof of the writer's buffered save. Keep immediate fake replies
+await delivery separately from successful protected replacement. The receipt is
+not proof of the writer's buffered save. Keep immediate fake replies
 so synchronization does not remove restoration-overlap coverage; a held reply is
 useful for diagnosis, not a replacement for that timing.
 
 The receipt-saturation scenario keeps 500 receipts × 200 ids, evicts only `page-0`
 for `repeat`, and preserves oldest-end coverage and the single assistant's key
 `-8`. It verifies exactly one newest command (`cursor: ''`, limit 200), retains the
-five-second full saved-snapshot predicate after the separate 20-second receipt
-wait, then saves later live content at key `42` with next key `43` and checks
-equality after a third fresh Electron launch. See
+separate 20-second repeated-page receipt wait, then polls successful protected
+replacement for five seconds before comparing the complete saved snapshot once.
+Later live content uses a host/conversation/message-id-specific `messageReceived`
+listener installed before the push, followed by its own five-second save check.
+It retains key `42` with next key `43` and checks complete saved-snapshot equality
+after a third fresh Electron launch. Reused profiles reconnect through the first
+launch's still-running fake; script and observe that daemon. See
 [cause and counted validation](development-verification-history.md#served-page-persistence-verification).
+
+Polling a record containing 100,000 receipt ids can consume the deadline while
+transferring an old read even after a replacement succeeds. The scenario installs
+one forwarding wrapper around the real protected handler in `onLaunched`, after
+handler readiness and before navigation. It records item counts only for matching
+host/conversation `replaceTimeline` calls returning `ok`. Poll the small observation
+through `readMainProcess` for counts `1`, then `2`; retain the full snapshot
+assertions to detect incorrect persisted state. Installation is single-shot, and
+the original handler is restored before closing. A held-save control confirms
+receipt alone cannot release this barrier. Rendered text is also a poor receipt
+barrier under contention; the typed event avoids coupling persistence proof to
+layout readiness. Alternating CDP/main command observers both reproduced the race,
+so this scenario keeps its existing `observeCommands`.
 
 ## History continuity and overlap
 

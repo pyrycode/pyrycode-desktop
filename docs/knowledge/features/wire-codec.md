@@ -374,11 +374,14 @@ parser and remains runnable during held transfers.
 Host-wide discovery reconciliation, cursor expiry/restarts and readiness refresh
 now belong to `hostedApps`; connection hello construction advertises
 `hosted_apps_v1`. Validators remain stateless. See
-[hosted readiness and retirement](daemon-connection-lifecycle.md#deadlines-and-retirement)
+[hosted readiness and retirement](daemon-connection-hosted-resource-views.md#deadlines-and-retirement)
 for atomic snapshots, contiguous updates, fixed deadlines and explicit retry. The
-isolated viewer remains with [#1960](https://github.com/pyrycode/pyrycode-desktop/issues/1960),
+[native viewer](daemon-connection-hosted-resource-views.md#native-viewer) consumes
+that readiness-bound service. Fetch adaptation remains with
+[#1961](https://github.com/pyrycode/pyrycode-desktop/issues/1961), trusted chrome/placement
+with [#1992](https://github.com/pyrycode/pyrycode-desktop/issues/1992),
 Apps rows/navigation/stable links with [#1928](https://github.com/pyrycode/pyrycode-desktop/issues/1928), and real paired
-round trips/browser interaction/SQL persistence acceptance with later slices and
+round trips/browser interaction/SQL persistence acceptance with
 [#1929](https://github.com/pyrycode/pyrycode-desktop/issues/1929). Manifest/build
 validation and asset-handle containment remain daemon-owned.
 

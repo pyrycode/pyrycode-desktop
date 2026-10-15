@@ -1,6 +1,7 @@
 import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { Envelope, HistoryPagePayload } from '../src/shared/wire/types'
+import type { ElectronApplication, Locator, Page } from '@playwright/test'
 
 const newestIds = Array.from({ length: 20 }, (_, index) => index + 8)
 const ts = '2026-10-07T12:00:00Z'
@@ -15,7 +16,44 @@ const reply = (ask: Envelope, ids: number[], cursor: string, tool = false) => en
     } } : message(id)), cursor, at_start: true
   } })
 
-test('known gaps require fresh input, retain failure/resume, anchor and expansion through protected restoration', async ({ launchPairedApp }) => {
+const settled = (thread: Locator) => expect.poll(() => thread.evaluate(async el => {
+  const metrics = () => [el.scrollTop, el.scrollHeight, el.clientHeight, el.clientWidth,
+    el.querySelector('[data-history-gap]')?.getBoundingClientRect().top ?? 0]
+  let previous = metrics()
+  for (let frame = 0; frame < 3; frame++) {
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+    const next = metrics()
+    if (next.some((value, index) => Math.abs(value - previous[index]) > 0.1)) return false
+    previous = next
+  }
+  return true
+})).toBe(true)
+async function prepareGapInput({ page, app }: { page: Page; app: ElectronApplication }, asks: Envelope[], expectedRequests: number) {
+  const thread = page.locator('.conversation__thread'), marker = thread.locator('[data-history-gap]').first()
+  await page.mouse.move(0, 0)
+  await thread.focus()
+  await expect(thread).toBeFocused()
+  await settled(thread)
+  await marker.evaluate(node => {
+    const el = node.parentElement!, viewport = el.getBoundingClientRect(), rect = node.getBoundingClientRect()
+    const top = Math.max(viewport.top, document.querySelector('.conversation__top-chrome')!.getBoundingClientRect().bottom)
+    const bottom = Math.min(viewport.bottom, document.querySelector('.conversation__input-chrome')!.getBoundingClientRect().top)
+    el.scrollTop += (rect.top + rect.bottom - top - bottom) / 2
+  })
+  await settled(thread)
+  await expect.poll(() => marker.evaluate(node => {
+    const el = node.parentElement!, viewport = el.getBoundingClientRect(), rect = node.getBoundingClientRect()
+    const top = Math.max(viewport.top, document.querySelector('.conversation__top-chrome')!.getBoundingClientRect().bottom)
+    const bottom = Math.min(viewport.bottom, document.querySelector('.conversation__input-chrome')!.getBoundingClientRect().top)
+    return { focused: document.activeElement === el, intersects: rect.height > 0 && rect.bottom > top && rect.top < bottom,
+      top, bottom, markerTop: rect.top, markerBottom: rect.bottom, scrollTop: el.scrollTop,
+      height: el.scrollHeight, viewport: el.clientHeight }
+  })).toMatchObject({ focused: true, intersects: true })
+  await app.evaluate(() => {})
+  expect(asks).toHaveLength(expectedRequests)
+}
+
+test('known gaps require fresh input, retain failure/resume, anchor and expansion through protected restoration', async ({ launchPairedApp }, testInfo) => {
   const asks: Envelope[] = []
   const { app, page, daemon, servers } = await launchPairedApp({ buildReplyFrames: bytes => {
     const env = decodeEnvelope(bytes)
@@ -38,40 +76,6 @@ test('known gaps require fresh input, retain failure/resume, anchor and expansio
   await expect.poll(() => asks.length).toBe(2)
   daemon.pushFrame(reply(asks[1], newestIds, 'gap-start'))
   const marker = thread.locator('[data-history-gap]')
-  // Focus and layout can invalidate a park before the pre-scroll demand measurement.
-  const settled = () => expect.poll(() => thread.evaluate(async el => {
-    const metrics = () => [el.scrollTop, el.scrollHeight, el.clientHeight, el.clientWidth]
-    let previous = metrics()
-    for (let frame = 0; frame < 3; frame++) {
-      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
-      const next = metrics()
-      if (next.some((value, index) => Math.abs(value - previous[index]) > 0.1)) return false
-      previous = next
-    }
-    return true
-  })).toBe(true)
-  const prepareGapInput = async (expectedRequests: number) => {
-    await page.mouse.move(0, 0)
-    await thread.focus()
-    await expect(thread).toBeFocused()
-    await settled()
-    await marker.evaluate(node => {
-      const el = node.parentElement!, viewport = el.getBoundingClientRect()
-      const top = Math.max(viewport.top, document.querySelector('.conversation__top-chrome')!.getBoundingClientRect().bottom)
-      const bottom = Math.min(viewport.bottom, document.querySelector('.conversation__input-chrome')!.getBoundingClientRect().top)
-      const rect = node.getBoundingClientRect()
-      el.scrollTop += (rect.top + rect.bottom - top - bottom) / 2
-    })
-    await settled()
-    await expect.poll(() => marker.evaluate(node => {
-      const el = node.parentElement!, viewport = el.getBoundingClientRect(), rect = node.getBoundingClientRect()
-      const top = Math.max(viewport.top, document.querySelector('.conversation__top-chrome')!.getBoundingClientRect().bottom)
-      const bottom = Math.min(viewport.bottom, document.querySelector('.conversation__input-chrome')!.getBoundingClientRect().top)
-      return document.activeElement === el && rect.height > 0 && rect.bottom > top && rect.top < bottom
-    })).toBe(true)
-    await app.evaluate(() => {})
-    expect(asks).toHaveLength(expectedRequests)
-  }
   await expect(marker).toHaveText('Load earlier messages')
   await expect(thread.locator('.bubble')).toHaveCount(21)
   expect(await thread.innerText()).toMatch(/Gap row 1[\s\S]*Load earlier messages[\s\S]*Gap row 8[\s\S]*Gap row 9/)
@@ -87,7 +91,7 @@ test('known gaps require fresh input, retain failure/resume, anchor and expansio
   expect(asks).toHaveLength(2)
   await marker.evaluate(el => el.scrollIntoView({ block: 'center' }))
   await page.screenshot({ path: '/tmp/builder-1879/gap-idle-800.png', animations: 'disabled' })
-  await prepareGapInput(2)
+  await prepareGapInput({ page, app }, asks, 2)
   await page.keyboard.press('ArrowUp')
   await expect.poll(() => asks.length).toBe(3)
   expect(asks[2].payload).toEqual({ conversation_id: SEEDED_ROW.id, cursor: 'gap-start', limit: 200 })
@@ -109,12 +113,28 @@ test('known gaps require fresh input, retain failure/resume, anchor and expansio
   await expect.poll(() => asks.length).toBe(4)
   expect(asks[3].payload).toEqual(asks[2].payload)
   const anchor = thread.getByText('Gap row 8', { exact: true })
+  // Retry focus can return the thread to zero; park only after its loading render.
+  await page.mouse.move(0, 0)
+  await settled(thread)
+  await marker.evaluate(node => {
+    const header = document.querySelector('.conversation__top-chrome')!.getBoundingClientRect().bottom
+    node.parentElement!.scrollTop += node.getBoundingClientRect().top - header - 4
+  })
+  await settled(thread)
   const before = (await anchor.boundingBox())!.y
+  const geometry = () => thread.evaluate(el => ({ top: el.scrollTop, height: el.scrollHeight, viewport: el.clientHeight,
+    focus: document.activeElement?.className, marker: el.querySelector('[data-history-gap]')?.getBoundingClientRect().toJSON(),
+    anchor: Array.from(el.querySelectorAll('.bubble')).find(row => row.textContent?.includes('Gap row 8'))?.getBoundingClientRect().toJSON() }))
+  const beforeGeometry = await geometry()
   daemon.pushFrame(reply(asks[3], [6, 7], 'gap-step'))
   await expect(marker).toHaveText('Load earlier messages')
   await expect(thread.locator('.bubble')).toHaveCount(23)
   await expect(tool).toHaveAttribute('aria-expanded', 'true')
-  await expect.poll(async () => Math.abs((await anchor.boundingBox())!.y - before)).toBeLessThan(2)
+  try {
+    await expect.poll(async () => Math.abs((await anchor.boundingBox())!.y - before)).toBeLessThan(2)
+  } finally {
+    await testInfo.attach('retry-anchor-geometry', { body: JSON.stringify({ before: beforeGeometry, after: await geometry() }), contentType: 'application/json' })
+  }
   await app.evaluate(() => {})
   expect(asks).toHaveLength(4)
   // Protected snapshot observation is a persistence barrier, separate from rendered rows.
@@ -128,7 +148,7 @@ test('known gaps require fresh input, retain failure/resume, anchor and expansio
   await expect.poll(() => asks.length).toBe(5)
   daemon.pushFrame(reply(asks[4], newestIds, 'newest-overlap'))
   await expect(marker).toHaveText('Load earlier messages')
-  await prepareGapInput(5)
+  await prepareGapInput({ page, app }, asks, 5)
   await page.keyboard.press('ArrowUp')
   await expect.poll(() => asks.length).toBe(6)
   expect(asks[5].payload.cursor).toBe('gap-step')
@@ -178,11 +198,11 @@ test('legacy and refused gap evidence survives full Electron relaunch and needs 
   const tool = thread.locator('.tool-row__chip--toggle').first()
   await tool.click()
   await expect(tool).toHaveAttribute('aria-expanded', 'true')
-  const step = async () => {
-    await marker.first().evaluate(el => el.scrollIntoView({ block: 'center' }))
-    await thread.focus(); await second.page.keyboard.press('ArrowUp')
+  const step = async (expectedRequests: number) => {
+    await prepareGapInput(second, asks, expectedRequests)
+    await second.page.keyboard.press('ArrowUp')
   }
-  await step(); await expect.poll(() => asks.length).toBe(3)
+  await step(2); await expect.poll(() => asks.length).toBe(3)
   expect(asks[2].payload.cursor).toBe('bad-origin')
   first.daemon.pushFrame(encodeEnvelope({ id: 91, type: 'error', ts, in_reply_to: asks[2].id,
     payload: { code: 'history.invalid_cursor', message: 'synthetic refusal' } }))
@@ -193,7 +213,7 @@ test('legacy and refused gap evidence survives full Electron relaunch and needs 
   await marker.evaluate(el => el.scrollIntoView({ block: 'center' }))
   await second.page.screenshot({ path: '/tmp/builder-1880/refused-800.png', animations: 'disabled' })
   expect(asks).toHaveLength(3)
-  await step(); await expect.poll(() => asks.length).toBe(4)
+  await step(3); await expect.poll(() => asks.length).toBe(4)
   expect(asks[3].payload.cursor).toBe('')
   first.daemon.pushFrame(reply(asks[3], newestIds, 'bad-origin'))
   await expect(marker).toHaveText('Load earlier messages')
@@ -212,11 +232,13 @@ test('legacy and refused gap evidence survives full Electron relaunch and needs 
   expect((await read(third.page))?.coverage).toEqual({ status: 'received', cursor: 'held-end', atStart: true })
   const restoredTool = restoredThread.locator('.tool-row__chip--toggle').first()
   await restoredTool.click()
-  const freshStep = async () => {
-    await restoredMarker.first().evaluate(el => el.scrollIntoView({ block: 'center' }))
-    await restoredThread.focus(); await third.page.keyboard.press('ArrowUp')
+  const freshStep = async (expectedRequests: number) => {
+    await prepareGapInput(third, asks, expectedRequests)
+    await third.page.keyboard.press('ArrowUp')
   }
-  await freshStep(); await expect.poll(() => asks.length).toBe(6)
+  // Controlled focus-time movement: preparation must park after focus has settled.
+  await restoredThread.evaluate(el => el.addEventListener('focus', () => { el.scrollTop = el.scrollHeight }, { once: true }))
+  await freshStep(5); await expect.poll(() => asks.length).toBe(6)
   expect(asks[5].payload.cursor).toBe('')
   first.daemon.pushFrame(reply(asks[5], newestIds, 'usable-origin'))
   await expect(restoredMarker).toHaveText('Load earlier messages')
@@ -224,14 +246,14 @@ test('legacy and refused gap evidence survives full Electron relaunch and needs 
   await third.page.setViewportSize({ width: 1280, height: 800 })
   await restoredMarker.evaluate(el => el.scrollIntoView({ block: 'center' }))
   await third.page.screenshot({ path: '/tmp/builder-1880/legacy-idle-1280.png', animations: 'disabled' })
-  await freshStep(); await expect.poll(() => asks.length).toBe(7)
+  await freshStep(6); await expect.poll(() => asks.length).toBe(7)
   expect(asks[6].payload.cursor).toBe('usable-origin')
   const anchor = restoredThread.getByText('Gap row 8', { exact: true })
   await restoredMarker.evaluate(node => {
     const header = document.querySelector('.conversation__top-chrome')!.getBoundingClientRect().bottom
     node.parentElement!.scrollTop += node.getBoundingClientRect().top - header - 4
   })
-  await third.page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  await settled(restoredThread)
   const before = (await anchor.boundingBox())!.y
   const frame = decodeEnvelope(reply(asks[6], [4, 5, 6, 7], 'walk'))
   first.daemon.pushFrame(encodeEnvelope({ ...frame, payload: { ...frame.payload, at_start: false } }))
@@ -240,7 +262,7 @@ test('legacy and refused gap evidence survives full Electron relaunch and needs 
   await expect.poll(async () => Math.abs((await anchor.boundingBox())!.y - before)).toBeLessThan(2)
   expect(await restoredThread.innerText()).toMatch(/Gap row 1[\s\S]*synthetic.txt[\s\S]*Gap row 4[\s\S]*Gap row 8/)
   expect(asks).toHaveLength(7)
-  await freshStep(); await expect.poll(() => asks.length).toBe(8)
+  await freshStep(7); await expect.poll(() => asks.length).toBe(8)
   // Only the tool identity proves overlap: omit the held operator ID and fresh-walk atStart.
   const joined = decodeEnvelope(reply(asks[7], [2, 3, 4], 'done', true))
   first.daemon.pushFrame(encodeEnvelope({ ...joined, payload: { ...joined.payload, at_start: false } }))

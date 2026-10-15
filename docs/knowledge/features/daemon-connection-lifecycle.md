@@ -118,172 +118,44 @@ for the bounded per-host payload hold, pairing lifetime and
 
 # Hosted resource views
 
-Select a named host with `registry.connectionFor(serverId)` (null for an unknown
-host). Its trusted main-process `hostedApps` API, backed by
-`src/main/transport/hostedApps.ts`, owns discovery independently of conversations:
+Main-process callers use `app.hostedAppViews.open(parent, serverId, appId, bounds)`
+from `src/main/hostedAppView.ts`. It captures
+`registry.connectionFor(serverId).hostedApps`, never the active selection, and
+requires complete current authoritative discovery of a running active release.
+Ordinary opens use that authority; `hostedApps.refresh()` invalidates existing
+bindings. Seeing `list_apps` dispatched does not prove discovery has completed.
 
-- `read()` returns a structured copy of `HostedAppsState`: `type` is `unavailable`,
-  `unsupported`, `loading`, `failed` with static `error`, or `ready` with `revision`
-  and `items: HostedAppRecord[]`. Find the current app in those copied items;
-  mutating the copy cannot change authority. Records retain every desired/observed
-  state, including stopped or failed apps and nullable releases/error summaries.
-- `subscribe(listener)` observes invalidation and status/record changes and returns
-  an unsubscribe function. Listeners read the current copy; listener exceptions
-  cannot escape into dispatch.
-- `refresh()` invalidates readiness and starts a new authoritative walk. Calls
-  during an active refresh coalesce. Unavailable/unsupported hosts send no discovery
-  requests.
-- `openView(appId)` returns `{ ok: true, view }` only from a complete current
-  snapshot plus contiguous updates, for a running record with non-null
-  `active_release`. Otherwise it returns `{ ok: false, error: 'unconfirmed' }`
-  locally. The caller cannot authorize a binding with a cached record or release.
+A refusal is `{ ok: false, error: 'unconfirmed', state }`, with static
+`state.type` of `loading`, `disconnected`, `unsupported` or `unavailable`.
+Success is `{ ok: true, view }`. The native handle exposes `content`
+(`WebContentsView`), `origin`, copied `read()` state, `subscribe(listener)` with
+unsubscribe, `resize(bounds)`, idempotent `close()` and readiness-bound
+`request(input, signal?)`. State moves from `loading` to `ready` after document
+load, and back to `loading` on navigation; retirement ends in `disconnected`,
+`unsupported`, `unavailable` or `closed`. Listener exceptions cannot change authority.
+Bound requests pin host/app/release/connection/view outside page code and fence
+late results. The native request capability is available for the Fetch consumer;
+the browser resource loader permits only same-origin GET without Range.
 
-The hello advertises `hosted_apps_v1` with the background handlers installed.
-Discovery support requires that capability in the current validated acknowledgement
-and `ack.server_id` matching the named paired host. Each supported initial
-connection, automatic re-handshake and explicit reconnect starts fresh discovery;
-cached running state grants no readiness. Capability downgrade or a foreign host
-acknowledgement leaves discovery unsupported. Identical app IDs on different hosts
-have independent records and bindings.
+Each successful open gets a fresh memory-only session and unpredictable
+`https://app-<32 lowercase hex>.invalid` origin. Node integration is off; sandbox
+and context isolation are on. No preload, `window.pyry` or page IPC is installed.
+Document-start lockdown removes `cookieStore`/`CookieStore` immutably, alongside
+native disabling of `document.cookie`; disabling the latter alone leaves an
+alternate cookie API usable. HTTP authentication and unsupported browser routes
+are denied too.
 
-The successful binding's `view` offers `request(input, signal?)` and `retire()`.
-The underlying `hostedResources.openView(appId, release)` remains the lower-level
-transport seam, backed by `src/main/transport/hostedResources.ts`; it checks
-authentication/capability and pins identities, but does not establish discovery
-readiness. Native consumers use `hostedApps.openView` for that authority. Request
-input discriminates `app_asset_request` and `app_api_request`, with wire payload
-fields except `app_id`/`release_version`: the closure pins those identities, its
-connection, unique view scope and resource generation. Callers supply no envelope
-ID or response routing authority. Discovery, resource, credit and cancel IDs share
-`nextEnvelopeId`, which stays monotonic across dials.
+Release change, removal/non-running state, discovery loss, disconnect,
+re-handshake/unpair, replacement, close and parent teardown retire resources and
+native content. Setup/debugger failure also retires content. Old handles never
+revive: reopening needs current authority and a fresh generation/session/origin.
 
-The synchronous owner queues at most sixteen pending operations per view,
-including active work, with at most eight active per connection. Metadata reserves
-declared bytes against 16 MiB per connection before allocation. The
-[contextual codecs](wire-codec.md#response-metadata-and-original-request-correspondence)
-bound assets to 8 MiB/256 chunks, APIs to 1 MiB/32 chunks, and request bodies/chunks
-to 32768 decoded bytes. Completion requires one accepted metadata frame, feasible
-chunk counts, consecutive granted chunks, exact declared length/count and SHA-256.
-Validated zero-body metadata completes immediately. The initial request grants only
-chunk 0; consuming each nonfinal chunk sends one next credit, which grants nothing
-until its send observation reports written. Other transport/control traffic keeps
-running while a resource waits.
-
-`request` resolves to `{ ok: true, metadata, bytes: Buffer }` or
-`{ ok: false, error, uncertain }`. Allowed API verbs, encoded queries, binary
-bodies and permitted headers retain the
-[wire HTTP semantics](wire-codec.md#resource-requests-and-http-limits).
-Non-2xx HTTP status remains a successful resource result; HEAD/204/205/304 deliver
-an empty buffer. Failure categories are `unavailable`, `retired`, `aborted`,
-`limit`, `invalid`, `timeout`, `corrupt`, `bridge` and `send-failed`.
-Diagnostics contain static event/code only. Bytes stay in main on the existing
-encrypted transport, without HTTP access or persistence. Isolated viewer delivery
-belongs to [#1960](https://github.com/pyrycode/pyrycode-desktop/issues/1960);
-Apps rows, navigation and stable links belong to
-[#1928](https://github.com/pyrycode/pyrycode-desktop/issues/1928). Daemon production
-activation, real round trips and SQL acceptance remain with
-[#1929](https://github.com/pyrycode/pyrycode-desktop/issues/1929).
-
-## Deadlines and retirement
-
-Discovery walks one pending `list_apps` request per connection, with at most
-16 records per page and 256 records per host. App IDs must increase strictly
-within and across pages at one snapshot revision. Publish only a complete atomic
-snapshot, including an empty result. During the walk, buffer at most 256 newer
-`app_updated`/`app_removed` notifications. Discard revisions at or below the
-snapshot and apply newer whole records or removal tombstones contiguously before
-publishing. Ready-state notifications use the same contiguous rule. A correlated
-`apps.changed` error (including cursor expiry), page revision/order drift, revision
-gap or notification overflow discards the incomplete walk and coalesces a restart.
-Malformed owned traffic fails discovery; stale, foreign and cross-generation
-replies cannot certify readiness.
-
-A refresh has a fixed thirty-second deadline from enqueue, including all its
-restarts, and a five-second inactivity limit refreshed only by an accepted list
-page. Restart errors and unrelated notifications cannot extend inactivity. Expiry,
-admission exhaustion, invalid traffic, other bridge errors and request/send failure
-leave `failed` with static `timeout`, `limit`, `invalid`, `bridge` or `send-failed`.
-That state grants no readiness and stays failed until a trusted caller requests
-`refresh()` or a new supported connection starts discovery. Daemon retry hints
-alone do not authorize another attempt. Completion/failure releases walk buffers
-and deadline/restart timers; reset also clears cancellation bookkeeping.
-
-Resource operations separately keep their thirty-second enqueue deadline and
-five-second active progress timeout, refreshed only by accepted metadata/chunks.
-Queue promotion checks enqueue expiry before sending; inbound progress checks
-both deadlines before refreshing inactivity. Timer callback ordering must not
-dispatch expired work or let a late frame rescue it.
-
-Loss of authoritative discovery retires all discovery bindings before notifying
-observers. Release change, removal or non-running state retires just the affected
-app's bindings; unaffected apps and hosts remain usable. `hostedResources.retireViews`
-holds shared queue promotion until the entire affected binding set is retired,
-preserving an existing pump guard. Retiring handles sequentially without that
-barrier would let an active read settling in the first scope dispatch a queued
-stale mutation in another affected scope. Queued mutations that were never sent
-settle with `uncertain: false`; eligible unaffected work resumes after the barrier.
-
-Abort retires one resource operation. View `retire()` permanently invalidates that
-handle, unregisters its discovery binding and settles its pending work; owner
-`hostedResources.retire()` invalidates every resource view on the connection.
-Rediscovery permits fresh bindings and reads, never revival of old handles or
-replay of uncertain mutations. Resource terminals settle once, remove timers/abort
-listeners and release reservations/partial bytes. Invalid correlated resource
-responses, bridge errors and send/drop failures affect their own operation.
-
-Discovery lists/cancellations and resource credits/cancellations share sixteen
-control reservations per connection. Pending correlations and held sends reserve
-separately, so fewer than sixteen cancellations may be admitted. A held send's
-reservation survives target or acknowledgement expiry until its send observation
-or connection reset: releasing it earlier would allow repeated refreshes to grow
-the Noise rekey buffer. Exhaustion fails the affected work locally with `limit`.
-
-Retire obsolete pending list work immediately and, while connected and capacity
-permits, send `app_cancel` with the target `request_id` and no `app_id`. Resource
-retirement, abort, timeout and response failure cancel attempted work with app
-scope. Each cancellation has its own allocated envelope ID matched by
-`app_cancelled.in_reply_to`; its payload must match the target request and scope
-(app omitted for a list). Target settlement and fresh discovery never wait for
-the acknowledgement. Cancellation correlations expire independently after five
-seconds; acknowledgement, malformed/wrong-target reply or send failure releases
-only that cancellation's bookkeeping, without reviving the target. Held-send
-reservations retain their independent lifetime.
-
-Relay drop, handshake, explicit reconnect, authentication/update-required failure,
-driver error/terminal and stop reset resources before discovery. Unpair removes
-and stops the host; pairing replacement reconnects it. Reset resources first so
-discovery retirement cannot send old-session resource cancels during re-handshake;
-observers run only after both authorities are invalidated. Reset advances resource
-generation and releases controls, timers and buffers. Old handles stay retired even
-if host/app/release names match;
-the dial fence rejects superseded-driver callbacks and the shared allocator prevents
-reused IDs across redials. Unknown/late metadata/chunks allocate nothing. Failed
-POST/PUT/PATCH/DELETE operations become `uncertain: true` once sending is attempted,
-including a thrown/refused send; queued operations never attempted remain certain.
-No mutation is automatically replayed.
-
-Hosted dispatch preserves fatal authentication/update-required precedence, then
-routes discovery-owned list/cancel replies before resource-owned replies and
-generic envelope admission. It validates original bytes through the hosted codecs.
-Unvalidated `parseJsonObject` hints may locate and retire owned work even when
-`decodeEnvelope` would reject it; they never authorize byte acceptance. Valid fatal
-authentication/update errors retain precedence. See the
-[wire boundary lesson and focused coverage](wire-codec.md#consumer-obligations-and-testing).
-
-`hostedApps.test.ts` covers complete/empty walks, interleaved updates/removal,
-restart/deadline/control bounds, copied reads, cancellation correlation and bulk
-retirement. `daemonConnection.test.ts` exercises advertisement, per-host support,
-re-handshake/downgrade and identical app IDs on two hosts. Its held walk uses a
-positively processed unrelated message/control request as the dispatch barrier;
-silence alone would not prove unrelated traffic remains runnable.
-
-The [verifier PASS verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1990#issuecomment-6183913898)
-at `f27ef45f` records 10,274 unit tests executed/passed, 0 failed and 3 skipped,
-and 398 fake-transport Playwright tests executed/passed, 0 failed and 1 skipped.
-Its PASS review confirms all seven `retires affected bindings before queue promotion`
-variants were present and passed: release, removal, non-running state, refresh,
-gap, invalid notification and reset, with queued POSTs unsent and unaffected work
-completing. This is fake transport evidence; live acceptance remains with #1929.
+See [discovery, resources, native policy and verification](daemon-connection-hosted-resource-views.md)
+and [ADR 0012](../decisions/0012-hosted-app-native-isolation.md).
+Fetch adaptation remains [#1961](https://github.com/pyrycode/pyrycode-desktop/issues/1961),
+trusted chrome/placement [#1992](https://github.com/pyrycode/pyrycode-desktop/issues/1992),
+entry points [#1928](https://github.com/pyrycode/pyrycode-desktop/issues/1928) and real
+daemon/relay/SQL proof [#1929](https://github.com/pyrycode/pyrycode-desktop/issues/1929).
 
 # How it works
 

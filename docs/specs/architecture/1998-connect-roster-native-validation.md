@@ -49,6 +49,9 @@ pre-verify checks, build and docs guard passed. Units: 10,292 executed/passed,
 0 failed, 3 existing skips, 408 passing files. Logs: `/tmp/builder-1998/pre-verify.log`
 and `/tmp/builder-1998/build.log`. The scenario and configuration remain byte-for-byte
 unchanged from merged main.
+Configuration SHA256: `f2868e97d72733c286ff8c3098f09adc62e2e8bfa3ad9393e000eebf9a429d5a`,
+identical to the original macOS failure. Scenario-file SHA256:
+`5bcaa01b1d16335b5a97589e2e36a6be79ce44bca85ea4123c600872a8457a32`.
 
 Native task `0234f9aa222747faa60ae91272b3c4c0a8c191f095a48b442728b5adbb6e44ce`
 targets that exact pushed candidate. It is queued, with no assigned machine or
@@ -57,3 +60,5 @@ executed result yet. Pending reports: `/tmp/builder-1998/mac-results/desktop/`
 configuration and setup attachments). Retrieve with `fleet-task.py await <task>
 --out /tmp/builder-1998/mac-results`, inspect the full suite and named scenario,
 then commit the counted native result here. No native pass is claimed.
+Last task read: 2026-10-15 09:50 UTC, still queued with no assigned runner/result.
+PR #2000 carries this pending complete-native-gate handoff explicitly.

@@ -77,3 +77,17 @@ commands as host/conversation/target separately from wire delivery: duplicate ID
 both daemons remain refused by main's existing ambiguous-owner guard. No production contract changes.
 #1964 overlaps this file's separate agent-scroll test; edits remain local to read evidence.
 Recount: about 590 written lines overall, no new exports or production consumers in this repair.
+
+2026-10-15 (verifier finding 2): The roster scenario in `e2e/tool-groups.spec.ts`
+stores history requests from two conversations in one slot, although main's
+`requestHistory` correlates replies by request ID and suppresses repeated pending
+requests. Make the quiet conversation's outstanding request an explicit barrier
+before returning to the seeded conversation, reproducing the wrong-reply race.
+Then capture requests by owning host/conversation and answer the seeded request;
+wait for its historical child to commit before asserting the existing finished
+marker. Keep quiet history delayed throughout. No production behavior changes.
+No other numeric feature branch overlaps these repair files. The runtime
+CodeGraph sidecars are already untracked by merged main. Obtain the complete
+native fake suite for the pushed candidate, preserving its configured workers,
+projects and retries; inspect all returned results and setup attachments.
+Recount: under 700 total written lines, no additional exports or consumers.

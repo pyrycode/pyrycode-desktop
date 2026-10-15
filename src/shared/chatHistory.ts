@@ -271,8 +271,7 @@ function signedSafe(value: unknown): number {
   return Number.isSafeInteger(n) ? n : invalid()
 }
 
-function retainedThread(value: unknown, hostId: string, conversationId: string): ThreadSnapshot {
-  const v = record(value)
+function retainedItems(value: unknown): ThreadSnapshot['items'] {
   let nodes = 0
   function json(value: unknown, depth = 0): unknown {
     if (++nodes > MAX_CHAT_HISTORY_ITEMS || depth > 64) return invalid()
@@ -286,33 +285,144 @@ function retainedThread(value: unknown, hostId: string, conversationId: string):
     // fromEntries creates own data properties, including __proto__, without invoking setters.
     return Object.fromEntries(entries.map(([key, child]) => [string(key), json(child, depth + 1)]))
   }
-  const items = array(v.items, value => {
+  return array(value, value => {
     const item = record(json(value))
     return { ...item, id: readId(item.id), kind: string(item.kind), rev: readId(item.rev) }
   })
-  const itemIds = new Set(items.map(item => item.id))
-  const arrivalOrder = optional(v.arrivalOrder, value => array(value, readId))
-  const version = readId(v.version), checkpoint = readId(v.checkpoint)
-  const uncommittedVersion = v.uncommittedVersion === undefined ? (version > checkpoint ? version : 0) : readId(v.uncommittedVersion)
-  const ranges = array(v.ranges, value => {
+}
+function retainedRanges(value: unknown): ThreadSnapshot['ranges'] {
+  const ranges = array(value, value => {
     const r = record(value), start = readId(r.start), end = readId(r.end)
     return start <= end ? { start, end } : invalid()
   })
+  if (ranges.some((r, i) => i > 0 && r.start <= ranges[i - 1].end)) return invalid()
+  return ranges
+}
+function retainedMetadata(value: unknown, hostId: string, conversationId: string): Omit<ThreadSnapshot, 'items' | 'ranges' | 'arrivalOrder'> {
+  const v = record(value)
+  const version = readId(v.version), checkpoint = readId(v.checkpoint)
+  const uncommittedVersion = v.uncommittedVersion === undefined ? (version > checkpoint ? version : 0) : readId(v.uncommittedVersion)
   const repair = nullable(v.repair, value => {
     const r = record(value), fromVersion = readId(r.fromVersion), throughVersion = readId(r.throughVersion)
     return fromVersion === checkpoint && throughVersion >= fromVersion ? { fromVersion, throughVersion } : invalid()
   })
   if (id(v.hostId) !== hostId || id(v.conversationId) !== conversationId || checkpoint > version ||
-      uncommittedVersion > version || itemIds.size !== items.length ||
-      (arrivalOrder !== undefined && (arrivalOrder.length !== items.length ||
-        new Set(arrivalOrder).size !== items.length || arrivalOrder.some(id => !itemIds.has(id)))) ||
-      ranges.some((r, i) => i > 0 && r.start <= ranges[i - 1].end)) return invalid()
-  return { hostId, conversationId, epoch: id(v.epoch), items, version, checkpoint, uncommittedVersion, ranges, repair,
-    ...(arrivalOrder === undefined ? {} : { arrivalOrder }),
+      uncommittedVersion > version) return invalid()
+  return { hostId, conversationId, epoch: id(v.epoch), version, checkpoint, uncommittedVersion, repair,
     ...(v.olderAvailable === undefined ? {} : { olderAvailable: bool(v.olderAvailable) }) }
+}
+/** Selected facts share admission with full snapshots, without claiming complete membership. */
+export const threadHistoryCodec = { items: retainedItems, ranges: retainedRanges, metadata: retainedMetadata }
+
+function retainedThread(value: unknown, hostId: string, conversationId: string): ThreadSnapshot {
+  const v = record(value), items = retainedItems(v.items), ranges = retainedRanges(v.ranges)
+  const itemIds = new Set(items.map(item => item.id))
+  const arrivalOrder = optional(v.arrivalOrder, value => array(value, readId))
+  if (itemIds.size !== items.length ||
+      (arrivalOrder !== undefined && (arrivalOrder.length !== items.length ||
+        new Set(arrivalOrder).size !== items.length || arrivalOrder.some(id => !itemIds.has(id))))) return invalid()
+  return { ...retainedMetadata(v, hostId, conversationId), items, ranges,
+    ...(arrivalOrder === undefined ? {} : { arrivalOrder }) }
 }
 
 /** Parsers return detached, allowlisted data; callers contain the static validation failures. */
+function historyCoverage(value: unknown): Extract<ChatHistorySnapshot, { kind: 'timeline' }>['coverage'] {
+  const c = record(value)
+  const status = choice(c.status, ['unknown', 'received'])
+  return status === 'unknown' ? { status } : { status, cursor: string(c.cursor), atStart: bool(c.atStart) }
+}
+
+function historyGap(value: unknown, keys: readonly number[]): HistoryGap {
+  const g = record(value)
+  const newerId = readId(g.newerId)
+  const cursor = 'cursor' in g ? string(g.cursor) : undefined
+  const refusedCursors = optional(g.refusedCursors, value => array(value, string))
+  if (refusedCursors !== undefined && (new Set(refusedCursors).size !== refusedCursors.length ||
+      cursor !== undefined && refusedCursors.includes(cursor))) return invalid()
+  const resume = { ...(cursor === undefined ? {} : { cursor }),
+    ...(refusedCursors === undefined ? {} : { refusedCursors }) }
+  if ('legacyRowKeys' in g) {
+    const legacyRowKeys = array(g.legacyRowKeys, signedSafe)
+    const positions = new Map(keys.map((key, index) => [key, index]))
+    if ('olderId' in g || legacyRowKeys.length === 0 || new Set(legacyRowKeys).size !== legacyRowKeys.length ||
+        legacyRowKeys.some((key, index) => !positions.has(key) || index > 0 &&
+          (positions.get(key) ?? -1) <= (positions.get(legacyRowKeys[index - 1]) ?? -1))) return invalid()
+    return { legacyRowKeys, newerId, ...resume }
+  }
+  const olderId = readId(g.olderId)
+  if (newerId - olderId <= 1) return invalid()
+  return { olderId, newerId, ...resume }
+}
+
+function historyDisplay(value: unknown, keys: ReadonlyMap<number, DurableThreadItem>): HistoryContribution[] {
+  const contributions = array(value, value => {
+    const d = record(value)
+    const fields = { id: readId(d.id), lastId: optional(d.lastId, readId), rowKey: optional(d.rowKey, signedSafe),
+      joinKey: optional(d.joinKey, value => {
+        const key = string(value)
+        const separator = key.indexOf(' ')
+        const type = key.slice(0, separator)
+        return separator > 0 && key.length - separator - 1 > 0 && key.length - separator - 1 <= 64 &&
+          ['assistantDelta', 'toolUse', 'toolResult', 'toolDenied', 'turnEnd', 'sessionTransition',
+            'unrecognizedMessage', 'apiRetry', 'compacting', 'modelRefusalFallback', 'modelRefusalNoFallback'].includes(type)
+          ? key : invalid()
+      }) }
+    const held = fields.rowKey === undefined ? undefined : keys.get(fields.rowKey)
+    if (fields.rowKey !== undefined && held === undefined) return invalid()
+    const kind = choice(d.kind, ['row', 'patch', 'suppressed'])
+    if (fields.lastId !== undefined && (fields.lastId < fields.id || kind !== 'row' || d.joinKey !== undefined)) return invalid()
+    const source = fields.joinKey?.split(' ', 1)[0]
+    if (kind === 'suppressed') {
+      if (held !== undefined && !((source === 'assistantDelta' && held.kind === 'assistantText') ||
+        (source === 'toolUse' && held.kind === 'toolCall') || (source === 'turnEnd' && held.kind === 'turnBoundary') ||
+        (source === undefined && held.kind === 'userText'))) return invalid()
+      return { ...fields, kind }
+    }
+    if (kind === 'row') {
+      const item = threadItem(d.item)
+      if (fields.lastId !== undefined && item.kind !== 'assistantText') return invalid()
+      if (source !== undefined && !((source === 'assistantDelta' && item.kind === 'assistantText') ||
+        (source === 'toolUse' && item.kind === 'toolCall') || (source === 'turnEnd' && item.kind === 'turnBoundary') ||
+        (source === 'sessionTransition' && item.kind === 'sessionBoundary') ||
+        (source === 'unrecognizedMessage' && item.kind === 'unrecognizedMessage') ||
+        (source === 'apiRetry' && item.kind === 'banner') ||
+        (source === 'compacting' && item.kind === 'compactionBoundary') ||
+        (['modelRefusalFallback', 'modelRefusalNoFallback'].includes(source) && item.kind === 'modelRefusal'))) return invalid()
+      if (held === undefined || held.kind !== item.kind ||
+        ('turnId' in item && (!('turnId' in held) || item.turnId !== held.turnId)) ||
+        (item.kind === 'toolCall' && (held.kind !== 'toolCall' || item.toolUseId !== held.toolUseId)) ||
+        (item.kind === 'assistantText' && (held.kind !== 'assistantText' || item.parentToolUseId !== held.parentToolUseId)) ||
+        (item.kind === 'userText' && (held.kind !== 'userText' || item.messageId !== held.messageId))) return invalid()
+      return { ...fields, kind, item }
+    }
+    if (source !== undefined && source !== 'toolResult' && source !== 'toolDenied') return invalid()
+    const toolUseId = id(d.toolUseId)
+    const parsed = threadItem({ kind: 'toolCall', turnId: '', toolUseId, name: '', inputSummary: '',
+      result: d.result === undefined ? null : d.result, denial: d.denial })
+    const turnId = parsed.kind === 'toolCall' && parsed.denial !== undefined ? id(d.turnId) : undefined
+    if (parsed.kind !== 'toolCall' || (parsed.result === null && parsed.denial === undefined) ||
+      (source !== undefined && source !== (parsed.denial === undefined ? 'toolResult' : 'toolDenied')) ||
+      (parsed.denial !== undefined && (turnId === '' || toolUseId === '' || d.result !== undefined ||
+        (held !== undefined && (held.kind !== 'toolCall' || held.turnId !== turnId)))) ||
+      (held !== undefined && (held.kind !== 'toolCall' || held.toolUseId !== toolUseId))) return invalid()
+    return { ...fields, kind, toolUseId, ...(turnId === undefined ? {} : { turnId }), parentToolUseId: optional(d.parentToolUseId, id),
+      ...(d.result === undefined ? {} : { result: parsed.result }),
+      ...(parsed.denial === undefined ? {} : { denial: parsed.denial }) }
+  })
+  if (contributions.some((d, index) => index > 0 && d.id <= (contributions[index - 1].lastId ?? contributions[index - 1].id))) return invalid()
+  return contributions
+}
+
+/** Selected records share validation with full snapshots; associations may be explicitly partial. */
+export const legacyHistoryCodec = {
+  row: threadItem, coverage: historyCoverage, display: historyDisplay, gap: historyGap,
+  id: readId, key: signedSafe, cursor: string,
+  receipt(value: unknown): { cursor: string; atStart: boolean } {
+    const r = record(value)
+    return { cursor: string(r.cursor), atStart: bool(r.atStart) }
+  }
+}
+
 export function parseChatHistorySnapshot(value: unknown): ChatHistorySnapshot {
   const v = record(value)
   if (typeof v.version !== 'number' || !Number.isSafeInteger(v.version)) return invalid()
@@ -341,37 +451,14 @@ export function parseChatHistorySnapshot(value: unknown): ChatHistorySnapshot {
     return { version: 1, kind: v.kind, serverId, conversationId, thread: retainedThread(v.thread, serverId, conversationId) }
   }
   if (v.kind !== 'timeline') return invalid()
-  const c = record(v.coverage)
-  const status = choice(c.status, ['unknown', 'received'])
-  const coverage = status === 'unknown' ? { status } : { status, cursor: string(c.cursor), atStart: bool(c.atStart) }
+  const coverage = historyCoverage(v.coverage)
   const prependedRows = number(v.prependedRows)
   if (!Number.isSafeInteger(prependedRows) || prependedRows < 0) return invalid()
   const items = array(v.items, threadItem)
   const served = optional(v.served, servedHistory)
   const newestCursor = optional(v.newestCursor, string)
-  const gaps = optional(v.gaps, value => array(value, (value): HistoryGap => {
-    const g = record(value)
-    const newerId = readId(g.newerId)
-    const cursor = 'cursor' in g ? string(g.cursor) : undefined
-    const refusedCursors = optional(g.refusedCursors, value => array(value, string))
-    if (refusedCursors !== undefined && (new Set(refusedCursors).size !== refusedCursors.length ||
-        cursor !== undefined && refusedCursors.includes(cursor))) return invalid()
-    const resume = { ...(cursor === undefined ? {} : { cursor }),
-      ...(refusedCursors === undefined ? {} : { refusedCursors }) }
-    if ('legacyRowKeys' in g) {
-      const legacyRowKeys = array(g.legacyRowKeys, signedSafe)
-      const keys = isRecord(v.rowIdentity) ? array(v.rowIdentity.rowKeys, signedSafe)
-        : items.map((_, index) => index - prependedRows)
-      const positions = new Map(keys.map((key, index) => [key, index]))
-      if ('olderId' in g || legacyRowKeys.length === 0 || new Set(legacyRowKeys).size !== legacyRowKeys.length ||
-          legacyRowKeys.some((key, index) => !positions.has(key) || index > 0 &&
-            (positions.get(key) ?? -1) <= (positions.get(legacyRowKeys[index - 1]) ?? -1))) return invalid()
-      return { legacyRowKeys, newerId, ...resume }
-    }
-    const olderId = readId(g.olderId)
-    if (newerId - olderId <= 1) return invalid()
-    return { olderId, newerId, ...resume }
-  }))
+  const gaps = optional(v.gaps, value => array(value, value => historyGap(value,
+    isRecord(v.rowIdentity) ? array(v.rowIdentity.rowKeys, signedSafe) : items.map((_, index) => index - prependedRows))))
   const numericGaps = gaps?.filter(g => g.olderId !== undefined)
   if ((gaps !== undefined || newestCursor !== undefined) && coverage.status !== 'received') return invalid()
   if (numericGaps?.some((g, index) => index > 0 && g.olderId < numericGaps[index - 1].newerId) ||
@@ -389,65 +476,8 @@ export function parseChatHistorySnapshot(value: unknown): ChatHistorySnapshot {
       nextRowKey > Number.MAX_SAFE_INTEGER - 100_001 || rowKeys.some(key => key >= nextRowKey)) return invalid()
     return { rowKeys, nextRowKey }
   })
-  const display = optional(v.display, value => {
-    const keys = new Map(rowIdentity?.rowKeys.map((key, index) => [key, items[index]]))
-    const contributions = array(value, value => {
-      const d = record(value)
-      const fields = { id: readId(d.id), lastId: optional(d.lastId, readId), rowKey: optional(d.rowKey, signedSafe),
-        joinKey: optional(d.joinKey, value => {
-          const key = string(value)
-          const separator = key.indexOf(' ')
-          const type = key.slice(0, separator)
-          return separator > 0 && key.length - separator - 1 > 0 && key.length - separator - 1 <= 64 &&
-            ['assistantDelta', 'toolUse', 'toolResult', 'toolDenied', 'turnEnd', 'sessionTransition',
-              'unrecognizedMessage', 'apiRetry', 'compacting', 'modelRefusalFallback', 'modelRefusalNoFallback'].includes(type)
-            ? key : invalid()
-        }) }
-      const held = fields.rowKey === undefined ? undefined : keys.get(fields.rowKey)
-      if (fields.rowKey !== undefined && held === undefined) return invalid()
-      const kind = choice(d.kind, ['row', 'patch', 'suppressed'])
-      if (fields.lastId !== undefined && (fields.lastId < fields.id || kind !== 'row' || d.joinKey !== undefined)) return invalid()
-      const source = fields.joinKey?.split(' ', 1)[0]
-      if (kind === 'suppressed') {
-        if (held !== undefined && !((source === 'assistantDelta' && held.kind === 'assistantText') ||
-          (source === 'toolUse' && held.kind === 'toolCall') || (source === 'turnEnd' && held.kind === 'turnBoundary') ||
-          (source === undefined && held.kind === 'userText'))) return invalid()
-        return { ...fields, kind }
-      }
-      if (kind === 'row') {
-        const item = threadItem(d.item)
-        if (fields.lastId !== undefined && item.kind !== 'assistantText') return invalid()
-        if (source !== undefined && !((source === 'assistantDelta' && item.kind === 'assistantText') ||
-          (source === 'toolUse' && item.kind === 'toolCall') || (source === 'turnEnd' && item.kind === 'turnBoundary') ||
-          (source === 'sessionTransition' && item.kind === 'sessionBoundary') ||
-          (source === 'unrecognizedMessage' && item.kind === 'unrecognizedMessage') ||
-          (source === 'apiRetry' && item.kind === 'banner') ||
-          (source === 'compacting' && item.kind === 'compactionBoundary') ||
-          (['modelRefusalFallback', 'modelRefusalNoFallback'].includes(source) && item.kind === 'modelRefusal'))) return invalid()
-        if (held === undefined || held.kind !== item.kind ||
-          ('turnId' in item && (!('turnId' in held) || item.turnId !== held.turnId)) ||
-          (item.kind === 'toolCall' && (held.kind !== 'toolCall' || item.toolUseId !== held.toolUseId)) ||
-          (item.kind === 'assistantText' && (held.kind !== 'assistantText' || item.parentToolUseId !== held.parentToolUseId)) ||
-          (item.kind === 'userText' && (held.kind !== 'userText' || item.messageId !== held.messageId))) return invalid()
-        return { ...fields, kind, item }
-      }
-      if (source !== undefined && source !== 'toolResult' && source !== 'toolDenied') return invalid()
-      const toolUseId = id(d.toolUseId)
-      const parsed = threadItem({ kind: 'toolCall', turnId: '', toolUseId, name: '', inputSummary: '',
-        result: d.result === undefined ? null : d.result, denial: d.denial })
-      const turnId = parsed.kind === 'toolCall' && parsed.denial !== undefined ? id(d.turnId) : undefined
-      if (parsed.kind !== 'toolCall' || (parsed.result === null && parsed.denial === undefined) ||
-        (source !== undefined && source !== (parsed.denial === undefined ? 'toolResult' : 'toolDenied')) ||
-        (parsed.denial !== undefined && (turnId === '' || toolUseId === '' || d.result !== undefined ||
-          (held !== undefined && (held.kind !== 'toolCall' || held.turnId !== turnId)))) ||
-        (held !== undefined && (held.kind !== 'toolCall' || held.toolUseId !== toolUseId))) return invalid()
-      return { ...fields, kind, toolUseId, ...(turnId === undefined ? {} : { turnId }), parentToolUseId: optional(d.parentToolUseId, id),
-        ...(d.result === undefined ? {} : { result: parsed.result }),
-        ...(parsed.denial === undefined ? {} : { denial: parsed.denial }) }
-    })
-    if (contributions.some((d, index) => index > 0 && d.id <= (contributions[index - 1].lastId ?? contributions[index - 1].id))) return invalid()
-    return contributions
-  })
+  const display = optional(v.display, value => historyDisplay(value,
+    new Map(rowIdentity?.rowKeys.map((key, index) => [key, items[index]]))))
   return {
     version: 1, kind: 'timeline', serverId, conversationId: id(v.conversationId),
     items, prependedRows, coverage,

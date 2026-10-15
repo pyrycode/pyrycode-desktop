@@ -34,6 +34,14 @@ Every snapshot has `version: 1`, `serverId` and a `kind` of `list`, `timeline` o
 they never become authoritative daemon items. Both conversation formats may coexist
 at the same coordinates and have separate reads.
 
+Both legacy backends use the unchanged `parseChatHistorySnapshot` admission and
+allowlisted projection for full snapshots. Indexed disk reconstruction preserves
+supplied held order, optional-field absence and all admitted evidence; equal or misleading timestamps
+never reorder rows. Ownership remains exact and case-sensitive. SQLite coordinates
+use UTF-16LE BLOBs for every lookup, enumeration, insert and removal: TEXT binding
+would replace lone surrogates and merge distinct admitted JavaScript ids with U+FFFD.
+See [migration limits](chat-history-api.md#api) for earlier TEXT keys.
+
 A daemon-item record adds `conversationId` and shared `ThreadSnapshot` field
 `thread`, retaining epoch, item ids/revisions, held order, hidden/unordered items,
 attribution and unknown inert JSON, including patch-produced nulls. It also retains
@@ -325,6 +333,40 @@ running label, including on connected opening and after reconnect. New live rece
 resume normal rendering; connection status alone cannot revive saved working state.
 Renderer web storage remains prohibited for conversation content.
 
+### Bounded local-page evidence
+
+The indexed backend's [main-only page methods](chat-history-api.md#main-only-bounded-legacy-pages)
+return selected rows and their evidence separately from the full snapshot contract.
+`savedCoverage` is the saved scope's oldest-end coverage; optional `newestCursor`
+retains its saved origin. Neither is recalculated from the selected row count.
+A short/empty local page or `continuation: null` establishes no daemon completeness,
+freshness or new coverage. Optional evidence absent in the snapshot remains absent;
+a present evidence field can project to an empty array.
+
+`display` includes committed contributions bound to the selected row keys. Their
+inclusive `id`/`lastId` ranges select existing `servedIds` and receipt memberships;
+display-only rows never acquire invented served ids. Each receipt projection keeps
+its original snapshot ordinal as `identity`, original receipt order, selected
+membership order, cursor and `atStart`, and explicitly carries `partial: true`.
+Omitted memberships and receipts remain unknown. These projections cannot replace
+the complete receipt union required by full-snapshot admission.
+
+`gaps` includes numeric gaps intersecting those contribution ranges inclusively,
+so both gaps survive when a selected id is their shared boundary. Legacy gaps
+retain only memberships for selected keys in their original order. Each projection
+keeps its snapshot ordinal `identity` and `partial: true`; it omits unselected
+memberships and all `refusedCursors`. Absence from a page does not retire saved gaps
+or promote omitted facts to known coverage.
+
+Necessary adjacent cursors appear separately in
+`cursorAnchors: { receiptIdentity, id, cursor, atStart }[]`. For each selected gap,
+selection uses the nearest receipt whose first membership is at or after its
+`newerId`, breaking ties by receipt ordinal and deduplicating receipts. It does
+not collect every cursor from intersecting spans. Anchor ids alone never become
+selected served ids or receipt memberships, and their start flags certify no
+additional completeness. See [selected-record validation and protection](chat-history-results.md#bounded-page-results)
+and [bounded-work fixtures](chat-history-testing.md#bounded-legacy-page-regressions).
+
 ### Received-state admission and ownership
 
 `PairedShell` retains `createNewestHistoryDemand` across effect replay. Each actual
@@ -363,6 +405,17 @@ host/conversation, shared by newest, older, gap and Retry. Backwards demand duri
 local read or pending request is discarded; lifecycle demand defers instead.
 Remaining in the band
 after a response also requires new input. There is no timer or automatic walk.
+
+Oldest-end `atStart` does not close unresolved gaps elsewhere in the held log;
+[visible-gap demand](conversation-shell-scroll-pin.md#user-demand-and-prepend-position)
+still takes priority. History fixtures must respect durable entry chronology:
+IDs increase with time, wire pages are newest-first, and an uninterrupted older
+continuation uses IDs below the preceding page's oldest ID. Serving larger IDs
+as supposedly older rows can invent disjoint spans and make correct gap requests
+look like broken terminal stopping. The
+[`history-walk.spec.ts`](../../../e2e/history-walk.spec.ts) fixture serves 16 through 3,
+then an empty nonterminal page, then 2, then 1. Its terminal-row input exposes this
+trap; see the [controlled regression and counted evidence](development-verification-evidence-that-cannot-pass-too-early.md#history-page-receipt-and-terminal-demand).
 
 Requests and failures retain same-host rows, prepend metadata and successful
 coverage. Pending/failed history retains the requested cursor and purpose (`older`,
@@ -603,117 +656,38 @@ for saved-read notices, result/error classifications and preservation after fail
 
 ## Storage and concurrency
 
-### Buffered replacements
+The application still uses the [protected collection and buffered writer](chat-history-storage.md).
+The independently callable SQLite foundation exposes
+[`createHistoryDatabase`](../../../src/main/historyDatabase.ts) and
+[`createIndexedLegacyHistory`](../../../src/main/indexedLegacyHistory.ts). One main-process
+owner lazily opens a reusable synchronous connection at
+`history/history.sqlite` beneath trusted `userDataPath`; its caller closes it
+explicitly. Directory creation uses mode 0700 and the database is set to 0600.
+Reads and mutations run synchronously within transactions, with no await across
+snapshot reconstruction or replacement. See [schema admission and migration](chat-history-api.md#api).
 
-With optional `threads`, the writer observes changed owned daemon snapshots in the
-same queue, excluding the private hydration marker from saves. Removing a held
-thread discards its pending replacement; memory cleanup alone does not erase disk.
-Confirmed deletion discards both formats' pending replacements, suppresses later
-captures and invalidates the thread's reads/held state. Successful unpair clears
-every held thread for that host, including off-screen scopes and pending reads;
-failure resumes buffered work. `stop()` detaches this observer and awaits owned
-removal/flush work. Production thread subscriptions and offline/reconnect screen
-proof remain [#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
+Each committed scope has separately encrypted records for held rows, served ids,
+ordered receipts and their individual id memberships, display contributions and
+row associations, gaps, legacy gap-key memberships and refused cursors. The encrypted
+header retains scope coverage, newest cursor, optional-evidence presence, allocator
+and prepended count independently of those records. Plain numeric indexes support
+bounded page selection without a whole-timeline or all-evidence cell. Full
+reconstruction returns one committed snapshot and checks its records against
+canonical parser output.
 
-The renderer writer coalesces bursts on a 200 ms timer in a per-record pending map.
-Canonical projected values are compared with the latest observed value, so
-transient-only changes and unchanged durable records submit no replacement.
-One async drain retains the newest update arriving while a prior write is pending.
-It also compares the final candidate with the last successful save: a burst that
-changes a saved value and then returns to it needs no replacement. Comparing only
-successive queued values misses that case.
+Every replacement, including identical or empty content, receives a new random UUID
+snapshot identity; delete/recreate cannot reuse the previous commit's identity.
+Scope deletion cascades to all its evidence. These identities identify commits,
+not authorization. Payload protection and reviewed structural columns are detailed
+in [failure preservation](chat-history-results.md#results-and-failure-preservation).
 
-Detached pending snapshots survive navigation, host switches, disconnects and
-holder eviction with their original coordinates. Eviction drops observation and
-comparison metadata, never the pending save or the disk record. The eleventh
-received conversation can therefore evict the first before its timer runs without
-losing the first conversation's captured snapshot.
-
-Confirmed deletion shares this serial drain with replacements. It discards the
-exact conversation's buffered replacements, filters its entry from buffered host lists
-without reordering peers, and waits behind any already in-flight write. A per-host
-deleted-id set suppresses subsequent timeline/daemon-item captures and filters delayed list
-captures for the writer's lifetime, including retained holder mutations and shutdown.
-Stale captures therefore cannot overwrite the queued removal or recreate successfully
-removed records. Each removal attempt clears comparison state for that timeline and
-host list; removal itself is not skipped by replacement deduplication. Successful
-unpair resets suppression for fresh same-server re-pairing.
-
-### Protected collection
-
-The single main-process store and handler both capture detached validated request
-copies before asynchronous work, so caller mutation while queued cannot alter a
-pending save. Never create a service per request.
-
-The handler queues valid calls before the asynchronous membership lookup and
-waits for storage completion. The store has its own queue covering every valid
-read and mutation across all hosts. Ordering only the filesystem writes would
-allow a slow earlier membership check to submit an old save after a later removal;
-both queues are necessary. Global ordering also prevents cross-host read/modify/
-write lost updates. Reads wait for earlier operations, failures leave the queues
-usable, and an earlier pending save cannot overtake a later save or resurrect a
-later-removed record. Separate service instances or processes have no shared lock.
-
-All snapshots occupy one versioned collection, `{ version: 1, snapshots: [...] }`,
-under the constant secure-store name `chat-history`. Identity comparisons use
-string equality over `serverId`, `kind` and, for both conversation formats, `conversationId`;
-caller ids never become filenames or object lookup keys. One collection makes
-list-entry and both conversation-record removals atomic without a journal or mutable manifest.
-
-Each operation reads and validates the whole collection; each changed mutation
-encrypts and replaces it in full, unless removing the final snapshot deletes the
-blob. Unchanged replacements and repeated removals skip persistence. Removing a
-conversation can leave a stored empty list, which remains distinct from missing.
-Other hosts' records and all pairing credential blobs are untouched.
-
-The tradeoff is whole-collection I/O and a shared unreadable-data failure domain:
-one bad snapshot or unsupported version blocks access to every host's chat
-records. Retained timelines can outlive their list entries and grow independently
-of memory eviction. A future storage-layout change must account for the versioned
-format and atomic removal contract.
-
-Protection inherits [ADR 0005](../decisions/0005-secret-at-rest-safestorage-fail-closed.md).
-Production composition reuses OS-backed encryption and
-`fileSecretPersistence(join(app.getPath('userData'), 'secrets'))`; encryption
-unavailability, including Linux `basic_text`, cannot fall back to plaintext.
-The existing adapter supplies owner-only files and temp-file/rename replacement,
-so readers see the old or new complete ciphertext. Atomic replacement supplies
-file integrity; the queues supply invocation order. No new cryptography, network
-work or background pruning is involved.
-
-### Window close and app quit
-
-The mounted `writer.stop()` first calls its injected `flushTimeline` while the
-per-fold observer remains attached, settling accepted deltas even when their frame
-has not run. Detaching first loses accepted text on window close. Repeated stops
-skip this settlement hook; injected writers without it keep their existing behavior.
-It then unsubscribes the list/timeline and optional thread observers, daemon events
-and host-removal notifications,
-waits for already-started host removals to settle, then cancels the timer and drains
-buffered and in-flight replacements and confirmed conversation removals in order.
-Deletion suppression remains active throughout the flush. Unsubscribing alone
-could acknowledge close before failed
-unpair resumes its buffered snapshots. Settlement cannot schedule a new timer after
-stop. Main defers normal window close and `before-quit` teardown
-until preload's `onChatHistoryFlush` callback has stopped the writer and sent a
-`flushed` acknowledgement over `pyry:chat-history-flush`. Main then awaits already
-submitted history operations before resuming close/quit. App quit and Windows
-Restart now share one `createQuitDrain` promise, stopping the connection registry
-before draining. Updater installation starts before its explicit app quit, so
-`before-quit` alone is too late. After a successful drain, window close guards
-pass; an installation failure exits with `autoInstallOnAppQuit` disabled, since
-the stopped registry cannot resume. See [updater shutdown](windows-packaging.md#history-drain-and-installation-failure).
-Closing only a window leaves the app able to open a fresh window and writer.
-
-Readiness registration avoids waiting on a window whose observer never mounted.
-Lifecycle messages must come from a window's main frame; flush acknowledgements
-resolve only that sender's wait. Closing the window releases its wait and tracking
-entries. Hook cleanup removes its flush listener, and `will-quit` removes the
-main handler and lifecycle listener. Reconnect adds no listeners.
-
-The guarantee covers graceful close/quit. Abrupt process termination cannot drain
-renderer buffers; atomic file replacement still protects the last complete
-collection. Flushing never adds a completion boundary to a partial answer.
+The adapter is pinned to `better-sqlite3` 12.4.1. Host Node and Electron require
+separate native rebuilds; packaging rebuilds for the target ABI and unpacks the
+adapter from asar. See [commands and counted Linux/macOS proof](chat-history-testing.md#native-runtime-and-packaged-proof).
+Windows NSIS x64/arm64 targets remain configured; these smokes add no Linux/macOS
+release channel. Main-only bounded legacy pages are independently callable;
+application binding and collection import belong to #1975, authoritative storage
+to #1974, and local-page consumers/partial writes to #1931.
 
 ## Testing
 

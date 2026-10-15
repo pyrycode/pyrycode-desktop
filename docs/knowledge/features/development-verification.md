@@ -114,6 +114,45 @@ the surrounding sidebar/top/input chrome, so they do not prove integrated chrome
 No real-Claude/live-daemon test ran or was required for this supplied seam. Production
 activation and combined live proof remain [#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
 
+## Hosted app link verification
+
+[`e2e/hosted-app-links.spec.ts`](../../../e2e/hosted-app-links.spec.ts) clicks links
+in the production conversation renderer through privileged preload/IPC and inspects
+native hosted content and fake-daemon dispatch. `launchPairedApp` uses legacy
+non-UUID host IDs; use `skipPairing` and spec-local canonical UUIDv4 pairing for
+this grammar instead of silently testing targets the parser must refuse.
+
+The configured verifier gate on `fd19fde4bd34febc3111693f2171d62a520015a4`,
+2026-10-15, ran `npx playwright test --reporter=json`: **436 executed, 436 passed,
+0 failed, 3 skipped**. All four named cases below were present and passed, as
+confirmed by the dispatcher gate report and
+[final verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/2005#issuecomment-6191844871).
+The skips were three macOS-only badge/window lifecycle cases on Linux.
+
+| Passed scenario | Behavior covered |
+| --- | --- |
+| `streaming and settled links preserve conversation drafts` | Pending/frozen and settled activation, repeated opens, keyboard activation, unchanged healthy discovery and sidebar return releasing native content/restoring the draft. |
+| `latest host selection survives delayed replies` | Equal app IDs on two hosts, cross-host selection and delayed A discovery/command replies after selecting B. |
+| `invalid and unpaired links stay bounded` | Malformed destinations stay visible/inert, manual pairing cancel preserves the draft, and successful pairing does not open the original target automatically. |
+| `links reuse discovery recovery` | Missing/stopped/failed apps, offline/reconnect and unsupported recovery, failed discovery refresh and held completion, Reopen and removal. |
+
+Fence zero-dispatch/OS-handoff assertions with positive processing evidence.
+The delayed-selection case releases old discovery, observes a newer B label and
+uses an ordered snapshot response after releasing A's command result before
+checking B's generation/native identity and zero A assets. Recovery observes
+authoritative status/discovery processing before excluding resources; a requested
+walk alone does not establish readiness. Ready content and return-to-conversation
+checks precede the final `shell.openExternal` spy assertions.
+
+Static parser/renderer tests pin exact raw destinations, normalized-destination
+denial, escaped titles/reference-label delimiters, meaningful labels, opt-in output
+and no render-time activation. Main boundary units independently cover attached
+privileged main-frame and named paired-host admission. Static renders cannot prove
+clicks, effects or native composition. Existing
+[native-view/Fetch proof](daemon-connection-hosted-resource-views.md#native-viewer-verification)
+retains its scope; these synthetic reply scenarios establish no real Claude
+creation/publish, daemon/relay or SQL acceptance, which remains #1929.
+
 ## Review and document hygiene
 
 The pipeline uses one GitHub identity. A reviewer cannot approve or request changes

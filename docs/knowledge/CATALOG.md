@@ -20,9 +20,10 @@ Search this catalog for a topic. Start with INDEX.md. The documentation stage ma
 ## Features
 
 - [Protected local chat history](features/chat-history.md) — Versioned saved-host snapshots, guarded protected storage, received-state recording and echo cancellation, durable coverage, host ownership, coalescing, close/quit flushing and saved-list and on-demand offline timeline restoration, stale-read admission, restored ownership and local read failures.
-- [Protected chat history — API and operations](features/chat-history-api.md) — Fixed IPC, saved-host authorization, main-process removal ordering and operation contracts.
-- [Protected local chat history — results](features/chat-history-results.md) — Saved-read notices, result and error classifications, failed-write preservation and confirmed-removal outcomes.
-- [Protected local chat history — testing](features/chat-history-testing.md) — Admission/refusal, restoration, protected persistence, offline reply regressions and durable-contract verification.
+- [Protected local chat history — storage and lifecycle](features/chat-history-storage.md) — Buffered replacements, protected collection ordering and graceful window/app shutdown; links to the indexed legacy foundation.
+- [Protected chat history — API and operations](features/chat-history-api.md) — Fixed IPC, saved-host authorization, callable indexed legacy/authoritative operations, partial held-order pages, protected continuations, atomic schema-4 migration and family-scoped removal contracts.
+- [Protected local chat history — results](features/chat-history-results.md) — Saved-read notices, static failures, rollback, reviewed SQLite plaintext columns and protected payload boundaries.
+- [Protected local chat history — testing](features/chat-history-testing.md) — Admission, restoration, disk/isolation/failure regressions, native ABI rebuilds and counted packaged Linux/macOS proof.
 - [Development verification](features/development-verification.md): source checks, test boundaries, layout evidence and live-test diagnosis.
 - [Development verification — what each test tier proves](features/development-verification-what-each-test-tier-proves.md) — Static, mounted and live proof boundaries, with counted regression evidence.
 - [Development verification — evidence that cannot pass too early](features/development-verification-evidence-that-cannot-pass-too-early.md) — Positive processing barriers and nonvacuous absence assertions.

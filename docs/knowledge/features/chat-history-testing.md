@@ -72,6 +72,137 @@ covers membership, rejected requests before record access, ordering and containe
 failures for the original six operations; the daemon-cache tests below cover the
 additive `readThread`/`replaceThread` operations.
 
+[`indexedLegacyHistory.test.ts`](../../../src/main/indexedLegacyHistory.test.ts)
+uses real temporary SQLite databases with reversible test encryption. Fresh
+owners after close/reopen compare parser-normalized snapshots, including fragmented
+served/display/gap evidence, ordered child memberships, all durable row fields,
+optional absence, empty evidence and saved-empty versus missing. Equal/misleading
+timestamps must not affect supplied order. Case variants and equal conversation ids
+on different hosts remain distinct.
+
+The parameterized `isolates every UTF-16 %s across restart, replacement and removal`
+covers both ownership coordinates with distinct lone high/low surrogates, U+FFFD
+and a valid surrogate pair, checking missing peers as well as saved peers. Ordinary
+case-sensitive strings alone cannot reveal SQLite TEXT encoding collisions.
+The migration regression preserves identities and ciphertext, injects both migration
+and post-migration decryption failure, compares unchanged bytes, then retries.
+
+Trigger failures during insertion/cascading deletion and mid-write encryption failure
+exercise rollback, later recovery, peer isolation and fresh identity after replacement
+or delete/recreate. Corrupt indexes/payloads, unsupported schemas, unavailable
+encryption, invalid requests and mismatched coordinates must preserve committed data.
+Sentinel checks inspect all files in the history directory (including any sidecars)
+and captured diagnostics after success and rollback for message, attachment and
+cursor leakage; the durable-row fixture also checks raw unknown text on disk.
+These fixtures prove the protected persistence
+seam; production OS encryption requires the packaged proof below.
+
+### Bounded legacy page regressions
+
+The same on-disk `indexedLegacyHistory.test.ts` fixture covers callable page reads;
+an in-memory database or same-instance traversal alone would miss durable
+continuation and reopen failures. The 603-row traversal closes and creates fresh
+database owners between 200-row windows, preserving held order, repeated content,
+timestamp ties and ordinal-minus-prepended fallback keys. It compares the full
+snapshot after paging. Missing versus saved-empty and absent optional evidence
+need separate assertions; none establishes daemon completeness.
+
+Fragmented fixtures check selected display ranges, served ids and receipt
+memberships, original receipt identity/order and selected membership order,
+explicit `partial: true`, both gaps at a shared numeric boundary, selected legacy
+gap keys and omitted refused cursors. A separate range/anchor case checks that
+only the nearest receipt start supplies the adjacent cursor and that anchor ids
+stay outside selected served/receipt membership. Rendering the right rows alone
+would miss evidence widening or invented served provenance.
+
+Admission cases reject malformed limits/boundaries, wrong format, cross-owner
+reuse, identical replacement and delete/recreate continuations. Parameterized
+page ownership cases exercise both coordinates with distinct UTF-16 ids,
+including lone surrogates and U+FFFD. Selected corruption cases cover ciphertext,
+indexes, row/contribution bindings and protection errors without changing saved
+data; an unreadable unselected row stays untouched. Original unwrapped records
+remain page-readable. The schema-3 regression removes the receipt-start index,
+stages schema 2, injects selected decryption failure and checks rollback of the
+index/version and preservation of committed identity before successful retry.
+Query-plan inspection must show `legacy_receipt_start` for anchor selection:
+bounded returned payloads alone would miss scanning every non-start membership.
+
+The bounded-work regression instruments SQLite result records, JSON decodes and
+decrypts. Growing unrelated older history from 600 to 2,000 rows, with additional
+receipts/cursors and a single receipt spanning the older history and selected
+window, leaves the measured counts equal. Exactly 200 row payloads are read;
+only selected evidence/necessary anchors are processed, and at most one order-only
+row probe is allowed. Decodes and decrypts each equal the number of row/evidence
+payloads read. This is bounded by selected content and relevant evidence, not a
+promise of constant evidence size for every row: the heavily fragmented-row case
+retains all 1,200 contributions and memberships. Range queries batch at most 100
+predicates so one row cannot exceed SQLite's expression-depth limit.
+
+The [verifier verdict for the paging change](https://github.com/pyrycode/pyrycode-desktop/pull/2012#issuecomment-6190982424)
+records 10,319 unit tests executed/passed, 0 failed and 3 skipped, including all
+26 backend cases, on `de25c375f42755f5da20a4c4003c790e9525522a`. Its fake-transport
+gate recorded 428 executed/passed, 0 failed and 3 skipped. These callable
+main-process operations require no real-Claude or visual acceptance; application
+binding and page consumers remain separate work.
+
+### Native runtime and packaged proof
+
+Host-Node Vitest and Electron use different native ABIs. `npm run rebuild:node`
+runs `npm rebuild better-sqlite3` for host tests; `npm run rebuild:electron` runs
+`electron-builder install-app-deps` for Electron. Rebuild for the runtime being
+used after switching ABIs. Production packaging sets `npmRebuild: true` and
+`asarUnpack: node_modules/better-sqlite3/**`; a Node import alone cannot prove the
+packaged adapter loads.
+
+On Linux/macOS, `npm run check:history-native -- /tmp/history-native-proof` packages
+an isolated entrypoint, launches the packaged Electron app and writes `runtime.stdout`
+and `runtime.stderr` beneath the supplied scratch directory. It uses the actual
+`electronSecretEncryption`, commits, closes and reopens the database, compares
+parser-normalized content structurally, checks persisted sentinels and reports
+versions, packaged/asar/native-unpacked flags, static stage and nonzero test counts.
+Failure or missing/all-skipped evidence is nonzero. It adds no release channel.
+
+[`history-native.spec.ts`](../../../e2e/history-native.spec.ts) includes
+`packaged protected history commits and reopens with production encryption` in the
+ordinary Playwright configuration and attaches stdout/stderr. This lets a managed
+`desktop-fake-suite` task exercise the native proof on the exact pushed candidate
+through normal manager admission. On macOS follow the approved Electron-launch
+route from the project instructions. Other platforms explicitly skip this case;
+direct smoke invocation rejects them before packaging imports or scratch creation.
+[`historyNativePlatform.test.ts`](../../../src/main/historyNativePlatform.test.ts)
+pins Windows rejection. Windows execution and NSIS packaging were not run for this
+ticket; existing NSIS x64/arm64 targets remain unchanged.
+
+The [final verifier review](https://github.com/pyrycode/pyrycode-desktop/pull/1996#issuecomment-6189261285)
+confirmed retained production-encryption artifacts from candidate
+`f2ef9815571c2ce773a0d736e0ec32d0f26b776a`, whose backend/native/dependency/packaging
+files match the reviewed head. The named packaged case above is present and passed
+on both platforms, with `packaged`, `asar` and `unpacked` all true:
+
+| Platform/architecture | Electron | Embedded Node | better-sqlite3 | Encryption backend | Executed | Passed | Failed | Skipped |
+| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: |
+| Linux/x64 | 33.4.11 | 20.18.3 | 12.4.1 | `gnome_libsecret` | 1 | 1 | 0 | 0 |
+| macOS/arm64 | 33.4.11 | 20.18.3 | 12.4.1 | `os-keychain` | 1 | 1 | 0 | 0 |
+
+Linux evidence is `/tmp/pyry-history-native-oIcJN0/runtime.stdout` and
+`/tmp/builder-1979/rework-54c52c4c/linux-native.log`. Managed Mac task
+`3e410b97e50a5471f7ce4e37030f5781e4ad1f84b12f515c8520d95a72e515e8`, run
+`9297b2992b3b45cb013a6c5f392611eb5e33ca3e7526636e4eb6853acefc73cd`, returned
+`/tmp/builder-1979/rework-54c52c4c/mac-results/desktop/playwright.json` with complete
+native stdout/stderr attachments; its native case passed in 8.899 seconds with
+empty stderr. Exact runtime JSON and artifact locations also live in the
+[architecture plan](../../specs/architecture/1979-protected-indexed-legacy-history.md#revisions).
+
+That earlier full Mac suite was not green: 408 executed, 406 passed, 2 failed,
+1 skipped, 0 retries. Its pre-launch HTTP 404 remains tracked by #1983 and missing
+connect-b completion by #1998; neither is native-backend evidence. The dispatcher's
+later supplied verifier gate 6 reports 414 executed, 413 passed, 1 failed, 3 skipped;
+`native view retires on unpair` and
+`connect roster Agents appear before history and keep identity through live and historical launches`
+are individually listed as passed. Its aggregate counts do not identify the native
+case, so the retained per-platform artifacts above establish that proof. No live
+Claude test is required for this unbound storage backend.
+
 ## Recording and removal
 
 [`chatHistoryWriter.test.ts`](../../../src/renderer/src/store/chatHistoryWriter.test.ts)

@@ -67,14 +67,56 @@ Diagnostics contain static event/code only. Validated bytes travel over the
 existing encrypted transport and stay in main until delivered into the isolated
 native viewer below; no direct HTTP access or body persistence is added.
 
+### Sidebar display projection
+
+The [host Apps section](channel-list.md#host-apps) reuses authoritative discovery through
+`src/main/hostedAppsDisplay.ts`.
+`HostedAppsDisplayState` in `src/shared/ipc/hostedAppsDisplay.ts` contains only `serverId` and
+discovery status; `ready` adds copied app ID, title (at most 128 characters) and observed state.
+The existing discovery bound of 256 apps and complete-snapshot rules still apply. Revisions,
+releases, error details, native handles, resource bytes, credentials and keys stay in main;
+sidebar metadata grants no readiness or release authority. Diagnostics use static event/code only.
+
+`registerHostedAppsDisplay` attaches only composition-root privileged windows. The fixed
+`pyry:hosted-apps-display` channel validates that registered WebContents and its exact main frame
+before dispatch. Commands have exactly `type` (`watch`, `unwatch` or `refresh`), bounded nonempty
+`serverId` and a nonnegative safe-integer `token`. Watch and refresh resolve the named host through
+the registry; unknown hosts refuse without discovery dispatch. Unwatch is idempotent and removes
+only the matching token. Replies are `{ ok: true }` or `{ ok: false, error: 'refused' }`, never
+display snapshots.
+
+A saved-host list can publish before asynchronous registry construction finishes. A watch with no
+connection waits once for `registry.settled()` (already-queued reconciliation only), then checks
+the host again. Immediate refusal would leave a newly paired host unsubscribed after construction,
+requiring a remount to recover. Pending watch identity is canceled on matching unwatch, replacement, reload, close or
+disposal. This wait neither refreshes discovery nor admits an unknown host.
+
+Each client holds one watch per host. Observation is installed before the initial copied state is
+sent on the event stream. Publication checks both watch identity and the captured `hostedApps`
+service against the registry: accessors return fresh wrappers, so compare service identity.
+Reconciliation rebinds replacement services and publishes unavailable for a removed connection;
+retired callbacks cannot restore old data. The renderer clears removed-host display state and
+guards callbacks during subscription teardown.
+
+Preload's `onHostedApps(serverId, listener)` installs its listener before watch, allocates a
+monotonic subscription token, and filters both token and host. Cleanup deactivates/removes the
+listener and unwatches that exact token, so late cleanup cannot retire its replacement. A refused
+or rejected initial invoke produces static failed feedback only before any streamed snapshot;
+late replies cannot overwrite newer state. Window loading/close and bridge disposal clear active
+and pending watches. Reconnect readiness still comes exclusively from fresh complete discovery.
+`refreshHostedApps(serverId)` delegates to existing coalescing and capability/availability checks.
+Ordinary row opening uses current main authority without refresh: refresh would invalidate healthy
+bindings elsewhere on the same host.
+
 ## Native viewer
 
 `src/main/index.ts` publishes `createHostedAppViews(registry, diagnosticLog)` on
 the readonly native `app.hostedAppViews` property. Trusted Fetch/chrome consumers
 call `open(parent, serverId, appId, bounds)`. The production
 [trusted pane bridge](paired-shell-routing.md#hosted-app-selection-and-trusted-chrome)
-uses this API for named-host/app selection over privileged preload/IPC; sidebar/link
-entry points remain #1928. A successful open replaces the previous view under
+uses this API for named-host/app selection over privileged preload/IPC from both
+sidebar Apps rows and assistant reply links. Live publishing/relay/SQL acceptance
+remains #1929. A successful open replaces the previous view under
 that parent. Bounds are Electron rectangles in the parent's content view;
 `resize(bounds)` updates them while live and `close()` is idempotent.
 
@@ -86,6 +128,16 @@ open would retire other bindings on that host. A received discovery request is
 only dispatch evidence: readiness requires the complete response and contiguous
 updates. Wait for authoritative opening, retaining the first successful handle;
 repeated successful opens replace the content being observed.
+
+Stable channel links carry only host/app identity. Resolve the named paired host,
+then consume complete current-generation discovery and the native viewer's running
+authority; neither URL validity nor cached metadata grants readiness. Healthy opens
+reuse current discovery without refreshing. Loading, failed or reconnected discovery
+must complete before any content opens, with refresh owned by existing recovery.
+Missing/stopped/failed apps load no resources and links never start an app. The
+[shell routing](paired-shell-routing.md#hosted-app-selection-and-trusted-chrome)
+handles unknown hosts through manual pairing and uses the pane event stream for
+selection ordering; it adds no discovery or viewer lifecycle of its own.
 
 ### Pane recovery and placement
 
@@ -281,8 +333,8 @@ URLs, queries, payloads, credentials or caught exception text. See
 [ADR 0012](../decisions/0012-hosted-app-native-isolation.md) for the isolation choice.
 
 Trusted chrome/placement uses the [paired shell selection seam](paired-shell-routing.md#hosted-app-selection-and-trusted-chrome).
-Sidebar/link entry points remain [#1928](https://github.com/pyrycode/pyrycode-desktop/issues/1928), and real
-daemon/relay/SQL proof [#1929](https://github.com/pyrycode/pyrycode-desktop/issues/1929).
+Sidebar Apps rows and assistant links share that selection seam. Real daemon/relay/SQL
+proof remains [#1929](https://github.com/pyrycode/pyrycode-desktop/issues/1929).
 
 ## Deadlines and retirement
 
@@ -497,6 +549,16 @@ claimed; real SQL durability and relay acceptance remain
 
 ### Trusted pane verification
 
+[`e2e/hosted-app-links.spec.ts`](../../../e2e/hosted-app-links.spec.ts) activates
+production conversation links through privileged preload/IPC, reusing these native
+readiness/retirement and Fetch boundaries. It covers held discovery/selection replies,
+two hosts sharing an app ID, unavailable/offline/unsupported recovery and draft
+restoration. Positive discovery, current-label or ordered IPC barriers precede
+absence assertions for OS handoff and forbidden resource dispatch. See
+[link verification](development-verification.md#hosted-app-link-verification)
+for the four named scenarios and counted fake-transport evidence; live publishing
+remains #1929.
+
 `e2e/hosted-content-pane.spec.ts` uses spec-local fake-daemon replies with
 `launchPairedApp` and selects through the production `window.pyry` preload/IPC
 path. Its six cases are:
@@ -543,6 +605,38 @@ layout evidence, not an independent whole-window native capture; bounds and
 compared the existing sidebar/inset-pane/chrome structure with Figma node 102:4;
 hosted HTML remains synthetic. No live daemon/relay/SQL result is claimed here;
 that proof remains #1929.
+
+### Sidebar verification
+
+[`e2e/hosted-app-sidebar.spec.ts`](../../../e2e/hosted-app-sidebar.spec.ts) uses fake transport with
+production preload/IPC and clicked sidebar rows. The dispatcher's verifier gate at `1f68ed79`
+(2026-10-15) reports **432 executed, 432 passed, 0 failed, 3 skipped**, with each of these named
+tests present and passed:
+
+- `discovery, lifecycle and navigation`: post-publish updates/removal, equal IDs across hosts,
+  pending opens, independent folds and return to the conversation draft.
+- `paging and retry`: held multi-page completion, failure and coalesced host Retry.
+- `unsupported and unauthorized`: unsupported/disconnected states and refused display/refresh
+  IPC without dispatch.
+- `stale delivery and remount`: reconnect, retired subscriptions, mounted unpair and remount.
+
+The [verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/2004#issuecomment-6191126579)
+also records a final-code Mac run at `d2c80ba5`: **434 executed, 434 passed, 0 failed, 1 skipped**,
+0 retries, with all four sidebar tests present and passed. Its sole skip was the existing
+`an independent input-enabled cover preserves isolated hover` display case; the dispatcher run
+above lists that case as passed. These are separate runs, not conflicting totals.
+
+For stale-delivery absence assertions, first observe a positive current-service update or command
+acknowledgement and then a renderer animation-frame commit barrier. Mounted unpair must deliver
+the token active immediately before removal and assert absence before reload. A pre-remount token
+would prove only remount fencing, and reloading before the assertion would erase the subscription
+under test. Main's held-reconciliation unit covers host-list publication before connection
+construction and cancellation of pending watches; preload units cover late replies.
+
+The verifier compared integrated ready and failed captures at 1280×800 and 800×800 from
+`d2c80ba5` with Figma 132:3902 / Apps 590:4015, including themed Retry. Renderer markup tests
+cannot establish delivery, clicks or native composition. Existing native-view/Fetch proofs retain
+their own scope; this sidebar slice claims no real daemon publishing, relay or SQL proof (#1929).
 
 ## Discovery verification
 

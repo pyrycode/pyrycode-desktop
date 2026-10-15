@@ -17,6 +17,7 @@ import { encodeEnvelope } from '../../src/main/transport/codec'
 import { LOOPBACK_RELAY_ENV_FLAG } from '../../src/main/relayPolicy'
 import { TEST_SECRET_BACKEND_ENV_FLAG } from '../../src/main/secretBackend'
 import {
+  appWindow,
   attachLaunchFate,
   createLaunchFateLog,
   launchIsolatedApp,
@@ -368,7 +369,12 @@ export const test = base.extend<PairedAppFixtures>({
       // failure, so the drain below records it under this thunk's label exactly like any other step.
       teardown.push({ step: 'app', run: () => fate.closeWatched(app) })
 
-      const page = await app.firstWindow()
+      // The window once its app document has loaded, so the hook and the drive below never start on a
+      // document that is still starting up (see `appWindow`). The hook therefore always runs after the
+      // app's bundle has run and React has mounted its first screen, where it used to run at the commit,
+      // usually before. Its contract is unchanged: it completes before pairing and before any
+      // conversation opens.
+      const page = await appWindow(app)
       // History-handler replacement must follow startup registration, which precedes createWindow.
       // The hook still completes before pairing or opening the restored conversation.
       await control.onLaunched?.(app)
@@ -417,7 +423,7 @@ export const test = base.extend<PairedAppFixtures>({
       // #1091: this locator is UNFILTERED and runs in Playwright strict mode, which is why the second
       // pairing below happens strictly after it — a second row existing at this moment would break the
       // click outright. (#1070's AC5 protects the same locator.)
-      await page.locator('.channel-list__row-open').click()
+      await page.locator('.channel-list__row-open:not(:has(.channel-list__app-state))').click()
 
       // Send enables ONLY on the `connected` daemon event — after the real Noise_IK handshake
       // terminates at the fake. This is the fixture's completion signal; it resolves here. Because the
@@ -442,7 +448,7 @@ export const test = base.extend<PairedAppFixtures>({
 
         // The addressed connection request must earn this row from the second transport.
         // No unsolicited seed push: a missing request now fails the fixture's connected gate.
-        await expect(page.locator('.channel-list__row-open')).toHaveCount(2, {
+        await expect(page.locator('.channel-list__row-open:not(:has(.channel-list__app-state))')).toHaveCount(2, {
           timeout: HANDSHAKE_TIMEOUT_MS
         })
       }

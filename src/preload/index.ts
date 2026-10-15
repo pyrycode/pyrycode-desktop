@@ -1,6 +1,7 @@
 import { APP_UPDATE_STATE_CHANNEL, APP_UPDATE_ACTION_CHANNEL, projectAppUpdateState, type AppUpdateState, type AppUpdateAction } from '../shared/ipc/appUpdate'
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import { HOSTED_PANE_CHANNEL, type HostedPaneCommand, type HostedPaneState } from '../shared/ipc/hostedPane'
+import { HOSTED_APPS_DISPLAY_CHANNEL, type HostedAppsDisplayState } from '../shared/ipc/hostedAppsDisplay'
 import { CHAT_HISTORY_CHANNEL, CHAT_HISTORY_FLUSH_CHANNEL, type ChatHistoryRequest, type ChatHistoryResult } from '../shared/chatHistory'
 import { DAEMON_EVENT_CHANNEL, type StampedDaemonEvent } from '../shared/ipc/events'
 import { COMMAND_CHANNEL, isRendererCommand, type RendererCommand } from '../shared/ipc/commands'
@@ -72,8 +73,28 @@ import { MARKDOWN_SAVE_CHANNEL, type MarkdownSaveOutcome } from '../shared/ipc/m
 // sendCommand. Keys and raw bytes stay in the background process; ipcRenderer itself never
 // crosses the bridge.
 let historyReceipt: { type: string; serverId: string | null | undefined } | null = null
+let hostedAppsToken = 0
 
 const api = {
+  refreshHostedApps: (serverId: string): Promise<{ ok: true } | { ok: false; error: 'refused' }> =>
+    ipcRenderer.invoke(HOSTED_APPS_DISPLAY_CHANNEL, { type: 'refresh', serverId, token: 0 }),
+  onHostedApps: (serverId: string, listener: (state: HostedAppsDisplayState) => void): (() => void) => {
+    const token = ++hostedAppsToken
+    let active = true, received = false
+    const handler = (_event: IpcRendererEvent, value: { token: number; state: HostedAppsDisplayState }): void => {
+      if (active && value.token === token && value.state.serverId === serverId) { received = true; listener(value.state) }
+    }
+    ipcRenderer.on(HOSTED_APPS_DISPLAY_CHANNEL, handler)
+    void ipcRenderer.invoke(HOSTED_APPS_DISPLAY_CHANNEL, { type: 'watch', serverId, token }).then(result => {
+      if (active && !received && !result.ok) listener({ serverId, type: 'failed' })
+    }).catch(() => {
+      if (active && !received) listener({ serverId, type: 'failed' })
+    }) // Static feedback only; invoke replies never overwrite streamed snapshots.
+    return () => {
+      active = false; ipcRenderer.removeListener(HOSTED_APPS_DISPLAY_CHANNEL, handler)
+      void ipcRenderer.invoke(HOSTED_APPS_DISPLAY_CHANNEL, { type: 'unwatch', serverId, token }).catch(() => {}) // Teardown is best effort.
+    }
+  },
   hostedPane: (command: HostedPaneCommand): Promise<{ ok: true; state: HostedPaneState } | { ok: false; error: 'refused' }> =>
     ipcRenderer.invoke(HOSTED_PANE_CHANNEL, command),
   onHostedPane: (listener: (state: HostedPaneState) => void): (() => void) => {

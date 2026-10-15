@@ -446,7 +446,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
         activeConversationStore.getState().activeConversation?.id === savedTimelineTarget.conversationId
         ? savedTimelineTarget : null
       newestHistory.sync(target !== null && threadRuntime.isThread(target.serverId, target.conversationId) ? null : target, target !== null &&
-        connectedConversationHostNow(target.conversationId) === target.serverId)
+        connectedConversationHostNow(target.conversationId) === target.serverId && historyAskDeps.canRequest?.(target.conversationId) === true)
     }
     // Let receipt admission and writer capture finish before releasing deferred demand.
     const schedule = (): void => { queueMicrotask(() => { if (listening) sync() }) }

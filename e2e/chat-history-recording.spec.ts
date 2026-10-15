@@ -613,6 +613,8 @@ test('local list read failures stay beside the saved host', async ({ launchPaire
 test('saved coverage survives offline restart, reconnect, live receipts and connected reopening', async ({ launchPairedApp }) => {
   test.setTimeout(90_000)
   let unavailable = false
+  let holdReconnectList = false
+  let reconnectListRequested = false
   let drop: () => void = () => {}
   const cursors: unknown[] = []
   const newPayload = { conversation_id: SEEDED_ROW.id, turn_id: 'after-reconnect', seq: 0, text: 'New same-host reply' }
@@ -632,7 +634,10 @@ test('saved coverage survives offline restart, reconnect, live receipts and conn
   const first = await launchPairedApp({ buildReplyFrames: bytes => {
     const env = decodeEnvelope(bytes)
     if (unavailable) { drop(); return [] }
-    if (env.type === 'list_conversations') return [seedConversationsFrame()]
+    if (env.type === 'list_conversations') {
+      if (holdReconnectList) { reconnectListRequested = true; return [] }
+      return [seedConversationsFrame()]
+    }
     if (env.type !== 'request_history') return []
     cursors.push(env.payload.cursor)
     return [frame('history_page', { entries: env.payload.cursor === '' ? [entry(1)] : [
@@ -650,6 +655,7 @@ test('saved coverage survives offline restart, reconnect, live receipts and conn
   await expect.poll(async () => snapshotText(await read(first.page))).toContain('Restored partial reply')
   await first.app.close()
   unavailable = true
+  holdReconnectList = true
 
   const second = await launchPairedApp({}, { reuseUserDataDir: first.userDataDir, onLaunched: observe })
   await second.page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
@@ -664,6 +670,12 @@ test('saved coverage survives offline restart, reconnect, live receipts and conn
   await expect(second.page.locator('.bubble__cursor')).toHaveCount(0)
   await expect(second.page.locator('.bubble')).toHaveCount(2)
   await settle(second.page)
+  await expect.poll(() => reconnectListRequested).toBe(true)
+  expect(await count(second.app)).toBe(0)
+  holdReconnectList = false
+  await first.daemon.pushFrame(seedConversationsFrame())
+  await expect.poll(() => cursors).toEqual(['', ''])
+  await settle(second.page)
   expect(await count(second.app)).toBe(1)
   await second.page.setViewportSize({ width: 800, height: 800 })
   await second.page.screenshot({ path: '/tmp/builder-1395-reconnected-800.png', animations: 'disabled' })
@@ -674,6 +686,7 @@ test('saved coverage survives offline restart, reconnect, live receipts and conn
   await second.page.locator('.conversation__thread').evaluate(el => { el.scrollTop = 0 })
   await second.page.locator('.conversation__thread').focus()
   await second.page.keyboard.press('Home')
+  await expect.poll(() => count(second.app)).toBe(2)
   await expect(second.page.locator('.bubble')).toHaveCount(4)
   expect(cursors).toEqual(['', '', 'saved-cursor'])
   expect(await count(second.app)).toBe(2)

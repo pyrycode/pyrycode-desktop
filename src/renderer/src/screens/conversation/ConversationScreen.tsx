@@ -635,6 +635,7 @@ export function ConversationScreen({
           onStopTask: (serverId, conversationId, taskId) => sendConversationCommand({ type: 'stopBackgroundTask', serverId,
             payload: { conversation_id: conversationId, task_id: taskId } }) }}
         foldTools={collapseToolUses} turnRunning={isTurnRunning(phase)} onReply={replyToMessage} onOpenMarkdownPath={reader.open}
+        onOpenHostedApp={onOpenHostedApp}
         trailing={<>
           {queryState?.type === 'loading' && <p role="status">Loading messages…</p>}
           {queryState?.type === 'failed' && <ComposerHistoryFailure retryable onRetry={() => {

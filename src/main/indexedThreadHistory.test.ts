@@ -103,7 +103,8 @@ it.each([0, 4096])('follows boundary-string continuations after reopen with %i b
   expect(await page(reopened.store, before)).toMatchObject({ items: s.thread.items.slice(0, 1), continuation: null })
   expect(newest.continuation!.length).toBeLessThanOrEqual(8192)
   expect(h.encryption.decrypt(Buffer.from(newest.continuation!, 'base64url')).byteLength).toBeLessThanOrEqual(101)
-  expect(await reopened.store.execute(put({ ...s, thread: { ...s.thread, epoch: 'replacement' } }))).toEqual({ status: 'ok' })
+  const replacement = { ...s, thread: { ...s.thread, epoch: 'replacement' } }
+  expect(await reopened.store.execute(put(replacement))).toEqual({ status: 'ok' })
   expect(await reopened.store.execute(before)).toEqual(error('invalid-request'))
 })
 

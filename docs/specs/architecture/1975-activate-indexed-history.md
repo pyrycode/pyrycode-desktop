@@ -74,3 +74,19 @@ None. The simpler atomic design stores protected lists in SQLite rather than coo
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-15
+
+## Revisions
+
+2026-10-15 — Implementation retained the design. The final written scope is below the forecast and the normal 800-line ceiling. No new exported type or dependency; nine actual store construction sites, including the newly found update-drain regression, were adapted. Source collection write barriers no longer represent indexed I/O: store tests now hold source import, handler tests hold membership, writer integration tests hold writer admission, and SQLite triggers prove mutation rollback.
+
+Lifecycle proof maps to these executed tests in `src/main/chatHistoryMigration.test.ts`:
+
+- First/repeated import, newer database content and reopen: `imports both exact formats once, preserves newer indexed content and never reopens the source after restart` (also checks list reads without source access and file plaintext).
+- Interrupted import/retry: `rolls back an interrupted two-format import and retries without duplicates`.
+- Invalid/version/decrypt failure and recovery: `preserves an unreadable %s source and recovers without poisoning the queue`.
+- Commit/cleanup failure, restart and identical owner/epoch reuse: `retries retirement after commit without replaying removed records, even with reused identities`.
+- Held import/removal/unpair and queued stale saves: `orders a held import before %s removal and rejects queued stale saves after identical reuse`.
+- Shutdown: `drains accepted import before close and rejects later admission`.
+- Unsupported database and unavailable protection: `preserves committed records and source when database admission or encryption is unavailable`.
+
+`src/main/chatHistoryHandler.test.ts` additionally executes `invalidates queued conversation work while allowing fresh identical coordinates`, including stale list replacement. Backend schema assertions now expect additive schema 5. The durable singleton completion record is the application deletion fence: every application mutation follows its commit, so source replay cannot cross a completed deletion, even if source retirement fails.

@@ -266,7 +266,16 @@ for (const cause of ['close', 'view-replacement', 'parent', 'document-bind', 'do
 }
 
 test('Fetch reconnect reconciles committed uncertain writes without replay', async ({ launchPairedApp }) => {
-  const s=scenario('first',true), { app, page, daemon }=await launchPairedApp(s.options)
+  const s=scenario('first',true), { app, page, daemon }=await launchPairedApp(s.options, {
+    async onLaunched(app) {
+      const page = await app.firstWindow()
+      // Force initial discovery before the fixture clicks: both row types must coexist.
+      await page.addLocatorHandler(page.locator('.channel-list__row-open:not(:has(.channel-list__app-state))'), async () => {
+        await expect(page.locator('.channel-list__app-state')).toHaveCount(1)
+        await expect(page.locator('.channel-list__row-open')).toHaveCount(2)
+      }, { times: 1, noWaitAfter: true })
+    }
+  })
   const first=await open(app)
   await expect.poll(()=>evaluate(app,'document.body.dataset.loaded')).toBe('first-dynamic')
   await evaluate(app, `window.pending=fetch('/api/preferences?hold=1',{method:'POST',body:'committed'}).catch(()=>null);undefined`)

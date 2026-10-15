@@ -29,6 +29,35 @@ The store validates independently but has no pairing dependency, so saved-host
 authorization belongs to the handler. Pairing records are reduced to membership,
 never forwarded to the caller.
 
+The independently callable
+[`createIndexedLegacyHistory({ database, encryption, log })`](../../../src/main/indexedLegacyHistory.ts)
+also returns `execute(unknown): Promise<ChatHistoryResult>`, accepting only
+`readTimeline`, `replaceTimeline`, `removeConversation` and `removeServer`.
+It parses and detaches requests before database access; unsupported operations,
+invalid snapshots and coordinate mismatches return `invalid-request`. Its removals
+delete only the addressed legacy SQLite scope(s) and indexed evidence. They do not
+update lists or daemon-item records. The application-bound operations in the table
+below retain their existing wider removal behavior. Saved-host authorization remains
+with `createChatHistoryHandler` when application binding lands.
+
+[`createHistoryDatabase({ userDataPath })`](../../../src/main/historyDatabase.ts)
+owns the connection and exposes synchronous `transaction(run)` plus `close()`.
+An empty schema-version-0 database receives schema 2 transactionally; an unversioned
+database containing tables or an unfamiliar version is rejected without recreation.
+Schema 1 migrates TEXT ownership keys to UTF-16LE BLOBs inside the calling operation's
+transaction, retaining ciphertext and committed-snapshot UUIDs. A later validation
+or decryption failure rolls back the migration and version change too, allowing
+retry. Migration preserves strings already stored in schema 1; it cannot recover
+surrogate distinctions lost during earlier TEXT binding. Future schema additions
+require explicit versioned migrations; snapshot `version: 1` is unchanged.
+
+Full reads reconstruct and validate one committed snapshot through
+`parseChatHistorySnapshot`, then compare canonical records with stored payloads
+and indexes to reject missing/orphan records or inconsistent indexes. Replacement
+and conversation removal validate the existing addressed snapshot before mutation;
+host removal validates every legacy scope for that exact host. Other hosts and
+peer conversations remain independent. See [rollback and protection](chat-history-results.md#results-and-failure-preservation).
+
 [`src/main/index.ts`](../../../src/main/index.ts) registers one handler over one
 store for the app lifetime, sharing the existing secure store and paired-server
 store. Preload exposes `window.pyry.chatHistory(request): Promise<ChatHistoryResult>`

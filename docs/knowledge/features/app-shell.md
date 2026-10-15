@@ -150,7 +150,7 @@ updates across chat and host switches. Its store subscriptions do not depend on
 the selected route or connection state. Normal close/quit stops and drains the
 writer before teardown; hook cleanup removes its subscriptions and flush listener.
 See [local recording](chat-history.md#received-state-admission-and-ownership) and
-[close/quit flushing](chat-history.md#window-close-and-app-quit). These effects need
+[close/quit flushing](chat-history-storage.md#window-close-and-app-quit). These effects need
 the Electron recording tests; static `AppView` renders cannot prove they mounted.
 
 ### Why `onCancel` now navigates

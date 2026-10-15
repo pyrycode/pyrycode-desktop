@@ -45,7 +45,7 @@ async function readState(page: Page, commands: Envelope[]) {
       document.querySelector('.conversation__input-chrome')?.getBoundingClientRect().top ?? Infinity)
     return { url: location.href, ready: document.readyState, focused: document.hasFocus(),
       visible: document.visibilityState, reader: document.querySelector('.markdown-reader') !== null,
-      key: tail?.getAttribute('data-read-row'), top, bottom,
+      key: tail?.getAttribute('data-read-row'), top, bottom, viewportBottom: viewport?.bottom,
       tailTop: rect?.top, tailBottom: rect?.bottom, height: rect?.height,
       eligible: rect !== undefined && rect.height > 0 && rect.bottom > top && rect.bottom <= bottom,
       committed: tail?.textContent?.includes('Reader-covered addition.') ?? false }
@@ -326,10 +326,17 @@ test('committed folded tails require focus, uncovered viewport and a closed read
   const input = page.locator('.conversation__input-chrome')
   await input.evaluate(el => { (el as HTMLElement).style.transform = 'translateY(-80px)' })
   await thread.evaluate(el => { el.scrollTop = el.scrollHeight })
-  await expect.poll(async () => (await readState(page, commands)).eligible).toBe(false)
+  await expect.poll(async () => {
+    const s = await readState(page, commands)
+    return s.tailBottom !== undefined && s.viewportBottom !== undefined &&
+      s.tailBottom <= s.viewportBottom && s.tailBottom > s.bottom
+  }).toBe(true)
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
   expect(targets(commands).at(-1)).toBe(35)
   await input.evaluate(el => { (el as HTMLElement).style.removeProperty('transform') })
+  // A CSS transform does not resize the observed chrome: drive the callback
+  // explicitly after restoring it, just as in the covered measurement above.
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
   await expect.poll(() => targets(commands).at(-1)).toBe(36)
   daemon.pushFrame(end(37))
   await expect.poll(() => targets(commands).at(-1)).toBe(37)

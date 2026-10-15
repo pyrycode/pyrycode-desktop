@@ -59,6 +59,14 @@ when launch setup overlaps. The shared three-argument pairing contract and real
 tier callers remain unchanged; skipped pairing and reused paired profiles do not
 observe a Welcome click.
 
+Before registration, the default pairing drive disables background throttling on
+the exact Page's BrowserWindow and disposes its handle in `finally`, after the
+launch hook and reuse/skip checks. The exemption lasts for that window's lifetime
+without changing native show/hide policy. This protects the initial native-hidden
+interval even on shown Linux launches; the three Chromium backgrounding switches
+alone did not establish frame progress there. Shared pairing and real-tier callers
+retain their existing behavior. See [the controlled readiness mechanism](e2e-harness-desktop-isolation.md#separate-welcome-readiness-boundary).
+
 Only a click pending after five seconds or rejecting earlier produces the fixed
 `welcome-stall` attachment (`application/json`, inline body in Playwright JSON).
 One capture is reused if a pending click later rejects. It records `launchIndex`,
@@ -137,12 +145,70 @@ Launch-fate recorded two clean exits and no teardown failures; the normal second
 launch added no stall attachment. The verdict also confirms all 11 diagnostic
 unit regressions passed in the unit run: 9,354 executed/passed, 0 failed, 3 skipped.
 
-No naturally occurring Welcome stall was captured; every retained stall
-attachment belongs to the controlled regression. Controlled faults establish
+No naturally occurring Welcome stall was captured in that instrumentation work;
+its retained stall attachments belong to the controlled regression. Those faults establish
 diagnostic behavior only. Native macOS execution and actual OS-minimized behavior
-were not exercised, and no live-Claude acceptance was required. Retain the first
-natural failure's evidence before a follow-up claims a confirmed cause and fixes
-its boundary; see [the separate readiness boundary](e2e-harness-desktop-isolation.md#separate-welcome-readiness-boundary).
+were not exercised, and no live-Claude acceptance was required. The subsequent
+native-hidden repair below has separate causal evidence; the historical natural
+trigger remains unproven.
+
+### Recorded Welcome repair acceptance
+
+The [repair verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1987#issuecomment-6182475899)
+reviewed the controlled native-hidden comparison and deletion control separately
+from focused acceptance and the complete configured gate. At `cfd0ad90`, sources
+matching historical `df4ce98b` produced a 30000ms ordinary Welcome click stability
+timeout when native-hidden. Available diagnostics recorded hidden, not minimized,
+unfocused, an enabled CTA, zero frames and 14 timer ticks over 750ms. Input capture
+recorded no pointerdown/up/click; shown/covered controls delivered trusted input
+and reached the pairing form. Both native show and unthrottling released pending
+input. These observations establish the repaired mechanism, not the missing
+historical trigger or actual minimized-window behavior.
+
+Repaired code is `0d5e9393d12ac6e4ba82e6dade967e02276087bc`; the helper/spec sources
+are unchanged at gate revision `215fa6f1d790d37445d7602bdae3f3a750ad4963`.
+Focused runs used Linux x64, Node 25.8.0, Electron 33.4.11, Playwright 1.61.1 and
+`xvfb-run -a`, normal shown 1100×800 windows and an explicitly hidden regression
+window. All rows below have zero retry attempts; worker counts are actual.
+
+| Run | Revision | Workers | Executed / passed / failed / skipped | Retained result |
+| --- | --- | --- | --- | --- |
+| Repair deleted, expected causal failure | `0d5e9393` with only eight repair lines removed | 1 | 1 / 0 / 1 / 0 | `/tmp/builder-1986/mutation-red.json` |
+| Named offline scenario, 20 repetitions | `0d5e9393` | 1 | 20 / 20 / 0 / 0 | `/tmp/builder-1986/final-one.json` |
+| Named offline scenario, 20 repetitions | `0d5e9393` | 4 | 20 / 20 / 0 / 0 | `/tmp/builder-1986/final-four.json` |
+| Complete offline-settings spec | `0d5e9393` | 1 | 4 / 4 / 0 / 0 | `/tmp/builder-1986/final-spec.json` |
+| Both Welcome regressions | `0d5e9393` | 1 | 2 / 2 / 0 / 0 | `/tmp/builder-1986/final-welcome.json` |
+| Dispatcher gate 6, `npx playwright test --reporter=json`, 2026-10-15 | `215fa6f1` | 4 | 396 / 396 / 0 / 3 | `/work/Projects/pyrycode-desktop-agents/logs/verifier-gate_#1986_6.log` |
+
+The named offline test, `pre-opened composer menus discard mouse and keyboard
+choices offline, then reconnect`, was present and passed in both repetition runs,
+the four-test spec and the full gate (2403ms, first attempt). Its model, effort,
+permission-confirmation and renderer-boundary command assertions remain unchanged;
+see [the offline contract](conversation-shell-run-configuration.md#run-configuration-modeleffortyolo-sections-188).
+Both `ordinary Welcome pairing stays responsive while its native window is hidden`
+and the existing `a controlled real Welcome stall retains progress evidence before
+teardown and correlates multiple launches` were present and passed in the focused
+Welcome run and the full gate. The new regression requires trusted input, normal
+pairing, advancing frames and no stall attachment while the native window stays
+hidden. The deletion control fails at the ordinary Welcome click, with the same
+zero-frame/advancing-timer reading and available cleanup.
+
+Exact commands and the retained causal reports (`input.json`,
+`recovery-observed.json`) are in the
+[issue evidence](https://github.com/pyrycode/pyrycode-desktop/issues/1986#issuecomment-6182367676)
+and [plan validation](../../specs/architecture/1986-offline-settings-reliability.md#final-validation).
+Matching `.log` files, `*-results/` directories and traces remain under
+`/tmp/builder-1986/`; the gate revision record is `verifier-gate_#1986.pass.json`
+beside its log. These are supplied evidence paths, not committed artifacts or new
+documentation-stage runs. Excluded probes and the rebuild-overlapping acceptance
+run are identified in the issue and plan. Passing unchanged baselines are not
+repair evidence.
+
+The full gate had 399 configured tests, three existing macOS-only skips (two badge
+cases and window reopen) and no unrelated failures. The unit gate passed 10,178
+tests, failed zero and skipped three, including all 11 Welcome diagnostic tests
+present and passed. No live Claude was required; native macOS/Windows and actual
+minimized-window validation are not claimed.
 
 ### Initialization ownership
 

@@ -17,7 +17,10 @@ Linux always shows windows; macOS and Windows default to hidden, with exact
 `HIDDEN_WINDOW_ENV_FLAG='1'`; shown launches remove an inherited flag. The
 [window-presentation affordance](window-presentation-affordance.md) also disables
 `backgroundThrottling` for hidden windows, which otherwise remain occluded.
-Shown windows retain normal product presentation and background throttling.
+Shown windows retain normal product presentation. Before its default pairing
+drive, `launchPairedApp` also disables background throttling on the exact pairing
+window, including shown launches; see [Welcome readiness](#separate-welcome-readiness-boundary).
+The smoke and real-tier launch paths retain their existing throttling policy.
 
 `readDesktopIsolation(app)` reads Chromium's parsed switches and actual window
 visibility inside the acquired app. `expectDesktopIsolated(app)` requires all
@@ -284,10 +287,39 @@ explicit unavailable outcomes; only validated primitives and fixed labels enter
 the report. See [capture and cleanup ownership](e2e-harness-launch-fate.md#welcome-stall-diagnostics)
 and [revision-separated acceptance](e2e-harness-launch-fate.md#recorded-welcome-diagnostic-acceptance).
 
-No natural Welcome stall was captured while validating this instrumentation.
-Controlled nonresponse and advancing-timer/zero-frame faults prove capture only,
-without requiring actual OS minimization. The historical cause remains unknown.
-When the first natural failure arrives, retain its attachments and file a
-follow-up that distinguishes observations from hypotheses, establishes a
-confirmed cause with a check separating alternatives, then fixes that boundary
-with a regression. The separate hover diagnosis supplies no Welcome cause.
+The original instrumentation's controlled nonresponse and advancing-timer/zero-frame
+faults prove capture only, without requiring actual OS minimization. The later
+[#1986 investigation](https://github.com/pyrycode/pyrycode-desktop/issues/1986#issuecomment-6182367676)
+reproduced a native-hidden mechanism at `cfd0ad90`, with app/helper sources identical
+to the historical `df4ce98b` Welcome timeout. Native hiding left the renderer
+responsive and the CTA enabled, but produced zero animation frames and 14 timer
+ticks over 750ms. The ordinary click timed out after 30000ms waiting for visibility,
+enabled state and stability; no pointerdown, pointerup or click arrived. Shown and
+covered controls delivered trusted input and reached the pairing form. Showing
+the window or disabling background throttling released the pending ordinary click.
+Renderer timers therefore do not establish frame progress or click actionability.
+
+Shown launches can still be native-hidden before their first paint: all 100 normal
+initial-hook samples observed hidden/loading windows with throttling enabled.
+The Chromium switches alone did not protect that interval. `launchPairedApp` now
+acquires `app.browserWindow(page)` after the launch hook and reuse/skip checks,
+sets `webContents.setBackgroundThrottling(false)` before the ordinary pairing
+drive, and disposes the handle in `finally`. The setting lasts for that window's
+lifetime; disposing the handle does not restore throttling. Native presentation,
+`pairFromUnpairedLaunch(page, payload, label?)`, real-tier callers and diagnostic
+capture/cleanup remain unchanged.
+
+`ordinary Welcome pairing stays responsive while its native window is hidden`
+in `e2e/welcome-stall.spec.ts` holds the exact native window hidden after its normal
+first show (or retains hidden presentation). It requires one trusted Welcome click,
+normal pairing/confirmation through enabled Send, hidden native state with throttling
+disabled, two real animation-frame callbacks and no stall attachment. Removing
+only the fixture repair reproduces the original click boundary. See
+[revision-separated repair evidence](e2e-harness-launch-fate.md#recorded-welcome-repair-acceptance).
+
+This controlled defect is distinct from the unrecorded historical trigger: the
+natural failure's raw call log and attachment remain unavailable, and normal green
+launches do not explain why its hidden interval persisted. The separate hover
+diagnosis supplies no Welcome cause. Retain native, renderer/frame and input
+evidence on any new natural failure; macOS/Windows native execution and actual
+minimized-window behavior are not established by the Linux hidden-window proof.

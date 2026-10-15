@@ -27,7 +27,7 @@ test('host-first sidebar follows the Figma insets, row sizes and host spacing', 
   const sections = page.locator('.channel-list__section')
   const rows = page.locator('.channel-list__row')
   await expect(hosts).toHaveCount(2)
-  await expect(sections).toHaveCount(4)
+  await expect(sections).toHaveCount(6)
   await expect(rows).toHaveCount(3)
   await expect(page.locator('.channel-list__workspace')).toHaveCount(0)
   await expect(page.locator('.channel-list__divider')).toHaveCount(0)
@@ -48,7 +48,7 @@ test('host-first sidebar follows the Figma insets, row sizes and host spacing', 
     expect(h.height).toBe(24)
   }
   expect((await box(rows.nth(1))).y - (await box(rows.nth(0))).y).toBe(28)
-  const firstHostEnd = await box(sections.nth(1))
+  const firstHostEnd = await box(page.locator('.channel-list__app-status').first())
   expect((await box(hosts.nth(1))).y - firstHostEnd.y - firstHostEnd.height).toBe(16)
   const tree = page.locator('.channel-list__tree')
   const list = page.locator('.channel-list')

@@ -417,7 +417,7 @@ export const test = base.extend<PairedAppFixtures>({
       // #1091: this locator is UNFILTERED and runs in Playwright strict mode, which is why the second
       // pairing below happens strictly after it — a second row existing at this moment would break the
       // click outright. (#1070's AC5 protects the same locator.)
-      await page.locator('.channel-list__row-open').click()
+      await page.locator('.channel-list__row-open:not(:has(.channel-list__app-state))').click()
 
       // Send enables ONLY on the `connected` daemon event — after the real Noise_IK handshake
       // terminates at the fake. This is the fixture's completion signal; it resolves here. Because the
@@ -442,7 +442,7 @@ export const test = base.extend<PairedAppFixtures>({
 
         // The addressed connection request must earn this row from the second transport.
         // No unsolicited seed push: a missing request now fails the fixture's connected gate.
-        await expect(page.locator('.channel-list__row-open')).toHaveCount(2, {
+        await expect(page.locator('.channel-list__row-open:not(:has(.channel-list__app-state))')).toHaveCount(2, {
           timeout: HANDSHAKE_TIMEOUT_MS
         })
       }

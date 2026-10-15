@@ -93,9 +93,11 @@ only the derived target label and rejection flag. The modal rejection notice app
 
 ### Hosted app selection and trusted chrome
 
-The production selection seam for [sidebar/link entry points (#1928)](https://github.com/pyrycode/pyrycode-desktop/issues/1928)
-is `window.pyry.hostedPane({ type: 'select', serverId, appId })`. Name the paired
-host and the discovered app explicitly; no sidebar Apps entry is installed yet.
+The [host sidebar's Apps rows](channel-list.md#host-apps), shipped in
+[#2001](https://github.com/pyrycode/pyrycode-desktop/issues/2001), select through
+`window.pyry.hostedPane({ type: 'select', serverId, appId })`. Each row names its paired
+host and discovered app explicitly; channel-link entry points remain
+[#2002](https://github.com/pyrycode/pyrycode-desktop/issues/2002).
 `window.pyry.onHostedPane(listener)` returns an unsubscribe function and delivers
 `HostedPaneState` snapshots/events. It subscribes before requesting the initial
 snapshot and ignores that reply once an event has arrived. Use this stream to
@@ -142,6 +144,15 @@ completion uses a separate selection-identity fence: a release-generation change
 must not discard a still-current label read. Exact registered client/main-frame
 membership, strict command shapes and bounded geometry are checked in main;
 malformed, stale or untrusted requests return `refused` without changing the pane.
+
+App navigation leaves the active channel/chat identity and its host intact, creates no conversation,
+and preserves `composerDraftStore` entries keyed by host/conversation. The pane stream controls app
+highlighting: only its exact host/app is selected, and all channel/chat highlights are suppressed
+while it is open. Selecting the original channel/chat again closes the current hosted generation,
+uses the existing conversation activation path and restores its selection and draft. Do not copy app
+identity into the active-conversation store or apply a late select-command result over streamed state;
+switching hosts/apps must leave a pending open unable to redirect its successor. Non-running or
+unconfirmed apps use the existing loading/unavailable/recovery states without starting an app.
 
 Incidental active-conversation changes cannot redirect the hosted connection.
 Explicit channel/chat opening, confirmed chat creation, Settings, Archive and

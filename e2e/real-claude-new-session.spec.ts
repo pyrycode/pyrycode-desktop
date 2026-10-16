@@ -1,4 +1,5 @@
 import { chooseConnectedMenuItem } from './fixtures/chooseConnectedMenuItem'
+import { installTurnCompletionEvidence } from './fixtures/turnCompletionEvidence'
 import { scenarioNonce } from './fixtures/clientScenario'
 import { type Page } from '@playwright/test'
 import { test, expect, encodePairingPayload } from './fixtures/clientScenario'
@@ -127,6 +128,7 @@ test('real claude restarts on Reset session and the turn stream survives it', as
   page
 }) => {
   test.setTimeout(SPEC_TIMEOUT_MS)
+  await page.evaluate(installTurnCompletionEvidence)
 
   // Per-run nonces defeat reply caching; the replies' CONTENT is never asserted on, only their arrival.
   // Two distinct prompts so a stale row from the first turn cannot be mistaken for the second's.
@@ -175,6 +177,9 @@ test('real claude restarts on Reset session and the turn stream survives it', as
     .toBeGreaterThanOrEqual(1)
   // The turn is over, not merely started: the cursor drops on turn_end. Reset only after it quiesces.
   await expect(page.locator(CURSOR_SELECTOR)).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
+  await expect.poll(() => page.evaluate(() => (window as typeof window & {
+    turnCompletionEvidence: { count: () => number }
+  }).turnCompletionEvidence.count()), { timeout: TURN_TIMEOUT_MS }).toBe(1)
 
   // A precondition read, not the proof: an ordinary turn draws no session boundary, so the delimiter
   // counted after the restart is the restart's. The proof is the positive count below.

@@ -5,6 +5,7 @@ import type { ThreadItem } from '../src/shared/wire/thread'
 import { capturePairedApp } from './fixtures/capturePairedApp'
 import { mintChatInWorkspace } from './fixtures/mintChatRow'
 import { pairAnotherServerFromSettings } from './fixtures/pairingArrival'
+import { installHeldThreadRead } from './fixtures/heldThreadRead'
 
 const stamp = '2026-10-15T00:00:00Z'
 const item = (id: number, text: string): ThreadItem => ({ id, rev: 1, order: id, kind: 'assistant_message',
@@ -381,7 +382,7 @@ test('current thread prompts remain answerable during pending and failed initial
   expect(foreignRequests.some(r => r.type === 'modal_answer')).toBe(false)
 })
 
-test('restore overlapping live content retains complete progress across an interrupted catch-up and epoch replacement', async ({ launchPairedApp }) => {
+test('restore overlapping live content retains complete progress across an interrupted catch-up and epoch replacement', async ({ launchPairedApp }, testInfo) => {
   const requests: Envelope[] = []
   let interrupt = false, reset = false, overlapped = false
   let { page, app, daemon, forwarder, userDataDir } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
@@ -404,20 +405,10 @@ test('restore overlapping live content retains complete progress across an inter
     return result.status === 'stored' && result.snapshot.kind === 'daemon-items' ? result.snapshot.thread.checkpoint : null
   }, SEEDED_ROW.id)).toBe(20)
   await app.close()
-  const resumed = await launchPairedApp({ threadMode: 'native',}, { reuseUserDataDir: userDataDir, onLaunched: async app => { await app.evaluate(({ ipcMain }) => {
-    const original = (ipcMain as any)._invokeHandlers.get('pyry:chat-history')
-    Object.assign(globalThis, { heldThreadReads: 0 })
-    ipcMain.removeHandler('pyry:chat-history')
-    ipcMain.handle('pyry:chat-history', async (event, request) => {
-      const result = await original(event, request)
-      if (request.operation === 'readThread') {
-        (globalThis as any).heldThreadReads++
-        await new Promise<void>(resolve => ipcMain.once('test:release-thread-read', () => resolve()))
-        ipcMain.removeHandler('pyry:chat-history'); ipcMain.handle('pyry:chat-history', original)
-      }
-      return result
-    })
-  }) } })
+  const resumed = await launchPairedApp({ threadMode: 'native' }, { reuseUserDataDir: userDataDir, onLaunched: async app => {
+    const evidence = await installHeldThreadRead(app)
+    await testInfo.attach('held-thread-read-setup', { body: JSON.stringify(evidence), contentType: 'application/json' })
+  } })
   page = resumed.page; app = resumed.app
   await page.getByText(SEEDED_ROW.name!, { exact: true }).first().click()
   await expect.poll(() => app.evaluate(() => (globalThis as any).heldThreadReads)).toBe(1)

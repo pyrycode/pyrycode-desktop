@@ -418,7 +418,7 @@ export function createIndexedThreadHistory(deps: {
   }
   function save(db: Database.Database, snapshot: Extract<ChatHistorySnapshot, { kind: 'daemon-items' }>,
     identity: string, generation: string, previous: ThreadSnapshot | null = null) {
-    const previousHeader = db.prepare<[string], Row>(`SELECT ${columns} FROM thread_records WHERE scope = ? AND kind = 'header' AND ordinal = 0`).get(identity)
+    const previousHeader = previous === null ? undefined : db.prepare<[string], Row>(`SELECT ${columns} FROM thread_records WHERE scope = ? AND kind = 'header' AND ordinal = 0`).get(identity)
     const keepIndexes = previousHeader && header(decode(previousHeader, identity), snapshot.serverId, snapshot.conversationId).mutable !== undefined
     const retained = new Map(db.prepare<[string], { item_id: number; payload: Buffer }>(
       'SELECT item_id, payload FROM thread_payloads WHERE scope = ?').all(identity).map(r => [r.item_id, r.payload]))

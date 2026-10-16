@@ -152,8 +152,8 @@ it('opening indexes follow owned revisions and removal without reviving old depe
 })
 
 it('cold opening payload work stays bounded as unrelated older, hidden and range history grows', async () => {
-  const h = setup()
   async function measure(unrelated: number) {
+    const h = setup()
     const s = snapshot(0), items = [
       ...Array.from({ length: unrelated }, (_, n) => ({ id: n + 100, rev: 1, kind: 'future', shown: false })),
       { id: 1, rev: 1, kind: 'future', active: true, order: 1 },

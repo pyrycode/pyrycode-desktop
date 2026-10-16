@@ -347,3 +347,13 @@ it('keeps main reply usage independent of child traffic sharing a turn', () => {
   expect(rows.find(r => r.source.id === 20)?.stats).toBe('42 out')
   expect(rows.find(r => r.source.id === 30)?.stats).toBeUndefined()
 })
+
+it('shows written input once as a user row without offering queue actions', () => {
+  const html = render([item(7, 'user_message', { text: 'written before consumption', queued_msg_id: 2 },
+    { status: 'written', active: true, order: 0 })])
+  expect(html).toContain('data-thread-role="user"')
+  expect(html).toContain('written before consumption')
+  expect(html).not.toContain('data-thread-role="queued"')
+  expect(html).not.toContain('Drop queued message')
+  expect(html).not.toContain('Send queued message now')
+})

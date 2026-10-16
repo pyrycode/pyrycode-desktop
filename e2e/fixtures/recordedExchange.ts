@@ -112,6 +112,7 @@ export class RecordedExchange {
   private connection = 1
   private barrier = 0
   private failure: Error | undefined
+  private progress = new Set<() => void>()
   constructor(recording: Recording) {
     // Clone and validate so callers cannot mutate an active replay.
     this.recording = parseRecording(JSON.stringify(recording))
@@ -157,6 +158,31 @@ export class RecordedExchange {
     this.barrier++
     return this.drain()
   }
+  async checkpointWhenReady(name: string): Promise<Uint8Array[]> {
+    const expected = this.recording.barriers?.[this.barrier]
+    if (this.failure) throw this.failure
+    if (!expected || expected.name !== name) return this.fail('Recorded exchange checkpoint mismatch')
+    if (this.index === expected.before) return this.checkpoint(name)
+    return new Promise((resolve, reject) => {
+      const finish = (): void => {
+        if (this.failure || this.index > expected.before) {
+          cleanup(); reject(this.failure ?? new Error('Recorded exchange checkpoint mismatch')); return
+        }
+        if (this.index === expected.before) {
+          cleanup()
+          try { resolve(this.checkpoint(name)) } catch (error) { reject(error) }
+        }
+      }
+      const cleanup = (): void => { clearTimeout(timer); this.progress.delete(finish) }
+      const timer = setTimeout(() => {
+        this.failure ??= new Error('Recorded exchange checkpoint prefix incomplete')
+        this.notifyProgress()
+      }, 30_000)
+      this.progress.add(finish)
+      finish()
+    })
+  }
+  private notifyProgress(): void { for (const finish of [...this.progress]) finish() }
   private drain(): Uint8Array[] {
     const frames: Uint8Array[] = []
     while (this.index < this.recording.wire.length) {
@@ -175,6 +201,7 @@ export class RecordedExchange {
       frames.push(encodeEnvelope(message))
     }
     this.emitted += frames.length
+    this.notifyProgress()
     return frames
   }
   start(): Uint8Array[] { return this.drain() }
@@ -186,6 +213,7 @@ export class RecordedExchange {
   }
   private fail(message: string): never {
     this.failure ??= new Error(message)
+    this.notifyProgress()
     throw this.failure
   }
   reply(bytes: Uint8Array): Uint8Array[] {

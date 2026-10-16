@@ -36,6 +36,9 @@ export function scenarioInput<T>(name: string, generate: () => T): T {
 }
 export async function liveProof(run: () => Promise<void> | void): Promise<void> {
   if (scenarioMode !== 'replay') await run()
+  // Offline cannot establish the filesystem/OS fact. It must still reach the
+  // exact recorded prefix at which the live proof succeeded.
+  await state?.checkpoint('live-proof')
 }
 // A recorded test-side action is distinct from an application request. Its effects
 // are never fabricated: capture executes it; replay releases only captured messages.
@@ -180,7 +183,7 @@ const replay = base.extend<ReplayFixtures>({
       buildInitialFrames: () => exchange.start(), buildReconnectFrames: () => exchange.reconnect(),
       buildReplyFrames: bytes => { try { return exchange.reply(bytes) } catch { return [] } } })
     state = { inputs: recording.scenario.inputs!, source: recording.source, checkpoint: async name => {
-      for (const frame of exchange.checkpoint(name)) daemon.pushFrame(frame)
+      for (const frame of await exchange.checkpointWhenReady(name)) daemon.pushFrame(frame)
     } }
     try {
       await use({ pairFields: { server: 'fake-daemon', token: 'dummy-token-not-a-real-credential',

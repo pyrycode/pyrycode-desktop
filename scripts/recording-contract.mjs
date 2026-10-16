@@ -35,7 +35,8 @@ export function requestContract(recording) {
     }
     if (entry.direction !== 'client') continue
     const message = entry.message
-    const signature = JSON.stringify({ type: message.type, payload: normalize(message.payload) })
+    const { id: _id, ts: _ts, ...contract } = message
+    const signature = JSON.stringify(normalize(contract))
     if (queriesAllowed.has(message.type)) queries.push(signature)
     else { flush(); steps.push(signature) }
   }

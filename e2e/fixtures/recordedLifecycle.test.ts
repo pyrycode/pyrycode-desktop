@@ -51,3 +51,17 @@ it('rejects forged connection jumps and malformed checkpoint positions', () => {
     expect(() => parseRecording(JSON.stringify(recording))).toThrow('Invalid daemon recording')
   }
 })
+
+it('waits for the actual recorded prefix before releasing a successful live-proof checkpoint', async () => {
+  const recording = fixture()
+  recording.barriers = [{ before: 1, name: 'live-proof' }]
+  const replay = new RecordedExchange(recording)
+  replay.setDeviceId('actual')
+  let finished = false
+  const ready = replay.checkpointWhenReady('live-proof').then(frames => { finished = true; return frames })
+  await Promise.resolve()
+  expect(finished).toBe(false)
+  expect(replay.reply(encodeEnvelope(message(2, 'list_conversations')))).toEqual([])
+  expect((await ready).map(decodeEnvelope)).toHaveLength(1)
+  expect(finished).toBe(true)
+})

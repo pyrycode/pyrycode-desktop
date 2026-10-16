@@ -86,7 +86,7 @@ function sessionDividerReason(c: Record<string, unknown>): 'clear' | 'idle_evict
 }
 function presentation(s: Held): ThreadItem | null {
   const c = record(s.content)
-  if (!c || typeof s.status !== 'string' || !['running', 'done', 'failed', 'denied', 'interrupted', 'queued', 'delivered', 'lost', 'dropped',
+  if (!c || typeof s.status !== 'string' || !['running', 'done', 'failed', 'denied', 'interrupted', 'queued', 'written', 'delivered', 'lost', 'dropped',
     'finished', 'stopped', 'stopping', 'ended_with_session', 'gone'].includes(s.status)) return null
   const turnId = text(s.turn) ?? ''
   switch (s.kind) {

@@ -112,3 +112,10 @@ Configuration revalidation is bounded to one request pair per selected bound
 session and opening after an admitted withdrawal of a previously held settings
 reading. It does not retry missing initial replies. Effort recall waits for a
 real configuration reading before interpreting an empty effort as unset.
+
+Core #3508 adds the successful Send now write fact needed before a held tool
+echoes input. Desktop recognizes the explicit pending `written` status as one
+user row without queue actions. Every original Send now assertion, including
+the release-file ordering, remains. Successful live-only assertions also mark
+causal checkpoints: offline waits for their actual recorded message prefix but
+never executes or claims the filesystem/OS proof.

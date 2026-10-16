@@ -2,6 +2,8 @@ import { expect, type ElectronApplication, type Page, type TestInfo } from '@pla
 import { electron } from './electronLaunch'
 import type { ChildProcess } from 'node:child_process'
 import { HIDDEN_WINDOW_ENV_FLAG } from '../../src/main/windowPresentation'
+import { isTransientContextLoss } from './mainProcessRead'
+import { setTimeout as delay } from 'node:timers/promises'
 
 // The one place the default tier launches Electron (#1067). Both launch sites — `launchPairedApp.ts`
 // (48 of the 49 spec files) and `smoke.spec.ts` (the 49th) — go through `launchIsolatedApp` below, so
@@ -199,14 +201,25 @@ async function ignoreDisplayPointer(app: ElectronApplication): Promise<void> {
 export async function readDesktopIsolation(
   app: ElectronApplication
 ): Promise<DesktopIsolationState> {
-  return app.evaluate(({ app: electronApp, BrowserWindow }, switches) => {
+  const deadline = Date.now() + 5_000
+  const read = ({ app: electronApp, BrowserWindow }: typeof import('electron'), switches: string[]) => {
     const windows = BrowserWindow.getAllWindows()
     return {
       switchesApplied: switches.filter((name) => electronApp.commandLine.hasSwitch(name)),
       windows: windows.length,
       visibleWindows: windows.filter((window) => window.isVisible()).length
     }
-  }, [...RENDERER_THROTTLING_SWITCHES])
+  }
+  // This is a read only. A lost inspector promise must neither satisfy isolation
+  // nor relaunch the application; repeat the read within the existing five-second bound.
+  for (;;) {
+    try {
+      return await app.evaluate(read, [...RENDERER_THROTTLING_SWITCHES])
+    } catch (error) {
+      if (!isTransientContextLoss(error) || Date.now() >= deadline) throw error
+      await delay(100)
+    }
+  }
 }
 
 /**

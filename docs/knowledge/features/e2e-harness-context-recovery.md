@@ -121,6 +121,70 @@ These passes supplement the deterministic recovery proof; the reason Electron lo
 inspection context remains unproven. The original evaluation error and running-at-outcome
 launch-fate do not establish renderer navigation, an app crash or completed installation.
 
+### Held thread read registration
+
+The resumed restore-overlap case in `thread-activation.spec.ts` uses the single-consumer
+[`installHeldThreadRead`](../../../e2e/fixtures/heldThreadRead.ts) in `onLaunched`, after
+window loading and before opening the conversation. Window readiness cannot establish
+whether a rejected installation evaluation actually replaced `pyry:chat-history`.
+The synchronous callback publishes a marker containing the original handler, wrapper
+identity and phase. A separate `readMainProcess` inspection must confirm that the marker
+is armed and the actual registered IPC handler is that wrapper before setup succeeds.
+
+Recovery allows at most two installation evaluations, each followed by at most three
+inspection reads, without sleeps. Only transient installation loss followed by conclusive
+marker absence permits the second guarded installation. Unavailable inspection never
+authorizes replay or success; exhausted confirmation, acknowledged absence and changed
+registration fail. Fatal errors and non-`Error` throws become bounded, client-owned
+installation/inspection error strings, without arbitrary inspector messages or causes.
+The launch hook itself is never retried.
+
+Existing marker identity guards late installation callbacks, including after release,
+so they cannot double-wrap registration, reset `heldThreadReads` or rearm a completed hold.
+The first `readThread` claims the hold before awaiting the original result; other operations
+and concurrent later reads delegate. Once the original result is available, the held read
+increments the observation and waits for `test:release-thread-read`. Release restores the
+original registered handler before returning the captured result and retains the released
+marker. The held request owns one release listener; fixture teardown closes the app and
+fake services on failure.
+
+[`heldThreadRead.test.ts`](../../../e2e/fixtures/heldThreadRead.test.ts) executes the actual
+setup and inspection callbacks against an IPC registration fake with release listeners.
+The [verifier evidence](https://github.com/pyrycode/pyrycode-desktop/pull/2037#issuecomment-6206339154)
+records 13 executed, 0 passed, 13 failed, 0 skipped against the extracted original setup,
+then 13 executed/passed, 0 failed/skipped with confirmation. Coverage includes loss before
+and after effect, lost/exhausted confirmation, finite absence, late execution, concurrent
+delegation, restoration and content-free fatal rejection. Logs are
+`/tmp/builder-2035/held-read-{before,after}.log`.
+
+Linux x64 reports at candidate `4cd97dacce6f64f4d46e80095c011886c1ddd62a` retain the
+unchanged named case `restore overlapping live content retains complete progress across
+an interrupted catch-up and epoch replacement`: `/tmp/builder-2035/named.json` records
+1 executed/passed, 0 failed/skipped. `/tmp/builder-2035/group.json` records 17 executed/passed,
+0 failed/skipped across the complete `thread-activation.spec.ts`, `history-native.spec.ts`
+and `chat-history-recording.spec.ts` group. Both configured two workers and zero retries;
+the named run used one actual worker and the group used two. Matching `.stderr` files
+are empty, with no top-level report errors or fake-setup failure attachments. Include
+`indexed-history-lifecycle.spec.ts` in that group when #1975 lands; it was absent from the
+reviewed main revision and tree. macOS is outside this ticket's verification scope;
+no real-Claude acceptance is required.
+
+The group's `held-thread-read-setup` attachment records
+`{ installationAttempts: 1, inspectionAttempts: 1, contextLosses: 1 }`: registration was
+confirmed after a lost acknowledgement without reinstalling. Its `launch-fate` attachments
+cover 18 launches, all exit 0, no signals or teardown failures; the resumed app remained
+running at outcome and closed cleanly. The named run records the same setup counts with
+zero losses. At `02e7034ad859a672ef9a75128f5d126192826e46`, the complete Linux default-tier
+gate records 432 executed/passed, 0 failed, 10 skipped, two actual workers and zero retries;
+the named case is present and passed, with one installation, one inspection, zero losses
+and clean launch fate. Its exact checkpoint 20, overlap retained once, complete progress
+21 after interruption, replacement epoch, stale-content exclusion and no-legacy-request
+assertions and positive receipt barriers remain intact. Controlled failures and the
+observed recovered acknowledgement establish the confirmation mechanism; the upstream
+Electron/Playwright trigger behind context destruction remains unknown.
+
+### Native window setup
+
 Native window setup has two independently observable fields. The single-consumer
 [`configureComposerWindow`](../../../e2e/fixtures/composerWindowSetup.ts) serves only
 the long-model cases in `composer-options-clamp.spec.ts`. Its control callback checks

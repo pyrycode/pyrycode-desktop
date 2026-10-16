@@ -77,3 +77,7 @@ None. A cleaner shared progress-fold extraction would change the main persistenc
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-16
+
+## Revisions
+
+2026-10-16: The private pending-read token is an object carrying metadata/range/certificate observations, compared by identity, rather than a separate Symbol plus observation table. It retains no item payload history. Batch generations remain Symbols. The implementation fits entirely in `threadItemStore`; the reader and runtime already provide the required full validation, cancellation and coordinator settlement contracts. The mounted overlap fixture now holds the server reply and seeds a saved-only row plus unfinished version 25/checkpoint 20, proving that visible rows and the resumed version cannot come from the reply or applied version.

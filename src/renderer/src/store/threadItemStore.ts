@@ -5,6 +5,7 @@ export type { ThreadSnapshot } from '../../../shared/chatHistory'
 
 type HeldItem = Readonly<Pick<ThreadItem, 'id' | 'kind' | 'rev'> & Record<string, unknown>>
 type Range = Readonly<{ start: number; end: number }>
+type RestoreProgress = Pick<OwnedThreadChanges, 'metadata' | 'completion' | 'availability' | 'ranges'>
 /** Client-owned certification, supplied only after the sync coordinator proves completion. */
 export interface ThreadBatchCertificate {
   fromVersion: number
@@ -66,24 +67,57 @@ function rangesUnion(ranges: readonly Range[]): readonly Range[] {
   return freeze(merged)
 }
 
+/** Replay received progress against saved obligations, as the owned writer does on disk. */
+function restoredProgress(saved: ThreadSnapshot, progress: readonly RestoreProgress[]): ThreadSnapshot {
+  let old = saved, oldest = saved.ranges[0]?.start ?? Infinity
+  for (const p of progress) {
+    const next = p.metadata, completion = p.completion
+    const certified = completion !== undefined && completion.fromVersion <= old.checkpoint
+    const fenced = old.repair !== null || (old.uncommittedVersion ?? 0) > old.checkpoint
+    const bound = completion || fenced ? certified ? completion.version : old.checkpoint : next.checkpoint
+    const checkpoint = Math.max(old.checkpoint, Math.min(next.checkpoint, bound))
+    const oldRepair = old.repair && !(certified && completion.version >= old.repair.throughVersion) ? old.repair : null
+    const nextRepair = next.repair && (next.repair.fromVersion >= old.checkpoint || next.repair.throughVersion > old.checkpoint)
+      ? next.repair : null
+    const missing = completion !== undefined && !certified
+    const repair = oldRepair || nextRepair || missing ? { fromVersion: checkpoint,
+      throughVersion: Math.max(checkpoint, oldRepair?.throughVersion ?? 0, nextRepair?.throughVersion ?? 0,
+        missing ? completion.version : 0) } : null
+    const unfinished = old.uncommittedVersion ?? 0
+    const retain = !(certified && completion.version >= unfinished)
+    const uncommittedVersion = Math.max(next.uncommittedVersion ?? 0,
+      retain && (unfinished > next.checkpoint || fenced) ? unfinished : 0)
+    let olderAvailable = old.olderAvailable
+    const boundary = p.availability
+    if (boundary && (boundary.start < oldest || boundary.start === oldest && olderAvailable !== false)) {
+      oldest = boundary.start; olderAvailable = boundary.available
+    }
+    old = { ...old, version: Math.max(old.version, next.version), checkpoint, repair, uncommittedVersion,
+      olderAvailable, ranges: rangesUnion([...old.ranges, ...p.ranges]) }
+  }
+  return old
+}
+
 /** No production singleton or subscriptions: callers explicitly own epochs and completed replies. */
 export function createThreadItemStore(log?: { event: (fields: { event: string; code?: string }) => void }) {
   return createStore<ThreadItemStore>((set, get) => {
-    const reads = new Map<string, Map<string, symbol>>()
+    const reads = new Map<string, Map<string, { progress: RestoreProgress[] }>>()
     const read = (host: string, conversation: string): Slice | undefined => get().hosts.get(host)?.get(conversation)
     function publish(host: string, conversation: string, slice: Slice,
       change: { item?: HeldItem; ranges?: readonly Range[]; acceptEpoch?: boolean; resetId?: string;
         availability?: OwnedThreadChanges['availability']; completion?: OwnedThreadChanges['completion'] } = {}): void {
-      reads.get(host)?.delete(conversation)
       if (slice.snapshot !== slice.restored) {
         const { items: ignoredItems, ranges: ignoredRanges, arrivalOrder: ignoredArrival, ...metadata } = slice.snapshot
         void ignoredItems; void ignoredRanges; void ignoredArrival
-        slice = { ...slice, owned: { metadata, acceptEpoch: change.acceptEpoch ?? false,
+        const owned: OwnedThreadChanges = { metadata, acceptEpoch: change.acceptEpoch ?? false,
           ...(change.resetId === undefined ? {} : { resetId: change.resetId }),
           ...(change.availability === undefined ? {} : { availability: change.availability }),
           ...(change.completion === undefined ? {} : { completion: change.completion }),
           items: change.item === undefined ? [] : [change.item],
-          removeIds: [], ranges: change.ranges ?? [] } }
+          removeIds: [], ranges: change.ranges ?? [] }
+        slice = { ...slice, owned }
+        reads.get(host)?.get(conversation)?.progress.push({ metadata, ranges: owned.ranges,
+          completion: owned.completion, availability: owned.availability })
       }
       const hosts = new Map(get().hosts), conversations = new Map(hosts.get(host))
       conversations.set(conversation, slice)
@@ -128,9 +162,9 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
       snapshot: (host, conversation) => read(host, conversation)?.snapshot ?? null,
       beginLocalRead(host, conversation) {
         if (read(host, conversation)) return null
-        const token = Symbol(), scopes = reads.get(host) ?? new Map<string, symbol>()
+        const token: { progress: RestoreProgress[] } = { progress: [] }, scopes = reads.get(host) ?? new Map()
         scopes.set(conversation, token); reads.set(host, scopes)
-        const current = (): boolean => reads.get(host)?.get(conversation) === token && !read(host, conversation)
+        const current = (): boolean => reads.get(host)?.get(conversation) === token
         const end = (): void => { if (reads.get(host)?.get(conversation) === token) reads.get(host)?.delete(conversation) }
         return {
           complete(value) {
@@ -140,14 +174,29 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
             const parsed = parseChatHistorySnapshot({ version: 1, kind: 'daemon-items', serverId: host,
               conversationId: conversation, thread: value })
             if (parsed.kind !== 'daemon-items') return
-            const snapshot = detach(parsed.thread)
+            let snapshot = detach(parsed.thread)
+            const admitted = read(host, conversation)
+            if (admitted && admitted.snapshot.epoch !== snapshot.epoch) return
             const items = new Map(snapshot.items.map(item => [item.id, item])), byId = new Map<number, HeldItem>()
             // Older snapshots have only display order; new ones retain the original arrival order.
             for (const id of snapshot.arrivalOrder ?? items.keys()) {
               const item = items.get(id)
               if (item !== undefined) byId.set(id, item)
             }
-            publish(host, conversation, { snapshot, restored: snapshot, generation: Symbol(),
+            if (admitted) {
+              let incompatible = false
+              for (const [id, item] of admitted.byId) {
+                const stored = byId.get(id)
+                if (stored && stored.kind !== item.kind) incompatible = true
+                if (!stored || stored.kind !== item.kind || item.rev >= stored.rev) byId.set(id, item)
+              }
+              snapshot = restoredProgress(snapshot, token.progress)
+              snapshot = detach({ ...snapshot, items: ordered(byId), arrivalOrder: [...byId.keys()],
+                ...(incompatible ? { repair: { fromVersion: snapshot.checkpoint,
+                  throughVersion: Math.max(snapshot.version, snapshot.repair?.throughVersion ?? 0) } } : {}) })
+              if (incompatible) log?.event({ event: 'thread-items-repair', code: 'kind' })
+            }
+            publish(host, conversation, { snapshot, restored: snapshot, generation: admitted?.generation ?? Symbol(),
               uncommittedVersion: snapshot.uncommittedVersion ?? 0, byId })
             log?.event({ event: 'thread-items-restored', code: 'stored' })
           },
@@ -155,7 +204,9 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
         }
       },
       acceptEpoch(host, conversation, epoch, reset = false) {
-        if (!reset && read(host, conversation)?.snapshot.epoch === epoch) return
+        const held = read(host, conversation)
+        if (!reset && held?.snapshot.epoch === epoch) return
+        if (reset || held) reads.get(host)?.delete(conversation)
         publish(host, conversation, { generation: Symbol(), uncommittedVersion: 0, byId: new Map(), snapshot: Object.freeze({
           hostId: host, conversationId: conversation, epoch, items: Object.freeze([]), arrivalOrder: Object.freeze([]),
           version: 0, checkpoint: 0, uncommittedVersion: 0, ranges: Object.freeze([]), repair: null
@@ -168,6 +219,8 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
       },
       applyUpdate(host, update) {
         const p = update.payload, conversation = p.conversation_id
+        if (!read(host, conversation) && reads.get(host)?.has(conversation) && update.type === 'thread_item_added')
+          get().acceptEpoch(host, conversation, p.epoch)
         const slice = read(host, conversation)
         if (!slice || slice.snapshot.epoch !== p.epoch) return { type: 'stale' }
         if (update.type === 'thread_item_added') return applyFull(host, conversation, slice, update.payload.item, p.version, true)

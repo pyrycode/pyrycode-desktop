@@ -87,15 +87,14 @@ test('re-pair: a sealed pairing rejection opens a recovery modal', async ({
   await expect(page.locator('.composer-status__error')).toHaveCount(0)
   await expect(page.getByRole('button', { name: COMPOSER_RECONNECT_BUTTON_COPY, exact: true })).toHaveCount(0)
 
-  // The row keeps its 24px at-rest geometry: the chip wears the row's own box, so moving Re-pair out of it
-  // is what retires #963's 32px growth on this transition.
-  const withChip = await readStatusRowGeometry(page)
-  expect(withChip).toEqual(atRest)
+  // Both connection explanation and recovery float above the thread; the status row keeps its height.
+  const withPills = await readStatusRowGeometry(page)
+  expect(withPills).toEqual(atRest)
 
   // Rejection notices float below the header, including an empty offline thread.
   const explanation = page.locator('.conversation__top-overlay [role="status"]')
   await expect(explanation).toContainText('Your pairing has expired')
-  await expect.poll(() => repair.evaluate(el => {
+  await expect.poll(() => repair.evaluate(() => {
     const header = document.querySelector('.conversation__top-chrome')!.getBoundingClientRect()
     const pane = document.querySelector('.conversation__message-area')!.getBoundingClientRect()
     const pill = document.querySelector('.conversation__top-overlay')!.getBoundingClientRect()

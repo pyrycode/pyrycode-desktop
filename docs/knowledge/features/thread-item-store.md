@@ -151,8 +151,11 @@ complete snapshot membership is not inferred from it. Production opening request
 retains availability ownership outside selected ranges; continuation and the sparse
 id-to-arrival-position map stay in separate slice `residency`. Its separate
 `traversal` is undefined before the first newest held-page read, a string for the
-next before-page token, and null when that pass is exhausted. Opening's continuation
-alone cannot enumerate hidden items omitted inside/after its shown window, and an
+next before-page token, and null when that pass is exhausted. Optional `recovery`
+holds the capability paired with that traversal token; held-page completion updates
+both together, clearing recovery when the page omits it. Opening does not install
+its capability as traversal state. These opaque values never enter `ThreadSnapshot`
+or owned persistence. Opening's continuation alone cannot enumerate hidden items omitted inside/after its shown window, and an
 old active dependency cannot stand in for visited content. These values confer no
 progress or write authority.
 
@@ -191,8 +194,12 @@ An exact admitted live winner also retains its append companion through hydratio
 Resident metadata, repair, checkpoint, unfinished progress and availability boundary
 remain authoritative; only supplied saved ranges are unioned. An old page cannot
 roll back newer progress or certify the holes between fragmented ranges. The next
-opaque token may fail after a concurrent write; that failure retains admitted content
-and requires explicit retry without automatic recovery (#2064).
+opaque token remains generation-bound. With its matching recovery capability, main
+can select a newly authenticated identity window after owned mutation or same-epoch
+replacement; ordinary stale tokens alone still reject. Recovery pages use this same
+merge path and preserve the admitted generation. A failed bounded selection retains
+admitted content and the token/capability for explicit Retry; it never spins or
+reopens newest. See [saved traversal recovery](thread-runtime.md#independent-saved-traversal).
 
 The pending token records received progress observations, not item payload history.
 Opening restoration folds their exact completion intervals, ranges and boundary readings over
@@ -436,8 +443,9 @@ The runtime consumes saved held pages before adding new older network demand,
 independently of pending/failed network state. Hydrating `[100,200)` alongside
 `[900,1000)` leaves the next network `before_order` at 900. Short/empty local pages
 and null local continuation add no certificate, advance no checkpoint, clear no
-repair and do not overwrite older availability. Local exhaustion is separate from
-daemon exhaustion, resident display and read acknowledgement; hydration emits no save.
+repair and do not overwrite older availability. Recovery capabilities and circular
+identity-pass exhaustion confer exactly the same lack of completeness authority.
+Local exhaustion is separate from daemon exhaustion, resident display and read acknowledgement; hydration emits no save.
 
 A page marker must have `upper_order === before_order` and numeric
 `continuation === lower_order`. Commit only supplied `[lower_order, upper_order)`;

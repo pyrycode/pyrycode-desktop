@@ -18,7 +18,7 @@ void app.whenReady().then(async () => {
     asar: __filename.includes('app.asar/'), unpacked: false, stage: 'runtime', executed: 1, passed: 0, failed: 0, skipped: 0,
     saturatedMemberships: 100_000, saturatedReplacementMs: 0,
     openingFixtureItems: 801, openingSelected: 200, openingActive: 1, openingDependencies: 0, openingEvidence: 2,
-    openingConversionMs: 0, coldOpeningMs: 0 }
+    openingConversionMs: 0, coldOpeningMs: 0, recoveryMs: 0, recoveredIdentities: 0 }
   const database = createHistoryDatabase({ userDataPath: app.getPath('userData') })
   try {
     const require = createRequire(__filename)
@@ -108,6 +108,27 @@ void app.whenReady().then(async () => {
       traversed = await traversalStore.execute({ ...request, operation: 'beforeThreadPage', continuation: traversed.page.continuation })
     }
     if (!isDeepStrictEqual(all, openingItems) || new Set(all.map(i => i.id)).size !== 801) throw Error('traversal-content')
+    evidence.stage = 'saved-recovery'
+    let recovering = await traversalStore.execute({ ...request, operation: 'newestThreadPage' })
+    if (recovering.status !== 'page' || recovering.page.continuation === null) throw Error('recovery-start')
+    recovering = await traversalStore.execute({ ...request, operation: 'beforeThreadPage', continuation: recovering.page.continuation })
+    if (recovering.status !== 'page') throw Error('recovery-depth')
+    const { items: omittedItems, ranges: omittedRanges, arrivalOrder: omittedArrival, ...openingMetadata } = opening.thread
+    void omittedItems; void omittedRanges; void omittedArrival
+    if ((await traversalStore.execute({ operation: 'mutateThread', serverId: 'smoke', conversationId: 'opening', change: {
+      metadata: openingMetadata, acceptEpoch: false, items: [], removeIds: [], ranges: [] } })).status !== 'ok') throw Error('recovery-invalidation')
+    database.close()
+    const recoveryStore = fresh(), recovered = new Map<number, unknown>(), recoveryStarted = performance.now()
+    for (let n = 0; n < 10 && recovering.status === 'page' && recovering.page.continuation !== null; n++) {
+      recovering = await recoveryStore.execute({ ...request, operation: 'beforeThreadPage',
+        continuation: recovering.page.continuation, recovery: recovering.page.recovery })
+      if (recovering.status !== 'page') throw Error('recovery-page')
+      for (const value of recovering.page.items) recovered.set(value.id, value)
+    }
+    if (recovering.status !== 'page' || recovering.page.continuation !== null ||
+      openingItems.some(value => !isDeepStrictEqual(recovered.get(value.id), value))) throw Error('recovery-content')
+    evidence.recoveryMs = Math.round(performance.now() - recoveryStarted)
+    evidence.recoveredIdentities = recovered.size
     evidence.stage = 'protected-bytes'
     const directory = join(app.getPath('userData'), 'history')
     for (const name of readdirSync(directory)) {

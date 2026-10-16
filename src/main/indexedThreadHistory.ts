@@ -120,6 +120,19 @@ export function createIndexedThreadHistory(deps: {
   database: ReturnType<typeof createHistoryDatabase>; encryption: SecretEncryption; log: DiagnosticLog
 }) {
   const { database, encryption, log } = deps
+  function protectToken(value: unknown): string {
+    const token = Buffer.from(encryption.encrypt(Buffer.from(JSON.stringify(value)))).toString('base64url')
+    if (!token || token.length > MAX_CONTINUATION_LENGTH) throw INVALID_CHAT_HISTORY
+    return token
+  }
+  function unprotectToken(value: string): Record<string, unknown> {
+    return object(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(encryption.decrypt(Buffer.from(value, 'base64url')))))
+  }
+  function ring(value: unknown): { boundary: number; cursor: number | null; wrapped: boolean } {
+    const v = object(value), boundary = natural(v.boundary), cursor = v.cursor === null ? null : natural(v.cursor)
+    if (typeof v.wrapped !== 'boolean' || Object.keys(v).length !== 3 || !v.wrapped && cursor === null) throw INVALID_CONTINUATION
+    return { boundary, cursor, wrapped: v.wrapped }
+  }
   // An AVL sequence preserves arbitrary admitted held order without fractional labels.
   // Parent rows are hints only: rank authenticates the hinted route from the current root.
   function sequence(db: Database.Database, identity: string) {
@@ -405,6 +418,8 @@ export function createIndexedThreadHistory(deps: {
   }
   function save(db: Database.Database, snapshot: Extract<ChatHistorySnapshot, { kind: 'daemon-items' }>,
     identity: string, generation: string, previous: ThreadSnapshot | null = null) {
+    const previousHeader = previous === null ? undefined : db.prepare<[string], Row>(`SELECT ${columns} FROM thread_records WHERE scope = ? AND kind = 'header' AND ordinal = 0`).get(identity)
+    const keepIndexes = previousHeader && header(decode(previousHeader, identity), snapshot.serverId, snapshot.conversationId).mutable !== undefined
     const retained = new Map(db.prepare<[string], { item_id: number; payload: Buffer }>(
       'SELECT item_id, payload FROM thread_payloads WHERE scope = ?').all(identity).map(r => [r.item_id, r.payload]))
     const old = new Map(previous?.epoch === snapshot.thread.epoch ? previous.items.map(i => [i.id, i]) : [])
@@ -412,7 +427,8 @@ export function createIndexedThreadHistory(deps: {
     db.prepare('INSERT INTO thread_scopes VALUES (?, ?, ?)').run(identity, Buffer.from(snapshot.serverId, 'utf16le'), Buffer.from(snapshot.conversationId, 'utf16le'))
     const insert = db.prepare('INSERT INTO thread_records VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
     const payloadInsert = db.prepare('INSERT INTO thread_payloads VALUES (?, ?, ?, ?)')
-    for (const { payload, ...indexes } of records(snapshot.thread, generation)) {
+    const nextRows = records(snapshot.thread, generation)
+    for (const { payload, ...indexes } of nextRows) {
       let value = payload
       if (indexes.kind === 'item') {
         const i = object(payload), id = natural(i.id), rev = natural(i.rev)
@@ -423,6 +439,13 @@ export function createIndexedThreadHistory(deps: {
       }
       const bytes = encryption.encrypt(Buffer.from(JSON.stringify({ scope: indexes.kind === 'header' ? identity : generation, ...indexes, value })))
       insert.run(identity, indexes.kind, indexes.ordinal, indexes.arrival, indexes.item_order, indexes.range_ordinal, indexes.range_start, indexes.range_end, Buffer.from(bytes))
+    }
+    // Replacement already owns full-snapshot work; keep later recovery reads bounded.
+    if (keepIndexes) {
+      const h = header(nextRows[0].payload, snapshot.serverId, snapshot.conversationId)
+      h.mutable = activate(db, identity, h, snapshot.thread)
+      h.availabilityStart = snapshot.thread.ranges[0]?.start
+      writeHeader(db, identity, h)
     }
   }
   function migrate(db: Database.Database): void {
@@ -643,7 +666,7 @@ export function createIndexedThreadHistory(deps: {
         uncommittedVersion, repair }, request.serverId, request.conversationId)
     }
     m.sequence = sequenceRoot; m.nodes = nodes
-    h.mutable = m; h.generation = randomUUID(); h.itemCount = m.roots.ids.count; h.rangeCount = m.roots.ranges.count
+    h.mutable = m; h.hasArrival = true; h.generation = randomUUID(); h.itemCount = m.roots.ids.count; h.rangeCount = m.roots.ranges.count
     if (h.itemCount > MAX_CHAT_HISTORY_ITEMS || h.rangeCount > MAX_CHAT_HISTORY_ITEMS) throw INVALID_CHAT_HISTORY
     ids.flush(); ordered.flush(); ranges.flush(); sorted.flush(); endings.flush()
     writeHeader(db, owner, h)
@@ -652,11 +675,28 @@ export function createIndexedThreadHistory(deps: {
     token: Record<string, unknown> | null, opening = false): ThreadHistoryResult {
     const m = h.mutable
     if (!m || h.itemCount !== (m.sequence ?? m.roots.order).count || h.rangeCount !== m.roots.ranges.count) throw INVALID_CHAT_HISTORY
-    if (token && (token.identity !== h.generation || typeof token.before !== 'number' || token.before > h.itemCount)) throw INVALID_CONTINUATION
+    if (token && (token.identity !== h.generation || typeof token.before !== 'number' || token.ring === undefined && token.before > h.itemCount)) throw INVALID_CONTINUATION
     const end = token ? natural(token.before) : h.itemCount
-    let start = Math.max(0, end - limit)
-    let leaves = opening ? [] : m.sequence ? sequence(db, identity).window(m.sequence, start, end)
+    let start = Math.max(0, end - limit), nextRing: ReturnType<typeof ring> | null | undefined
+    let leaves = opening || token?.ring !== undefined ? [] : m.sequence ? sequence(db, identity).window(m.sequence, start, end)
       : tree(db, identity, 'order').window(m.roots.order, start, end)
+    if (token?.ring !== undefined) {
+      const current = ring(token.ring), ids = tree(db, identity, 'ids'), root = m.roots.ids
+      const lower = current.wrapped ? ids.rank(root, numericKey(current.boundary)) : 0
+      const upper = current.cursor === null ? root.count : ids.rank(root, numericKey(current.cursor))
+      start = Math.max(lower, upper - limit)
+      leaves = ids.window(root, start, upper)
+      const cursor = leaves[0]?.id
+      nextRing = start > lower && cursor !== null && cursor !== undefined ? { ...current, cursor }
+        : current.wrapped || ids.rank(root, numericKey(current.boundary)) === root.count ? null
+        : { ...current, wrapped: true, cursor: null }
+      if (!m.sequence) throw INVALID_CHAT_HISTORY
+      const ordered = sequence(db, identity), rootSequence = m.sequence
+      leaves = leaves.map(leaf => {
+        if (leaf.position === null) throw INVALID_CHAT_HISTORY
+        return { leaf, rank: ordered.rank(rootSequence, leaf.position) }
+      }).sort((a, b) => a.rank - b.rank).map(v => v.leaf)
+    }
     const cached = new Map<number, { row: Row; value: ThreadSnapshot['items'][number] }>()
     function entry(leaf: Leaf) {
       const previous = cached.get(leaf.ordinal)
@@ -718,21 +758,34 @@ export function createIndexedThreadHistory(deps: {
       }
     }
     const ranges = threadHistoryCodec.ranges([...evidence.values()].sort((a, b) => a.start - b.start))
-    const continuation = start === 0 ? null : Buffer.from(encryption.encrypt(Buffer.from(JSON.stringify({
-      format: 'daemon-items', identity: h.generation, before: start
-    })))).toString('base64url')
-    if (continuation !== null && continuation.length > MAX_CONTINUATION_LENGTH) throw INVALID_CHAT_HISTORY
+    const next = nextRing === undefined ? start === 0 ? null : { format: 'daemon-items', identity: h.generation, before: start }
+      : nextRing === null ? null : { format: 'daemon-items', identity: h.generation, before: 1, ring: nextRing }
+    const continuation = next === null ? null : protectToken(next)
+    const boundary = nextRing?.cursor ?? nextRing?.boundary ?? items[0]?.id
+    const recovery = opening || next === null || boundary === undefined ? undefined : protectToken({ format: 'daemon-items-rebase',
+      owner: identity, epoch: digest(h.metadata.epoch), token: digest(JSON.stringify(next)), boundary })
     return { status: 'page', page: { partial: true, metadata: h.metadata, items, ranges,
-      ...(h.hasArrival ? { arrivalPositions: selected.map(r => natural(r.arrival)) } : {}),
-      ...(h.availabilityStart === undefined ? {} : { availabilityStart: h.availabilityStart }), continuation } }
+      arrivalPositions: selected.map(r => natural(r.arrival)),
+      ...(h.availabilityStart === undefined ? {} : { availabilityStart: h.availabilityStart }), continuation,
+      ...(recovery === undefined ? {} : { recovery }) } }
   }
-  function readPage(db: Database.Database, server: string, conversation: string, limit: number, token: Record<string, unknown> | null, opening = false): ThreadHistoryResult {
+  function readPage(db: Database.Database, server: string, conversation: string, limit: number, token: Record<string, unknown> | null,
+    opening = false, recovery?: Record<string, unknown>): ThreadHistoryResult {
     const identity = scope(db, server, conversation)
     if (identity === null) { if (token) throw INVALID_CONTINUATION; return { status: 'missing' } }
     const row = db.prepare<[string], Row>(`SELECT ${columns} FROM thread_records WHERE scope = ? AND kind = 'header' AND ordinal = 0`).get(identity)
     if (!row) throw INVALID_CHAT_HISTORY
     const h = header(decode(row, identity), server, conversation)
-    if (opening && h.mutable?.roots.endings === undefined) {
+    if (recovery && (!token || recovery.format !== 'daemon-items-rebase' || Object.keys(recovery).length !== 5 ||
+      recovery.owner !== identity || recovery.epoch !== digest(h.metadata.epoch) ||
+      recovery.token !== digest(JSON.stringify(token)))) throw INVALID_CONTINUATION
+    if (token && token.identity !== h.generation) {
+      if (!recovery) throw INVALID_CONTINUATION
+      const boundary = natural(recovery.boundary)
+      token = { format: 'daemon-items', identity: h.generation, before: 1, ring: { boundary, cursor: boundary, wrapped: false } }
+      log.event({ event: 'history-storage-operation', code: 'thread-page-rebase' })
+    }
+    if ((opening || token?.ring !== undefined) && h.mutable?.roots.endings === undefined) {
       // A retained scope converts once, transactionally, without progress or owned-save authority.
       const saved = load(db, server, conversation)
       if (!saved) throw INVALID_CHAT_HISTORY
@@ -785,12 +838,12 @@ export function createIndexedThreadHistory(deps: {
       const report = (result: ThreadHistoryResult): ThreadHistoryResult => {
         log.event({ event: 'history-storage-result', code: result.status === 'error' ? result.code : result.status }); return result
       }
-      let request, paging: { limit: number; continuation?: string; opening?: boolean } | undefined
+      let request, paging: { limit: number; continuation?: string; recovery?: string; opening?: boolean } | undefined
       try {
         const v = parseChatHistoryRequest(value)
         if (v.operation === 'openThreadPage' || v.operation === 'newestThreadPage' || v.operation === 'beforeThreadPage') {
           paging = { limit: v.limit, opening: v.operation === 'openThreadPage',
-            ...(v.operation === 'beforeThreadPage' ? { continuation: v.continuation } : {}) }
+            ...(v.operation === 'beforeThreadPage' ? { continuation: v.continuation, recovery: v.recovery } : {}) }
           request = parseChatHistoryRequest({ operation: 'readThread', serverId: v.serverId, conversationId: v.conversationId })
         } else request = v
         if (!['readThread', 'replaceThread', 'mutateThread', 'removeConversation', 'removeServer'].includes(request.operation)) throw INVALID_CHAT_HISTORY
@@ -800,12 +853,17 @@ export function createIndexedThreadHistory(deps: {
       const removing = request.operation === 'removeConversation' || request.operation === 'removeServer'
       try {
         if (!encryption.isAvailable()) return report({ status: 'error', code: 'encryption-unavailable' })
-        let token: Record<string, unknown> | null = null
+        let token: Record<string, unknown> | null = null, recovery: Record<string, unknown> | undefined
         if (paging?.continuation !== undefined) {
           try {
-            token = object(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(encryption.decrypt(Buffer.from(paging.continuation, 'base64url')))))
-            if (token.format !== 'daemon-items' || Object.keys(token).length !== 3 ||
+            token = unprotectToken(paging.continuation)
+            if (token.format !== 'daemon-items' || Object.keys(token).length !== (token.ring === undefined ? 3 : 4) ||
               typeof token.identity !== 'string' || !/^[0-9a-f-]{36}$/.test(token.identity) || natural(token.before) === 0) throw INVALID_CHAT_HISTORY
+            if (token.ring !== undefined) ring(token.ring)
+            if (paging.recovery !== undefined) {
+              recovery = unprotectToken(paging.recovery)
+              natural(recovery.boundary)
+            }
           } catch { return report({ status: 'error', code: 'invalid-request' }) }
         }
         return report(database.transaction((db): ThreadHistoryResult => {
@@ -823,7 +881,7 @@ export function createIndexedThreadHistory(deps: {
               load(db, request.serverId, s.conversation.toString('utf16le'))
             }
           } else if ('conversationId' in request) {
-            if (paging) return readPage(db, request.serverId, request.conversationId, paging.limit, token, paging.opening)
+            if (paging) return readPage(db, request.serverId, request.conversationId, paging.limit, token, paging.opening, recovery)
             const snapshot = load(db, request.serverId, request.conversationId)
             previous = snapshot?.thread ?? null
             if (request.operation === 'readThread') return snapshot ? { status: 'stored', snapshot } : { status: 'missing' }
@@ -833,7 +891,11 @@ export function createIndexedThreadHistory(deps: {
           else if (request.operation === 'removeConversation' || request.operation === 'replaceThread') {
             const conversation = Buffer.from(request.conversationId, 'utf16le')
             if (request.operation === 'replaceThread') {
-              save(db, request.snapshot, scope(db, request.serverId, request.conversationId) ?? randomUUID(), randomUUID(), previous)
+              let owner = scope(db, request.serverId, request.conversationId)
+              if (owner !== null && previous?.epoch !== request.snapshot.thread.epoch) {
+                db.prepare('DELETE FROM thread_scopes WHERE identity = ?').run(owner); owner = null
+              }
+              save(db, request.snapshot, owner ?? randomUUID(), randomUUID(), previous)
             } else db.prepare('DELETE FROM thread_scopes WHERE server = ? AND conversation = ?').run(server, conversation)
           }
           return { status: 'ok' }

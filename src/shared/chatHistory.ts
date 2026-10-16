@@ -126,10 +126,11 @@ export type ThreadHistoryPage = {
   arrivalPositions?: readonly number[]
   availabilityStart?: number
   continuation: string | null
+  recovery?: string
 }
 export type ChatHistoryRequest = { serverId: string } & (
   | { operation: 'openThreadPage' | 'newestThreadPage'; conversationId: string; limit: number }
-  | { operation: 'beforeThreadPage'; conversationId: string; limit: number; continuation: string }
+  | { operation: 'beforeThreadPage'; conversationId: string; limit: number; continuation: string; recovery?: string }
   | { operation: 'mutateThread'; conversationId: string; change: OwnedThreadChanges }
   | { operation: 'readList' }
   | { operation: 'removeServer' }
@@ -344,12 +345,14 @@ export const threadHistoryCodec = { items: retainedItems, ranges: retainedRanges
     const v = record(value), items = retainedItems(v.items), ranges = retainedRanges(v.ranges)
     const arrivalPositions = optional(v.arrivalPositions, value => array(value, readId))
     const continuation = v.continuation === null ? null : string(v.continuation)
+    const recovery = optional(v.recovery, localToken)
     if (v.partial !== true || new Set(items.map(i => i.id)).size !== items.length ||
         arrivalPositions !== undefined && (arrivalPositions.length !== items.length || new Set(arrivalPositions).size !== items.length) ||
         continuation !== null && (continuation.length === 0 || continuation.length > 65536 || !/^[A-Za-z0-9_-]+$/.test(continuation))) return invalid()
     return { partial: true, metadata: retainedMetadata(v.metadata, hostId, conversationId), items, ranges,
       ...(arrivalPositions === undefined ? {} : { arrivalPositions }),
-      ...(v.availabilityStart === undefined ? {} : { availabilityStart: readId(v.availabilityStart) }), continuation }
+      ...(v.availabilityStart === undefined ? {} : { availabilityStart: readId(v.availabilityStart) }), continuation,
+      ...(recovery === undefined ? {} : { recovery }) }
   },
   nodes(value: unknown): number {
     if (typeof value !== 'object' || value === null) return 1
@@ -529,17 +532,21 @@ export function parseChatHistorySnapshot(value: unknown): ChatHistorySnapshot {
   }
 }
 
+function localToken(value: unknown): string {
+  const token = string(value)
+  return token.length > 0 && token.length <= 65536 && /^[A-Za-z0-9_-]+$/.test(token) ? token : invalid()
+}
 export function parseChatHistoryRequest(value: unknown): ChatHistoryRequest {
   const v = record(value)
   const serverId = id(v.serverId)
   if (v.operation === 'openThreadPage' || v.operation === 'newestThreadPage' || v.operation === 'beforeThreadPage') {
     const limit = readId(v.limit), conversationId = id(v.conversationId), before = v.operation === 'beforeThreadPage'
     if (limit < 1 || limit > 200 || Object.keys(v).some(k =>
-      !['operation', 'serverId', 'conversationId', 'limit', ...(before ? ['continuation'] : [])].includes(k))) return invalid()
+      !['operation', 'serverId', 'conversationId', 'limit', ...(before ? ['continuation', 'recovery'] : [])].includes(k))) return invalid()
     if (v.operation !== 'beforeThreadPage') return { operation: v.operation, serverId, conversationId, limit }
-    const continuation = string(v.continuation)
-    if (continuation.length === 0 || continuation.length > 65536 || !/^[A-Za-z0-9_-]+$/.test(continuation)) return invalid()
-    return { operation: 'beforeThreadPage', serverId, conversationId, limit, continuation }
+    const continuation = localToken(v.continuation), recovery = optional(v.recovery, localToken)
+    return { operation: 'beforeThreadPage', serverId, conversationId, limit, continuation,
+      ...(recovery === undefined ? {} : { recovery }) }
   }
   if (v.operation === 'mutateThread') {
     if (Object.keys(v).some(k => !['operation', 'serverId', 'conversationId', 'change'].includes(k))) return invalid()

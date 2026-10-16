@@ -19,7 +19,7 @@ export type ThreadApplyResult =
   | { type: 'repair'; hostId: string; conversationId: string; epoch: string; throughVersion: number;
       reason: 'missing' | 'base' | 'incompatible' | 'kind' | 'coverage' }
 type Slice = { appendCompanion?: { id: number; rev: number; version: number }; snapshot: ThreadSnapshot; restored?: ThreadSnapshot; owned?: OwnedThreadChanges; generation: symbol; uncommittedVersion: number; byId: ReadonlyMap<number, HeldItem>;
-  availabilityStart?: number; residency?: { continuation: string | null; traversal?: string | null; arrivalPositions: ReadonlyMap<number, number> } }
+  availabilityStart?: number; residency?: { continuation: string | null; traversal?: string | null; recovery?: string; arrivalPositions: ReadonlyMap<number, number> } }
 type Batch = {
   applyItems: (items: readonly ThreadItem[], version: number) => readonly ThreadApplyResult[]
   commit: (certificate: ThreadBatchCertificate) => ThreadApplyResult
@@ -222,7 +222,7 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
             publish(host, conversation, { snapshot, restored: snapshot, appendCompanion, generation: admitted?.generation ?? Symbol(),
               uncommittedVersion: snapshot.uncommittedVersion ?? 0, byId, availabilityStart,
               ...(page ? { residency: { continuation: page.continuation,
-                ...(heldPage ? { traversal: page.continuation } : {}),
+                ...(heldPage ? { traversal: page.continuation, recovery: page.recovery } : {}),
                 arrivalPositions: new Map([...(admitted?.residency?.arrivalPositions ?? []),
                   ...page.items.map((item, index): [number, number] => [item.id, arrivals?.[index] ?? index])]) } } : {}) })
             log?.event({ event: 'thread-items-restored', code: 'stored' })

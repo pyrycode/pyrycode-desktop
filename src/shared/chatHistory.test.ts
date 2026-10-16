@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseChatHistoryRequest, parseChatHistorySnapshot, type DurableThreadItem } from './chatHistory'
+import { parseChatHistoryRequest, parseChatHistorySnapshot, threadHistoryCodec, type DurableThreadItem } from './chatHistory'
 
 const items: DurableThreadItem[] = [
   { kind: 'userText', text: 'hello', createdAt: 123, messageId: 'msg', attachments: [{ attachmentId: 'a', filename: 'a.png' }] },
@@ -25,6 +25,20 @@ const timeline = { version: 1, kind: 'timeline', serverId: 'host', conversationI
 const summary = { id: 'chat', name: null, is_promoted: false, is_archived: true, cwd: '/display', last_message_ts: '', last_used_at: 'date', workspace_label: null }
 
 describe('chat history records and requests', () => {
+  it('admits bounded opaque recovery only on before-page requests and detached partial pages', () => {
+    const request = { operation: 'beforeThreadPage', serverId: 'host', conversationId: 'chat', limit: 20, continuation: 'YQ', recovery: 'Yg' }
+    expect(parseChatHistoryRequest(request)).toEqual(request)
+    const value = { partial: true, metadata: { hostId: 'host', conversationId: 'chat', epoch: 'e', version: 0, checkpoint: 0, repair: null },
+      items: [], ranges: [], continuation: 'YQ', recovery: 'Yg' }
+    const parsed = threadHistoryCodec.page(value, 'host', 'chat')
+    value.recovery = 'Yw'
+    expect(parsed.recovery).toBe('Yg')
+    for (const recovery of ['', null, 2, 'private text', 'Y'.repeat(65537)]) {
+      expect(() => parseChatHistoryRequest({ ...request, recovery })).toThrow()
+      expect(() => threadHistoryCodec.page({ ...value, recovery }, 'host', 'chat')).toThrow()
+    }
+    expect(() => parseChatHistoryRequest({ ...request, operation: 'newestThreadPage' })).toThrow()
+  })
   it('detaches reset identities and boundary observations and rejects malformed ownership', () => {
     const metadata = { hostId: 'h', conversationId: 'c', epoch: 'e', version: 2, checkpoint: 2, uncommittedVersion: 0, repair: null }
     const observation = { metadata, completion: { fromVersion: 0, version: 2 }, availability: { start: 100, available: false } }

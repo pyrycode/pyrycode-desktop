@@ -89,8 +89,23 @@ Without saved residency, demand delegates directly.
 Local loading/failure takes precedence in the existing presentation without replacing
 network state. Upward input cannot retry a local failure: explicit Retry repeats
 that demand, otherwise Retry delegates to the coordinator. Errors retain displayed
-content and content-free classifications, with no automatic token recovery; recovery
-after an owned mutation/replacement remains #2064.
+content and content-free classifications. Each demand makes one IPC call and one
+selection attempt for at most 200 identities plus relevant saved evidence, with no
+automatic retry loop. Explicit Retry prioritizes failed local demand and starts
+another bounded attempt.
+
+Only held traversal stores and echoes `residency.recovery` alongside its continuation;
+opening's capability cannot seed the traversal. Main authenticates the pair against
+the exact scope owner, epoch and decoded continuation. On generation invalidation
+from owned writes or same-epoch replacement, it selects a bounded circular identity
+pass around the retained boundary, then returns each window in current held order.
+That pass covers items moved across the old boundary and removed boundaries without
+reopening newest or replaying loaded depth. Another invalidation can rebase a later
+demand; selection failure retains content and requires explicit Retry. There is no
+recovery based on a generic error or weakened ordinary-token validation. Same-epoch
+replacement rebuilds existing indexes during its write transaction, keeping later
+recovery reads bounded. See [the protected contract](chat-history-api.md#bounded-authoritative-opening-and-pages)
+and [ADR 0015](../decisions/0015-protected-saved-traversal-recovery.md).
 
 The selected local job captures the item-store generation. Navigation cancels it;
 reset/epoch replacement, deletion, successful unpair and teardown retire it. Both
@@ -107,7 +122,7 @@ At zero with no accepted demand, the pin restores prior following intent so a sh
 offline thread still follows intrinsic row growth. Accepted saved demand preserves
 the existing visible-row anchor and offset. See
 [scroll demand](conversation-shell-scroll-pin.md#user-demand-and-prepend-position) and
-[counted traversal proof](chat-history-testing-restoration.md#counted-unchanged-saved-traversal-validation).
+[counted recovery proof](chat-history-testing-restoration.md#counted-saved-traversal-recovery-validation).
 
 ## Navigation boundaries
 

@@ -539,9 +539,10 @@ ownership and content; neither family converts into the other.
 
 Every replacement and owned mutation, including metadata-only work, rotates its continuation
 identity. Legacy scopes use a fresh snapshot UUID; authoritative scopes retain
-their owner and rotate a protected generation, reusing unchanged same-epoch item
-ciphertext. Delete/recreate receives fresh ownership; deletion cascades to all
-evidence and payloads. These identities are not authorization. Payload protection
+their owner for same-epoch replacement and rotate a protected generation, reusing
+unchanged same-epoch item ciphertext. Epoch-changing replacement receives a new
+owner. Delete/recreate receives fresh ownership; deletion cascades to all evidence
+and payloads. These identities are not authorization. Payload protection
 and reviewed structural columns are detailed in
 [failure preservation](chat-history-results.md#results-and-failure-preservation).
 
@@ -554,10 +555,13 @@ opening and held-page variants use the fixed authorized bridge. Ordinary owned
 writes preserve unloaded history. Production opening uses partial selection with
 no full-read fallback; retained full operations remain callable. Complete unchanged
 saved traversal starts newest-first independently of opening's shown-window token
-and preserves the visible-row anchor. Invalidated tokens retain classified failure
-and displayed facts; automatic mutation recovery remains #2064. One-time conversion
-after import or retained replacement is separate from ordinary fresh-owner opening work. See
-[the mutable-storage decision](../decisions/0014-authenticated-owned-thread-mutations.md).
+and preserves the visible-row anchor. A separate authenticated recovery capability
+rebases invalidated traversal in bounded identity windows after owned mutations or
+same-epoch replacement. Ordinary stale tokens still reject, and selection failures
+retain displayed facts for explicit Retry. Indexed replacement rebuilds indexes in
+its write transaction; initial conversion remains separate from cold opening/recovery.
+See [the recovery contract](chat-history-api.md#bounded-authoritative-opening-and-pages)
+and [ADR 0015](../decisions/0015-protected-saved-traversal-recovery.md).
 
 ## Testing
 

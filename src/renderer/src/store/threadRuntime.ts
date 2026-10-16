@@ -78,7 +78,8 @@ export function createThreadRuntime(deps: {
     if (!slice?.residency || slice.residency.traversal === null) { query.input({ type, serverId: host }); return isLinked(host) }
     const continuation = slice.residency.traversal
     const read = readSavedTimeline({ threads: items, read: deps.read, log: deps.log }, host, target.chat,
-      continuation === undefined ? { operation: 'newestThreadPage' } : { operation: 'beforeThreadPage', continuation })
+      continuation === undefined ? { operation: 'newestThreadPage' } : { operation: 'beforeThreadPage', continuation,
+        ...(slice.residency.recovery === undefined ? {} : { recovery: slice.residency.recovery }) })
     const job = { generation: slice.generation, cancel: read.cancel }
     target.local = job; localState(host, target.chat, { type: 'loading', purpose: 'older' })
     // Selection and store lifecycle jointly own both admission and failure presentation.

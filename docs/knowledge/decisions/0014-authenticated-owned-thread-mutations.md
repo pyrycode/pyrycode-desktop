@@ -115,4 +115,6 @@ Failed writer work rejoins newer pending ownership and waits for a later flush/e
 it does not spin. Deletion/unpair suppression and graceful shutdown draining remain
 ordered. Protection fails closed in main, diagnostics use static classifications,
 and the renderer gains no SQL, filesystem, key or ciphertext access. Partial
-restoration/navigation remain #2041/#2042.
+restoration and traversal use the authorized partial-page bridge;
+[ADR 0015](0015-protected-saved-traversal-recovery.md) extends generation-bound
+continuations with a separate authenticated bounded-recovery capability.

@@ -56,6 +56,24 @@ describe('saved held-page admission', () => {
 })
 
 describe('runtime local history demand', () => {
+  it('echoes only the traversal recovery capability and retries classified failures without spinning', async () => {
+    const read = vi.fn().mockResolvedValueOnce({ status: 'page', page: { ...page(), recovery: 'b3Blbg' } })
+      .mockResolvedValueOnce({ status: 'page', page: { ...page(), recovery: 'cmViYXNl' } })
+      .mockResolvedValueOnce({ status: 'error', code: 'unreadable' })
+      .mockResolvedValueOnce({ status: 'page', page: page([item(1)], null) })
+    const r = createThreadRuntime({ read, send: vi.fn(), log: vi.fn() })
+    try {
+      await r.open('a', 'c').done
+      r.query('older', 'a'); await tick()
+      expect(read.mock.calls[1][0]).not.toHaveProperty('recovery')
+      r.query('older', 'a'); await tick()
+      expect(read.mock.calls[2][0]).toMatchObject({ operation: 'beforeThreadPage', recovery: 'cmViYXNl' })
+      expect(read).toHaveBeenCalledTimes(3)
+      r.query('retry', 'a'); await tick()
+      expect(read.mock.calls[3][0]).toMatchObject({ recovery: 'cmViYXNl' })
+      expect(r.items.getState().snapshot('a', 'c')!.items.map(i => i.id)).toEqual([1, 2])
+    } finally { r.dispose() }
+  })
   it.each(['encryption-unavailable', 'unreadable', 'invalid-request', 'ipc-failed'] as const)('retains valid displayed content and classified %s without retry loops', async code => {
     const read = vi.fn().mockResolvedValueOnce({ status: 'page', page: page() })
     if (code === 'ipc-failed') read.mockRejectedValueOnce(Error('private IPC detail'))

@@ -52,6 +52,129 @@ async function page(store: ReturnType<typeof createIndexedThreadHistory>, reques
 const error = (code: string) => ({ status: 'error', code })
 const stored = (s: unknown) => ({ status: 'stored', snapshot: parseChatHistorySnapshot(s) })
 
+// Genuine committed pre-upgrade envelopes, independent of the new writer.
+function seedSchema5(h: ReturnType<typeof setup>, s = snapshot(), corrupt = false) {
+  const identity = '12345678-1234-1234-1234-123456789abc'
+  const admitted = parseChatHistorySnapshot(s)
+  if (admitted.kind !== 'daemon-items') throw Error('expected thread')
+  const { items, ranges, arrivalOrder, ...metadata } = admitted.thread
+  h.database.transaction(db => {
+    db.exec('DROP TABLE IF EXISTS thread_payloads; DELETE FROM thread_scopes; PRAGMA user_version = 5')
+    db.prepare('INSERT INTO thread_scopes VALUES (?, ?, ?)').run(identity, Buffer.from(s.serverId, 'utf16le'), Buffer.from(s.conversationId, 'utf16le'))
+    const insert = db.prepare('INSERT INTO thread_records VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    const add = (kind: string, ordinal: number, value: unknown, arrival: number | null = null,
+      item_order: number | null = null, range_ordinal: number | null = null, range_start: number | null = null, range_end: number | null = null) => {
+      const indexes = { kind, ordinal, arrival, item_order, range_ordinal, range_start, range_end }
+      insert.run(identity, kind, ordinal, arrival, item_order, range_ordinal, range_start, range_end,
+        h.encryption.encrypt(Buffer.from(JSON.stringify({ scope: identity, ...indexes, value }))))
+    }
+    add('header', 0, { metadata, itemCount: items.length, rangeCount: ranges.length, hasArrival: true })
+    items.forEach((item, i) => {
+      const n = typeof item.order === 'number' && Number.isSafeInteger(item.order) && item.order >= 0 ? item.order : null
+      const r = n === null ? -1 : ranges.findIndex(r => r.start <= n && n < r.end)
+      add('item', i, item, arrivalOrder?.indexOf(item.id) ?? null, n, r < 0 ? null : r)
+    })
+    ranges.forEach((r, i) => add('range', i, r, null, null, null, r.start, r.end))
+    if (corrupt) db.exec("UPDATE thread_records SET range_ordinal = NULL WHERE kind = 'item' AND ordinal = 8")
+  })
+  h.database.close()
+  return Buffer.from(h.encryption.encrypt(Buffer.from(JSON.stringify({ format: 'daemon-items', identity, before: 7 })))).toString('base64url')
+}
+
+it('upgrades committed schema-5 history transactionally and preserves old continuations', async () => {
+  const h = setup(), s = snapshot(), continuation = seedSchema5(h, s), first = h.fresh()
+  const p = await page(first.store, ask('beforeThreadPage', { limit: 2, continuation }))
+  expect(p.items).toEqual(s.thread.items.slice(5, 7))
+  expect(p.arrivalPositions).toEqual([3, 2])
+  expect(await first.store.execute(ask('readThread'))).toEqual(stored(s))
+  expect(first.database.transaction(db => db.pragma('user_version', { simple: true }))).toBe(6)
+  first.database.close(); const reopened = h.fresh()
+  expect(await reopened.store.execute(ask('readThread'))).toEqual(stored(s))
+  expect((await page(reopened.store, ask('beforeThreadPage', { limit: 2, continuation }))).items).toEqual(p.items)
+})
+
+it.each(['corrupt', 'protection', 'encrypt', 'insert'])('preserves schema-5 commits across failed migration and retries: %s', async mode => {
+  const h = setup(), s = snapshot(), continuation = seedSchema5(h, s, mode === 'corrupt')
+  const path = join(h.root, 'history/history.sqlite')
+  if (mode === 'insert') {
+    const db = new Database(path)
+    db.exec("CREATE TRIGGER reject_upgrade BEFORE INSERT ON thread_records WHEN NEW.kind = 'range' BEGIN SELECT RAISE(ABORT, 'injected'); END")
+    db.close()
+  }
+  const before = readFileSync(path), fresh = h.fresh()
+  if (mode === 'protection') vi.spyOn(h.encryption, 'isAvailable').mockReturnValue(false)
+  if (mode === 'encrypt') vi.spyOn(h.encryption, 'encrypt').mockImplementationOnce(() => { throw Error('private') })
+  expect(await fresh.store.execute(newest())).toMatchObject({ status: 'error' })
+  fresh.database.close()
+  expect(readFileSync(path)).toEqual(before)
+  const disk = new Database(path)
+  expect(disk.pragma('user_version', { simple: true })).toBe(5)
+  expect(disk.prepare("SELECT name FROM sqlite_master WHERE name = 'thread_payloads'").all()).toEqual([])
+  if (mode === 'insert') disk.exec('DROP TRIGGER reject_upgrade')
+  if (mode === 'corrupt') disk.exec("UPDATE thread_records SET range_ordinal = 0 WHERE kind = 'item' AND ordinal = 8")
+  disk.close(); vi.restoreAllMocks()
+  const retry = h.fresh()
+  expect(await retry.store.execute(ask('readThread'))).toEqual(stored(s))
+  expect((await page(retry.store, ask('beforeThreadPage', { limit: 2, continuation }))).items).toEqual(s.thread.items.slice(5, 7))
+})
+
+it('retains stable payloads while replacement rotates generation and changes placement', async () => {
+  const h = setup(), s = snapshot()
+  const encrypt = h.encryption.encrypt, decrypt = h.encryption.decrypt
+  let serial = 0
+  // Distinct ciphertext on every call makes unnecessary re-encryption observable.
+  h.encryption.encrypt = bytes => {
+    const prefix = Buffer.alloc(4); prefix.writeUInt32BE(++serial)
+    return Buffer.concat([prefix, Buffer.from(encrypt(bytes))])
+  }
+  h.encryption.decrypt = bytes => decrypt(bytes.subarray(4))
+  expect(await h.store.execute(put(s))).toEqual({ status: 'ok' })
+  const payloads = () => h.database.transaction(db => db.prepare('SELECT * FROM thread_payloads ORDER BY item_id').all())
+  const before = payloads(), continuation = (await page(h.store)).continuation
+  const moved = { ...s, thread: { ...s.thread, items: [...s.thread.items].reverse(),
+    version: 400, ranges: [{ start: 0, end: 101 }], repair: null } }
+  expect(await h.store.execute(put(moved))).toEqual({ status: 'ok' })
+  expect(payloads()).toEqual(before)
+  expect(await h.store.execute(ask('readThread'))).toEqual(stored(moved))
+  expect(await h.store.execute(ask('beforeThreadPage', { limit: 2, continuation }))).toEqual(error('invalid-request'))
+  expect((await page(h.store)).arrivalPositions).toEqual([7, 8])
+  const next = (await page(h.store)).continuation
+  expect(await h.store.execute(put(moved))).toEqual({ status: 'ok' })
+  expect(payloads()).toEqual(before)
+  expect(await h.store.execute(ask('beforeThreadPage', { limit: 2, continuation: next }))).toEqual(error('invalid-request'))
+  const changed = { ...moved, thread: { ...moved.thread, items: moved.thread.items.map(i => i.id === 8 ? { ...i, rev: 99 } : i) } }
+  expect(await h.store.execute(put(changed))).toEqual({ status: 'ok' })
+  expect(payloads().slice(0, 8)).toEqual(before.slice(0, 8))
+  expect(payloads().slice(8)).not.toEqual(before.slice(8))
+  expect(await h.store.execute(ask('readThread'))).toEqual(stored(changed))
+  const epoch = { ...moved, thread: { ...moved.thread, epoch: 'next' } }
+  expect(await h.store.execute(put(epoch))).toEqual({ status: 'ok' })
+  expect(payloads()).not.toEqual(before)
+})
+
+it.each(['lookup', 'revision', 'payload', 'owner', 'orphan', 'replayed-placement', 'replayed-range'])('rejects protected payload association tampering: %s', async mode => {
+  const h = setup(); await h.store.execute(put(snapshot()))
+  const oldPlacement = h.database.transaction(db => db.prepare("SELECT payload FROM thread_records WHERE kind = 'item' AND ordinal = 8").get()) as { payload: Buffer }
+  const oldRange = h.database.transaction(db => db.prepare("SELECT payload FROM thread_records WHERE kind = 'range' AND ordinal = 2").get()) as { payload: Buffer }
+  if (mode.startsWith('replayed-')) await h.store.execute(put(snapshot()))
+  await h.store.execute(put(snapshot(9, 'Other')))
+  h.database.transaction(db => {
+    const owner = db.prepare('SELECT identity FROM thread_scopes WHERE server = ?').get(Buffer.from('Host', 'utf16le')) as { identity: string }
+    const scope = owner.identity
+    if (mode === 'lookup') db.prepare('UPDATE thread_payloads SET item_id = 99 WHERE scope = ? AND item_id = 8').run(scope)
+    if (mode === 'revision') db.prepare('UPDATE thread_payloads SET revision = 99 WHERE scope = ? AND item_id = 8').run(scope)
+    if (mode === 'payload') db.prepare('UPDATE thread_payloads SET payload = (SELECT payload FROM thread_payloads WHERE scope = ? AND item_id = 7) WHERE scope = ? AND item_id = 8').run(scope, scope)
+    if (mode === 'owner') db.prepare('UPDATE thread_payloads SET payload = (SELECT payload FROM thread_payloads WHERE scope != ? AND item_id = 8) WHERE scope = ? AND item_id = 8').run(scope, scope)
+    if (mode === 'orphan') db.prepare('INSERT INTO thread_payloads SELECT scope, 99, revision, payload FROM thread_payloads WHERE scope = ? AND item_id = 8').run(scope)
+    if (mode === 'replayed-placement') db.prepare("UPDATE thread_records SET payload = ? WHERE scope = ? AND kind = 'item' AND ordinal = 8").run(oldPlacement.payload, scope)
+    if (mode === 'replayed-range') db.prepare("UPDATE thread_records SET payload = ? WHERE scope = ? AND kind = 'range' AND ordinal = 2").run(oldRange.payload, scope)
+  })
+  expect(await h.store.execute(ask('readThread'))).toEqual(error('unreadable'))
+  if (mode !== 'orphan') expect(await h.store.execute(newest())).toEqual(error('unreadable'))
+  expect(await h.store.execute(put(snapshot(1)))).toEqual(error('unreadable'))
+  expect(await h.store.execute(ask('readThread', {}, 'Other'))).toEqual(stored(snapshot(9, 'Other')))
+})
+
 it('exact round trip and first-arrival restart retain covered unfinished progress', async () => {
   const h = setup(), s = snapshot()
   expect(await h.store.execute(put(s))).toEqual({ status: 'ok' })
@@ -200,7 +323,7 @@ it('selected reads/JSON decodes/decrypts stay bounded when unrelated history gro
     const decrypt = vi.spyOn(h.encryption, 'decrypt'), decode = vi.spyOn(JSON, 'parse')
     const p = await page(h.store)
     const work = [rows, decrypt.mock.calls.length, decode.mock.calls.length]
-    expect(work).toEqual([5, 4, 4])
+    expect(work).toEqual([7, 6, 6])
     expect(p.items.length).toBe(2); expect(p.ranges).toEqual(s.thread.ranges.slice(-1))
     vi.restoreAllMocks(); return work
   }
@@ -266,7 +389,7 @@ it('schema-2 additive migration rolls back with failed authoritative writes and 
   const timeline = { version: 1, kind: 'timeline', serverId: 'Host', conversationId: 'Chat', items: [], prependedRows: 0, coverage: { status: 'unknown' } }
   expect(await legacy.execute(ask('replaceTimeline', { snapshot: timeline }))).toEqual({ status: 'ok' })
   await h.store.execute(put(snapshot())); const token = (await page(h.store)).continuation
-  h.database.transaction(db => db.exec('DROP TABLE thread_records; DROP TABLE thread_scopes; PRAGMA user_version = 2'))
+  h.database.transaction(db => db.exec('DROP TABLE thread_payloads; DROP TABLE thread_records; DROP TABLE thread_scopes; PRAGMA user_version = 2'))
   h.database.close()
   const path = join(h.root, 'history/history.sqlite'), before = readFileSync(path), fresh = h.fresh()
   expect(await fresh.store.execute(ask('beforeThreadPage', { limit: 2, continuation: token }))).toEqual(error('invalid-request'))
@@ -289,8 +412,9 @@ it.each(['legacy', 'authoritative'])('preserves the %s schema-3 layout when both
   const legacy = createIndexedLegacyHistory({ database: h.database, encryption: h.encryption, log: { event: () => {} } })
   expect(await legacy.execute(ask('replaceTimeline', { snapshot: timeline }))).toEqual({ status: 'ok' })
   expect(await h.store.execute(put(s))).toEqual({ status: 'ok' })
+  if (family === 'authoritative') seedSchema5(h, s)
   h.database.transaction(db => {
-    db.exec(family === 'legacy' ? 'DROP TABLE thread_records; DROP TABLE thread_scopes' : 'DROP INDEX legacy_receipt_start')
+    db.exec(family === 'legacy' ? 'DROP TABLE thread_payloads; DROP TABLE thread_records; DROP TABLE thread_scopes' : 'DROP INDEX legacy_receipt_start')
     db.pragma('user_version = 3')
   })
   h.database.close(); const fresh = h.fresh()
@@ -298,15 +422,18 @@ it.each(['legacy', 'authoritative'])('preserves the %s schema-3 layout when both
   const reopenedLegacy = createIndexedLegacyHistory({ database: fresh.database, encryption: h.encryption, log: { event: () => {} } })
   expect(await reopenedLegacy.execute(ask('readTimeline'))).toEqual(stored(timeline))
   fresh.database.transaction(db => {
-    expect(db.pragma('user_version', { simple: true })).toBe(5)
+    expect(db.pragma('user_version', { simple: true })).toBe(6)
     expect(db.prepare("SELECT name FROM sqlite_master WHERE name = 'legacy_receipt_start'").get()).toEqual({ name: 'legacy_receipt_start' })
   })
 })
 
-it('empty replacements always rotate durable identity and invalidate older continuations', async () => {
+it('empty replacements always rotate protected generation and invalidate older continuations', async () => {
   const h = setup(); await h.store.execute(put(snapshot()))
   const token = (await page(h.store)).continuation
-  const identity = () => h.database.transaction(db => db.prepare('SELECT identity FROM thread_scopes').get())
+  const identity = () => h.database.transaction(db => {
+    const row = db.prepare("SELECT payload FROM thread_records WHERE kind = 'header'").get() as { payload: Buffer }
+    return JSON.parse(Buffer.from(h.encryption.decrypt(row.payload)).toString()).value.generation
+  })
   await h.store.execute(put(snapshot(0))); const first = identity()
   await h.store.execute(put(snapshot(0))); expect(identity()).not.toEqual(first)
   h.database.close()

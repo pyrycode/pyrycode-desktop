@@ -111,9 +111,10 @@ export function createIndexedThreadHistory(deps: {
   // The protected header authenticates these content-free paths. Replaying any old
   // leaf or branch fails against its parent's current digest, including after reopen.
   function tree(db: Database.Database, identity: string, name: keyof Roots) {
+    const pending = new Map<string, string | null>()
     function read(ref: Ref, path: string): { left: Ref; right: Ref; value: Leaf | null } {
       if (!ref.count) return { left: empty(), right: empty(), value: null }
-      const row = db.prepare<[string, string, string], { payload: unknown }>(
+      const row = pending.has(path) ? { payload: pending.get(path) } : db.prepare<[string, string, string], { payload: unknown }>(
         'SELECT payload FROM thread_auth WHERE scope = ? AND tree = ? AND path = ?').get(identity, name, path)
       if (!row || typeof row.payload !== 'string' || digest(path + row.payload) !== ref.hash) throw INVALID_CHAT_HISTORY
       const v = object(JSON.parse(row.payload)), left = reference(v.left), right = reference(v.right)
@@ -146,11 +147,11 @@ export function createIndexedThreadHistory(deps: {
         else n.right = update(n.right, path + '1')
         const count = n.left.count + n.right.count + (n.value ? 1 : 0)
         if (!count) {
-          db.prepare('DELETE FROM thread_auth WHERE scope = ? AND tree = ? AND path = ?').run(identity, name, path)
+          pending.set(path, null)
           return empty()
         }
         const payload = JSON.stringify(n), hash = digest(path + payload)
-        db.prepare('INSERT OR REPLACE INTO thread_auth VALUES (?, ?, ?, ?)').run(identity, name, path, payload)
+        pending.set(path, payload)
         return { hash, count }
       }
       return update(ref, '')
@@ -177,7 +178,14 @@ export function createIndexedThreadHistory(deps: {
       }
       return result
     }
-    return { get, set, window, rank }
+    function flush(): void {
+      for (const [path, payload] of pending) {
+        if (payload === null) db.prepare('DELETE FROM thread_auth WHERE scope = ? AND tree = ? AND path = ?').run(identity, name, path)
+        else db.prepare('INSERT OR REPLACE INTO thread_auth VALUES (?, ?, ?, ?)').run(identity, name, path, payload)
+      }
+      pending.clear()
+    }
+    return { get, set, window, rank, flush }
   }
   function selectedRow(db: Database.Database, identity: string, kind: string, leaf: Leaf): Row {
     const row = db.prepare<[string, string, number], Row>(`SELECT ${columns} FROM thread_records WHERE scope = ? AND kind = ? AND ordinal = ?`)
@@ -303,6 +311,7 @@ export function createIndexedThreadHistory(deps: {
     const m: Mutable = { roots: { ids: empty(), order: empty(), ranges: empty(), sort: empty() },
       nextOrdinal: Math.max(snapshot.items.length, snapshot.ranges.length), nextArrival: snapshot.items.length }
     const placements = db.prepare<[string], Row>(`SELECT ${columns} FROM thread_records WHERE scope = ? AND kind != 'header' ORDER BY kind, ordinal`).all(identity)
+    const ids = tree(db, identity, 'ids'), ordered = tree(db, identity, 'order'), ranges = tree(db, identity, 'ranges'), sorted = tree(db, identity, 'sort')
     for (const r of placements) {
       const value = decode(r, identity, h.generation), { payload: ignored, ...indexes } = r
       void ignored
@@ -313,12 +322,13 @@ export function createIndexedThreadHistory(deps: {
       const leaf = { ordinal: r.ordinal, digest: digest(rewritten.payload), position: r.kind === 'item' ? position : null,
         id: r.kind === 'item' ? natural(object(value).id) : null }
       if (r.kind === 'item') {
-        m.roots.ids = tree(db, identity, 'ids').set(m.roots.ids, numericKey(natural(leaf.id)), leaf)
-        m.roots.order = tree(db, identity, 'order').set(m.roots.order, position, leaf)
+        m.roots.ids = ids.set(m.roots.ids, numericKey(natural(leaf.id)), leaf)
+        m.roots.order = ordered.set(m.roots.order, position, leaf)
         const held = snapshot.items[r.ordinal]
-        m.roots.sort = tree(db, identity, 'sort').set(m.roots.sort, sortKey(held.order, indexes.arrival ?? r.ordinal), leaf)
-      } else m.roots.ranges = tree(db, identity, 'ranges').set(m.roots.ranges, numericKey(natural(r.range_start)), leaf)
+        m.roots.sort = sorted.set(m.roots.sort, sortKey(held.order, indexes.arrival ?? r.ordinal), leaf)
+      } else m.roots.ranges = ranges.set(m.roots.ranges, numericKey(natural(r.range_start)), leaf)
     }
+    ids.flush(); ordered.flush(); ranges.flush(); sorted.flush()
     return m
   }
   function mutateThread(db: Database.Database, request: Extract<ChatHistoryRequest, { operation: 'mutateThread' }>): void {
@@ -436,6 +446,7 @@ export function createIndexedThreadHistory(deps: {
       uncommittedVersion, repair }, request.serverId, request.conversationId)
     h.mutable = m; h.generation = randomUUID(); h.itemCount = m.roots.ids.count; h.rangeCount = m.roots.ranges.count
     if (h.itemCount > MAX_CHAT_HISTORY_ITEMS || h.rangeCount > MAX_CHAT_HISTORY_ITEMS) throw INVALID_CHAT_HISTORY
+    ids.flush(); ordered.flush(); ranges.flush(); sorted.flush()
     writeHeader(db, owner, h)
   }
   function mutablePage(db: Database.Database, identity: string, h: ReturnType<typeof header>, limit: number,

@@ -192,6 +192,26 @@ it('rejects malformed owned changes before touching storage', async () => {
   expect(transaction).not.toHaveBeenCalled()
 })
 
+it('coalesces shared protected paths into one write per path in an owned batch', async () => {
+  const h = setup(), s = snapshot(400)
+  let writes = 0
+  h.database.transaction(db => {
+    const prepare = db.prepare.bind(db)
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      const statement = prepare(sql)
+      if (sql.startsWith('INSERT OR REPLACE INTO thread_auth')) {
+        const run = statement.run.bind(statement)
+        vi.spyOn(statement, 'run').mockImplementation((...args) => { writes++; return run(...args) })
+      }
+      return statement
+    })
+  })
+  expect(await h.store.execute(owned(s, { items: s.thread.items }))).toEqual({ status: 'ok' })
+  const rows = h.database.transaction(db => db.prepare('SELECT count(*) AS n FROM thread_auth').get() as { n: number })
+  expect(writes).toBe(rows.n)
+  expect(writes).toBeGreaterThan(400)
+})
+
 it('ordinary owned validation, serialization and protected record work stay bounded as unrelated history grows', async () => {
   const h = setup()
   async function measure(count: number) {

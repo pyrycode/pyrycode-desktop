@@ -4,6 +4,7 @@ import type { UsageLimitReading } from '../../store/usageLimitStore'
 import { TopOverlay, USAGE_PILL_DISMISS_LABEL } from './TopOverlay'
 import { USAGE_LIMIT_EXHAUSTED_COPY, USAGE_LIMIT_WARNING_COPY } from './usageLimitNotice'
 import { COMPOSER_REPAIR_BUTTON_COPY } from './composerSend'
+import { MARKDOWN_OPEN_FAILED_NOTICE } from './MarkdownReader'
 
 // #1604 — the Top overlay's pure view. The markup is a pure function of the reading, the instant, the
 // dismissed triple and the repair flag, so every arm is a static render here; the clicks live in e2e.
@@ -20,10 +21,12 @@ const render = (props: {
   reading?: UsageLimitReading | null
   dismissed?: UsageLimitReading | null
   repair?: boolean
+  markdownOpenFailed?: boolean
   sessionError?: string
   resolution?: 'remote' | 'timeout' | null
 }): string => renderToStaticMarkup(
   <TopOverlay
+    markdownOpenFailed={props.markdownOpenFailed}
     sessionError={props.sessionError}
     reading={props.reading ?? null}
     nowSeconds={NOW}
@@ -39,6 +42,30 @@ const render = (props: {
 const X_BUTTON = `<button type="button" class="top-overlay-pill__dismiss" aria-label="${USAGE_PILL_DISMISS_LABEL}">`
 const REPAIR_PILL =
   `<button type="button" class="top-overlay-pill top-overlay-pill--error">${COMPOSER_REPAIR_BUTTON_COPY}</button>`
+
+describe('Markdown open failure pill', () => {
+  const failurePill = '<div class="top-overlay-pill top-overlay-pill--error" role="status">' +
+    `<span class="top-overlay-pill__text">${MARKDOWN_OPEN_FAILED_NOTICE}</span></div>`
+
+  it('shows only the client-owned error copy as a polite status without a dismiss button', () => {
+    expect(render({ markdownOpenFailed: true }))
+      .toBe(`<div class="conversation__top-overlay">${failurePill}</div>`)
+    expect(render({ markdownOpenFailed: false })).toBe('')
+  })
+
+  it.each([
+    { reading: reading() },
+    { repair: true },
+    { reading: reading(), repair: true }
+  ])('keeps one failure pill alongside other notices: %j', (other) => {
+    const markup = render({ ...other, markdownOpenFailed: true })
+    expect(markup.match(/conversation__top-overlay/g)).toHaveLength(1)
+    expect(markup.split(failurePill)).toHaveLength(2)
+    if (other.reading) expect(markup).toContain(USAGE_LIMIT_WARNING_COPY)
+    if (other.repair) expect(markup).toContain(REPAIR_PILL)
+    expect(markup).not.toContain('conversation__banner')
+  })
+})
 
 describe('TopOverlay (#1604)', () => {
   // The empty overlay in the strict exact-empty form: no element at all, so it takes no space.

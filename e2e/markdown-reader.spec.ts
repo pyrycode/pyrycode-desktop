@@ -1,9 +1,12 @@
 import { createHash } from 'node:crypto'
-import { test, expect, seedConversationsFrame, SEEDED_ROW } from './fixtures/launchPairedApp'
+import { test, expect, seedConversationsFrame, SEEDED_ROW, SECOND_SEEDED_ROW } from './fixtures/launchPairedApp'
+import { capturePairedApp } from './fixtures/capturePairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type {
   AssistantDeltaPayload,
   AttachmentChunkPayload,
+  ConversationsPayload,
+  RateLimitedPayload,
   ReadWorkspaceFilePayload,
   SendMessagePayload,
   TurnEndPayload
@@ -84,7 +87,7 @@ const buildReplyFrames = (inbound: Uint8Array): Uint8Array[] => {
 test('a markdown link in a reply opens the note in the reader, refetched on every open, and back returns (#1627)', async ({
   launchPairedApp
 }) => {
-  const { page, app } = await launchPairedApp({ buildReplyFrames })
+  const { page, app, daemon } = await launchPairedApp({ buildReplyFrames })
   // A completed upload, pushed on the channel main sends its terminals on (composer-attach.spec.ts's seam:
   // a real attach opens a native file dialog no locator can dismiss).
   const pushUpload = (event: AttachmentUploadEvent): Promise<void> =>
@@ -147,19 +150,72 @@ test('a markdown link in a reply opens the note in the reader, refetched on ever
   await reader.getByRole('button', { name: 'Back' }).click()
 
   // --- 4. A failed fetch closes the reader and shows one static notice, never the path or reason. ---
+  await expect(composer).toBeVisible()
+  const thread = page.locator('.conversation__thread')
+  // Hovering the link reveals message metadata; its height is independent of notice placement.
+  const messagePosition = () => assistant.evaluate(element => {
+    const { x, y } = element.getBoundingClientRect()
+    return { x, y }
+  })
+  const beforeFailure = {
+    thread: await thread.boundingBox(), message: await messagePosition(), composer: await composer.boundingBox()
+  }
   await assistant.getByRole('button', { name: 'the other' }).click()
-  const notice = page.locator('.conversation__banner', { hasText: 'Could not open the file.' })
+  const overlay = page.locator('.conversation__top-overlay')
+  const notice = overlay.locator('.top-overlay-pill--error', { hasText: 'Could not open the file.' })
   await expect(notice).toBeVisible({ timeout: TIMEOUT_MS })
+  await expect(notice).toHaveCount(1)
+  await expect(notice).toHaveText('Could not open the file.')
+  await expect(notice).toHaveAttribute('role', 'status')
+  await expect(notice.getByRole('button')).toHaveCount(0)
+  await expect(page.locator('.conversation__banner', { hasText: 'Could not open the file.' })).toHaveCount(0)
   await expect(reader).toHaveCount(0)
   await expect(composer).toBeVisible()
+  expect(beforeFailure.thread).not.toBeNull()
+  expect(beforeFailure.composer).not.toBeNull()
+  expect({ thread: await thread.boundingBox(), message: await messagePosition(), composer: await composer.boundingBox() })
+    .toEqual(beforeFailure)
   const noticeText = (await notice.textContent()) ?? ''
   expect(noticeText).not.toContain('Broken-Secret')
   expect(noticeText).not.toContain('verification')
 
+  // The failure coexists with a usage pill, floats above the thread, and fits the minimum window.
+  daemon.pushFrame(encodeEnvelope({ id: 1100, type: 'rate_limited', ts: FIXED_TS,
+    payload: { conversation_id: SEEDED_ROW.id, status: 'allowed_warning', limit_type: 'seven_day',
+      resets_at: 4_102_444_800, truncated_fields: null } satisfies RateLimitedPayload }))
+  await expect(overlay.locator('.top-overlay-pill')).toHaveCount(2)
+  for (const size of [{ width: 1100, height: 800 }, { width: 800, height: 600 }]) {
+    await app.evaluate(({ BrowserWindow }, dimensions) => {
+      BrowserWindow.getAllWindows()[0].setSize(dimensions.width, dimensions.height)
+    }, size)
+    await expect.poll(() => page.evaluate(() => innerWidth)).toBe(size.width)
+    const geometry = await notice.evaluate(element => {
+      const pill = element.getBoundingClientRect()
+      const area = document.querySelector('.conversation__message-area')!.getBoundingClientRect()
+      return { inside: pill.left >= area.left && pill.right <= area.right, compact: pill.width < area.width }
+    })
+    expect(geometry).toEqual({ inside: true, compact: true })
+    await capturePairedApp(app, page, `/tmp/builder-2077/markdown-failure-${size.width}.png`)
+  }
+
   // --- 5. Opening another markdown link clears the notice. ---
   await planLink.click()
   await expect(reader.locator('h1')).toHaveText('Plan version 4', { timeout: TIMEOUT_MS })
+  await expect(notice).toHaveCount(0)
   await reader.getByRole('button', { name: 'Back' }).click()
   await expect(composer).toBeVisible()
+  await expect(notice).toHaveCount(0)
+
+  // A second failure followed by a conversation switch drops the notice, including on return.
+  await assistant.getByRole('button', { name: 'the other' }).click()
+  await expect(notice).toBeVisible({ timeout: TIMEOUT_MS })
+  daemon.pushFrame(encodeEnvelope({ id: 1101, type: 'conversations', ts: FIXED_TS,
+    payload: { conversations: [SEEDED_ROW, SECOND_SEEDED_ROW] } satisfies ConversationsPayload }))
+  await page.getByText(SECOND_SEEDED_ROW.name!, { exact: true }).first().click()
+  await expect(page.locator('.conversation__thread')).toBeVisible()
+  await expect(page.locator('.conversation__overflow-title')).toHaveText(SECOND_SEEDED_ROW.name!)
+  await expect(notice).toHaveCount(0)
+  await page.getByText(SEEDED_ROW.name!, { exact: true }).first().click()
+  await expect(planLink).toBeVisible({ timeout: TIMEOUT_MS })
   await expect(notice).toHaveCount(0)
 })

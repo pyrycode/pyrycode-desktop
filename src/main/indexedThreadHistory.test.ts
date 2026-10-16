@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os'
 import Database from 'better-sqlite3'
 import { createHistoryDatabase } from './historyDatabase'
 import { createIndexedThreadHistory } from './indexedThreadHistory'
-import { createIndexedLegacyHistory } from './indexedLegacyHistory'
 import { parseChatHistorySnapshot } from '../shared/chatHistory'
 import type { SecretEncryption } from './secureStore'
 
@@ -210,9 +209,7 @@ it('selected reads/JSON decodes/decrypts stay bounded when unrelated history gro
 it('lossless scoped cleanup preserves legacy and equal ids on other hosts', async () => {
   const h = setup(), ids = ['Host', 'host', 'Host\0', '\ud800', '\ud801', '\ufffd']
   for (const host of ids) for (const chat of ids) expect(await h.store.execute(put(snapshot(2, host, chat)))).toEqual({ status: 'ok' })
-  const legacy = createIndexedLegacyHistory({ database: h.database, encryption: h.encryption, log: { event: () => {} } })
-  const timeline = { version: 1, kind: 'timeline', serverId: 'Host', conversationId: 'Host', items: [], prependedRows: 0, coverage: { status: 'unknown' } }
-  await legacy.execute(ask('replaceTimeline', { snapshot: timeline }, 'Host', 'Host'))
+  h.database.transaction(db => db.prepare('INSERT INTO legacy_scopes VALUES (?, ?, ?)').run('ignored', Buffer.from('Host', 'utf16le'), Buffer.from('Host', 'utf16le')))
   await h.store.execute(ask('removeConversation', {}, '\ud800', '\ud801'))
   await h.store.execute(ask('removeServer', {}, 'Host'))
   h.database.close(); const fresh = h.fresh()
@@ -220,8 +217,7 @@ it('lossless scoped cleanup preserves legacy and equal ids on other hosts', asyn
     expect(await fresh.store.execute(ask('readThread', {}, host, chat))).toEqual(
       host === 'Host' || host === '\ud800' && chat === '\ud801' ? { status: 'missing' } : stored(snapshot(2, host, chat)))
   }
-  const reopenedLegacy = createIndexedLegacyHistory({ database: fresh.database, encryption: h.encryption, log: { event: () => {} } })
-  expect(await reopenedLegacy.execute(ask('readTimeline', {}, 'Host', 'Host'))).toEqual(stored(timeline))
+  expect(fresh.database.transaction(db => db.prepare('SELECT identity FROM legacy_scopes').all())).toEqual([{ identity: 'ignored' }])
 })
 
 it('transaction failures preserve committed data and never expose sentinels', async () => {
@@ -262,9 +258,7 @@ it.each(['header', 'ordinal', 'arrival', 'order', 'membership', 'range', 'missin
 
 it('schema-2 additive migration rolls back with failed authoritative writes and preserves legacy facts', async () => {
   const h = setup()
-  const legacy = createIndexedLegacyHistory({ database: h.database, encryption: h.encryption, log: { event: () => {} } })
-  const timeline = { version: 1, kind: 'timeline', serverId: 'Host', conversationId: 'Chat', items: [], prependedRows: 0, coverage: { status: 'unknown' } }
-  expect(await legacy.execute(ask('replaceTimeline', { snapshot: timeline }))).toEqual({ status: 'ok' })
+  h.database.transaction(db => db.prepare('INSERT INTO legacy_scopes VALUES (?, ?, ?)').run('ignored', Buffer.from('Host', 'utf16le'), Buffer.from('Chat', 'utf16le')))
   await h.store.execute(put(snapshot())); const token = (await page(h.store)).continuation
   h.database.transaction(db => db.exec('DROP TABLE thread_records; DROP TABLE thread_scopes; PRAGMA user_version = 2'))
   h.database.close()
@@ -279,15 +273,12 @@ it('schema-2 additive migration rolls back with failed authoritative writes and 
   expect(disk.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'thread_%'").all()).toEqual([])
   disk.close()
   expect(await fresh.store.execute(put(snapshot()))).toEqual({ status: 'ok' })
-  const reopenedLegacy = createIndexedLegacyHistory({ database: fresh.database, encryption: h.encryption, log: { event: () => {} } })
-  expect(await reopenedLegacy.execute(ask('readTimeline'))).toEqual(stored(timeline))
+  expect(fresh.database.transaction(db => db.prepare('SELECT identity FROM legacy_scopes').all())).toEqual([{ identity: 'ignored' }])
 })
 
 it.each(['legacy', 'authoritative'])('preserves the %s schema-3 layout when both migrations converge', async family => {
   const h = setup(), s = snapshot()
-  const timeline = { version: 1, kind: 'timeline', serverId: 'Host', conversationId: 'Chat', items: [], prependedRows: 0, coverage: { status: 'unknown' } }
-  const legacy = createIndexedLegacyHistory({ database: h.database, encryption: h.encryption, log: { event: () => {} } })
-  expect(await legacy.execute(ask('replaceTimeline', { snapshot: timeline }))).toEqual({ status: 'ok' })
+  h.database.transaction(db => db.prepare('INSERT INTO legacy_scopes VALUES (?, ?, ?)').run('ignored', Buffer.from('Host', 'utf16le'), Buffer.from('Chat', 'utf16le')))
   expect(await h.store.execute(put(s))).toEqual({ status: 'ok' })
   h.database.transaction(db => {
     db.exec(family === 'legacy' ? 'DROP TABLE thread_records; DROP TABLE thread_scopes' : 'DROP INDEX legacy_receipt_start')
@@ -295,8 +286,7 @@ it.each(['legacy', 'authoritative'])('preserves the %s schema-3 layout when both
   })
   h.database.close(); const fresh = h.fresh()
   expect(await fresh.store.execute(ask('readThread'))).toEqual(family === 'legacy' ? { status: 'missing' } : stored(s))
-  const reopenedLegacy = createIndexedLegacyHistory({ database: fresh.database, encryption: h.encryption, log: { event: () => {} } })
-  expect(await reopenedLegacy.execute(ask('readTimeline'))).toEqual(stored(timeline))
+  expect(fresh.database.transaction(db => db.prepare('SELECT identity FROM legacy_scopes').all())).toEqual([{ identity: 'ignored' }])
   fresh.database.transaction(db => {
     expect(db.pragma('user_version', { simple: true })).toBe(5)
     expect(db.prepare("SELECT name FROM sqlite_master WHERE name = 'legacy_receipt_start'").get()).toEqual({ name: 'legacy_receipt_start' })

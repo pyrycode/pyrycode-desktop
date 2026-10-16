@@ -17,14 +17,12 @@ const thread = (serverId = 'a', conversationId = 'c') => ({ version: 1, kind: 'd
     ranges: [{ start: 1, end: 10 }], olderAvailable: false, repair: { fromVersion: 10, throughVersion: 25 },
     items: [JSON.parse('{"id":2,"rev":30,"kind":"future","order":null,"shown":false,"content":null,"session":"s","agent":"unknown","parent":null,"__proto__":{"polluted":true},"constructor":null}'),
       { id: 1, rev: 10, kind: 'assistant_message', order: 1, active: false, content: { text: 'private', future: [null, false, 0] } }] } })
-const legacy = (serverId = 'a') => ({ version: 1, kind: 'timeline', serverId, conversationId: 'c',
-  items: [{ kind: 'assistantText', text: 'legacy', turnId: 't' }], prependedRows: 0, coverage: { status: 'unknown' } })
 const list = (serverId = 'a') => ({ version: 1, kind: 'list', serverId, conversations: ['c', 'other'].map(id => ({
   id, name: null, is_promoted: false, is_archived: false, cwd: '/', last_message_ts: '', last_used_at: '', workspace_label: null })) })
 const save = (snapshot: unknown): ChatHistoryRequest => {
   const s = parseChatHistorySnapshot(snapshot)
   if (s.kind === 'list') return { operation: 'replaceList', serverId: s.serverId, snapshot: s }
-  return { operation: s.kind === 'timeline' ? 'replaceTimeline' : 'replaceThread', serverId: s.serverId,
+  return { operation: 'replaceThread', serverId: s.serverId,
     conversationId: s.conversationId, snapshot: s } as ChatHistoryRequest
 }
 async function setup() {
@@ -42,12 +40,11 @@ async function setup() {
 const read = (serverId = 'a', conversationId = 'c'): ChatHistoryRequest => ({ operation: 'readThread', serverId, conversationId })
 
 describe('protected daemon item history', () => {
-  it('round-trips held facts beside legacy rows through protected fresh instances', async () => {
+  it('round-trips retained held facts through protected fresh instances', async () => {
     const h = await setup()
-    for (const s of [thread(), legacy(), thread('b'), thread('a', 'offscreen')]) expect(await h.store.execute(save(s))).toEqual({ status: 'ok' })
+    for (const s of [thread(), thread('b'), thread('a', 'offscreen')]) expect(await h.store.execute(save(s))).toEqual({ status: 'ok' })
     const restored = await h.fresh().execute(read())
     expect(restored).toEqual({ status: 'stored', snapshot: thread() })
-    expect(await h.fresh().execute({ operation: 'readTimeline', serverId: 'a', conversationId: 'c' })).toMatchObject({ status: 'stored', snapshot: legacy() })
     expect(await h.fresh().execute(read('b'))).toEqual({ status: 'stored', snapshot: thread('b') })
     expect(Object.prototype).not.toHaveProperty('polluted')
     expect(JSON.stringify(h.logs)).not.toContain('private')
@@ -103,27 +100,26 @@ describe('protected daemon item history', () => {
     expect(result).toMatchObject({ status: 'stored', snapshot: { thread: { uncommittedVersion: 30 } } })
     if (result.status === 'stored' && result.snapshot.kind === 'daemon-items') expect(Object.hasOwn(result.snapshot.thread, 'olderAvailable')).toBe(false)
   })
-  it('deletion orders both formats and list removal behind queued saves', async () => {
+  it('deletion orders retained records and list removal behind queued saves', async () => {
     const h = await setup()
-    for (const s of [list(), legacy(), thread(), thread('a', 'other'), thread('b')]) await h.store.execute(save(s))
+    for (const s of [list(), thread(), thread('a', 'other'), thread('b')]) await h.store.execute(save(s))
     const writing = h.store.execute(save({ ...thread(), thread: { ...thread().thread, epoch: 'new' } }))
     const removing = h.store.execute({ operation: 'removeConversation', serverId: 'a', conversationId: 'c' })
     await writing; expect(await removing).toEqual({ status: 'ok' })
     expect(await h.fresh().execute(read())).toEqual({ status: 'missing' })
-    expect(await h.fresh().execute({ operation: 'readTimeline', serverId: 'a', conversationId: 'c' })).toEqual({ status: 'missing' })
     expect(await h.fresh().execute({ operation: 'readList', serverId: 'a' })).toMatchObject({ snapshot: { conversations: [{ id: 'other' }] } })
     expect(await h.fresh().execute(read('b'))).toMatchObject({ status: 'stored' })
   })
   it('unpair invalidates old work and preserves another host', async () => {
     const h = await setup()
     const handler = createChatHistoryHandler({ store: h.store, log: { event: () => {} }, pairedServers: { loadById: async () => ({}) as never } })
-    for (const s of [list(), legacy(), thread(), thread('a', 'offscreen'), thread('b')]) await handler(null, save(s))
+    for (const s of [list(), thread(), thread('a', 'offscreen'), thread('b')]) await handler(null, save(s))
     const clearing = handler.clearServer('a', async () => ({ matched: true }) as never)
     const staleWrite = handler(null, save(thread())), staleRead = handler(null, read())
     await clearing
     expect(await staleWrite).toEqual({ status: 'error', code: 'unknown-host' })
     expect(await staleRead).toEqual({ status: 'error', code: 'unknown-host' })
-    for (const request of [read(), read('a', 'offscreen'), { operation: 'readList', serverId: 'a' }, { operation: 'readTimeline', serverId: 'a', conversationId: 'c' }]) expect(await h.fresh().execute(request)).toEqual({ status: 'missing' })
+    for (const request of [read(), read('a', 'offscreen'), { operation: 'readList', serverId: 'a' }]) expect(await h.fresh().execute(request)).toEqual({ status: 'missing' })
     expect(await h.fresh().execute(read('b'))).toMatchObject({ status: 'stored' })
     expect(await handler(null, save(thread()))).toEqual({ status: 'ok' })
   })

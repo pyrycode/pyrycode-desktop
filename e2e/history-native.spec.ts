@@ -15,6 +15,6 @@ test('packaged protected history commits and reopens with production encryption'
   await testInfo.attach('history-native.stdout', { body: result.stdout, contentType: 'text/plain' })
   await testInfo.attach('history-native.stderr', { body: result.stderr, contentType: 'text/plain' })
   expect(result.stdout).toContain('"executed":1,"passed":1,"failed":0,"skipped":0')
-  expect(result.stdout).toContain('"saturatedMemberships":100000')
-  expect(result.stdout).toMatch(/"saturatedReplacementMs":\d+/)
+  expect(result.stdout).toContain('"retainedItems":1000')
+  expect(result.stdout).toMatch(/"protectedReplacementMs":\d+/)
 })

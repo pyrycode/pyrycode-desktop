@@ -48,7 +48,7 @@ describe('daemon item cache ownership', () => {
         : { status: 'stored', snapshot: outcome === 'host' ? { ...snapshot, serverId: 'b' }
           : outcome === 'conversation' ? { ...snapshot, conversationId: 'other' }
           : outcome === 'timeline' ? { version: 1, kind: 'timeline', serverId: 'a', conversationId: 'c',
-            items: [], prependedRows: 0, coverage: { status: 'unknown' } }
+            items: [], prependedRows: 0, coverage: { status: 'unknown' } } as unknown as ChatHistorySnapshot
           : outcome === 'list' ? { version: 1, kind: 'list', serverId: 'a', conversations: [] } : snapshot }
       const log = vi.fn(), read = vi.fn(async () => {
         if (outcome === 'reject') throw Error('private detail')

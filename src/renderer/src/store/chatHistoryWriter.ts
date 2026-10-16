@@ -9,7 +9,7 @@ import { subscribeChatHistoryRemoval } from './chatHistoryRemoval'
 import type { ThreadItemStore } from './threadItemStore'
 
 type ConversationRemoval = Extract<ChatHistoryRequest, { operation: 'removeConversation' }>
-type Snapshot = Exclude<ChatHistorySnapshot, { kind: 'timeline' }>
+type Snapshot = ChatHistorySnapshot
 type Receipt = { type: string; serverId: string | null | undefined }
 
 /** Receipts are synchronous; snapshots and their supplying host are detached before scheduling. */
@@ -44,7 +44,6 @@ export function createChatHistoryWriter(deps: {
     }
     let snapshot: ChatHistorySnapshot
     try { snapshot = parseChatHistorySnapshot(value) } catch { report('invalid-snapshot'); return }
-    if (snapshot.kind === 'timeline') return
     const key = keyFor(snapshot)
     const encoded = JSON.stringify(snapshot)
     if (seen.get(key) === encoded) return

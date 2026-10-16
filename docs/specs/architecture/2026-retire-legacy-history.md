@@ -78,3 +78,17 @@ None. Storage-only recognition validates the envelope, never retired rows. Scope
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-16
+
+## Revisions
+
+2026-10-16: The final consumer search found `DurableThreadItem` had only its obsolete equality test left after renderer retirement; remove both rather than keep an unused storage type. `chatHistoryWriter` also retains an impossible timeline guard and exclusion alias; simplify those to the retained snapshot contract. The packaged smoke replaces obsolete 100,000 receipt memberships with 1,000 retained daemon items and checks protected replacement/reopen timing, production encryption and plaintext exclusion. No retained format or lifecycle changes.
+
+2026-10-16: The required focused live run executed but failed at its unchanged initial channel-post baseline, before storage assertions. The same failure reproduced against an untouched export/build of main `41bd0e2173d5`; its screenshot shows an empty thread and the runner-start failure notice with the existing `spawnClaude: false` fixture. Track the independent investigation in #2046 and skip that scenario with an explicit link, per the out-of-scope bug policy. No live pass is claimed. The retired storage fallback is still removed, and all authoritative assertions remain for re-enablement by #2046.
+
+## Validation — Linux x64, 2026-10-16
+
+- Final merge: `origin/main` at `41bd0e2173d5`; pre-verify passes all five checks. Units: 9,106 executed/passed, 0 failed, 30 skipped across 390 passing files. Build and docs guard pass. Final logs: `/tmp/builder-2026/pre-verify-final.log` and `/tmp/builder-2026/build-final.log`.
+- Complete configured fake Playwright: 435 executed/passed, 0 failed, 3 skipped, 0 flaky, 0 retries; both clipboard/parallel projects, four workers, no selection or shard filters. The skips are the two macOS badge cases and macOS window reactivation. Report `/tmp/builder-2026/fake.json`; no top-level errors or fake-daemon-setup attachments. Configuration SHA256 `7097078cf6aaa5b94888a26af30c0f6bb000e6be66ff78891630f2a19a32795b`.
+- Packaged smoke within that suite: 1 executed/passed, 0 failed/skipped; Electron 33.4.11, Node 20.18.3, better-sqlite3 12.4.1, `gnome_libsecret`, packaged ASAR/unpacked native addon, 1,000 retained items and 104 ms protected replacement. Original runtime evidence: `/tmp/pyry-history-native-fcNqRi/runtime.stdout`.
+- Live named history-on-open scenario: candidate and unchanged main each 1 executed, 0 passed, 1 failed, 0 skipped before storage assertions. Daemon source `0917625fc6e91eeb2a16556f09e5ba0bbf62aabf`, binary SHA256 `dd2c2c290fd4acf58aabc87bbf3459ca18d3aae8f27cdd8b65eeb7cd06927a1f`. Reports `/tmp/builder-2026/live-source.json`, `/tmp/builder-2026/main-live.json`; baseline screenshot `/tmp/builder-2026/baseline-page.png`. Scenario now explicitly skipped pending Backlog/priority:low #2046. This is failed evidence, not live acceptance.
+- Size audit: fewer than 400 inserted/rewritten lines including this plan; 693 production and 900 test lines deleted, including the 317-line legacy indexed backend and its 506-line exclusive suite. No new exports or consumer signature migration. macOS is outside this ticket's verification scope.

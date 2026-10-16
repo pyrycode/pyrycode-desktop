@@ -53,7 +53,7 @@ export function createHistoryDatabase({ userDataPath }: { userDataPath: string }
           for (const scope of scopes) {
             if (typeof scope.identity !== 'string' || typeof scope.server !== 'string' || typeof scope.conversation !== 'string')
               throw INVALID_CHAT_HISTORY
-            parseChatHistoryRequest({ operation: 'readTimeline', serverId: scope.server, conversationId: scope.conversation })
+            parseChatHistoryRequest({ operation: 'readThread', serverId: scope.server, conversationId: scope.conversation })
             // BLOBs cannot collide with the remaining TEXT keys during this migration.
             update.run(Buffer.from(scope.server, 'utf16le'), Buffer.from(scope.conversation, 'utf16le'), scope.identity)
           }

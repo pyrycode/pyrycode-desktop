@@ -10,12 +10,13 @@ import { createChatHistoryWriter } from '../src/renderer/src/store/chatHistoryWr
 import { createConversationListStore } from '../src/renderer/src/store/conversationListStore'
 import { readSavedTimeline } from '../src/renderer/src/store/savedTimelineRestorer'
 import { createHistoryDatabase } from '../src/main/historyDatabase'
+import type { ChatHistoryRequest, ChatHistoryResult } from '../src/shared/chatHistory'
 
 const roots: string[] = []
 const owners: ReturnType<typeof createHistoryDatabase>[] = []
 afterEach(async () => { owners.splice(0).forEach(db => db.close()); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
 
-async function cache() {
+async function cache(intercept?: (request: ChatHistoryRequest, execute: () => Promise<ChatHistoryResult>) => Promise<ChatHistoryResult>) {
   const root = await mkdtemp(join(tmpdir(), 'thread-restart-')); roots.push(root)
   const database = createHistoryDatabase({ userDataPath: root }); owners.push(database)
   const encryption = { isAvailable: () => true, encrypt: (bytes: Uint8Array) => bytes.map(b => b ^ 173), decrypt: (bytes: Uint8Array) => bytes.map(b => b ^ 173) }
@@ -24,9 +25,79 @@ async function cache() {
   const storage = fresh(), source = createThreadItemStore(), api = source.getState()
   const writer = createChatHistoryWriter({ threads: source, lists: createConversationListStore(),
     receipt: () => null, log: () => {},
-    write: request => storage.execute(request), schedule: () => () => {} })
+    write: request => intercept ? intercept(request, () => storage.execute(request)) : storage.execute(request), schedule: () => () => {} })
   return { fresh, source, api, writer }
 }
+
+it.each([
+  ['saved', 5], ['pending', 5], ['saved', 10], ['pending', 10]
+] as const)('completion through %s/%s stays version-bound across coalescing and held failure', async (seed, through) => {
+  async function run(mode: 'separate' | 'coalesced' | 'retry') {
+    let hold = false, release!: (result: ChatHistoryResult) => void, attempts = 0
+    const { fresh, api, writer } = await cache((_request, execute) => {
+      if (!hold) return execute()
+      attempts++
+      return new Promise(resolve => { release = resolve })
+    })
+    const add = (id: number, version: number) => api.applyUpdate('a', { type: 'thread_item_added', payload: {
+      conversation_id: 'c', epoch: 'e', version, item: { id, rev: version, kind: 'assistant_message',
+        active: false, shown: true, status: 'done', summary: '', content: { text: String(id) } }
+    } })
+    const flush = async () => { if (mode === 'separate') await writer.flush() }
+    try {
+      api.acceptEpoch('a', 'c', 'e'); add(1, 2)
+      const unfinished = api.beginBatch('a', 'c', 'e')!
+      unfinished.applyItems([{ id: 2, rev: 10, kind: 'assistant_message', active: false, shown: true,
+        status: 'done', summary: '', content: { text: 'unloaded' } }], 10)
+      unfinished.abandon(); api.requireRepair('a', 'c', 'e', 10)
+      if (seed === 'saved') await writer.flush()
+      await flush()
+      api.deleteConversation('a', 'c'); api.acceptEpoch('a', 'c', 'e')
+      await flush()
+      expect(api.beginBatch('a', 'c', 'e')!.commit({ fromVersion: 0, version: through,
+        ranges: [{ start: 1, end: 3 }] }).type).toBe('applied')
+      await flush()
+      hold = mode === 'retry'
+      const draining = hold ? writer.flush() : undefined
+      add(3, 12)
+      if (draining) {
+        release({ status: 'error', code: 'write-failed' }); await draining
+        expect(attempts).toBe(1) // Failed work waits for an explicit retry, including newer pending work.
+        hold = false
+      }
+      await writer.flush()
+      const result = await fresh().execute({ operation: 'readThread', serverId: 'a', conversationId: 'c' })
+      expect(result).toMatchObject({ status: 'stored', snapshot: { thread: {
+        checkpoint: through < 10 ? through : 12, uncommittedVersion: through < 10 ? 10 : 0,
+        repair: through < 10 ? { fromVersion: through, throughVersion: 10 } : null,
+        ranges: [{ start: 1, end: 3 }], items: [{ id: 1 }, { id: 2 }, { id: 3 }]
+      } } })
+      return result
+    } finally { await writer.stop() }
+  }
+  const separate = await run('separate')
+  expect(await run('coalesced')).toEqual(separate)
+  expect(await run('retry')).toEqual(separate)
+})
+
+it('later pending repair and unfinished progress survive an earlier completion before the first save', async () => {
+  const { fresh, api, writer } = await cache()
+  try {
+    api.acceptEpoch('a', 'c', 'e')
+    api.beginBatch('a', 'c', 'e')!.commit({ fromVersion: 0, version: 5, ranges: [] })
+    const unfinished = api.beginBatch('a', 'c', 'e')!
+    unfinished.applyItems([{ id: 1, rev: 15, kind: 'assistant_message', active: false, shown: true,
+      status: 'done', summary: '', content: { text: 'unfinished' } }], 15)
+    unfinished.abandon(); api.requireRepair('a', 'c', 'e', 15)
+    api.deleteConversation('a', 'c'); api.acceptEpoch('a', 'c', 'e')
+    api.beginBatch('a', 'c', 'e')!.commit({ fromVersion: 0, version: 10, ranges: [] })
+    await writer.stop()
+    expect(await fresh().execute({ operation: 'readThread', serverId: 'a', conversationId: 'c' })).toMatchObject({
+      status: 'stored', snapshot: { thread: { version: 15, checkpoint: 10, uncommittedVersion: 15,
+        repair: { fromVersion: 10, throughVersion: 15 }, items: [{ id: 1, rev: 15 }] } }
+    })
+  } finally { await writer.stop() }
+})
 
 it('same-epoch holder recreation saves only owned facts and metadata without erasing unloaded history', async () => {
   const { fresh, source, api, writer } = await cache()

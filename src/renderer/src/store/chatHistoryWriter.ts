@@ -68,7 +68,9 @@ export function createChatHistoryWriter(deps: {
       else ranges.push({ ...range })
     }
     return { ...next, change: { ...next.change, acceptEpoch: previous.change.acceptEpoch || next.change.acceptEpoch,
-      certified: previous.change.certified || next.change.certified,
+      priorProgress: [...previous.change.priorProgress ?? [],
+        { metadata: previous.change.metadata, ...(previous.change.completion === undefined ? {} : { completion: previous.change.completion }) },
+        ...next.change.priorProgress ?? []],
       items: [...items.values()], removeIds: [...removeIds], ranges } }
   }
   function captureChange(host: string, id: string, slice: ThreadItemStore['hosts'] extends ReadonlyMap<string, ReadonlyMap<string, infer S>> ? S : never): void {

@@ -104,10 +104,15 @@ export type ChatHistorySnapshot = { version: 1; serverId: string } & (
       coverage: { status: 'unknown' } | { status: 'received'; cursor: string; atStart: boolean }
     }
 )
-export type OwnedThreadChanges = {
+type ThreadProgress = {
   metadata: Omit<ThreadSnapshot, 'items' | 'ranges' | 'arrivalOrder'>
+  /** Exact completed version interval, never inferred from a later live checkpoint. */
+  completion?: { fromVersion: number; version: number }
+}
+export type OwnedThreadChanges = ThreadProgress & {
   acceptEpoch: boolean
-  certified?: boolean
+  /** Earlier owned observations, in admission order, retained through coalescing/retry. */
+  priorProgress?: readonly ThreadProgress[]
   items: ThreadSnapshot['items']
   removeIds: readonly number[]
   ranges: ThreadSnapshot['ranges']
@@ -502,13 +507,31 @@ export function parseChatHistoryRequest(value: unknown): ChatHistoryRequest {
   if (v.operation === 'mutateThread') {
     if (Object.keys(v).some(k => !['operation', 'serverId', 'conversationId', 'change'].includes(k))) return invalid()
     const conversationId = id(v.conversationId), c = record(v.change)
-    if (Object.keys(c).some(k => !['metadata', 'acceptEpoch', 'certified', 'items', 'removeIds', 'ranges'].includes(k))) return invalid()
+    if (Object.keys(c).some(k => !['metadata', 'acceptEpoch', 'completion', 'priorProgress', 'items', 'removeIds', 'ranges'].includes(k))) return invalid()
+    const metadata = retainedMetadata(c.metadata, serverId, conversationId)
+    const progress = (value: unknown): ThreadProgress => {
+      const p = record(value)
+      const held = retainedMetadata(p.metadata, serverId, conversationId)
+      if (held.epoch !== metadata.epoch) return invalid()
+      const completion = optional(p.completion, value => {
+        const c = record(value), fromVersion = readId(c.fromVersion), version = readId(c.version)
+        if (Object.keys(c).some(k => !['fromVersion', 'version'].includes(k)) ||
+          fromVersion > version || version > held.checkpoint) return invalid()
+        return { fromVersion, version }
+      })
+      return { metadata: held, ...(completion === undefined ? {} : { completion }) }
+    }
+    const priorProgress = optional(c.priorProgress, value => array(value, value => {
+      const p = record(value)
+      if (Object.keys(p).some(k => !['metadata', 'completion'].includes(k))) return invalid()
+      return progress(p)
+    }))
     const items = retainedItems(c.items)
     const removeIds = array(c.removeIds, readId), ids = new Set(items.map(i => i.id))
     if (ids.size !== items.length || new Set(removeIds).size !== removeIds.length || removeIds.some(id => ids.has(id))) return invalid()
     return { operation: 'mutateThread', serverId, conversationId, change: {
-      metadata: retainedMetadata(c.metadata, serverId, conversationId), acceptEpoch: bool(c.acceptEpoch),
-      certified: c.certified === undefined ? false : bool(c.certified),
+      ...progress(c), acceptEpoch: bool(c.acceptEpoch),
+      ...(priorProgress === undefined ? {} : { priorProgress }),
       items, removeIds, ranges: retainedRanges(c.ranges)
     } }
   }

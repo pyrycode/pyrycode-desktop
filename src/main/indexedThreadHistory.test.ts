@@ -113,6 +113,20 @@ it('owned revision overlap, explicit removal and admitted epoch transition remai
     ...epoch.thread, items: [], arrivalOrder: [], ranges: [] } }))
 })
 
+it('completion cannot bridge a missing version interval or certify a newer checkpoint', async () => {
+  const h = setup(), s = snapshot()
+  s.thread.uncommittedVersion = 250
+  await h.store.execute(put(s))
+  const later = { ...s, thread: { ...s.thread, version: 400, checkpoint: 400, uncommittedVersion: 0, repair: null } }
+  expect(await h.store.execute(owned(later, { completion: { fromVersion: 150, version: 300 } }))).toEqual({ status: 'ok' })
+  expect(await h.store.execute(ask('readThread'))).toEqual(stored({ ...s, thread: { ...s.thread,
+    version: 400, repair: { fromVersion: 100, throughVersion: 300 } } }))
+  expect(await h.store.execute(owned(later))).toEqual({ status: 'ok' })
+  expect(await h.store.execute(owned(later, { completion: { fromVersion: 100, version: 300 } }))).toEqual({ status: 'ok' })
+  h.database.close()
+  expect(await h.fresh().store.execute(ask('readThread'))).toEqual(stored({ ...later, thread: { ...later.thread, checkpoint: 300 } }))
+})
+
 it('owned evidence merges without rewriting untouched placements and pages prove containing ranges', async () => {
   const h = setup(), s = snapshot()
   await h.store.execute(put(s)); await h.store.execute(owned(s))

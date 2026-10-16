@@ -352,7 +352,9 @@ export function createIndexedThreadHistory(deps: {
       if (!c.acceptEpoch) throw INVALID_CHAT_HISTORY
       identity = randomUUID()
       db.prepare('INSERT INTO thread_scopes VALUES (?, ?, ?)').run(identity, Buffer.from(request.serverId, 'utf16le'), Buffer.from(request.conversationId, 'utf16le'))
-      h = { metadata, itemCount: 0, rangeCount: 0, hasArrival: true, generation: randomUUID(),
+      h = { metadata: { hostId: request.serverId, conversationId: request.conversationId, epoch: metadata.epoch,
+        version: 0, checkpoint: 0, uncommittedVersion: 0, repair: null },
+        itemCount: 0, rangeCount: 0, hasArrival: true, generation: randomUUID(),
         mutable: { roots: { ids: empty(), order: empty(), ranges: empty(), sort: empty() }, nextOrdinal: 0, nextArrival: 0 } }
     }
     if (!h) throw INVALID_CHAT_HISTORY
@@ -435,15 +437,26 @@ export function createIndexedThreadHistory(deps: {
       if (!(row.payload instanceof Uint8Array)) throw INVALID_CHAT_HISTORY
       m.roots.ranges = ranges.set(m.roots.ranges, numericKey(start), { ordinal, digest: digest(row.payload), position: null, id: null })
     }
-    const old = h.metadata, fenced = old.repair !== null || (old.uncommittedVersion ?? 0) > old.checkpoint
-    const checkpoint = fenced && !c.certified ? old.checkpoint : Math.max(old.checkpoint, metadata.checkpoint)
-    const oldRepair = old.repair !== null && !(c.certified && metadata.checkpoint >= old.repair.throughVersion) ? old.repair : null
-    const repairThrough = Math.max(oldRepair?.throughVersion ?? 0, metadata.repair?.throughVersion ?? 0, checkpoint)
-    const repair = oldRepair || metadata.repair ? { fromVersion: checkpoint, throughVersion: repairThrough } : null
-    const uncommittedVersion = Math.max(metadata.uncommittedVersion ?? 0,
-      (old.uncommittedVersion ?? 0) > metadata.checkpoint || fenced && !c.certified ? old.uncommittedVersion ?? 0 : 0)
-    h.metadata = threadHistoryCodec.metadata({ ...old, ...metadata, version: Math.max(old.version, metadata.version), checkpoint,
-      uncommittedVersion, repair }, request.serverId, request.conversationId)
+    // Replay owned progress in admission order. Certificates cannot acquire the version of a later
+    // live observation or erase obligations lost when a same-epoch holder was recreated.
+    for (const progress of [...c.priorProgress ?? [], c]) {
+      const old = h.metadata, next = progress.metadata, completion = progress.completion
+      const certified = completion !== undefined && completion.fromVersion <= old.checkpoint
+      const fenced = old.repair !== null || (old.uncommittedVersion ?? 0) > old.checkpoint
+      const bound = completion || fenced ? certified ? completion.version : old.checkpoint : next.checkpoint
+      const checkpoint = Math.max(old.checkpoint, Math.min(next.checkpoint, bound))
+      const oldRepair = old.repair !== null && !(certified && completion.version >= old.repair.throughVersion) ? old.repair : null
+      const missingCoverage = completion !== undefined && !certified
+      const repairThrough = Math.max(oldRepair?.throughVersion ?? 0, next.repair?.throughVersion ?? 0,
+        missingCoverage ? completion.version : 0, checkpoint)
+      const repair = oldRepair || next.repair || missingCoverage ? { fromVersion: checkpoint, throughVersion: repairThrough } : null
+      const unfinished = old.uncommittedVersion ?? 0
+      const retainUnfinished = !(certified && completion.version >= unfinished)
+      const uncommittedVersion = Math.max(next.uncommittedVersion ?? 0,
+        retainUnfinished && (unfinished > next.checkpoint || fenced) ? unfinished : 0)
+      h.metadata = threadHistoryCodec.metadata({ ...old, ...next, version: Math.max(old.version, next.version), checkpoint,
+        uncommittedVersion, repair }, request.serverId, request.conversationId)
+    }
     h.mutable = m; h.generation = randomUUID(); h.itemCount = m.roots.ids.count; h.rangeCount = m.roots.ranges.count
     if (h.itemCount > MAX_CHAT_HISTORY_ITEMS || h.rangeCount > MAX_CHAT_HISTORY_ITEMS) throw INVALID_CHAT_HISTORY
     ids.flush(); ordered.flush(); ranges.flush(); sorted.flush()

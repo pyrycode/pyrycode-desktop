@@ -72,13 +72,13 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
     const reads = new Map<string, Map<string, symbol>>()
     const read = (host: string, conversation: string): Slice | undefined => get().hosts.get(host)?.get(conversation)
     function publish(host: string, conversation: string, slice: Slice,
-      change: { item?: HeldItem; ranges?: readonly Range[]; acceptEpoch?: boolean; certified?: boolean } = {}): void {
+      change: { item?: HeldItem; ranges?: readonly Range[]; acceptEpoch?: boolean; completion?: OwnedThreadChanges['completion'] } = {}): void {
       reads.get(host)?.delete(conversation)
       if (slice.snapshot !== slice.restored) {
         const { items: ignoredItems, ranges: ignoredRanges, arrivalOrder: ignoredArrival, ...metadata } = slice.snapshot
         void ignoredItems; void ignoredRanges; void ignoredArrival
         slice = { ...slice, owned: { metadata, acceptEpoch: change.acceptEpoch ?? false,
-          certified: change.certified ?? false,
+          ...(change.completion === undefined ? {} : { completion: change.completion }),
           items: change.item === undefined ? [] : [change.item],
           removeIds: [], ranges: change.ranges ?? [] } }
       }
@@ -236,7 +236,8 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
               uncommittedVersion: c.version >= slice.uncommittedVersion ? 0 : slice.uncommittedVersion,
               snapshot: Object.freeze({ ...s, ranges, olderAvailable,
               uncommittedVersion: c.version >= slice.uncommittedVersion ? 0 : slice.uncommittedVersion,
-              version: Math.max(s.version, c.version), checkpoint: Math.max(s.checkpoint, c.version), repair: null }) }, { ranges: c.ranges, certified: true })
+              version: Math.max(s.version, c.version), checkpoint: Math.max(s.checkpoint, c.version), repair: null }) },
+              { ranges: c.ranges, completion: { fromVersion: c.fromVersion, version: c.version } })
             log?.event({ event: 'thread-items-batch', code: 'committed' })
             return { type: 'applied' }
           },

@@ -122,8 +122,8 @@ and `scrollHeight`. While following, a scroll with changed geometry leaves the d
 to the pending observer rather than clearing the flag on layout movement. That
 observer refreshes all three measurements after the guarded pin. Trusted upward input
 still releases following synchronously, so the geometry guard cannot reclaim a held reader.
-Held readers retain native anchoring. This covers metadata reflow, narrowing, widening
-and 100%/125% zoom without another follow state machine or async task.
+Visible held readers retain native anchoring. This covers metadata reflow, narrowing,
+widening and 100%/125% zoom without another follow state machine or async task.
 
 Chromium can deliver a trusted downward wheel before or after native movement.
 The wheel handler resumes following when already in the bottom band, or when positive
@@ -176,6 +176,32 @@ repeatedly reveals/collapses the tail at 1280px and 800px, wheels from history s
 through changing metadata, and focuses an above-viewport row without moving a held
 content anchor. See
 [recorded browser and capture evidence](development-verification-layout-evidence.md#translucent-conversation-controls).
+
+### Covered reader resize preservation
+
+The [Markdown reader](conversation-shell-markdown-reader.md#pane-wiring) hides the
+mounted thread with `data-covered`. Hidden rows cannot supply native scroll anchors:
+resizing can clamp a settled offset, and returning to the original dimensions does
+not recover it merely because the thread stayed mounted. A released thread can
+even settle at the bottom without resuming following; equal geometry alone does
+not identify intent. Additional frame settlement cannot repair this persistent loss.
+
+`useThreadScrollPin` keeps one conversation-scoped `coveredPosition` ref. At the
+first covered viewport change it records the last processed width, height and
+offset, preferring an outstanding pin-write offset when present. The existing
+scroll handler, layout effect and resize observer all preserve this record before
+replacing those measurements, so whichever callback runs first cannot save the
+already-clamped position instead. When the original thread viewport width and height
+return while still covered, a released reader gets its recorded offset back; the
+existing echo guard records the write. Following readers keep the ordinary bottom
+pin, and this restoration never re-arms following.
+
+Uncovering, conversation changes and teardown clear the record; each later open
+captures its own position and dimensions. Back at different dimensions keeps the
+current native position. There are no new listeners or asynchronous jobs. The
+[controlled regression and Linux counts](development-verification-layout-evidence.md#reader-resize-scroll-preservation)
+distinguish this settled-state loss from the earlier reopen focus/hover race and
+the unavailable historical failure trace.
 
 ### Streaming input verification
 

@@ -104,7 +104,7 @@ Search this catalog for a topic. Start with INDEX.md. The documentation stage ma
     - [Daemon event channel — the sealed union: per-member history (early members)](features/daemon-event-channel-sealed-union-history-early.md) — Per-ticket rationale for the original six session-lifecycle arms through `modelAnnounced` (#587).
     - [Daemon event channel — the sealed union: per-member history (recent members)](features/daemon-event-channel-sealed-union-history-recent.md) — Per-ticket rationale for `slashCommandList` (#937) onward, including `thinkingProgress` (#1313), plus the union's two cross-member rules.
     - [Daemon connection — request correlation and diagnostics](features/daemon-connection-correlation.md) — How a reply is matched back to the request that asked for it, one section per correlated round trip, plus the diagnostic logging around them. Split 2026-09-23 once #1579's edit pushed it over the size cap — the larger correlation sections now live in their own documents, listed below; this entry keeps diagnostic logging plus the four smallest correlation sections and stays the map to the rest.
-    - [Daemon connection — request/history/attachment correlation](features/daemon-connection-correlation-requests.md) — Diagnostic logging (#128), then the request-response correlation stores for conversation creation (#1307), attachment upload (#861) and retrieval (#996), run-configuration read attribution (#1176), and conversation history (#1222).
+    - [Daemon connection — request and attachment correlation](features/daemon-connection-correlation-requests.md) — Diagnostic logging (#128), then the request-response correlation stores for conversation creation (#1307), attachment upload (#861) and retrieval (#996), run-configuration read attribution (#1176), and the legacy history correlation retired in #2025.
     - [Daemon connection — system-prompt and MCP-status correlation](features/daemon-connection-correlation-system-prompt-and-mcp.md) — System-prompt read (#1230) and write (#1249) correlation, the workspace-renaming correlation that shipped alongside the write, MCP-status request correlation (#1578) — including how [#1579](https://github.com/pyrycode/pyrycode-desktop/issues/1579) put the MCP-status verb to use — MCP reconnect (#1582), MCP toggle (#1586), and background-task stop (#1770) capability/refusal correlation, and conversation-mute write correlation (#1595).
     - [Daemon connection — lifecycle](features/daemon-connection-lifecycle.md) — When the connection is dialled, torn down and redialled, how it works internally, and the state and concurrency model that holds it together. Split 2026-09-05 — per-server routing (registry + conversation-id + correlation-id + server-scoped) now lives in its own document, listed below; this entry stays the map.
     - [Daemon connection — hosted resource views](features/daemon-connection-hosted-resource-views.md) — Authoritative discovery, native viewer API/state, browser isolation and HTTP policy, cancellation fences and counted fake-transport proof.
@@ -1120,41 +1120,9 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   dots](features/channel-list-host-row.md) (moved out of `channel-list.md` to stay under the doc-guard's
   byte cap) and this store's own doc. Architect self-review PASS.
 
-- [Request history send](features/request-history-send.md) — conversation scroll-back's **transport-only**
-  leg: an outbound `request_history` ask (`RequestHistoryPayload{conversation_id,cursor,limit}`, all
-  three keys always on the wire) and the decoded `history_page` reply
-  (`HistoryPagePayload{entries,cursor,at_start}`), over the daemon's append-only on-disk log
-  (pyrycode#2112/#2113/#2116) a conversation opened today can otherwise see nothing of. #1225 still owns
-  joining a page to the live stream. #1223 draws a page, but not via any of the four exhaustive renderer
-  bridges here — they still take null arms for `historyPageReceived`/`historyRequestFailed` — a **fifth**,
-  independent channel subscriber (`historyPageBridge.ts`) owns both arms instead (`historyPageReceived`
-  from #1223, `historyRequestFailed` since [#1259](https://github.com/pyrycode/pyrycode-desktop/issues/1259),
-  which is also the first sender of the ask itself, fired once per conversation activation); see
-  [Conversation timeline store](features/conversation-timeline-store.md) for the design. The one fact
-  shaping every piece: a `history_page`
-  names no conversation, so `daemonConnection`'s new `pendingHistoryRequests` map records each
-  request's envelope id against the conversation it named and resolves the reply's `conversationId`
-  from that memory rather than the wire — the `pendingConfigRequests`/`runConfigReceived` pattern
-  reused verbatim. The one non-obvious design call: the five reject codes get a **sibling** narrower,
-  `HistoryRejectReason`, beside `DaemonErrorOutcome` rather than five new members on it, since that type
-  is inherited whole by the attachment-upload failure union and a history code there would demand
-  composer copy no upload path can produce; it diverges from its neighbour by returning `undefined`
-  outside its five-member set (mapped to a sixth IPC-side `'unclassified'` member) rather than
-  classifying everything, because a correlated `message.too_long` — one stored entry too large for any
-  page — is a real, published outcome of this verb too. No client-invented size or count bound: the
-  frame-level `MAX_PLAINTEXT_BYTES` guard and the daemon's own 4096-entry clamp already cover it, and a
-  narrower client bound would silently drop valid pages. (#1222, security-sensitive, builder self-review
-  PASS, no MUST FIX — two SHOULD FIX, both documentation-only: an entry's `payload` is trusted in shape
-  and untrusted in content despite looking settled, and it crosses by reference with an inert
-  `__proto__` own-data-property a *later* `Object.assign`/`target[k]=v` consumer must not create a
-  hazard from.) Split from #1088. **#1227 closed both SHOULD FIX findings**: `entries` no longer crosses
-  IPC as opaque `HistoryEntry[]` — a second decode stage (`decodeHistoryEvent`/`decodeHistoryPage`)
-  narrows each entry's payload against the same eleven live-lane parsers into `HistoryTimelineEntry[]`,
-  a closed union, dropping the payload's daemon-asserted `conversation_id` on every arm. An undrawn or
-  unparseable entry is skipped, never failing the page; `modal_shown`/`question_shown` have no arm at
-  all, so no prompt can reach the window from history. `timelineBridge` stays permanently dormant for
-  `historyPageReceived`/`historyRequestFailed` even past #1223 — that ticket draws a page through a
-  fifth channel subscriber instead, never by claiming these two arms.
+- [Retired raw-history request route](features/request-history-send.md) — Removed Desktop
+  command, encoder, correlation, page/failure IPC, decoder and replay/resync recovery;
+  retained shared wire/storage/fake declarations and authoritative thread validation.
 
 - [System prompt send](features/system-prompt-send.md) — the **transport-only** read half of a
   conversation's system prompt: an outbound `request_system_prompt` ask

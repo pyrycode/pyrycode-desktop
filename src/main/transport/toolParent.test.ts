@@ -21,30 +21,4 @@ describe('tool parent attribution', () => {
       expect(() => parseInboundMessage(frame(type, parent))).toThrow()
     })
   }
-  it('skips malformed history entries without dropping valid attributed entries', () => {
-    const decoded = parseInboundMessage(encodeEnvelope({
-      id: 3, type: 'history_page', ts: '2026-09-11T12:00:00Z',
-      payload: { entries: [null, 42, 'parent'].map((parent, id) => ({
-        id, type: 'tool_use', ts: '2026-09-11T12:00:00Z',
-        payload: { ...payload, parent_tool_use_id: parent }
-      })), cursor: '', at_start: true }
-    }))
-    if (decoded?.kind !== 'history-page') throw new Error('missing history')
-    expect(decoded.historyPage.entries).toHaveLength(1)
-    expect(decoded.historyPage.entries[0].event).toMatchObject({ parentToolUseId: 'parent' })
-  })
-  it('replays attribution through history translation and result reduction', () => {
-    const decoded = parseInboundMessage(encodeEnvelope({
-      id: 2, type: 'history_page', ts: '2026-09-11T12:00:00Z',
-      payload: { entries: ['tool_use', 'tool_result'].map((type, id) => ({
-        id, type, ts: '2026-09-11T12:00:00Z',
-        payload: { ...payload, parent_tool_use_id: id === 0 ? 'parent' : '' }
-      })), cursor: '', at_start: true }
-    }))
-    if (decoded?.kind !== 'history-page') throw new Error('missing history')
-    expect(decoded.historyPage.entries.map((entry) => entry.event)).toMatchObject([
-      { type: 'toolUse', parentToolUseId: 'parent' },
-      { type: 'toolResult', parentToolUseId: undefined }
-    ])
-  })
 })

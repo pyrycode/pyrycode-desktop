@@ -272,8 +272,6 @@ export function translateDaemonEvent(event: DaemonEvent): SessionAction | null {
       // configuration and the session id (#491), not the session store. Present only because the
       // assertNever guard below makes a new arm a compile error.
       return null
-    case 'historyPageReceived':
-    case 'historyRequestFailed':
       // No session-store action (#1222). A page's entries are timeline items, so its consumer is the
       // timeline reduction (#1223) and the walk that drives the asks (#1224) — not this store, which
       // holds the live session's messages and status and has no scroll-back state at all. The reading

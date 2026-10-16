@@ -223,22 +223,14 @@ delta is the positive barrier before checking that the Compacting label is gone.
 A subsequent boundary also proves delivery of the preceding repeated false frame
 before the test checks the final divider count.
 
-Unconditional `reconnectResendFrames` prove delivery after a handshake, but cannot
-prove replay negotiation. For that, use `buildReconnectFrames(hello)`, which reads
-the authenticated reconnect hello and takes precedence over unconditional resends.
-[`reconnect-event-replay.spec.ts`](../../../e2e/reconnect-event-replay.spec.ts)
-seeds a visible prefix with `event_id: 41`, drops the client leg and releases the
-missed tail only when the hello carries exactly `last_event_id: 41`. It checks the
-received cursor and absent `last_seen_ts`, retained rows, once-only ordering,
-subsequent live events and no additional `request_history`. Omitting or changing
-the cursor must prevent tail delivery and fail the proof. Capture only replay
-metadata from the hello, never its token or identity. See
-[cursor lifetime and resync](daemon-connection-lifecycle.md#replay-cursor-lifetime).
-
-Return `[]` for a nonmatching cursor. A thrown `buildReconnectFrames` callback
-currently leaves the reconnect's fresh Noise handshake unfreed before it reaches
-`Split()`; the fake's ordinary `close()` does not own that local handshake. This
-test-only failure-path limitation remains outside the replay proof.
+Unconditional `reconnectResendFrames` prove delivery after a handshake. The
+production connection no longer negotiates event replay: initial and reconnect
+hellos omit `last_event_id` and `last_seen_ts`, and legacy `resync` is inert
+(#2025). The former `reconnect-event-replay.spec.ts` content proof retired with
+renderer producers in #2030. Use the existing `thread-activation.spec.ts` cases
+for authoritative reconnect/checkpoint recovery and zero legacy requests. Keep
+positive processing/render barriers before absence assertions. See
+[retirement evidence](thread-runtime.md#main-request-and-recovery-retirement-validation).
 
 ### Stopped-turn evidence
 

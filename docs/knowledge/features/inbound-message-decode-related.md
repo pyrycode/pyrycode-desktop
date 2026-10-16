@@ -101,21 +101,9 @@ the size cap; each entry below keeps the wording it had in the parent.
   docs, true inbound and false outbound (the daemon sanitises/sniffs on the retrieval leg). Ships
   dormant: `daemonConnection.ts`'s inbound switch has no case for `'attachment-chunk'` yet — the
   reassembler is a later slice.
-- [Request history send](request-history-send.md) — the twenty-sixth additive extension: the
-  `history_page` kind, `parseHistoryPagePayload`/`parseHistoryEntry`, the file's first object-field
-  narrower (`requireRecord`), and the sibling `HistoryRejectReason` narrower widening the pre-existing
-  `daemon-error` kind with an optional `historyReject` field. [#1222](https://github.com/pyrycode/pyrycode-desktop/issues/1222)
-  is also this boundary's first ticket with a live consumer at ship time — [daemon
-  connection](daemon-connection.md)'s `pendingHistoryRequests` correlation map. The independent
-  `historyPageBridge.ts` consumes `historyPageReceived` and `historyRequestFailed`;
-  the four unrelated exhaustive renderer bridges intentionally return null. [#1227](https://github.com/pyrycode/pyrycode-desktop/issues/1227)
-  followed up with a second stage in the same file: `decodeHistoryEvent`/`decodeHistoryPage` narrow each
-  entry's *payload* (not just its envelope) against the same eleven live-lane parsers, so
-  `HistoryEntry.payload` — opaque since #1222 — is now read by something. Not a new `InboundDaemonMessage`
-  kind, so it isn't numbered in this chronology; the full account, including the security review that
-  mandated a `switch` over an object-literal dispatch table for the untrusted `type` discriminant (a
-  lesson worth generalising to any future "which types do we handle" set in this file), is in [Request
-  history send](request-history-send.md#payload-decode-srcmaintransportinboundmessagets-1227).
+- [Retired request history](request-history-send.md) — #2025 deletes exclusive history-page
+  parsing/decoding and history-refusal narrowing. Live parsers, admitted-envelope metadata,
+  ordinary daemon errors and thread dispatch remain supported.
 - [System prompt send](system-prompt-send.md) — the twenty-seventh additive extension: the
   `system_prompt` kind, `parseSystemPromptPayload` + the new `narrowSessionPromptStatus` comparand
   narrower, and the file's first payload whose optional field (`system_prompt`) must keep three

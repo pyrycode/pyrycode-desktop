@@ -37,19 +37,6 @@ describe.each(['model_refusal_fallback', 'model_refusal_no_fallback'] as const)(
   it('rejects non-string report members', () => {
     expect(() => parseInboundMessage(frame(type, { ...payload, truncated_fields: ['banner', false] }))).toThrow()
   })
-  it('decodes history with the same fields and drops payload conversation identity', () => {
-    const result = parseInboundMessage(frame('history_page', {
-      entries: [{ id: 1, type, ts: 'stamp', payload }], cursor: '', at_start: true
-    }))
-    expect(result?.kind).toBe('history-page')
-    if (result?.kind !== 'history-page') return
-    expect(result.historyPage.entries[0]?.event).toMatchObject({
-      type: type === 'model_refusal_fallback' ? 'modelRefusalFallback' : 'modelRefusalNoFallback',
-      originalModel: 'original', refusalCategory: 'future', banner: common.banner,
-      truncatedFields: common.truncated_fields, droppedFields: null
-    })
-    expect(result.historyPage.entries[0]?.event).not.toHaveProperty('conversationId')
-  })
 })
 
 it('preserves unknown scope strings', () => {

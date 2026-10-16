@@ -260,7 +260,6 @@ export function createConnectionRegistry(deps: ConnectionRegistryDeps): Connecti
       resolve().toggleMcpServer(conversationId, serverName, enabled),
     stopBackgroundTask: (conversationId, taskId) => resolve().stopBackgroundTask(conversationId, taskId),
     queryThread: (query, requestId) => resolve().queryThread(query, requestId),
-    requestHistory: (payload) => resolve().requestHistory(payload),
     requestSystemPrompt: (conversationId) => resolve().requestSystemPrompt(conversationId),
     requestConversations: () => resolve().requestConversations(),
     requestRecentWorkspaces: () => resolve().requestRecentWorkspaces(),

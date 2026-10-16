@@ -97,16 +97,13 @@ This is an absence rule for optional fields, not a blanket null-removal rule.
 Hosted discovery requires explicit nullable fields; see
 [null and omission preservation](#hosted-null-and-omission-preservation).
 
-`last_event_id` requests bounded current-conversation replay after a daemon-wide
-event position. `last_seen_ts` has no daemon consumer; connection-produced hellos
-never send it. The codec passes the numeric position through without validating
-its range. [Daemon connection](daemon-connection-lifecycle.md#replay-cursor-lifetime)
-owns positive-safe-integer validation and the in-memory cursor; `decodeEnvelope`
-keeps payloads opaque and only retains numeric `event_id` values. Observe an
-admitted envelope before narrowing its payload, so unknown types and malformed
-payloads can still advance replay. Failed size or envelope guards cannot advance
-or reset it. An expired or unknown position yields `resync`; the connection clears
-that host's cursor without automatically loading history.
+The generic codec still supports optional replay fields and numeric envelope
+`event_id`; this preserves the shared daemon/Mobile contract. Desktop's production
+connection passes neither replay field on initial or reconnect hellos (#2025),
+keeps no replay cursor and treats legacy `resync` as unmodeled. Its admitted-envelope
+observer retains live-session metadata before payload narrowing, not replay progress.
+See [hello and pairing lifetime](daemon-connection-lifecycle.md#hello-and-held-send-pairing-lifetime)
+and [thread recovery](thread-runtime.md#restore-recovery-and-cleanup).
 
 ### Data flow
 

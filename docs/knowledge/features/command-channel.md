@@ -13,6 +13,14 @@ keeping sockets, transport handles and keys in the background process.
 
 Gives the renderer **one typed function** (`window.pyry.sendCommand`) to ship a sealed command to the background process, and gives the background process **one typed seam** (`onCommand`) to receive those commands — after validating each at the untrusted→trusted boundary. Every command travels on a single IPC channel; the union carries modeled action payloads and client correlation IDs, with no token, key or raw-frame field. `ipcRenderer` itself never crosses to the window.
 
+## Retired raw-history command
+
+`requestHistory` is absent from `RendererCommand` and `isRendererCommand` (#2025).
+Even a formerly valid `{ type: 'requestHistory', payload: { conversation_id,
+cursor, limit } }` is rejected by the existing unknown-command path. Its payload
+guard, main dispatch and registry delegate are deleted. Supported content requests
+use host-addressed thread queries; no legacy fallback is available.
+
 ## Public device identity
 
 The separate no-argument `pyry:device-identity` invoke is exposed as

@@ -271,8 +271,6 @@ export function translateModalEvent(
       // Not a modal event (#491). Present only because the assertNever guard makes a new arm a
       // compile error.
       return null
-    case 'historyPageReceived':
-    case 'historyRequestFailed':
       // Not modal events (#1222), and PERMANENTLY so: nothing is waiting on an answer. A page is a
       // replay of what already happened, answering this app's own ask, where a modal is a permission
       // prompt gating an action claude wants to take, resolved by `modal_answer` against `modal_id`. A

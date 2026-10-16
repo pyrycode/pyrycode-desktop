@@ -111,8 +111,7 @@ function ThreadFixture() {
     sendConnection(hostId, connected) { setConnection({ hostId, status: connected ? { type: 'connected',
       ack: { server_id: hostId, conn_id: 'fixture', protocol_version: '2', capabilities: [] } } : { type: 'disconnected' } }); },
     send(text, deviceId) { submitMessage(text, scope.chat, { serverId: scope.host, threadSend: { store: sends, deviceId },
-      newMessageId: () => 'shared-id', sendCommand: command => actions.push([scope.host, command]),
-      dispatch() { throw new Error('legacy echo'); }, dispatchFor() { throw new Error('legacy queue'); } }); },
+      newMessageId: () => 'shared-id', sendCommand: command => actions.push([scope.host, command]) }); },
     taskInputs(inputs, callback = true) { setTaskInputs({ ...inputs, onStopTask: callback ? (host, chat, task) => stops.push([host, chat, task]) : undefined }); },
     activeChat() { return activeConversationStore.getState().activeConversation?.id ?? null; },
     unavailable(host) { savedLinks.set(host, sessionStore.getState().statuses.get(host));
@@ -131,7 +130,7 @@ function ThreadFixture() {
     <ConversationListData />
     <output hidden data-testid="read-state">{JSON.stringify({ receipts, scope,
       marks: (rows ?? []).map(row => [row.serverId, row.id, row.read_up_to,
-        isConversationUnread(null, null, row, conversationReadRouteStore.getState().epochFor(row.serverId, row.id) !== undefined)]) })}</output>
+        isConversationUnread(row)]) })}</output>
     <ThreadItemsTimeline snapshot={snapshot} backgroundTasksOpen={backgroundTasksOpen} onBackgroundTasksOpenChange={setBackgroundTasksOpen} readInputs={readInputs && { ...readInputs, completeThrough }} sendInputs={{ connection, local: { ...local, hostId: scope.host, conversationId: scope.chat },
       onAction: (host, command) => actions.push([host, command]) }} taskInputs={taskInputs} turnRunning={turnRunning} foldTools onReply={(role, text) => replies.push(role + ':' + text)}
       onOpenMarkdownPath={path => paths.push(path)} />

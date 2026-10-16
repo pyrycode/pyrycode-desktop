@@ -77,6 +77,10 @@ None. The simpler atomic design stores protected lists in SQLite rather than coo
 
 ## Revisions
 
+2026-10-16 — Verifier rework for reviewed commit `54d7010a`, findings 1 and 2. Within the existing import transaction, validate all addressed destination records and collect missing snapshots before entering the mutation phase. Preserve classified backend/validation/protection errors; classify raw list insertion, completion-marker insertion and outer import COMMIT failures as `write-failed`. Share static error mapping with normal operations so stored list versions retain `unsupported-version` for reads, replacement and both removals. No public interface, durable state, authorization, queue or encryption changes. No in-flight branch overlaps these rework files. Forecast under 180 additional source/test/plan lines, no new exports or consumers, within the accepted activation floor exception.
+
+Test-first real-disk cases: `classifies an import %s failure and rolls back both families before queued retry` covers list insertion, marker insertion and deferred outer COMMIT, intact source, absent completion, preserved committed peers, same-queue recovery and exact fresh-owner content. `preserves a stored list with version %s across reads and mutations` covers safe-integer 9 versus malformed versions, ciphertext/both-family preservation and usable later work. Security re-review: PASS; all nine original categories remain applicable and unchanged, with static error codes only and no caught exception data exposed. No transaction spans secure-store I/O. Existing Linux native and focused lifecycle checks will run after Node/Electron adapter preparation; the full configured fake gate remains dispatcher-owned.
+
 2026-10-16 — Final Linux acceptance on pushed candidate `41fbd1f47a361551f872badcc483121b46911161`, containing main `af067d8f6cd343613ffe03d70032845ced2931c3`. No other in-flight feature branch overlaps the final changed files. Install, documentation guard, pre-verify **5/5** and production build pass. This subsequent commit records evidence only.
 
 | Final check | Executed | Passed | Failed | Skipped |

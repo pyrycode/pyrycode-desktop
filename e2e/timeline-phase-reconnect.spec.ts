@@ -4,6 +4,9 @@ import { e2eShowsWindow } from './fixtures/desktopIsolation'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { EnvelopeType, TurnStatePayload } from '../src/shared/wire/types'
 
+// Scripted history is published as thread catch-up/pages by the shared fake daemon.
+test.use({ scriptedHistory: true })
+
 const frame = (type: EnvelopeType, payload: unknown, in_reply_to?: number): Uint8Array =>
   encodeEnvelope({ id: 1723, type, ts: '2026-10-05T00:00:00Z', payload, in_reply_to })
 // Reconciliation frames deliberately omit event_id: these phases are not replay-ring entries.

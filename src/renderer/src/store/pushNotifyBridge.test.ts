@@ -127,6 +127,21 @@ describe('notifyKindForEvent', () => {
 })
 
 describe('subscribePushNotify', () => {
+  it('notifies once for a live main-thread end, excluding replay windows and child turns', () => {
+    const bridge = fakeBridge(), send = vi.fn()
+    subscribePushNotify(bridge.onDaemonEvent, send, () => true, noName)
+    const item = { id: 1, rev: 1, order: 1, kind: 'turn_end' as const, turn: 'turn',
+      session: 'session', shown: false, active: false, status: 'done', summary: '', content: {} }
+    const ending: Extract<DaemonEvent, { type: 'threadUpdate' }> = { type: 'threadUpdate', conversationId: 'chat', correlation: { id: 1, ts: '' }, update: {
+      type: 'thread_item_added', payload: { conversation_id: 'chat', epoch: 'epoch', version: 1, item } } }
+    bridge.emit(ending, 'host')
+    bridge.emit(ending, 'host')
+    bridge.emit({ ...ending, update: { type: 'thread_item_added', payload: { conversation_id: 'chat', epoch: 'epoch', version: 2, item: { ...item, id: 2, parent: 99 } } } }, 'host')
+    expect(send.mock.calls).toEqual([[{ type: 'notify', payload: { kind: 'turn-complete' } }]])
+    bridge.emit(ending, 'other-host')
+    expect(send).toHaveBeenCalledTimes(2)
+  })
+
   it('subscribes exactly once', () => {
     const bridge = fakeBridge()
     subscribePushNotify(bridge.onDaemonEvent, vi.fn(), () => true, noName)

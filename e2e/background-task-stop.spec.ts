@@ -19,7 +19,7 @@ const openPanel = async (page: Page) => {
 test('silent stops survive navigation and settle on stopped, omission and correlated refusal', async ({ launchPairedApp }) => {
   test.setTimeout(90_000)
   const fake = conversationStateFake({ conversations: [SEEDED_ROW] })
-  const { page, daemon } = await launchPairedApp({ buildReplyFrames: fake, helloAck: { capabilities: ['stop_background_task'] } })
+  const { page, daemon } = await launchPairedApp({ buildReplyFrames: fake, helloAck: { capabilities: ['thread', 'stop_background_task'] } })
   await page.setViewportSize({ width: 1280, height: 800 })
   daemon.pushFrame(frame('conversations', { conversations: [SEEDED_ROW, second] }))
   daemon.pushFrame(frame('background_task_roster', { conversation_id: SEEDED_ROW.id, tasks: rows, dropped_tasks: 0 }))
@@ -74,8 +74,9 @@ test('silent stops survive navigation and settle on stopped, omission and correl
   await panel.locator('li').filter({ hasText: 'Synthetic roster work' }).getByRole('button', { name: 'Stop task' }).click()
   await expect.poll(() => fake.backgroundTaskStopRequests().length).toBe(2)
   await expect(panel.getByRole('heading', { name: 'Running · 1', exact: true })).toBeVisible()
-  await expect(panel.locator('li').filter({ hasText: 'Synthetic roster work' })).toHaveCount(0)
-  await expect(finished.locator('.background-task-panel__tag')).toHaveText('Stopped')
+  // Authoritative ended items remain durable after the roster omits a task.
+  await expect(panel.locator('li').filter({ hasText: 'Synthetic roster work' })).toContainText('Outcome unknown')
+  await expect(panel.locator('li').filter({ hasText: 'Synthetic terminal work' }).locator('.background-task-panel__tag')).toHaveText('Stopped')
 
   const refusedButton = panel.locator('li').filter({ hasText: 'Synthetic refused work' }).getByRole('button', { name: 'Stop task' })
   await refusedButton.click()

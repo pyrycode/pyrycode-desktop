@@ -1,9 +1,9 @@
 # Composer send
 
-The renderer half of the send flow: typing updates a retained draft; submission mints a
-`message_id`, emits a `sendMessage` command and immediately draws a local row. Production
-uses the legacy timeline echo. The injectable daemon-thread route retains pending rows
-until a matching authoritative user item takes over. This is the counterpart to the
+Typing updates a retained draft. Submission obtains the authenticated public device
+identity from main, then mints a `message_id`, emits a host-addressed `sendMessage`
+command and draws a local pending row. Production
+retains that row until a matching authoritative user item takes over. This is the counterpart to the
 [outbound send path](outbound-send-path.md), which encrypts the command for the relay.
 
 Introduced in [#66](../codebase/66.md). Entirely `src/renderer/` — no keys, sockets, Noise handshake, or preload internals; the composer only calls the typed `window.pyry.sendCommand` bridge and dispatches into the store.
@@ -15,9 +15,9 @@ Enter and Actions-menu sends:
 
 - The input is **controlled** — typing updates a session draft keyed by host and conversation; a successful typed submit clears only that draft; whitespace-only input is retained.
 - **Submit** (the send button or Enter) mints a `message_id` via `crypto.randomUUID()`, assembles a `SendMessagePayload` for the active conversation, and emits `window.pyry.sendCommand(sendMessageCommand(payload))`.
-- The legacy route writes a `userText` echo to the flat and host-owned held timelines.
-  An explicit `threadSend` input instead retains it in a scoped pending-send store and
-  bypasses both echo writers.
+- Production passes `threadSend` and retains the row in the host/conversation-scoped
+  pending-send store. Both legacy echo writers are bypassed. The old helper branch
+  remains only for retained callers and tests.
 - A bridge exception marks a still-local row `Not sent`, rolls attachments back and
   returns false so the container retains its draft. An already accepted daemon item
   remains authoritative.
@@ -31,16 +31,15 @@ render through [the supplied thread view](conversation-shell.md#what-it-does).
 `submitMessage`'s optional `threadSend: { store, deviceId }` input form an explicitly
 injectable adapter. Its owner supplies the trusted opaque device identity, snapshots,
 transport feedback and subscriptions. `ThreadItemsTimeline` receives matching scoped
-pending/feedback, connection and action inputs through `sendInputs`. The adapter remains
-inactive in production until [#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908)
-provides authenticated identity access from main, IPC/subscriptions and capability selection.
-This slice adds no main/preload/wire change or real-Claude requirement.
-
-During that integration, compose settlement alongside the independent session/read
-adapters from [#1935](https://github.com/pyrycode/pyrycode-desktop/issues/1935) and
-[#1936](https://github.com/pyrycode/pyrycode-desktop/issues/1936). Preserve their
-account/session facts and cache ownership; the pending store owns only local sends
-and newest-send feedback. See the [settlement design](../../specs/architecture/1906-thread-send-settlement.md).
+pending/feedback, connection and action inputs through `sendInputs`. The production
+[thread runtime](thread-runtime.md#sending-and-authenticated-identity) owns these
+subscriptions and composes settlement alongside independent session/read adapters.
+The no-argument `window.pyry.deviceIdentity()` call returns only the lowercase
+hexadecimal public key used by Noise authentication, or `identity-unavailable`.
+Private key material never crosses IPC. Each submission captures identity and
+selection ownership before sending. A failed identity lookup, lost owner or false
+submit result retains recoverable text without overwriting a newer draft.
+The pending store owns only local sends and newest-send feedback. See the [settlement design](../../specs/architecture/1906-thread-send-settlement.md).
 
 - [Internals](composer-send-internals.md) — submit helper, optimistic echo, connection and keyboard
   gates, attachment handling, and [the controlled composer](composer-send-internals.md#3-the-controlled-composer--conversationscreentsx).
@@ -60,7 +59,14 @@ selected/creating host + conversation -> retained draft coordinates
 
 Send / Enter -> handleSubmit -> sendText(text)
   unavailable host / pending model recall -> false; retain draft and attachments
-  submitMessage(text, activeConversationId, deps)
+  production thread path -> capture draft and attachment ownership
+    await deviceIdentity; leave draft editable
+    failure / changed connection or selection -> roll back attachment claim; keep draft
+    valid identity -> submitMessage with captured deviceId and host
+    false result -> helper owns attachment rollback; keep draft
+    true result -> clear only the unchanged submitted draft; preserve later edits
+    return false while invoke is pending; continuation owns completion
+  retained helper path -> submitMessage(text, activeConversationId, deps)
     whitespace-only / no conversation -> false; retain draft
     explicit threadSend without serverId -> false; retain draft and attachments
     mint message_id; take pending attachments
@@ -74,8 +80,9 @@ Send / Enter -> handleSubmit -> sendText(text)
 Actions command -> sendText(command) -> same submission path; no draft clear
 ```
 
-Clearing happens at local success; a caught bridge exception returns false and retains
-the draft. It does not wait for delivery acknowledgement. Other drafts remain untouched. Draft storage
+Production clearing happens after identity access and successful local submission,
+only if the captured draft is unchanged. A caught bridge exception returns false
+and retains the draft. It does not wait for delivery acknowledgement. Other drafts remain untouched. Draft storage
 preserves whitespace exactly; trimming belongs only to submission.
 
 For the injected route, `retain(host, conversation, deviceId, event)` captures the

@@ -121,6 +121,162 @@ These passes supplement the deterministic recovery proof; the reason Electron lo
 inspection context remains unproven. The original evaluation error and running-at-outcome
 launch-fate do not establish renderer navigation, an app crash or completed installation.
 
+### Disconnected-delivery observations and cleanup
+
+[`disconnectedDelivery.ts`](../../../e2e/fixtures/disconnectedDelivery.ts) is a
+single-consumer helper for `disconnected-message-delivery.spec.ts`. Socket-write
+observations use `readDeliveryObservation`: at most three `readMainProcess` attempts,
+then failure if every read is unavailable. Pending payloads use a five-second poll
+that retains the successful payload snapshot for the delivery assertions. The
+unavailable sentinel never becomes an empty array, zero or a passing assertion;
+unrelated errors propagate unchanged. Installation, forwarding, resume, clicks
+and frame delivery remain single effects outside read recovery.
+
+Installation runs inside `withDeliveryCleanup` so a lost installation acknowledgement
+still reaches cleanup without reinstalling. Restoration releases the held pairing
+read and restores `fs.readFile`, `WebSocket.prototype.send` and the original ordered
+`pyry:command` listener sequence. A retained restored marker makes late restoration
+callbacks no-ops: they cannot duplicate listener registration or forward held messages.
+Read-only confirmation checks the restored flag, released gate and all hook/listener
+identities; an absent installation marker needs no restoration.
+
+Cleanup permits at most two guarded restoration evaluations, each followed by at
+most three confirmation reads, without sleeps. Only transient acknowledgement loss
+followed by conclusive unrestored state permits recovery. Confirmed restoration
+succeeds even when its acknowledgement was lost; unavailable confirmation never
+authorizes replay or success. Exhausted reads/recovery, acknowledged mismatch and
+unrelated errors fail cleanup. App-first closure and unconditional `launch-fate`
+attachment remain owned by `launchPairedApp`.
+
+When cleanup succeeds, the exact original thrown value survives. When both the
+scenario and cleanup fail, `withDeliveryCleanup` retains both originals in
+`AggregateError.errors` **and includes both original stacks in its message**.
+Playwright serializes an Error's message and filtered stack without
+`AggregateError.errors`; retaining the objects alone can hide the original assertion
+in browser failure output. Cleanup failure also fails an otherwise passing scenario.
+
+[`disconnectedDelivery.test.ts`](../../../e2e/fixtures/disconnectedDelivery.test.ts)
+executes the actual evaluated callbacks against fake IPC, file and socket boundaries.
+Coverage distinguishes context loss before/after restoration, transient/exhausted
+confirmation, finite recovery, fatal errors and acknowledged mismatch. It also checks
+installation loss before/after effect, successful/failed resume, gate release,
+listener identity/order, late restoration without duplicate listeners or held-command
+replay, successful falsy reads, and visibility of both original failures.
+
+The [verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/2055#issuecomment-6213389616)
+dated 2026-10-16 confirms the following Linux x64 evidence.
+Controlled baseline: **20 executed, 6 passed, 14 failed, 0 skipped**;
+final fault coverage: **20 executed/passed, 0 failed/skipped**, with all 20 also
+present and passed in the unit gate (**9,123 executed/passed, 0 failed, 3 skipped**).
+A separate reporting regression failed before both original stacks were included.
+Logs remain in `/tmp/builder-2054/fault-before.log`, `reporting-before.log` and
+`fault-final.log`.
+
+| `accepted disconnected messages drain and settle:` mode | Focused executed/passed/failed/skipped | Complete-suite executed/passed/failed/skipped |
+| --- | --- | --- |
+| `automatic` | 10 / 10 / 0 / 0 | 1 / 1 / 0 / 0 |
+| `explicit` | 10 / 10 / 0 / 0 | 1 / 1 / 0 / 0 |
+| `terminal` | 10 / 10 / 0 / 0 | 1 / 1 / 0 / 0 |
+
+Focused `--repeat-each=10 --retries=0` evidence totals **30 executed/passed,
+0 failed/skipped/flaky**, every retry index 0, retained in
+`/tmp/builder-2054/focused-final.json` with empty matching `.stderr`.
+The dispatcher complete configured fake suite (`npx playwright test --reporter=json`)
+at `75c6e5c9b59cf4a1c9243cfc68c432fa208e47a1` totals **435 executed/passed,
+0 failed, 3 existing macOS-only skips, 0 flaky**;
+the table confirms each named mode is present and passed separately from the other
+432 passes. Both clipboard/parallel projects, two configured/actual workers and
+zero retries were unchanged on this host; the historical failing host used four
+workers. This satisfies execution at the existing configuration, without claiming
+a new four-worker run. Retained evidence is
+`/work/Projects/pyrycode-desktop-agents/logs/verifier-gate_#2054_8.log` and matching
+stderr (Vite deprecation warning only). These completed results supersede the
+builder plan/PR's pending full-suite status.
+
+All 30 focused and three complete-suite delivery `launch-fate` attachments report
+running at outcome, exit 0, no signal and no teardown failures. Neither report has
+report-level errors or failed cases. Delivery, socket-write, queue, text/identity/order,
+settlement, duplicate-replay barrier, cross-host isolation and visual assertions remain
+intact, without new skips, test retries, arbitrary sleeps or larger timeouts.
+macOS is outside this ticket's verification scope; no live-Claude acceptance is required.
+
+The [historical failure and artifact limits](https://github.com/pyrycode/pyrycode-desktop/issues/2054#issuecomment-6212772434)
+remain separate: during #2044 on Linux at `0ffe0b12fafa366a43c98990daa1169dffdb83e1`,
+the complete suite recorded **435 executed, 434 passed, 1 failed, 3 skipped**,
+with four workers, both projects and zero retries. The automatic case failed at
+`__delivery1853.restore()`; the packaged protected-storage check passed. Original
+reported paths are `/tmp/builder-2044-final-playwright.json`, matching `.stderr`,
+and `test-results/disconnected-message-deliv-a6f05--drain-and-settle-automatic-parallel/error-context.md`.
+The retrieved builder bundle contained a truncated log tail and empty pointers,
+corroborating the failure and unchanged subsequent passes without those original
+artifacts. Controlled faults prove bounded acknowledgement recovery and reporting;
+they do not identify the upstream Electron/Playwright trigger, establish whether
+the failed cleanup executed, or reveal an earlier assertion it might have concealed.
+
+### Held thread read registration
+
+The resumed restore-overlap case in `thread-activation.spec.ts` uses the single-consumer
+[`installHeldThreadRead`](../../../e2e/fixtures/heldThreadRead.ts) in `onLaunched`, after
+window loading and before opening the conversation. Window readiness cannot establish
+whether a rejected installation evaluation actually replaced `pyry:chat-history`.
+The synchronous callback publishes a marker containing the original handler, wrapper
+identity and phase. A separate `readMainProcess` inspection must confirm that the marker
+is armed and the actual registered IPC handler is that wrapper before setup succeeds.
+
+Recovery allows at most two installation evaluations, each followed by at most three
+inspection reads, without sleeps. Only transient installation loss followed by conclusive
+marker absence permits the second guarded installation. Unavailable inspection never
+authorizes replay or success; exhausted confirmation, acknowledged absence and changed
+registration fail. Fatal errors and non-`Error` throws become bounded, client-owned
+installation/inspection error strings, without arbitrary inspector messages or causes.
+The launch hook itself is never retried.
+
+Existing marker identity guards late installation callbacks, including after release,
+so they cannot double-wrap registration, reset `heldThreadReads` or rearm a completed hold.
+The first `readThread` claims the hold before awaiting the original result; other operations
+and concurrent later reads delegate. Once the original result is available, the held read
+increments the observation and waits for `test:release-thread-read`. Release restores the
+original registered handler before returning the captured result and retains the released
+marker. The held request owns one release listener; fixture teardown closes the app and
+fake services on failure.
+
+[`heldThreadRead.test.ts`](../../../e2e/fixtures/heldThreadRead.test.ts) executes the actual
+setup and inspection callbacks against an IPC registration fake with release listeners.
+The [verifier evidence](https://github.com/pyrycode/pyrycode-desktop/pull/2037#issuecomment-6206339154)
+records 13 executed, 0 passed, 13 failed, 0 skipped against the extracted original setup,
+then 13 executed/passed, 0 failed/skipped with confirmation. Coverage includes loss before
+and after effect, lost/exhausted confirmation, finite absence, late execution, concurrent
+delegation, restoration and content-free fatal rejection. Logs are
+`/tmp/builder-2035/held-read-{before,after}.log`.
+
+Linux x64 reports at candidate `4cd97dacce6f64f4d46e80095c011886c1ddd62a` retain the
+unchanged named case `restore overlapping live content retains complete progress across
+an interrupted catch-up and epoch replacement`: `/tmp/builder-2035/named.json` records
+1 executed/passed, 0 failed/skipped. `/tmp/builder-2035/group.json` records 17 executed/passed,
+0 failed/skipped across the complete `thread-activation.spec.ts`, `history-native.spec.ts`
+and `chat-history-recording.spec.ts` group. Both configured two workers and zero retries;
+the named run used one actual worker and the group used two. Matching `.stderr` files
+are empty, with no top-level report errors or fake-setup failure attachments. Include
+`indexed-history-lifecycle.spec.ts` in that group when #1975 lands; it was absent from the
+reviewed main revision and tree. macOS is outside this ticket's verification scope;
+no real-Claude acceptance is required.
+
+The group's `held-thread-read-setup` attachment records
+`{ installationAttempts: 1, inspectionAttempts: 1, contextLosses: 1 }`: registration was
+confirmed after a lost acknowledgement without reinstalling. Its `launch-fate` attachments
+cover 18 launches, all exit 0, no signals or teardown failures; the resumed app remained
+running at outcome and closed cleanly. The named run records the same setup counts with
+zero losses. At `02e7034ad859a672ef9a75128f5d126192826e46`, the complete Linux default-tier
+gate records 432 executed/passed, 0 failed, 10 skipped, two actual workers and zero retries;
+the named case is present and passed, with one installation, one inspection, zero losses
+and clean launch fate. Its exact checkpoint 20, overlap retained once, complete progress
+21 after interruption, replacement epoch, stale-content exclusion and no-legacy-request
+assertions and positive receipt barriers remain intact. Controlled failures and the
+observed recovered acknowledgement establish the confirmation mechanism; the upstream
+Electron/Playwright trigger behind context destruction remains unknown.
+
+### Native window setup
+
 Native window setup has two independently observable fields. The single-consumer
 [`configureComposerWindow`](../../../e2e/fixtures/composerWindowSetup.ts) serves only
 the long-model cases in `composer-options-clamp.spec.ts`. Its control callback checks

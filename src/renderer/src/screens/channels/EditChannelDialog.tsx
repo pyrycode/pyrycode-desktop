@@ -1,3 +1,4 @@
+import { sendConversationCommand } from '../conversation/conversationActionAvailability'
 import { useEffect, useState } from 'react'
 import { MAX_SYSTEM_PROMPT_BYTES } from '@shared/wire/types'
 import { Modal } from '../../components/Modal'
@@ -469,7 +470,7 @@ export function EditChannelDialog({
           : current
       )
     })
-    requestSystemPrompt(window.pyry.sendCommand, conversationId)
+    requestSystemPrompt(command => sendConversationCommand(command, serverId), conversationId)
     return off
   }, [conversationId, serverId])
 
@@ -505,7 +506,7 @@ export function EditChannelDialog({
             try {
               submitSystemPrompt(
                 {
-                  sendCommand: window.pyry.sendCommand,
+                  sendCommand: command => sendConversationCommand(command, serverId),
                   dispatch: (event) => systemPromptWriteStore.getState().dispatch(event)
                 },
                 conversationId,
@@ -527,8 +528,8 @@ export function EditChannelDialog({
           const muteWrite = muteWriteFor(mute)
           if (muteWrite === null) return
           try {
-            window.pyry.sendCommand({
-              type: 'setConversationMuted',
+            sendConversationCommand({
+              type: 'setConversationMuted', serverId,
               payload: { conversation_id: conversationId, muted: muteWrite.muted },
               attemptId: crypto.randomUUID()
             })

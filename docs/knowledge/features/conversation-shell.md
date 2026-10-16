@@ -8,17 +8,32 @@ Introduced in [#1](../codebase/1.md); the thread was bound to the live [session 
 
 Renders the open chat's live timeline and composer. Messages scroll behind translucent controls across the full pane. At history start, the first row keeps its 97px header clearance and 20px horizontal inset; while following, the newest row clears the complete occupied input area. The sidebar and footer actions, context reading, attachment button, model, effort and permission selectors retain their desktop layout. Sending with Enter or the button adds an optimistic echo; see [Composer send](composer-send.md). The [Markdown reader](conversation-shell-markdown-reader.md) retains its independent overlay; its translucent adaptation remains follow-up work.
 
-The injectable `ThreadItemsTimeline` route instead combines retained daemon snapshots
-with scoped local pending rows from [Composer send](composer-send.md#data-flow).
-A separate inactive live-state adapter uses
-[summary-only session authority](session-id-store.md#summary-authority-in-the-inactive-thread-adapter)
-and projects [live status and lifecycle inputs](conversation-shell-turn-status.md#session-scoped-live-presentation)
-with [host-bound prompts](modal-store-bridge.md#session-scoped-thread-prompts).
-Production selection remains [#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
+The production `ThreadItemsTimeline` combines retained daemon snapshots with scoped
+local pending rows from [Composer send](composer-send.md#data-flow).
+The [thread runtime](thread-runtime.md) supplies
+[summary-only session authority](session-id-store.md#summary-authority-in-the-thread-runtime),
+[live status and lifecycle inputs](conversation-shell-turn-status.md#session-scoped-live-presentation)
+and [host-bound prompts](modal-store-bridge.md#session-scoped-thread-prompts).
+Every host must accept `thread`; a host without it shows the daemon update-required
+state and draws no conversation rows. There is no legacy fallback.
 After acceptance, text and valid supplied attachment facts come exclusively from the
 daemon `user_message`; local content is retired rather than matched by text or kept
-as accepted truth. No resend repairs display, and legacy echoes, `queueStore` and
-`foldQueuedRows` add no rows to this view.
+as accepted truth. No resend repairs display, and legacy echoes and `queueStore`
+add no rows to this view. #2023 removed `Timeline`, `foldQueuedRows`, provisional
+Agent placement and the roster-connected drawer. #2030 deletes the remaining
+renderer reconstruction reducer/holders, history demand/retry and joins,
+gap/receipt ledgers, inferred rosters, legacy echo settlement, exclusive queue
+actions and local-count read bookkeeping. Shared row/types/translators remain at
+their existing paths. #2029 separately retired renderer legacy saved IO; main/IPC
+and saved-format/storage retirement remain #2025 and #2026 respectively.
+
+Composer reports read canonical items for the bound session; status and session
+errors read admitted host/conversation/session live state. Without a snapshot,
+content reports and item previews are empty; without a binding, current-session
+reports and live activity are empty. Existing items, unaccepted local sends and independently admitted
+prompts keep their own lifetimes. None of these missing inputs activates a legacy
+fallback. Sidebar/badge unread compares only received owning-host shown/read marks.
+Refusal recovery still forwards new model-selection writes to `threadRuntime.refusals`.
 
 Accepted user items without a positive order sit at the tail in snapshot first-arrival
 order. Delivery revises that same scoped item into its supplied positive position,
@@ -48,13 +63,13 @@ see [Unpair control](conversation-shell-chrome.md#unpair-control-166-deleted-by-
 
 A **proactive** twin of that escape hatch landed in [#167](../codebase/167.md): beneath the composer, a `Re-pair` button that appeared only when the connection had hit a terminal failure or the daemon had rejected the pairing, instead of requiring the user to notice the manual header control. [#963](https://github.com/pyrycode/pyrycode-desktop/issues/963) folded it into the composer status row's own error slot as a filled button, in place of the block beneath the composer. [#1604](https://github.com/pyrycode/pyrycode-desktop/issues/1604) moved it again, out of that slot into the **Top overlay** (below) as a pill, so a pairing rejection no longer competes with the slot's other occupants for the same space. See [Re-pair control](conversation-shell-chrome.md#re-pair-control-167-folded-into-the-composer-status-rows-error-slot-by-963) below and [Composer — actionable-error button](conversation-shell-composer-repair-button.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963-re-pair-split-out-by-1604).
 
-A **Top overlay of pills** landed in [#1604](https://github.com/pyrycode/pyrycode-desktop/issues/1604): a right-aligned stack pinned over the message area's top edge, shared with mobile, that takes no space and renders no element when it has no pills. Two occupants moved into it out of the composer status row's single-occupant slot, where each used to compete with every other slot occupant for the same space: the [usage-limit notice](conversation-shell-composer-usage-limit-notice.md#the-usage-limit-notice-now-a-top-overlay-pill-1321-moved-by-1604) (#1321) — now a Default pill with a dismiss X for exactly `allowed_warning`, an Error pill with no X for every other status, shown whatever the slot holds and whatever the connection state — and the pairing-error [Re-pair button](conversation-shell-composer-repair-button.md) (#963), now an Error pill with no X. `TopOverlay` (the pure view) lives in `TopOverlay.tsx`, and `TopOverlayControl` (its store-bound container) lives in `ConversationScreen.tsx`; the thread and the overlay together are wrapped in an always-rendered `.conversation__message-area`, so the overlay — Re-pair especially — still has somewhere to sit when an offline host leaves `Timeline` nothing to draw.
+A **Top overlay of pills** landed in [#1604](https://github.com/pyrycode/pyrycode-desktop/issues/1604): a right-aligned stack pinned over the message area's top edge, shared with mobile, that takes no space and renders no element when it has no pills. Two occupants moved into it out of the composer status row's single-occupant slot, where each used to compete with every other slot occupant for the same space: the [usage-limit notice](conversation-shell-composer-usage-limit-notice.md#the-usage-limit-notice-now-a-top-overlay-pill-1321-moved-by-1604) (#1321) — now a Default pill with a dismiss X for exactly `allowed_warning`, an Error pill with no X for every other status, shown whatever the slot holds and whatever the connection state — and the pairing-error [Re-pair button](conversation-shell-composer-repair-button.md) (#963), now an Error pill with no X. `TopOverlay` (the pure view) lives in `TopOverlay.tsx`, and `TopOverlayControl` (its store-bound container) lives in `ConversationScreen.tsx`; the thread and the overlay together are wrapped in an always-rendered `.conversation__message-area`, so the overlay — Re-pair especially — still has somewhere to sit when a pane has no thread snapshot to draw.
 
 The [permission resolution notice](#permission-resolution-notices) follows usage,
 with client-owned copy and a dismiss X. A session-error notice follows resolution
 and precedes Re-pair, using the existing Error treatment with no dismiss control.
-`TopOverlayControl` selects only the open conversation's latest `sessionError` from
-the keyed timeline. `TopOverlay` compares its code to client literals; daemon codes
+`TopOverlayControl` selects only the open conversation's admitted `sessionError` from
+its authoritative live store. `TopOverlay` compares its code to client literals; daemon codes
 and message text never enter displayed text, attributes or classes.
 
 Re-pair and pills with a dismiss X show an 8% On Surface hover layer over their
@@ -80,7 +95,7 @@ its notice, so returning does not replay it. Unopened notices stay held, includi
 through same-host saved-history reads; host reconnect clears them even off-screen
 without touching other hosts. Cleanup defers consumption through a microtask to
 distinguish actual departure from StrictMode replay. See
-[timeline lifetime](conversation-timeline-store.md#what-it-does) and
+[live-state ownership](thread-runtime.md#live-controls-and-read-publication) and
 [verification boundaries](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves).
 
 The thread overflow menu's bottom-end anchor uses level 2 above the Top overlay's
@@ -106,7 +121,7 @@ A second, **structured-stream** thread landed in [#203](../codebase/203.md): a `
 
 `ThinkingIndicator`'s own twin, over a second store scalar, landed in [#317](../codebase/317.md): a `StallIndicator` mounted as its sibling, showing a problem-state affordance when the daemon's onset-only `stall` signal (#315) fires and self-clearing on the next turn activity (client-derived in the reducer — there is no daemon "cleared" frame). A first supersede peer, `ApiRetryIndicator`, landed in [#493](../codebase/493.md) over the daemon's `api_retry` signal (#492); a **second**, `CompactingIndicator`, landed in [#496](../codebase/496.md) over `compacting` (#495), mounted right after `ApiRetryIndicator` and, like it, occluding the thinking indicator rather than co-rendering beside it. All three retired in [#967](https://github.com/pyrycode/pyrycode-desktop/issues/967), which folded their copy into `ThinkingIndicator`'s own widened label instead of three separate mounts. See [Thinking / working indicator § Retired by #967](conversation-shell-working-indicator.md#thinking--working-indicator-215-held-for-the-whole-running-turn-since-648-tool-named-since-649-opens-on-send-since-650-folds-in-retry-compacting-and-stall-since-967-splits-the-local-send-window-into-sending-and-waiting-for-claude-since-1725) below.
 
-**The cutover landed in [#179](../codebase/179.md):** the client hello now advertises `interactive`, the coarse `message` fan-out stops daemon-side, the composer's optimistic echo routes into the timeline as a `userText` item, and the coarse `MessageThread` mount is retired. `Timeline` is now the conversation's **single** thread surface — every "inert until #179" render slice below (the structured-stream thread, the thinking indicator, the tool-call rows, the permission modal) is now live. See [The interactive flip + thread cutover](conversation-shell-conversation-and-modals.md#the-interactive-flip--thread-cutover-179) below.
+**The cutover landed in [#179](../codebase/179.md):** the client hello now advertises `interactive`, the coarse `message` fan-out stops daemon-side, the composer's optimistic echo routes into the timeline as a `userText` item, and the coarse `MessageThread` mount is retired. `Timeline` became the single thread surface at that cutover. The current `ThreadItemsTimeline` later replaced it, and #2023 removed the retained legacy view; shared row presentation remains live. See [The interactive flip + thread cutover](conversation-shell-conversation-and-modals.md#the-interactive-flip--thread-cutover-179) below.
 
 **The message bubble itself was the last piece of the desktop chat screen still wearing the mobile drawing, and [#969](https://github.com/pyrycode/pyrycode-desktop/issues/969) redrew it:** one 6px-cornered shape for both sides in place of the mobile's mirrored clipped corner, the desktop's 16/20 padding and fills, `title-small` emphasized type (a token family this ticket added), and a new **meta row** at the foot holding a timestamp slot (filled by #970) and a copy control that puts the message's own text on the clipboard. Reaching the OS clipboard needed a one-line narrowing of the renderer's blanket permission denial in `src/main/index.ts`, to an allowlist of exactly `clipboard-sanitized-write`. See [Message bubble](conversation-shell-message-bubble.md) below.
 
@@ -124,20 +139,13 @@ A **screen-snapshot request + display** landed in [#324](../codebase/324.md) and
 deleted upstream (pyrycode#1348), leaving the button enabled and silently inert. See
 [Screen-snapshot action & display](conversation-shell-conversation-and-modals.md#screen-snapshot-action--display-324-removed-618) below.
 
-An **openable background-task panel** landed in [#581](../codebase/581.md): a trigger — originally a
-`StatusRow`-sibling between the thread and the composer, retired to a `Background tasks` overflow-menu
-item by [#962](https://github.com/pyrycode/pyrycode-desktop/issues/962) — opens an overlay listing the tasks
-[`backgroundTaskRosterStore`](background-task-roster-store.md) (#573/#576/#577) holds alive for the
-open conversation — work that outlives a turn, which the chat's turn-shaped rendering has no way to
-express, without adding a single row to the timeline. The store's three `selectRosterFor` readings
-(never-observed, observed-with-nothing-alive, populated) render as three structurally distinct
-outputs. This slice is the shell: chrome, the trigger, the three-way branch, and one row per task
-showing `description` + `taskType` only. Split from #568 alongside #582 (truncation/cap reports) and
-\#583 (latest patch, shipped); visual design is #580's. [#1634](https://github.com/pyrycode/pyrycode-desktop/issues/1634)
-landed that design: a non-modal drawer beside the thread, in place of the interim `.status-sheet__*`
-overlay, toggled by a Primary-outlined composer pill and by the overflow-menu item, its open state
-surviving a conversation switch. See [Background-task panel](conversation-shell-background-tasks.md#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583)
-below.
+The **background-task drawer** uses supplied task-linked items from the same thread
+snapshot. Supplied activity partitions Running/Finished and supplies the active
+count; saved reports, progress and outcomes remain separate facts. The non-modal
+drawer and count pill share the overflow menu's open state, held by `PairedShell`
+across conversation switches. An empty supplied task array leaves an empty groups
+body; retained roster events add no copy or tasks. See
+[Background-task panel](conversation-shell-background-tasks.md#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583).
 
 Permission and trust requests scroll after the open chat's message and queued rows, including
 empty/offline histories. The oldest outstanding request hides only a waiting questionnaire,
@@ -163,7 +171,7 @@ This screen is large enough that its surfaces live in their own documents. Each 
 - [Turn status surfaces](conversation-shell-turn-status.md) — Retained refusal records and a map to timeline rendering, stopped turns, background tasks and the working indicator. The composer offers [stopped-turn recovery](conversation-shell-composer-status.md#stopped-turn-recovery) and [refusal Switch back](conversation-shell-composer-status.md#refusal-switch-back) with separate lifetimes.
 - [Composer](conversation-shell-composer.md) — The composer's own surfaces: its status row, error chip and footer row. The options panel is large enough to have its own document.
 - [Composer options panel](conversation-shell-composer-options.md) — The composer's options panel: its resting appearance, placement, keyboard driving, and the live wiring behind each control.
-- [Adjacent tool runs](conversation-shell-tool-row-header-groups.md#adjacent-tool-runs) — Open conversations fold two or more adjacent root tools into “Using tools: N”; local expansion retains member state, and root failures remain visible alongside running status. `Timeline.foldTools` defaults off for other callers.
+- [Adjacent tool runs](conversation-shell-tool-row-header-groups.md#adjacent-tool-runs) — Open conversations fold two or more adjacent root tools into “Using tools: N”; local expansion retains member state, and root failures remain visible alongside running status. `ThreadItemsTimeline.foldTools` defaults off for other callers.
 - [Tool rows](conversation-shell-tool-rows.md) — Pending and resolved rows, the expandable result, collapsed headline and input field list. Failed results show an accessible 16px [Failed icon](conversation-shell-tool-rows.md#failed-icon) between count and chevron in either expansion state; denied rows keep their separate treatment, and borders and joins stay plain.
 - [Tool row layout](conversation-shell-tool-row-layout.md) — Map only. The later redraw of the tool row: the shell command code block, the full-width bordered row, the header's groups and run routing, and the expanded body's own drawing (field values and result), split across six documents.
 - [Conversation surfaces and modals](conversation-shell-conversation-and-modals.md) — Surfaces that act on the conversation as a whole rather than on one turn. Now a map itself: the interactive flip + thread cutover, the queued backlog, and screen-snapshot history stayed here; three larger topics split out on 2026-09-02 (below).
@@ -181,11 +189,12 @@ The seams this screen exposes are in [Seams](conversation-shell-seams.md).
 `ThreadItemsTimeline.readInputs` supplies a received summary `row`, `completeThrough`,
 `readerOpen` and optionally an injected publisher. The view pairs them with its immutable
 `snapshot`; select the same host/conversation/epoch in `conversationReadRouteStore`.
-This is a supplied seam, with production activation and combined live-daemon proof owned by
-[#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908). Thread content does not pass
-through `reduceTimeline` or legacy row-key/history evidence.
+Production composition supplies these inputs from the selected host's runtime,
+received summaries and certified newest/catch-up completion. Thread content does
+not pass through `reduceTimeline` or legacy row-key/history evidence.
+Credentialed live acceptance remains distinct from this integration.
 
-`readTargetFor(undefined, inputs)` takes the received `last_shown_version`, never maximum
+`readTargetFor(inputs)` takes the received `last_shown_version`, never maximum
 item IDs, revisions or held `version`. Admission requires matching snapshot/summary scope,
 present shown/read metadata, a non-negative safe target, and a newest ordered shown source
 row. The target must be at most both `snapshot.checkpoint` and supplied `completeThrough`,
@@ -221,10 +230,28 @@ Each reconnect may retry that evidenced target once, even while blurred, without
 newer summary. A higher target needs a new committed visible observation. Epoch replacement,
 deletion, owner loss or unavailable metadata discards pending authority; a scope change alone
 creates none. Late receipts cannot confirm another host's pending claim. Thread publisher
-ownership is host-qualified; legacy publication still requires unambiguous ID ownership, and
-main retains its independent ambiguous-connected-owner refusal. Thus a recorded renderer
+ownership requires the authoritative epoch and shown watermark; the legacy latest-entry,
+row-key and receipt branches are deleted. Main retains its independent
+ambiguous-connected-owner refusal. Thus a recorded renderer
 attempt is not proof of wire delivery. See [mounted evidence](development-verification.md#authoritative-thread-read-evidence)
-and [legacy publication](conversation-last-read-store.md#how-it-works).
+and [publisher lifecycle](conversation-last-read-store.md#how-it-works).
+
+### Navigation and cleanup
+
+Creation, opening/reopening, switching, archive/delete and unpair retain active/session,
+configuration/prompt and pairing cleanup; flat/keyed legacy timelines no longer exist (#2030).
+Same-ID activation preserves held configuration but always requests a refresh; an ID change clears
+session and configuration before requesting the new chat's readings. Creation opens the
+host-qualified thread runtime without creating a legacy slice or marking it viewed.
+
+Navigation publishes no read evidence. `PairedShell` retains `useConversationLastRead`, now only a
+wrapper around authoritative `useReadPublication`; its local count store, writer,
+subscription and cleanup are removed.
+Deletion still requires owning-host admission before active exit. Authoritative item, pending-send
+and protected-storage cleanup keep their independent host-qualified lifecycle and ordering. See
+[activation/exits](paired-shell-conversation-exits.md),
+[deletion admission](paired-shell-conversation-deletion.md#confirmed-deletion-and-host-authority) and
+[counted validation](thread-runtime.md#navigation-retirement-validation).
 
 ### Permission resolution notices
 
@@ -326,14 +353,26 @@ See [verification boundaries](development-verification-what-each-test-tier-prove
 
 ## Edge cases and limitations
 
-- An empty connected timeline keeps a focusable history scroller with `EmptyThread` inside. An empty offline chat omits `Timeline` unless a pending questionnaire, permission/trust or owned rejection needs it; its chrome and Top overlay still mount and measure.
+The legacy timeline, roster and receipt producers and their exclusive tests are
+deleted (#2030), following presentation retirement (#2023).
+The [thread runtime](thread-runtime.md) defines current rendering and live controls.
+The authoritative view shares the screen's actual scroll pin. Its ordinary
+Background tasks menu and task-count pill control the same drawer.
+Current-session hook stops, refusals, errors and foreground tools come from
+canonical reports and live readings, so a missing legacy timeline cannot hide them.
+Tool rows with unchanged immutable source facts reuse their presentation while
+another row streams. Cache presentation only for frozen source objects; mutable
+supplied test inputs must still be reprojected.
+
+
+- An empty supplied timeline keeps a focusable history scroller with `EmptyThread` inside. Without a snapshot, chrome, Top overlay and pending inline prompts still mount and measure.
 - Since [#179](../codebase/179.md), the timeline is the **only** thread surface — no split-brain, no empty second region. `MessageThread`/`selectMessages` are retained but unread residue.
-- The send button is **wired** ([#66](../codebase/66.md)): a click (or Enter) sends the composed message and appends an optimistic echo, now into the timeline ([#179](../codebase/179.md)). A whitespace-only input does nothing; a send-bridge failure is swallowed (no crash). See [Composer send](composer-send.md).
+- A click or Enter submits through the host-qualified pending-send store, capturing authenticated device/message identity. Whitespace does nothing; identity or bridge failure preserves recoverable input. Accepted daemon items settle only the exact host/device/message pair. See [Composer send](composer-send.md).
 - **Dark scheme only**; the desktop sidebar stays fixed while the chat pane reflows down to the 800px minimum window width.
 - **Connection banner** ([#279](../codebase/279.md)) — reads the open conversation's own host through `useOpenConnectionStatus` and renders while it is not connected. Pairing rejection selects the fixed recovery notice; other non-connected states use `CONNECTION_BANNER_COPY`, never `ConnectionError.message`. See [per-host decisions](session-store.md#one-slot-per-server-since-1133). Through [#968](../codebase/968.md) it coexisted with the composer's own terse caption (#31), both visible while disconnected by design; #968 dropped that caption, and the banner is now the only announcement of a non-connected state outside the `error` arm's status-row occupant (#797/#963).
 - Renderer unit tests use `renderToStaticMarkup`: store-bound containers read Zustand's initial server snapshot, and effects, geometry and clicks do not run. Fake-transport Electron coverage establishes interaction; see [test boundaries](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves).
 - **Session-boundary delimiter** ([#286](../codebase/286.md), redrawn [#690](https://github.com/pyrycode/pyrycode-desktop/issues/690)) — appears only when a `sessionBoundary` item exists; an empty thread and a thread with no boundary render exactly as before. Its `clear`/`idle_evict` copy is no longer provisional as of #690 — `Session reset` / `Session reset after idle` are the shipped labels, not a placeholder awaiting a Figma variant.
-- **Queued backlog + drop affordance** — queue snapshots fold into timeline rows. Send now sits above Cancel in a leading actions column; only the bubble dims to 50%. Send now requires `mid_turn_input: true`; Cancel is always present. Drop removes the owned optimistic echo after a successful send, while backlog removal remains daemon-owned. See [queued rows and side actions](conversation-shell-conversation-and-modals.md#queued-rows-folded-into-the-thread-1214-was-294-drop-since-296-echo-removal-since-1213).
+- **Queued rows** — supplied shown queued user items keep dimmed bubbles and valid attachments. Usable raw handles and a connected owning host gate Cancel/Send now; Send now also requires `mid_turn_input`. Drop hides only after the supplied revision, with no optimistic removal. See [queue authority](#what-it-does).
 - **Two-dot connection indicator** ([#330](../codebase/330.md)) — the two legs render independently and are never reconciled: a fatal session close leaves the relay dot at its last value (typically up) while the daemon dot shows down, and a retryable daemon-absent close leaves the daemon dot in-progress while the relay dot shows up/"Reachable" — both are intended, honest-per-hop renders, not bugs. The relay leg has no in-progress arm (that category is exercised only by the daemon leg's `connecting`), so the daemon dot never shows a false green.
 - **Channel Info sheet** ([#365](../codebase/365.md)) — a list-opened thread (never populates `activeConversationStore`) opens the sheet gracefully: chrome + a placeholder About line, no Channel ID footer, no crash. `sheetOpen` (run-config) and `channelInfoOpen` are independent booleans, so both overlays could in principle stack — not reachable through normal use (separate triggers) and no AC requires mutual exclusion, left as-is. Created / Total sessions / Total messages / Memory (Figma 20-48) have no desktop wire field and are deferred, not invented. Escape-dismiss and the overflow-select → open wiring are reviewed glue, not unit-tested (the `renderToStaticMarkup`-only suite constraint, same as #276/#177).
 - **Workspace Picker sheet** ([#383](../codebase/383.md)) — same `activeConversationStore`-null
@@ -346,18 +385,7 @@ See [verification boundaries](development-verification-what-each-test-tier-prove
   `conversation_updated`) — a pre-existing #278 limitation, not fixed here. The "Other" create-folder
   entry now opens a working dialog ([#398](../codebase/398.md)) when the active conversation has a uniquely owned, connected host; it
   remains unavailable alongside workspace selection otherwise.
-- **Background-task panel** ([#581](../codebase/581.md)) — a list-opened thread (no active conversation)
-  reads `conversationId: null`, which `selectRosterFor` resolves to the "never observed" reading, so
-  the panel opens gracefully with no crash and no rows, same posture as the Channel Info and Workspace
-  Picker sheets. `panelOpen` is independent of the other three open-state booleans, so overlays could in
-  principle stack — not reachable through normal use, no AC requires mutual exclusion. No terminal state
-  is ever shown: a task leaves the list only by no longer appearing in the next roster, never by an
-  explicit "done" render. Stale-list-after-reconnect is retired
-  ([#569](https://github.com/pyrycode/pyrycode-desktop/issues/569)): the store's held rosters
-  repopulate from the daemon's reconcile-on-connect burst, so the panel reads the two silences apart
-  across a reconnect too — `.background-task-panel__empty` ("No background tasks") for a
-  conversation reconciled with an explicit empty roster, `.background-task-panel__unobserved` ("No
-  background-task report yet") for one the daemon reports nothing for — never the pre-disconnect list.
+- **Background-task panel** — required supplied tasks determine membership, independent activity/outcomes and raw Stop eligibility. An empty array leaves empty groups without roster partial/unobserved/empty readings. Menu, count and Close control one open state; scope changes replace task facts while shell-owned visibility survives. See [drawer contract](conversation-shell-background-tasks.md).
 - **Thread scroll pin** keeps new content at the bottom only while following.
   Qualifying upward user input near the top requests one history page while the
   owning host is connected. Stable row keys, native nonzero anchoring and measured

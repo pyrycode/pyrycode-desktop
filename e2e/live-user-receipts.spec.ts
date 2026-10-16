@@ -30,7 +30,6 @@ test('live user envelopes draw with daemon time and preserve one optimistic echo
   const echo = rows.filter({ hasText: 'Sent from this desktop' })
   await expect(echo).toHaveCount(1)
   await expect.poll(() => sent.length).toBe(1)
-  const heldText = await echo.textContent()
   push('message', { message_id: sent[0].message_id, role: 'user', text: 'Conflicting receipt copy' })
   push('message', { message_id: 'phone-message', role: 'user', text: 'Duplicate phone copy' })
   // This positive effect follows both receipts through the same encrypted stream and UI bridge.
@@ -39,7 +38,8 @@ test('live user envelopes draw with daemon time and preserve one optimistic echo
   await expect(echo).toHaveCount(1)
   await expect(phone).toHaveCount(1)
   await expect(rows).toHaveCount(before + 2)
-  expect(await echo.textContent()).toBe(heldText)
+  await expect(echo).toContainText('13.01.2026 - 13:55')
+  await expect(echo).toContainText('Sent from this desktop')
   await expect(page.getByText('Conflicting receipt copy', { exact: true })).toHaveCount(0)
   await page.screenshot({ path: '/tmp/builder-1702-echo.png', animations: 'disabled' })
   testInfo.annotations.push({ type: 'visual-review', description: '1280x800; /tmp/builder-1702-{received,echo}.png' })

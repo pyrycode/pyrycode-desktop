@@ -1,8 +1,12 @@
-import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
+import { test, expect, SEEDED_ROW as SEED } from './fixtures/launchPairedApp'
 import { encodeEnvelope, decodeEnvelope } from '../src/main/transport/codec'
 import type { Envelope, EnvelopeType } from '../src/shared/wire/types'
 import { DAEMON_EVENT_CHANNEL } from '../src/shared/ipc/events'
 
+// Scripted history is published as thread catch-up/pages by the shared fake daemon.
+test.use({ scriptedHistory: true })
+
+const SEEDED_ROW = { ...SEED, current_session_id: 'addressable-session' }
 const other = { ...SEEDED_ROW, id: 'refusal-other', name: 'Other refusal discussion' }
 const original = 'claude-opus-4-1[1m]', fallback = 'claude-sonnet-4-5'
 const frame = (type: EnvelopeType, payload: unknown, in_reply_to?: number) => encodeEnvelope({
@@ -17,7 +21,7 @@ function fake(captured: Envelope[]) {
     const env = decodeEnvelope(bytes)
     captured.push(env)
     switch (env.type) {
-      case 'list_conversations': return [seedConversationsFrame()]
+      case 'list_conversations': return [frame('conversations', { conversations: [SEEDED_ROW] })]
       case 'request_session_settings': return [frame('session_settings', {
         session_id: 'addressable-session', model: 'haiku', effort: 'low', permission_mode: 'default',
         yolo: false, used_tokens: 100, window_tokens: 200000

@@ -1,3 +1,4 @@
+import { sendConversationCommand } from './conversationActionAvailability'
 import { useEffect, useState } from 'react'
 import { connectedConversationHostNow, useConversationActionAvailability } from './conversationActionAvailability'
 import type { RendererCommand } from '@shared/ipc/commands'
@@ -254,7 +255,7 @@ function WorkspacePickerSheet({
             ? undefined
             : (path) => {
                 if (connectedConversationHostNow(conversation.id) === null) return
-                requestChangeWorkspace(window.pyry.sendCommand, conversation.id, path)
+                requestChangeWorkspace(sendConversationCommand, conversation.id, path)
                 onClose()
               }
         }

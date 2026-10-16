@@ -99,12 +99,13 @@ test('navigation retains checked grant, clears arm and invalidates closed-chat t
   // Unique ownership disappears and returns before the pane is mounted.
   daemon.pushFrame(frame('conversations', { conversations: [OTHER] }))
   daemon.pushFrame(frame('conversations', { conversations: rows }))
+  daemon.pushFrame(grantShown('restored-current-session'))
   await openChat(page, SEEDED_ROW.name!)
   await expect(checkbox).not.toBeChecked()
   await checkbox.press('Space')
   await expect(checkbox).toBeChecked()
   await openChat(page, OTHER.name)
-  daemon.pushFrame(dismissed('closed'))
+  daemon.pushFrame(dismissed('restored-current-session'))
   daemon.pushFrame(grantShown('replacement'))
   await openChat(page, SEEDED_ROW.name!)
   await expect(panel).toContainText('replacement')
@@ -135,7 +136,7 @@ test('inline arrival and growth follow pinned readers while focus preserves held
     }
     requestAnimationFrame(sample)
   }))
-  const replies = thread.locator('.bubble[data-thread-role="assistant"]')
+  const replies = thread.locator('[data-thread-role="assistant"]')
   await expect(replies).toHaveCount(24)
   await expect(replies.last()).toHaveText(bubbleTextExactly('Reader row 23'))
   expect(await thread.evaluate(el => el.scrollHeight - el.clientHeight)).toBeGreaterThan(500)

@@ -2,11 +2,11 @@
 
 `createThreadItemStore` in
 [`threadItemStore.ts`](../../../src/renderer/src/store/threadItemStore.ts) retains
-decoded daemon facts for sync and cache consumers. Its vanilla Zustand factory has
-no production singleton, React hook, transport or subscription. The existing
-[conversation timeline holder](conversation-timeline-holder.md) continues to render
-rows reconstructed through `reduceTimeline`; these retained items never pass through
-that reducer, timestamp matching, receipt reconciliation or roster inference.
+decoded daemon facts for rendering, sync and cache consumers. The vanilla factory
+stays independent of React and transport. The app-lifetime
+[thread runtime](thread-runtime.md) owns its production instance and subscriptions.
+Every paired conversation uses these items rather than reconstructing rows through
+`reduceTimeline`, timestamp matching, receipt reconciliation or roster inference.
 
 The input types are `ThreadItem` and `ThreadUpdate` from `src/shared/wire/thread.ts`;
 [main's thread receiver](inbound-message-decode-limits.md#complete-live-thread-validation)
@@ -76,10 +76,10 @@ readings cannot affect a row. Host/conversation/epoch switches remount the suppl
 view and discard local drawer/expansion state. See
 [Background-task panel](conversation-shell-background-tasks.md#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583)
 for saved-field availability, owning-host Stop gating and raw callback targets.
-Production wiring, capability advertisement and combined live-daemon verification
-remain [#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908); live-input
-admission and reset remain [#1935](https://github.com/pyrycode/pyrycode-desktop/issues/1935).
-The ordinary app retains its legacy roster path.
+The [thread runtime](thread-runtime.md) connects these controls to production
+subscriptions and host-addressed commands. Legacy roster reports cannot establish
+task membership or replace supplied item facts. Credentialed live acceptance is
+tracked separately in the [live runbook](live-e2e-runbook.md#current-real-claude-gate-state).
 
 ## Exact-base changes, appends and inert JSON
 
@@ -131,6 +131,17 @@ Versions can skip integers. Newer held facts may accompany an earlier complete
 checkpoint; caching them does not certify the intervening progress. Envelope replay
 cursors and fragment progress are [separate transport facts](inbound-message-decode-interface.md#complete-live-thread-updates).
 
+The independently callable [authoritative SQLite backend](chat-history-api.md#main-only-bounded-authoritative-pages)
+preserves full snapshots and exposes explicitly partial held-order pages. Its
+`arrivalPositions`, when present, are original first-arrival positions aligned with
+selected items, not a shortened `arrivalOrder` permutation. Selected `ranges` are
+intact saved ranges containing indexable selected orders plus the newest saved
+boundary anchor, deduplicated in saved order. Hidden/unordered items remain held;
+their presence adds no coverage. The header returns saved scalar ownership,
+progress, repair and optional availability separately and unchanged. Such a page
+cannot be passed to the full-snapshot hydration seam as if it were complete;
+reader activation and partial application remain #1931.
+
 `beginLocalRead(hostId, conversationId)` provides the narrowly scoped disk hydration
 seam. A held scope returns null; an absent one receives a one-shot `complete`,
 `fail`, `cancel` handle owned by a private process-local token. A replacement read,
@@ -144,7 +155,7 @@ It retains item ids/revisions, held order, unknown JSON/null clears, epoch, appl
 version, complete checkpoint, ranges, optional older availability, repair and
 unfinished progress. No raw event replay, server request, batch completion or new
 coverage is manufactured. A missing result leaves the scope absent. The private
-restored marker lets the [history writer](chat-history.md#buffered-replacements)
+restored marker lets the [history writer](chat-history-storage.md#buffered-replacements)
 exclude hydration from saves while accepting later owned changes.
 
 `beginBatch(hostId, conversationId, epoch)` returns null without matching ownership.
@@ -170,6 +181,22 @@ remain disjoint; held active items and supplied parents cannot widen their pagin
 boundaries. Older availability follows the oldest supplied certified boundary;
 later-boundary replies cannot replace it, and a delayed reply cannot reopen an
 exhausted (`false`) reading at the same boundary.
+
+Received publications carry a separate `owned` change containing changed complete
+items, scalar metadata and only newly certified ranges. Hydration carries none;
+missing items/holders imply no removals. Successful `beginBatch.commit` alone adds
+`completion: { fromVersion, version }` and optional
+`availability: { start, available }` for the oldest supplied certified boundary.
+Repair, live updates and same-epoch holder recreation cannot supply that certificate.
+
+The [writer](chat-history-storage.md#buffered-replacements) coalesces item revisions
+and ranges while retaining progress/boundary observations in order. Main folds them
+against saved evidence, including unloaded obligations. An earlier completion cannot
+certify a later live checkpoint, discharge newer pending repair/unfinished progress,
+or reopen exhaustion at an older saved boundary. A plain boolean certification
+would lose those distinctions during coalescing and failed-write merging. New epochs
+start progress empty; retrying a completed repair observation cannot revive it, but
+a newly raised repair at the current checkpoint remains an obligation.
 
 ## Repair and unfinished-batch checkpoint fences
 
@@ -206,12 +233,26 @@ ahead of checkpoint, otherwise zero. Using applied version for every snapshot
 would overstate the unfinished obligation when newer live facts coexist with a
 lower pending batch, preventing its actual completion from releasing the fence.
 
+Protected full reads and bounded local pages retain that normalized unfinished
+version independently of applied version, including already-covered values. Pages
+also preserve complete checkpoint, repair and optional `olderAvailable` without
+reinterpreting them for the selected window. A local continuation is a position in
+one committed saved snapshot, not a daemon cursor or batch certificate. Reaching
+its end cannot advance checkpoint, clear repair, release unfinished progress or
+turn unknown/true older availability into false; only completed daemon
+certification can establish that progress.
+
 ## Epochs and cleanup ownership
 
-`acceptEpoch(hostId, conversationId, epoch)` explicitly establishes ownership;
-updates cannot choose a new epoch. Reaccepting the same epoch is idempotent. A new
-epoch resets only that conversation's items, version/checkpoint, ranges, older
-availability, repair and private pending progress, and creates a new generation.
+`acceptEpoch(hostId, conversationId, epoch, reset = false)` explicitly establishes
+ownership; updates cannot choose a new epoch. Reaccepting a held same epoch is
+idempotent unless `reset` is true. A new epoch resets only that conversation's
+items, version/checkpoint, ranges, older availability, repair and pending progress,
+and creates a new generation. The coordinator passes `true` for explicit daemon
+`thread_reset`, including a same-epoch reset. Its unique `resetId` supersedes older
+pending facts/progress and is persisted for idempotent acknowledgement retry.
+Recreating an absent holder in a saved epoch carries admission without reset and
+must preserve unloaded disk facts. Memory cleanup never supplies reset/removal intent.
 
 Batch handles capture a process-local generation symbol rather than trusting epoch
 text alone. Replacement invalidates earlier handles even if the old epoch string
@@ -227,10 +268,11 @@ keep their held references. Old batch application/commit cannot recreate a clear
 scope, including after the same host/conversation/epoch is accepted again.
 
 The [thread query coordinator](#thread-query-coordinator) owns requests, recovery and reply certification;
-[protected disk persistence](chat-history-api.md#api) consumes these snapshots.
-Lifecycle subscriptions, consumer migration and production capability activation remain with
-[#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908). These APIs alone claim
-no production daemon integration or live-Claude validation.
+[protected disk persistence](chat-history-api.md#owned-authoritative-mutations) consumes received owned changes.
+The [thread runtime](thread-runtime.md#restore-recovery-and-cleanup) supplies production
+lifecycle subscriptions. Deletion and successful unpair retire queries, pending
+reads, local sends, live bindings and read authority as well as these retained items.
+Store-only tests do not establish credentialed live acceptance.
 
 ## Thread query coordinator
 
@@ -271,11 +313,10 @@ handles remain owned by [protected history](chat-history.md#storage-and-concurre
 as established by [#1903](https://github.com/pyrycode/pyrycode-desktop/issues/1903).
 The coordinator never starts/cancels disk reads or replaces cache storage. Hydrated
 repair and unfinished-progress fences retain their store meaning.
-[#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908) owns production
-subscriptions, capability/content-path selection and mapping `onState`/older/retry
-into existing `conversationTimelineStore` presentation and demand seams
-(`activateConversation`, `createNewestHistoryDemand`, `requestOlderHistory`,
-`retryHistoryPage`). The ordinary app still uses those legacy callers.
+The [thread runtime](thread-runtime.md) supplies production subscriptions and maps
+query state, older demand and retry into the existing conversation controls.
+Production navigation opens this coordinator for both existing and newly created
+chats. Legacy newest-history demand and history recovery callers are unhooked.
 [#1931](https://github.com/pyrycode/pyrycode-desktop/issues/1931) owns bounded local
 paging over this network-demand contract.
 
@@ -376,6 +417,20 @@ after each cleanup operation.
 The [cache testing reference](chat-history-testing.md#restoration) covers local-read
 ownership, protected fresh-instance restoration and restart regressions for
 already-covered unfinished progress and first-arrival ties.
+
+[`indexedThreadHistory.test.ts`](../../../src/main/indexedThreadHistory.test.ts)
+covers fresh-instance protected full reads, 200-item backward traversal, bounded
+selected reads/decodes/decrypts, long-string continuations, scoped cleanup,
+corruption and transactional preservation. The
+[verifier re-review](https://github.com/pyrycode/pyrycode-desktop/pull/2014#issuecomment-6191872749)
+confirms all 25 authoritative on-disk cases executed and passed, 0 failed and 0
+skipped, within the unit gate's 10,356 executed/passed, 0 failed and 3 skipped at
+`a57a82d771e1d6c5f2d53765781939091f79ac75`. The cases include
+`exact round trip and first-arrival restart retain covered unfinished progress`
+and `200-item windows traverse held order exactly once across ties/null/unordered items`;
+both were present and passed. Protection uses an injected reversible fake,
+including base64 expansion and additional overhead; this proves no OS key-store
+round trip or live-daemon behavior.
 
 The [verifier's re-review](https://github.com/pyrycode/pyrycode-desktop/pull/1920#issuecomment-6099461564)
 on 2026-10-10 records 2 executed, 2 passed, 0 failed and 32 skipped by its name filter.

@@ -17,7 +17,7 @@ import {
   type FakeRoutingRelay
 } from '../../src/main/transport/fakeRoutingRelay'
 import { decideCapabilityGate, readDaemonCapabilities } from './daemonCapabilityGate'
-import { e2eShowsWindow, expectDesktopIsolated, RENDERER_THROTTLING_SWITCHES } from './desktopIsolation'
+import { appWindow, e2eShowsWindow, expectDesktopIsolated, RENDERER_THROTTLING_SWITCHES } from './desktopIsolation'
 import { HIDDEN_WINDOW_ENV_FLAG } from '../../src/main/windowPresentation'
 import { LOOPBACK_RELAY_ENV_FLAG } from '../../src/main/relayPolicy'
 import { TEST_SECRET_BACKEND_ENV_FLAG } from '../../src/main/secretBackend'
@@ -97,6 +97,7 @@ const BOOTSTRAP_UUID = '77777777-7777-4777-8777-777777777777'
 const BOUND_CONVERSATION_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
 
 export interface SpawnedDaemon {
+  mintPairing: () => Promise<Pick<QrPayload, 'server' | 'token' | 'server_static_pubkey'>>
   // Only the three credential fields decoded from `pyry pair` stdout. The QrPayload's `relay` is assembled
   // test-side from the #251 relay's /v1/client leg, never from pyry's output (which points at prod).
   pairFields: Pick<QrPayload, 'server' | 'token' | 'server_static_pubkey'>
@@ -520,7 +521,8 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
         if (decision.skip) testInfo.skip(true, decision.reason)
       }
 
-      await use({ pairFields, workdir })
+      await use({ pairFields, workdir, mintPairing: async () => decodePairFields(
+        await runPyryPair(pyryBin, daemonEnv, allowRemotePermissions, 'realclaude-e2e')) })
     } finally {
       await cleanup()
     }
@@ -588,7 +590,8 @@ export async function withIsolatedElectronApp(
       env
     })
     current = app
-    const page = await app.firstWindow()
+    // The window once its app document has loaded, as the default tier's launch waits (see `appWindow`).
+    const page = await appWindow(app)
     await expectDesktopIsolated(app)
     return {
       app, page, userDataDir,

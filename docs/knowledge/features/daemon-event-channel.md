@@ -205,12 +205,14 @@ clear types fail closed. False or absent flags use ordinary payload validation.
 Clears carry no conversation identity: the envelope has no such field, and main
 never fills one from the selected chat, a binding or a session tag. Clear then
 fresh delivery remains synchronous and ordered through host stamping, IPC and
-the existing preload subscription. Clears bypass prompt/request settlement,
-replay advancement and thread assembly. All four exhaustive legacy translators
+the existing preload subscription. Clears bypass prompt/request settlement
+and thread assembly. Replay cursor tracking is retired (#2025). All four exhaustive
+legacy translators
 return null without producing store actions. Filtering, retained-state clearing
 and unread/read publication belong to [#1907](https://github.com/pyrycode/pyrycode-desktop/issues/1907);
 catch-up/pages remain [#1912](https://github.com/pyrycode/pyrycode-desktop/issues/1912),
-and production activation/combined live proof remain [#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
+and the [thread runtime](thread-runtime.md) supplies production subscriptions.
+Credentialed live acceptance remains separately pending.
 Supplied-frame coverage lives in `src/main/sessionStateMetadata.test.ts`, with
 legacy translator coverage in `src/renderer/src/store/sessionStateMetadata.test.ts`.
 

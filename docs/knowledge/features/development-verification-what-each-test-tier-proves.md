@@ -10,6 +10,19 @@ click handlers, focus changes, or layout. A removed bridge mount can leave its
 import and all unit tests green. Check that each bridge is mounted in the app.
 Use the fake-transport browser tier to prove event delivery through the app.
 
+Embedded renderer source in Playwright fixture strings is outside TypeScript
+checking. When an API signature changes, audit those strings as well as typed
+production callers. A retired four-argument `isConversationUnread` call in
+`e2e/thread-items.spec.ts` survived typecheck and made both committed-visible-read
+scenarios report false unread state. Updating it to `isConversationUnread(row)`
+and removing unused legacy composer callbacks preserved the existing
+acknowledgement, epoch and host-isolation assertions; no duplicate proof was
+needed. Both widths are present and passed in the
+[Linux retirement gate](thread-runtime.md#renderer-producer-retirement-validation):
+435 executed/passed, 0 failed, 3 skipped overall, with all 12 thread-items cases
+executed and passed. Static/typecheck success alone did not establish the fixture's
+runtime contract.
+
 Keep builds sequential with Electron suites: launches read generated renderer assets.
 A concurrent rebuild can rewrite those assets during Welcome setup and produce
 timeouts unrelated to the scenario under review. Record that full run as failed
@@ -303,4 +316,3 @@ would reject the intended behavior. The current execution is recorded below.
 
 Inline permission, scrolling and session-grant evidence lives in
 [inline permission verification](development-verification-test-tiers.md#inline-permission-verification).
-

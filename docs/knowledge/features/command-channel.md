@@ -13,6 +13,27 @@ keeping sockets, transport handles and keys in the background process.
 
 Gives the renderer **one typed function** (`window.pyry.sendCommand`) to ship a sealed command to the background process, and gives the background process **one typed seam** (`onCommand`) to receive those commands — after validating each at the untrusted→trusted boundary. Every command travels on a single IPC channel; the union carries modeled action payloads and client correlation IDs, with no token, key or raw-frame field. `ipcRenderer` itself never crosses to the window.
 
+## Retired raw-history command
+
+`requestHistory` is absent from `RendererCommand` and `isRendererCommand` (#2025).
+Even a formerly valid `{ type: 'requestHistory', payload: { conversation_id,
+cursor, limit } }` is rejected by the existing unknown-command path. Its payload
+guard, main dispatch and registry delegate are deleted. Supported content requests
+use host-addressed thread queries; no legacy fallback is available.
+
+## Public device identity
+
+The separate no-argument `pyry:device-identity` invoke is exposed as
+`window.pyry.deviceIdentity()`. Main loads the same protected keypair used by the
+Noise connection and returns `{ ok: true, deviceId }`, where `deviceId` is its
+lowercase hexadecimal public key. Failure is only
+`{ ok: false, error: 'identity-unavailable' }`. No key, token, caught error or
+renderer-provided identity is accepted. Main removes the handler on quit.
+The [composer](composer-send.md#how-it-works) captures this identity per submission.
+Conversation commands carry their selected or retained `serverId`; public routing
+coordinates do not authenticate a sender. Main resolves explicit hosts through
+the paired registry rather than a last claimant of an equal conversation ID.
+
 ## The one way it diverges from the event half
 
 The daemon-event channel flows main → renderer, where the **producer is our own trusted main process**, so it adds **no runtime validation**. The command channel flows renderer → main, and **the renderer is UNTRUSTED relative to the main process** — every IPC message crossing `ipcMain` is untrusted-to-trusted, even though both sides are our code. So this channel ships one thing its mirror does not: **`isRendererCommand`, a runtime guard applied synchronously by preload and independently by the main receiver at the boundary.** The guard is what makes the `RendererCommand` type on the handler **honest** — without it, the handler would claim `RendererCommand` while the runtime value is attacker-controllable `unknown`. Everything downstream of the guard receives a shape-validated command. Do **not** copy the event half's "trusted producer, no validator" reasoning here — there is no transitive trust across this boundary.

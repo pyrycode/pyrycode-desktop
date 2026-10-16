@@ -12,12 +12,6 @@ describe('compaction decoding', () => {
     const payload = { ...identity, active: false, ...report }
     expect(parseInboundMessage(frame('compacting', payload)))
       .toEqual({ kind: 'compacting', compacting: payload, ts: 'stamp' })
-    const history = parseInboundMessage(frame('history_page', {
-      entries: [{ id: 1, type: 'compacting', ts: 'stamp', payload }], cursor: '', at_start: true
-    }))
-    expect(history).toMatchObject({ historyPage: { entries: [{ event: {
-      type: 'compacting', active: false, compactResult: report.compact_result, compactError: report.compact_error
-    } }] } })
   })
 
   it.each([{}, { pre_tokens: null, post_tokens: null }, { pre_tokens: 0, post_tokens: 0 },

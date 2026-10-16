@@ -109,7 +109,7 @@ test('the reader menu copies the note three ways and refreshes it (#1630)', asyn
 
   await page.getByPlaceholder('Message…').fill('where is the plan?')
   await page.getByRole('button', { name: 'Send' }).click()
-  const planLink = page.locator('.bubble[data-thread-role="assistant"]').getByRole('button', { name: 'the plan' })
+  const planLink = page.locator('[data-thread-role="assistant"]').getByRole('button', { name: 'the plan' })
   await expect(planLink).toBeVisible({ timeout: TIMEOUT_MS })
 
   const reader = page.locator('.markdown-reader')
@@ -232,6 +232,7 @@ const settledThreadPosition = (page: Page) => page.evaluate(async () => {
 for (const size of [{ width: 1280, height: 800 }, { width: 800, height: 600 }]) {
   test(`reader scrolls under sharp chrome with dynamic clearance and input at ${size.width}`, async ({ launchPairedApp }, testInfo) => {
     test.setTimeout(60_000)
+    const alternate = size.width === 1280 ? { width: 800, height: 600 } : { width: 1280, height: 800 }
     serve = 'ok'
     version = 0
     longNote = true
@@ -249,187 +250,254 @@ for (const size of [{ width: 1280, height: 800 }, { width: 800, height: 600 }]) 
       ]).flat()
       return [...history, ...buildReplyFrames(bytes)]
     } })
-    // Inject failures at the IPC handler seam: no OS app, filesystem write or reveal is invoked.
-    await app.evaluate(({ ipcMain }, channels) => {
-      for (const channel of channels) {
-        ipcMain.removeHandler(channel)
-        ipcMain.handle(channel, () => ({ type: 'failed', reason: 'refused' }))
+    const phases: unknown[] = []
+    await page.evaluate(() => {
+      const samples: unknown[] = []
+      const sample = (event: string) => {
+        const thread = document.querySelector<HTMLElement>('.conversation__thread')!
+        const link = document.querySelector('.markdown-link')?.getBoundingClientRect()
+        const focus = document.activeElement
+        const value = { event, time: performance.now(), top: thread.scrollTop,
+          content: thread.scrollHeight, width: thread.clientWidth, height: thread.clientHeight,
+          viewport: [innerWidth, innerHeight], link: link && [link.x, link.y, link.width, link.height],
+          focus: focus && [focus.tagName, focus.className, focus.getAttribute('aria-label')] }
+        samples.push(value)
+        return value
       }
-    }, [MARKDOWN_OPEN_CHANNEL, MARKDOWN_SAVE_CHANNEL])
-    const resize = (dimensions: { width: number; height: number }) => app.evaluate(({ BrowserWindow }, next) => {
-      BrowserWindow.getAllWindows()[0].setSize(next.width, next.height)
-    }, dimensions)
-    await resize(size)
-    const composer = page.getByPlaceholder('Message…')
-    await composer.fill('Synthetic primer')
-    await page.getByRole('button', { name: 'Send', exact: true }).click()
-    const link = page.getByRole('button', { name: 'the plan', exact: true })
-    await expect(link).toBeVisible({ timeout: TIMEOUT_MS })
-    await composer.fill('Draft survives the reader')
-    await link.click()
-    const reader = page.locator('.markdown-reader')
-    const body = reader.locator('.markdown-reader__body')
-    const trigger = reader.getByRole('button', { name: 'Note actions', exact: true })
-    const back = reader.getByRole('button', { name: 'Back', exact: true })
-    const menu = page.getByRole('menu', { name: 'Note actions', exact: true })
-    const item = (name: string) => menu.getByRole('menuitem', { name, exact: true })
-    await expect(reader.locator('h1')).toHaveText('Plan version 1')
-    // Back's focus closes the covered reply's metadata before the preservation baseline.
-    await back.focus()
-    const threadPosition = await settledThreadPosition(page)
-    expect(threadPosition).toBeGreaterThan(0)
-    let b = await readerGeometry(page)
-    // Fails on the old below-header scroller, before querying any new markup.
-    expect(b.body.top).toBe(b.pane.top)
-    expect(b.body.bottom).toBe(b.pane.bottom)
-    expect(b.first.left).toBe(b.pane.left + 20)
-    expect(b.first.top).toBe(b.pane.top + 85)
-    const clearStart = async () => {
-      await body.evaluate(node => { node.scrollTop = 0 })
-      await expect.poll(() => page.evaluate(() => {
-        const header = document.querySelector('.markdown-reader__chrome')!.getBoundingClientRect()
-        const first = document.querySelector('.markdown-reader h1')!.getBoundingClientRect()
-        return Math.abs(first.top - header.bottom)
-      })).toBeLessThan(1)
-    }
-    await clearStart()
-    await capturePairedApp(app, page, `/tmp/builder-1734/resting-${size.width}.png`)
-    const overlap = async () => {
-      await body.evaluate(node => { node.scrollTop = parseFloat(getComputedStyle(node).paddingTop) - 30 })
-      const first = await reader.locator('h1').boundingBox()
-      const button = await trigger.boundingBox()
-      if (!first || !button) throw new Error('Missing overlap geometry')
-      expect(first.y).toBeLessThan(button.y + button.height)
-      expect(first.y + first.height).toBeGreaterThan(button.y)
-      expect(first.x + first.width).toBeGreaterThan(button.x)
-      expect(first.x).toBeLessThan(button.x + button.width)
-    }
-    await overlap()
-    await capturePairedApp(app, page, `/tmp/builder-1734/scrolled-${size.width}.png`)
-    const treatment = await reader.evaluate(node => {
-      const blur = node.querySelector('.conversation__blur')!
-      const samples = [...blur.querySelectorAll('i')].map(el => getComputedStyle(el))
-      return { gradient: getComputedStyle(blur, '::after').backgroundImage,
-        blur: samples.map(style => style.backdropFilter),
-        pointer: samples.map(style => style.pointerEvents),
-        title: getComputedStyle(node.querySelector('.markdown-reader__title')!).textShadow,
-        back: getComputedStyle(node.querySelector('.markdown-reader__back')!).filter,
-        controlBlur: getComputedStyle(node.querySelector('.markdown-reader__bar-content')!).filter }
+      const scroll = () => sample('scroll-processed')
+      const resize = () => sample('resize')
+      document.querySelector('.conversation__thread')!.addEventListener('scroll', scroll)
+      window.addEventListener('resize', resize)
+      Object.assign(window, { readerScrollProbe: { sample, samples, dispose: () => {
+        document.querySelector('.conversation__thread')?.removeEventListener('scroll', scroll)
+        window.removeEventListener('resize', resize)
+      } } })
     })
-    expect(treatment.gradient).toContain('rgb(9, 20, 29)')
-    expect(treatment.gradient).toContain('rgba(0, 0, 0, 0)')
-    expect(treatment.blur).toEqual(['blur(10px)', 'blur(8px)', 'blur(5px)', 'blur(2px)'])
-    expect(treatment.pointer).toEqual(['none', 'none', 'none', 'none'])
-    expect(treatment.title).not.toBe('none')
-    expect(treatment.back).toContain('drop-shadow')
-    expect(treatment.controlBlur).toBe('none')
-
-    await trigger.click()
-    const copyBox = await item('Copy as markdown').boundingBox()
-    const textBox = await reader.locator('.bubble__markdown').boundingBox()
-    if (!copyBox || !textBox) throw new Error('Missing menu overlap')
-    expect(copyBox.y + copyBox.height).toBeGreaterThan(textBox.y)
-    expect(copyBox.y).toBeLessThan(textBox.y + textBox.height)
-    await item('Copy as markdown').click()
-    await expect(reader.locator('.markdown-reader__copied')).toBeVisible()
-    await clearStart()
-    b = await readerGeometry(page)
-    expect(b.padding).toBeGreaterThan(85)
-    await expect(reader.locator('.markdown-reader__copied')).toHaveCount(0, { timeout: 5000 })
-    await clearStart()
-    expect((await readerGeometry(page)).padding).toBe(85)
-    serve = 'broken'
-    await trigger.click()
-    await item('Refresh').click()
-    await expect(reader.locator('.markdown-reader__notice')).toHaveText('Could not open the file.')
-    await clearStart()
-    for (const action of ['Open in another app', 'Save to device']) {
-      const previous = (await readerGeometry(page)).padding
-      await trigger.click()
-      await item(action).click()
-      await expect.poll(async () => (await readerGeometry(page)).padding).toBeGreaterThan(previous)
-      await clearStart()
+    const record = async (phase: string) => {
+      const native = await app.evaluate(({ BrowserWindow }) => {
+        const win = BrowserWindow.getAllWindows()[0]
+        return { size: win.getSize(), content: win.getContentSize(), zoom: win.webContents.getZoomFactor() }
+      })
+      const renderer = await page.evaluate(name => {
+        const probe = (window as unknown as { readerScrollProbe: { sample: (name: string) => unknown } }).readerScrollProbe
+        return probe.sample(name)
+      }, phase)
+      phases.push({ phase, native, renderer })
+      return native
     }
-    await expect(reader.locator('.markdown-reader__notice')).toHaveCount(3)
-    await capturePairedApp(app, page, `/tmp/builder-1734/notices-${size.width}.png`)
-    serve = 'ok'
-    await trigger.click()
-    await item('Refresh').click()
-    await expect(reader.locator('h1')).toHaveText('Plan version 2')
-    await expect(reader.locator('.markdown-reader__notice')).toHaveCount(2)
-    await clearStart()
-
-    for (const dimensions of [size.width === 1280 ? { width: 800, height: 600 } : { width: 1280, height: 800 }, size]) {
-      await resize(dimensions)
-      for (const zoom of [1.25, 1]) {
-        await app.evaluate(({ BrowserWindow }, factor) => {
-          BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(factor)
-        }, zoom)
-        const contentSize = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getContentSize())
-        await expect.poll(() => page.evaluate(({ width, height }) =>
-          Math.max(Math.abs(window.innerWidth - width), Math.abs(window.innerHeight - height)),
-        { width: contentSize[0] / zoom, height: contentSize[1] / zoom })).toBeLessThanOrEqual(1)
-        await page.evaluate(() => new Promise<void>(resolve => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
-        }))
-        await clearStart()
-        await body.evaluate(node => { node.scrollTop = node.scrollHeight })
-        b = await readerGeometry(page)
-        expect(b.last.bottom).toBeLessThanOrEqual(b.pane.bottom - 15)
-        expect(b.last.bottom).toBeGreaterThan(b.pane.top + b.padding)
-        await overlap()
-        await trigger.click()
-        const menuBox = await menu.boundingBox()
-        if (!menuBox) throw new Error('Missing menu bounds')
-        expect(menuBox.x).toBeGreaterThanOrEqual(b.pane.left)
-        expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(b.pane.right)
-        expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(b.pane.bottom)
-        const labelLines = await menu.getByRole('menuitem').evaluateAll(rows => rows.flatMap(row => {
-          const range = document.createRange()
-          range.selectNodeContents(row.firstChild!)
-          return [...range.getClientRects()].map(line => ({ left: line.left, right: line.right }))
-        }))
-        expect(labelLines.length).toBeGreaterThanOrEqual(6)
-        for (const line of labelLines) {
-          expect(line.left).toBeGreaterThanOrEqual(menuBox.x)
-          expect(line.right).toBeLessThanOrEqual(menuBox.x + menuBox.width)
-        }
-        await capturePairedApp(app, page, `/tmp/builder-1734/menu-${dimensions.width}-${zoom}.png`)
-        await expect(item('Copy as markdown')).toBeFocused()
-        await page.keyboard.press('Escape')
-        await expect(trigger).toBeFocused()
-        await trigger.press('Enter')
-        await expect(menu).toBeVisible()
-        await body.click({ position: { x: 5, y: 350 } })
-        await expect(menu).toHaveCount(0)
-      }
-    }
-    await overlap()
-    await back.click()
-    await expect(reader).toHaveCount(0)
-    await expect(composer).toHaveValue('Draft survives the reader')
-    expect(await page.locator('.conversation__thread').evaluate(node => node.scrollTop)).toBe(threadPosition)
-    // A bare click can measure coordinates before hover reveals metadata and the
-    // bottom pin moves the link. Focus holds those details open while geometry settles.
-    await link.focus()
-    await expect(link).toBeFocused()
-    await settledThreadPosition(page)
-    const readsBeforeReopen = readRequests.length
     try {
+      // Inject failures at the IPC handler seam: no OS app, filesystem write or reveal is invoked.
+      await app.evaluate(({ ipcMain }, channels) => {
+        for (const channel of channels) {
+          ipcMain.removeHandler(channel)
+          ipcMain.handle(channel, () => ({ type: 'failed', reason: 'refused' }))
+        }
+      }, [MARKDOWN_OPEN_CHANNEL, MARKDOWN_SAVE_CHANNEL])
+      const resize = (dimensions: { width: number; height: number }) => app.evaluate(({ BrowserWindow }, next) => {
+        BrowserWindow.getAllWindows()[0].setSize(next.width, next.height)
+      }, dimensions)
+      await resize(size)
+      const composer = page.getByPlaceholder('Message…')
+      await composer.fill('Synthetic primer')
+      await page.getByRole('button', { name: 'Send', exact: true }).click()
+      const link = page.getByRole('button', { name: 'the plan', exact: true })
+      await expect(link).toBeVisible({ timeout: TIMEOUT_MS })
+      await composer.fill('Draft survives the reader')
+      await record('draft-filled')
+      const beforeWheel = await settledThreadPosition(page)
+      await link.hover()
+      await page.mouse.wheel(0, -40)
+      expect(await settledThreadPosition(page)).toBeLessThan(beforeWheel)
+      await record('held-before-open')
       await link.click()
-      await expect(reader.locator('h1')).toHaveText('Plan version 3')
-      expect(readRequests).toHaveLength(readsBeforeReopen + 1)
-      expect(readRequests.at(-1)).toMatchObject({ serve: 'ok', version: 2 })
-      expect(new Set(readRequests.map(request => request.id)).size).toBe(readRequests.length)
+      await record('opened')
+      const reader = page.locator('.markdown-reader')
+      const body = reader.locator('.markdown-reader__body')
+      const trigger = reader.getByRole('button', { name: 'Note actions', exact: true })
+      const back = reader.getByRole('button', { name: 'Back', exact: true })
+      const menu = page.getByRole('menu', { name: 'Note actions', exact: true })
+      const item = (name: string) => menu.getByRole('menuitem', { name, exact: true })
+      await expect(reader.locator('h1')).toHaveText('Plan version 1')
+      // Back's focus closes the covered reply's metadata before the preservation baseline.
+      await back.focus()
+      const threadPosition = await settledThreadPosition(page)
+      await record('baseline')
+      expect(threadPosition).toBeGreaterThan(0)
+      let b = await readerGeometry(page)
+      // Fails on the old below-header scroller, before querying any new markup.
+      expect(b.body.top).toBe(b.pane.top)
+      expect(b.body.bottom).toBe(b.pane.bottom)
+      expect(b.first.left).toBe(b.pane.left + 20)
+      expect(b.first.top).toBe(b.pane.top + 85)
+      const clearStart = async () => {
+        await body.evaluate(node => { node.scrollTop = 0 })
+        await expect.poll(() => page.evaluate(() => {
+          const header = document.querySelector('.markdown-reader__chrome')!.getBoundingClientRect()
+          const first = document.querySelector('.markdown-reader h1')!.getBoundingClientRect()
+          return Math.abs(first.top - header.bottom)
+        })).toBeLessThan(1)
+      }
+      await clearStart()
+      await capturePairedApp(app, page, `/tmp/builder-2047/resting-${size.width}.png`)
+      const overlap = async () => {
+        await body.evaluate(node => { node.scrollTop = parseFloat(getComputedStyle(node).paddingTop) - 30 })
+        const first = await reader.locator('h1').boundingBox()
+        const button = await trigger.boundingBox()
+        if (!first || !button) throw new Error('Missing overlap geometry')
+        expect(first.y).toBeLessThan(button.y + button.height)
+        expect(first.y + first.height).toBeGreaterThan(button.y)
+        expect(first.x + first.width).toBeGreaterThan(button.x)
+        expect(first.x).toBeLessThan(button.x + button.width)
+      }
+      await overlap()
+      await capturePairedApp(app, page, `/tmp/builder-2047/scrolled-${size.width}.png`)
+      const treatment = await reader.evaluate(node => {
+        const blur = node.querySelector('.conversation__blur')!
+        const samples = [...blur.querySelectorAll('i')].map(el => getComputedStyle(el))
+        return { gradient: getComputedStyle(blur, '::after').backgroundImage,
+          blur: samples.map(style => style.backdropFilter),
+          pointer: samples.map(style => style.pointerEvents),
+          title: getComputedStyle(node.querySelector('.markdown-reader__title')!).textShadow,
+          back: getComputedStyle(node.querySelector('.markdown-reader__back')!).filter,
+          controlBlur: getComputedStyle(node.querySelector('.markdown-reader__bar-content')!).filter }
+      })
+      expect(treatment.gradient).toContain('rgb(9, 20, 29)')
+      expect(treatment.gradient).toContain('rgba(0, 0, 0, 0)')
+      expect(treatment.blur).toEqual(['blur(10px)', 'blur(8px)', 'blur(5px)', 'blur(2px)'])
+      expect(treatment.pointer).toEqual(['none', 'none', 'none', 'none'])
+      expect(treatment.title).not.toBe('none')
+      expect(treatment.back).toContain('drop-shadow')
+      expect(treatment.controlBlur).toBe('none')
+
+      await trigger.click()
+      const copyBox = await item('Copy as markdown').boundingBox()
+      const textBox = await reader.locator('.bubble__markdown').boundingBox()
+      if (!copyBox || !textBox) throw new Error('Missing menu overlap')
+      expect(copyBox.y + copyBox.height).toBeGreaterThan(textBox.y)
+      expect(copyBox.y).toBeLessThan(textBox.y + textBox.height)
+      await item('Copy as markdown').click()
+      await expect(reader.locator('.markdown-reader__copied')).toBeVisible()
+      await clearStart()
+      b = await readerGeometry(page)
+      expect(b.padding).toBeGreaterThan(85)
+      await expect(reader.locator('.markdown-reader__copied')).toHaveCount(0, { timeout: 5000 })
+      await clearStart()
+      expect((await readerGeometry(page)).padding).toBe(85)
+      serve = 'broken'
+      await trigger.click()
+      await item('Refresh').click()
+      await expect(reader.locator('.markdown-reader__notice')).toHaveText('Could not open the file.')
+      await clearStart()
+      for (const action of ['Open in another app', 'Save to device']) {
+        const previous = (await readerGeometry(page)).padding
+        await trigger.click()
+        await item(action).click()
+        await expect.poll(async () => (await readerGeometry(page)).padding).toBeGreaterThan(previous)
+        await clearStart()
+      }
+      await expect(reader.locator('.markdown-reader__notice')).toHaveCount(3)
+      await capturePairedApp(app, page, `/tmp/builder-2047/notices-${size.width}.png`)
+      serve = 'ok'
+      await trigger.click()
+      await item('Refresh').click()
+      await expect(reader.locator('h1')).toHaveText('Plan version 2')
+      await expect(reader.locator('.markdown-reader__notice')).toHaveCount(2)
+      await clearStart()
+
+      for (const dimensions of [alternate, size]) {
+        await record(`before-resize-${dimensions.width}`)
+        await resize(dimensions)
+        await settledThreadPosition(page)
+        await record(`requested-resize-${dimensions.width}`)
+        for (const zoom of [1.25, 1]) {
+          await app.evaluate(({ BrowserWindow }, factor) => {
+            BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(factor)
+          }, zoom)
+          const contentSize = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getContentSize())
+          await expect.poll(() => page.evaluate(({ width, height }) =>
+            Math.max(Math.abs(window.innerWidth - width), Math.abs(window.innerHeight - height)),
+          { width: contentSize[0] / zoom, height: contentSize[1] / zoom })).toBeLessThanOrEqual(1)
+          await settledThreadPosition(page)
+          await record(`geometry-${dimensions.width}-${zoom}`)
+          await clearStart()
+          await body.evaluate(node => { node.scrollTop = node.scrollHeight })
+          b = await readerGeometry(page)
+          expect(b.last.bottom).toBeLessThanOrEqual(b.pane.bottom - 15)
+          expect(b.last.bottom).toBeGreaterThan(b.pane.top + b.padding)
+          await overlap()
+          await trigger.click()
+          const menuBox = await menu.boundingBox()
+          if (!menuBox) throw new Error('Missing menu bounds')
+          expect(menuBox.x).toBeGreaterThanOrEqual(b.pane.left)
+          expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(b.pane.right)
+          expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(b.pane.bottom)
+          const labelLines = await menu.getByRole('menuitem').evaluateAll(rows => rows.flatMap(row => {
+            const range = document.createRange()
+            range.selectNodeContents(row.firstChild!)
+            return [...range.getClientRects()].map(line => ({ left: line.left, right: line.right }))
+          }))
+          expect(labelLines.length).toBeGreaterThanOrEqual(6)
+          for (const line of labelLines) {
+            expect(line.left).toBeGreaterThanOrEqual(menuBox.x)
+            expect(line.right).toBeLessThanOrEqual(menuBox.x + menuBox.width)
+          }
+          await capturePairedApp(app, page, `/tmp/builder-2047/menu-${dimensions.width}-${zoom}.png`)
+          await expect(item('Copy as markdown')).toBeFocused()
+          await page.keyboard.press('Escape')
+          await expect(trigger).toBeFocused()
+          await trigger.press('Enter')
+          await expect(menu).toBeVisible()
+          await body.click({ position: { x: 5, y: 350 } })
+          await expect(menu).toHaveCount(0)
+        }
+      }
+      await overlap()
+      await record('before-back')
+      await back.click()
+      await expect(reader).toHaveCount(0)
+      await expect(composer).toHaveValue('Draft survives the reader')
+      expect(await record('after-back')).toMatchObject({ size: [size.width, size.height], zoom: 1 })
+      expect(await page.locator('.conversation__thread').evaluate(node => node.scrollTop)).toBe(threadPosition)
+      // Reopen at the other size: its preservation record must belong to this new open.
+      await resize(alternate)
+      await settledThreadPosition(page)
+      // A bare click can measure coordinates before hover reveals metadata and the
+      // bottom pin moves the link. Focus holds those details open while geometry settles.
+      await link.focus()
+      await expect(link).toBeFocused()
+      await settledThreadPosition(page)
+      const readsBeforeReopen = readRequests.length
+      try {
+        await link.click()
+        await expect(reader.locator('h1')).toHaveText('Plan version 3')
+        expect(readRequests).toHaveLength(readsBeforeReopen + 1)
+        expect(readRequests.at(-1)).toMatchObject({ serve: 'ok', version: 2 })
+        expect(new Set(readRequests.map(request => request.id)).size).toBe(readRequests.length)
+      } finally {
+        await testInfo.attach('reopen-diagnostics', { contentType: 'application/json', body: JSON.stringify({
+          readRequests,
+          readerCount: await reader.count(), heading: await reader.locator('h1').allTextContents(),
+          notices: await page.locator('.conversation__banner').allTextContents()
+        }, null, 2) })
+      }
+      await back.focus()
+      const reopenedPosition = await settledThreadPosition(page)
+      for (const dimensions of [size, alternate]) {
+        await resize(dimensions)
+        await settledThreadPosition(page)
+        await record(`reopen-resize-${dimensions.width}`)
+      }
+      await back.press('Enter')
+      await expect(reader).toHaveCount(0)
+      expect(await page.locator('.conversation__thread').evaluate(node => node.scrollTop)).toBe(reopenedPosition)
     } finally {
-      await testInfo.attach('reopen-diagnostics', { contentType: 'application/json', body: JSON.stringify({
-        readRequests,
-        readerCount: await reader.count(), heading: await reader.locator('h1').allTextContents(),
-        notices: await page.locator('.conversation__banner').allTextContents()
-      }, null, 2) })
+      const events = await page.evaluate(() => {
+        const probe = (window as unknown as { readerScrollProbe: { samples: unknown[]; dispose: () => void } }).readerScrollProbe
+        probe.dispose()
+        return probe.samples
+      })
+      await testInfo.attach('thread-scroll-phases', { contentType: 'application/json',
+        body: JSON.stringify({ phases, events }, null, 2) })
     }
-    await back.focus()
-    await back.press('Enter')
-    await expect(reader).toHaveCount(0)
   })
 }

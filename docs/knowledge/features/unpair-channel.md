@@ -205,9 +205,9 @@ All three callers share one rule — forgetting a server flips the route to the 
 the *refreshed* collection comes back empty — implemented once, in `runUnpairServer`, because that helper
 is the only one holding the post-erase list. Since [#1196](https://github.com/pyrycode/pyrycode-desktop/issues/1196)
 they share a second rule the same way: when a record *does* remain, the departed server's own renderer
-state — its conversation rows, every one of its conversations' retained threads, its open chat if one was
-open, and (since [#1197](https://github.com/pyrycode/pyrycode-desktop/issues/1197)) its conversations'
-last-read marks — is dropped through `clearServerScopedState`
+state — its conversation rows, matching active chat and exclusive local last-read marks — is
+dropped through `clearServerScopedState`. Legacy timelines are left alone since #2028;
+authoritative runtime cleanup has its own host-qualified boundary. The helper lives in
 (`src/renderer/src/clearServerScopedState.ts`). `UnpairServerDeps` gained a required
 `clearServerScopedState: (serverId: string) => void` member for this, so `UnpairDeps extends
 UnpairServerDeps` means the composer inherits it rather than re-declaring it — the same inheritance
@@ -220,7 +220,7 @@ else deps.clearServerScopedState(serverId)
 
 An `else`, not a second statement: the last-server path stays byte-identical, and the two clears can
 never both fire. Both containers spread one shared `serverScopedClearDeps` const (module scope in
-`clearServerScopedState.ts`, the `conversationLastReadDeps` idiom — every member reaches its singleton
+`clearServerScopedState.ts`, the module-scoped dependency-object idiom — every member reaches its singleton
 through `getState()` inside the arrow body) rather than each declaring its own deps literal, because a
 drift between two enumerations of the same clear set is exactly the half-fix this design exists to
 prevent. The one member that legitimately differs per caller is `navigateToList`: the Settings row's
@@ -241,17 +241,17 @@ store](conversation-last-read-store.md) for `clearLastReadFor` — the three sto
 clear composes — and [Paired shell — routing](paired-shell-routing.md) for `exitActiveConversation`, which
 `clearServerScopedState` calls once per departed conversation id to close the open-chat case (AC3)
 without re-deriving its gate. `clearLastReadFor` rides the same exclusive id set as `clearConversationsFor`
-rather than taking a fresh read, and runs last — after every `exitActiveConversation`-driven thread clear —
-because it is the only one of the three that reaches outside memory (`localStorage`) and the only one a
-still-mounted last-read bridge can re-mint mid-loop; see [Conversation last-read store § How it
-works](conversation-last-read-store.md#how-it-works) for the ordering argument.
+rather than taking a fresh read, and runs last, after the active-exit loop, because local read-mark
+persistence reaches outside memory (`localStorage`) and can throw. #2028 removed timeline clears
+and the count subscription; no mid-loop re-stamp remains. Keep the persistence-last constraint;
+see [Conversation last-read store § How it works](conversation-last-read-store.md#how-it-works) for the ordering argument.
 
 **The departed conversation-id set is the one daemon-supplied input on this path, and it is not trusted
 verbatim.** The ids come from the departing server's own `conversationsReceived` reply, so a confused or
-hostile paired daemon could list ids belonging to *another* paired machine; fed to a thread clear
-unfiltered, that would turn "forget machine A" into "destroy machine B's retained threads and close the
-chat the operator is reading on B," with no backfill in either timeline store. `clearServerScopedState`
-reads through `selectExclusiveConversationIdsFor`, not the shared `selectConversationIdsFor` the
+hostile paired daemon could list ids belonging to *another* paired machine; used unfiltered, that
+would let "forget machine A" close B's active chat or remove B's retained local read marks. Legacy
+timeline clears are retired; authoritative content cleanup remains independently host-qualified.
+`clearServerScopedState` reads through `selectExclusiveConversationIdsFor`, not the shared `selectConversationIdsFor` the
 reconnect-reset bridges ride, so an id another slot also claims is never dropped — found and fixed inside
 the architecture spec's own security review, before any code shipped. See § Security posture below.
 
@@ -344,7 +344,7 @@ renderer side, both callers:
                                         → getDepartedConversationIds(serverId)  — BEFORE the drop below
                                           (selectExclusiveConversationIdsFor: ids no OTHER slot claims)
                                         → clearConversationsFor(serverId)  — that server's row slot dropped
-                                        → for each departed id: clearTimelineFor(id); exitActiveConversation(…, id)
+                                        → for each departed id: exitActiveConversation(…, id)
                                           (the id gate means at most one iteration's exit actually fires)
                                         → shell stays up; only the caller-supplied navigateToList differs
 ```
@@ -437,7 +437,7 @@ deletion ([#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163), bui
   transaction. A crash between them leaves *no record + orphan label*, the argued-benign, self-healing
   interleaving (the next pairing that carries a label overwrites it; the next unpair erases it).
 - **The renderer's [host-label window store](host-label-window-store.md) is not reset here.**
-  `clearPairingScopedState` resets the timeline, session, active conversation, and last-read state on the
+  `clearPairingScopedState` clears session, active conversation and local last-read state on the
   last-server unpair, but not #833's renderer store — so an unpair-then-repair *inside one running app
   session* can leave the window holding the previous label until the next `hostLabel()` load overwrites
   it.

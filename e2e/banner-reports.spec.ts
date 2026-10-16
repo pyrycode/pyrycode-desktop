@@ -2,6 +2,9 @@ import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
 import { encodeEnvelope, decodeEnvelope } from '../src/main/transport/codec'
 import type { Envelope, EnvelopeType } from '../src/shared/wire/types'
 
+// Scripted history is published as thread catch-up/pages by the shared fake daemon.
+test.use({ scriptedHistory: true })
+
 const other = { ...SEEDED_ROW, id: 'banner-other', name: 'Other banner discussion' }
 const frame = (type: EnvelopeType, payload: unknown, in_reply_to?: number) => encodeEnvelope({
   id: 913, type, ts: '2026-09-10T09:14:02Z', payload, in_reply_to
@@ -53,7 +56,8 @@ test('hook reports survive activity, navigation and reconnect; accepted sends cl
   await open(other.name)
   daemon.pushFrame(banner('Hidden info report', 'info', true, false, other.id))
   await expect(status).toHaveText('Claude: Hidden info report')
-  await expect(rows).toHaveCount(0)
+  // A stopping report is a shown canonical notice even at info severity.
+  await expect(rows).toHaveText('Claude: Hidden info report')
   daemon.pushFrame(banner('Later hook refusal'))
   await open(SEEDED_ROW.name)
   await expect(rows).toHaveCount(3)

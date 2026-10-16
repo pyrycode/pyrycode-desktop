@@ -107,8 +107,8 @@ test('copies a message to the OS clipboard by pointer and by keyboard, and draws
   await page.getByPlaceholder('Message…').fill(TYPED_TEXT)
   await page.getByRole('button', { name: 'Send' }).click()
 
-  const assistantBubble = page.locator('.bubble[data-thread-role="assistant"]')
-  const userBubble = page.locator('.bubble[data-thread-role="user"]')
+  const assistantBubble = page.locator('[data-thread-role="assistant"]')
+  const userBubble = page.locator('[data-thread-role="user"]')
   await expect(assistantBubble.locator('.bubble__markdown')).toBeVisible({
     timeout: ROUND_TRIP_TIMEOUT_MS
   })

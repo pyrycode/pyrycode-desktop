@@ -17,9 +17,18 @@ const snapshot = (items: ThreadSnapshot['items'] = [item()], fields = {}): Threa
 const reading = { ...scope, session: 'old-session', agent: 'claude', taskId: 'raw-task' }
 const progress = { currentActivity: 'live activity', subagentType: '', lastToolName: 'Read', totalTokens: 42, toolUses: 2, durationMs: 1000, truncatedFields: null }
 const render = (s: ThreadSnapshot, live = inputs) => renderToStaticMarkup(createElement(BackgroundTaskPanelView,
-  { entry: null, suppliedTasks: threadTaskPresentations(s, live), onStopTask() {}, onClose() {} }))
+  { suppliedTasks: threadTaskPresentations(s, live), onStopTask() {}, onClose() {} }))
 
 describe('supplied task controls', () => {
+  it('draws only supplied tasks, including the empty body, without a roster projection', () => {
+    const html = renderToStaticMarkup(createElement(BackgroundTaskPanelView, {
+      suppliedTasks: [], onClose() {}
+    }))
+    expect(html).toContain('background-task-panel__groups')
+    expect(html).not.toContain('Partial list')
+    expect(html).not.toContain('No background tasks')
+    expect(html).not.toContain('No background-task report')
+  })
   it('requires shown usable saved links and uses the first linked representation everywhere', () => {
     const s = snapshot([item(), item(2, { kind: 'tool_call', active: false, status: 'finished' }),
       item(3, { shown: false }), item(4, { content: { ...content, task_link: null } }),

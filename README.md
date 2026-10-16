@@ -111,6 +111,7 @@ There is no CI (by policy), so before shipping run the gate locally:
 npm run build            # typecheck + build main/preload/renderer
 npm test                 # unit tests
 npm run e2e              # fake-transport Playwright suite (the default tier)
+npm run e2e:recorded    # captured real-daemon permission flow, no Claude login needed
 npm run e2e:real-claude  # real-daemon + real-claude UI liveness
 npm run e2e:real:gate    # the same specs, exit-code-safe (non-zero if nothing ran)
 ```
@@ -119,6 +120,11 @@ The real-claude gate drives a real `pyry` daemon running real `claude --model ha
 in-process, content-blind **local** fake relay; it is gated out of `npm run e2e` and **skips
 cleanly** when `claude`, `pyry`, or the credential is missing — `ANTHROPIC_API_KEY`, or
 `CLAUDE_CODE_OAUTH_TOKEN` plus a readable `~/.claude.json`.
+
+The default suite includes the recorded permission flow. See
+[recorded daemon exchanges](docs/recorded-tests.md) for capture, live verification,
+request matching and coverage limits. Existing live requirements remain in place
+until their scenarios have verified recorded replacements.
 
 See the [live e2e runbook](docs/knowledge/features/live-e2e-runbook.md)
 § Current real-claude gate state for the current pass/fail state, the full prerequisite list, the

@@ -13,7 +13,7 @@ const snapshot = (items = [row()], hostId = 'host', conversationId = 'chat'): Th
 function setup() {
   const store = createThreadSendStore()
   const deps = { serverId: 'host', threadSend: { store, deviceId: 'device' },
-    newMessageId: () => 'm', sendCommand: vi.fn(), dispatch: vi.fn(), dispatchFor: vi.fn() }
+    newMessageId: () => 'm', sendCommand: vi.fn() }
   const send = (text = 'local text', chat = 'chat', deviceId: string | null = 'device') =>
     submitMessage(text, chat, { ...deps, threadSend: { store, deviceId } })
   return { store, deps, send, state: () => store.getState().select('host', 'chat') }
@@ -27,7 +27,6 @@ describe('scoped daemon send settlement', () => {
     store.getState().settle(snapshot())
     expect(state().pending.map(p => p.deviceId)).toEqual(['device-2'])
     expect(store.getState().select('host', 'other-chat').pending).toHaveLength(1)
-    expect(deps.dispatch).not.toHaveBeenCalled(); expect(deps.dispatchFor).not.toHaveBeenCalled()
   })
 
   it('requires both usable identities in the exact scope, never text or message id alone', () => {

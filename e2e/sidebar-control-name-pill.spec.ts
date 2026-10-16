@@ -357,6 +357,12 @@ test('a row control names itself in a pill that follows the pointer, clear of th
   // pointer parks on that control's BOTTOM edge rather than its centre, which is what buys the case. That
   // row is the seeded unpromoted one, so this block also carries AC1's other name. ---
   await scrollTreeTo(tree, 'bottom')
+  // Apps follows Chats. Scroll back enough to put the real chat control at the
+  // scrollport's bottom edge, with Apps below the visible area.
+  const edge = await boxOf(tree, 'tree')
+  const beforeEdge = await boxOf(save, 'last row save')
+  await tree.evaluate((el, delta) => { el.scrollTop -= delta },
+    edge.y + edge.height - beforeEdge.y - beforeEdge.height - 1)
   // Read back rather than assumed, and the only place in this drive that needs to be: `scrollTop` written
   // to an element that does not scroll is a SILENT no-op, so a `tree` locator left pointing at the padded
   // column would turn this block's "scrolled to bottom" into "at top" and keep every assertion below

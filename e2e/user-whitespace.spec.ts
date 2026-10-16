@@ -144,10 +144,10 @@ const buildReplyFrames = (inbound: Uint8Array): Uint8Array[] => {
 }
 
 const userBubble = (page: Page, index: number): Locator =>
-  page.locator('.bubble[data-thread-role="user"]').nth(index)
+  page.locator('[data-thread-role="user"]').nth(index)
 
 const queuedBubble = (page: Page, index: number): Locator =>
-  page.locator('.bubble[data-thread-role="queued"]').nth(index)
+  page.locator('[data-thread-role="queued"]').nth(index)
 
 interface BubbleMetrics {
   whiteSpace: string
@@ -253,7 +253,7 @@ const readStackMetrics = (bubble: Locator): Promise<StackMetrics> =>
 const send = async (page: Page, text: string, expectedCount: number): Promise<void> => {
   await page.getByPlaceholder('Message…').fill(text)
   await page.getByRole('button', { name: 'Send', exact: true }).click()
-  await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveCount(expectedCount, {
+  await expect(page.locator('[data-thread-role="user"]')).toHaveCount(expectedCount, {
     timeout: ROUNDTRIP_TIMEOUT_MS
   })
 }
@@ -363,7 +363,7 @@ test('a user message draws the line breaks, blank lines, space runs and indents 
   // .message-row--queued since #1214 folded the backlog into the thread). Pushed AFTER launch resolved, so
   // it is past the `connected` backlog reset. ---
   daemon.pushFrame(queueStateFrame(QUEUED_ITEMS))
-  await expect(page.locator('.bubble[data-thread-role="queued"]')).toHaveCount(QUEUED_ITEMS.length, {
+  await expect(page.locator('[data-thread-role="queued"]')).toHaveCount(QUEUED_ITEMS.length, {
     timeout: ROUNDTRIP_TIMEOUT_MS
   })
 

@@ -1,0 +1,167 @@
+# Protected local chat history — storage and lifecycle
+
+Part of [protected local chat history](chat-history.md). The application uses
+protected indexed SQLite storage for lists and both conversation formats. The old
+protected collection is a one-time migration source.
+
+## Buffered replacements
+
+The writer requires `threads` and `lists`. Ordinary thread saves are detached
+`mutateThread` requests from the slice's `owned` change; list saves remain complete
+`replaceList` snapshots requiring the exact host's `conversationsReceived` receipt.
+Hydration publishes no owned change and schedules no save. Store no-ops and unchanged
+ownership references are skipped. Received repair/progress can schedule metadata-only
+work without validating/serializing the held item array. Production supplies
+`threadRuntime.items`; see [restore/query ownership](thread-runtime.md#restore-recovery-and-cleanup).
+Local unaccepted sends and session prompts are not durable cache content.
+
+The renderer coalesces bursts on a 200 ms timer per host/conversation/epoch. It
+retains highest item revisions, explicit removals and unioned ranges, while preserving
+metadata/completion/boundary observations in order. An admitted new epoch or explicit
+reset supersedes prior pending ownership. A reset has a unique `resetId`, retained
+through coalescing and recorded in the protected header for idempotent retry after
+a lost acknowledgement. Reaccepting the same epoch without reset preserves saved
+history. Omitted items and memory-only holder loss never imply removal or reset;
+pending ownership survives holder deletion/recreation and navigation.
+
+One serial drain takes a batch while later received changes accumulate separately.
+Success acknowledges only that batch. Failure rejoins it before newer pending work,
+subject to reset/epoch supersession and host/deletion fences. A failed scope is not
+retried again in that drain and failure schedules no immediate retry timer; a later
+explicit flush or received event can retry. This retains work without spinning.
+List canonical-value comparison still suppresses unchanged received lists and bursts
+that return to the last successfully saved list value; it does not compare whole
+thread snapshots.
+
+Detached changes keep their original coordinates across host switches and disconnects.
+Main applies completion intervals and oldest-boundary availability against saved
+fences, including unloaded evidence. OR-ing a certification flag while replacing
+metadata would let an earlier completion certify later live progress. See
+[owned admission and progress folding](chat-history-api.md#owned-authoritative-mutations).
+
+Confirmed deletion shares this serial drain with saves. It discards the
+exact conversation's buffered owned changes, filters its entry from buffered host lists
+without reordering peers, and waits behind any already in-flight write. A per-host
+deleted-id set suppresses subsequent daemon-item captures and filters delayed list
+captures for the writer's lifetime, including retained holder mutations and shutdown.
+Stale captures therefore cannot overwrite the queued removal or recreate successfully
+removed records. Each removal attempt clears comparison state for that item scope and
+host list; removal itself is not skipped by replacement deduplication. Successful
+unpair resets suppression for fresh same-server re-pairing.
+
+Removal entries use `[host, 'removeConversation', id]`, distinct from the item
+mutation's `[host, 'daemon-items', id]` key. Confirmation cancels the mutation key
+before queueing removal. Keeping removal distinct prevents content coalescing from
+replacing disk deletion. Successful unpair also advances the host generation;
+completion of an older in-flight save may not restore its successful-comparison
+state. Otherwise fresh identical content after re-pairing could be suppressed.
+
+## Protected collection
+
+The single main-process store and handler both capture detached validated request
+copies before asynchronous work, so caller mutation while queued cannot alter a
+pending save. Never create a service per request.
+
+The handler queues valid calls before the asynchronous membership lookup and
+waits for storage completion. The store has its own queue covering every valid
+read and mutation across all hosts. Ordering only the filesystem writes would
+allow a slow earlier membership check to submit an old save after a later removal;
+both queues are necessary. Global ordering serializes import, saves and cleanup
+across hosts. Reads wait for earlier operations, failures leave the queues
+usable, and an earlier pending save cannot overtake a later save or resurrect a
+later-removed record. Separate service instances or processes have no shared lock.
+
+`createChatHistoryStore` owns the supplied database and indexed legacy/thread
+backends. Schema 5 keeps complete encrypted list cells in `history_lists` beside
+both families and singleton completion/retirement state in `history_import`.
+Coordinates are exact UTF-16LE BLOBs; caller ids never become filenames. Lists
+validate their decrypted host against the requested owner. Full timeline/thread
+reads reconstruct only the addressed family; list reads decode only their cell.
+Retained replacements remain full replacements, including identical and empty
+snapshots. Ordinary thread mutations preserve unowned items/evidence using the
+[schema-7 authenticated layout](chat-history-api.md#api).
+Removing a conversation validates and deletes both formats and filters its saved
+list in one transaction without reordering peers. A resulting saved-empty list
+remains distinct from missing. Host removal includes off-screen records absent
+from its list and preserves other hosts' equal ids.
+
+Before the first operation, the store reads the fixed secure-store name
+`chat-history`, formerly `{ version: 1, snapshots: [...] }`. It validates the whole
+source, including duplicate identities and both formats, before importing anything.
+All addressed destinations are validated before mutation. Only missing lists and
+scopes are imported; existing indexed records win regardless of timestamps.
+Parser-normalized supplied order, optional absence and saved evidence survive;
+legacy rows never become authoritative items. Import and the completion row commit
+in one synchronous SQLite transaction. Backend classified failures are thrown
+through the enclosing transaction so either family's failure rolls back both.
+Secure-store reads/deletes are asynchronous and never occur inside that transaction.
+
+Completion is durable even when the source is absent. Interruption before the
+import commit retries without duplicates; after commit the store never reopens or
+decrypts the source. Its presence cannot replace newer content or resurrect a
+deleted scope, including after identical host/conversation/epoch reuse. The
+completion marker supplies this restart fence independently of source cleanup.
+
+Source retirement follows a successful operation transaction. With `retired: 0`,
+the store directly deletes the fixed source and then commits `retired: 1`.
+Interruption or cleanup failure leaves retirement retryable on later operations
+without replaying imported records or losing lists. Reads and replacements can
+succeed while cleanup is pending. Removal reports `remove-failed` when source
+cleanup fails, even after its SQLite deletion committed; it does not restore those
+deleted records. A repeated removal can retry retirement. Static
+`history-source-retired` diagnostics distinguish `ok` and `remove-failed`.
+
+The handler's host/conversation generations reject stale queued saves, reads and
+list replacements after removal; fresh authorized requests may save at reused
+coordinates. Main-only `clearServer` shares that admission queue and erases
+credentials before history. A matched credential erase remains successful if
+history cleanup fails, advances the host generation and permits ordinary unpaired
+teardown. An erase that throws or matches nothing leaves history/generations
+unchanged. See [authorization and cleanup results](chat-history-api.md#application-bound-operations).
+
+Protection inherits [ADR 0005](../decisions/0005-secret-at-rest-safestorage-fail-closed.md).
+Production composition shares one OS-backed `SecretEncryption` with the secure
+store, retaining Linux `basic_text` rejection. Indexed payloads, including lists,
+are encrypted before SQLite sees them; the directory is 0700, the database 0600
+and temporary storage is memory-only. Database/journal/temporary files must contain
+no payload plaintext. Unreadable sources and unsupported databases are preserved,
+never replaced with empty storage. Before completion, one bad source snapshot
+blocks import; afterward validation is scoped to affected indexed records.
+Retained timelines can outlive lists and grow independently of memory eviction.
+Mutable authentication uses standard SHA-256 under OS-protected roots. No new
+network work or background pruning is involved.
+
+## Window close and app quit
+
+`writer.stop()` unsubscribes the required list and authoritative item observers,
+daemon events and host-removal notifications. It waits for already-started host removals to settle, then cancels the timer and drains
+buffered and in-flight owned changes, list replacements and confirmed conversation
+removals in order. Failed owned writes remain pending for a later flush; stop does
+not manufacture a successful commit or retry indefinitely.
+Deletion suppression remains active throughout the flush. Unsubscribing alone
+could acknowledge close before failed
+unpair resumes its buffered work. Settlement cannot schedule a new timer after
+stop. Main defers normal window close and `before-quit` teardown
+until preload's `onChatHistoryFlush` callback has stopped the writer and sent a
+`flushed` acknowledgement over `pyry:chat-history-flush`. Main then awaits already
+submitted history operations before resuming window close. App quit and Windows
+Restart now share one `createQuitDrain` promise, stopping the connection registry
+before draining. Updater installation starts before its explicit app quit, so
+`before-quit` alone is too late. After a successful drain, window close guards
+pass; an installation failure exits with `autoInstallOnAppQuit` disabled, since
+the stopped registry cannot resume. See [updater shutdown](windows-packaging.md#history-drain-and-installation-failure).
+Quit additionally awaits `historyHandler.drain()` and `historyStore.close()` after
+all renderer flushes. Store close rejects new admission, drains its queue and
+closes the database. Closing only a window leaves the same store/database owner
+usable for a fresh window and writer; it does not call store close.
+
+Readiness registration avoids waiting on a window whose observer never mounted.
+Lifecycle messages must come from a window's main frame; flush acknowledgements
+resolve only that sender's wait. Closing the window releases its wait and tracking
+entries. Hook cleanup removes its flush listener, and `will-quit` removes the
+main handler and lifecycle listener. Reconnect adds no listeners.
+
+The guarantee covers graceful close/quit. Abrupt process termination cannot drain
+renderer buffers; SQLite transactions and durable completion/retirement state
+protect committed snapshots and prevent source replay. Flushing never adds a
+completion boundary to a partial answer.

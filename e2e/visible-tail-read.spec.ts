@@ -3,8 +3,11 @@ import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { ElectronApplication, Page } from '@playwright/test'
 import type { Envelope } from '../src/shared/wire/types'
 
+// Scripted history is published as thread catch-up/pages by the shared fake daemon.
+test.use({ scriptedHistory: true })
+
 const ts = '2026-10-08T00:00:00Z'
-const row = { ...SEEDED_ROW, read_up_to: 0, latest_entry_id: 30 }
+const row = { ...SEEDED_ROW, read_up_to: 0, last_shown_version: 30 }
 const frame = (type: string, payload: unknown, history_entry_id?: number, in_reply_to?: number) =>
   encodeEnvelope({ id: 900, event_id: 700, type, ts, history_entry_id, in_reply_to, payload })
 const list = () => frame('conversations', { conversations: [row] })
@@ -67,8 +70,8 @@ declare global { interface Window { readWork: ReadWork } }
 // and listeners without counting React, scroll-pin work or the test oracle.
 async function instrumentReadWork(page: Page) {
   const before = page.url()
-  // firstWindow supplies a Page, not a surviving renderer execution context.
-  // Wait for the app document before evaluating document-scoped instrumentation.
+  // The fixture hands this hook a loaded app document (appWindow). Waiting for the
+  // mounted Welcome screen keeps the instrumentation after the first commit.
   await expect(page.locator('.welcome__pair')).toBeVisible()
   await page.evaluate(() => {
     const counts = { constructors: 0, discovery: 0, listeners: 0, subscriptions: 0 }
@@ -142,7 +145,7 @@ test('read setup is reused across committed same-row deltas on short and long th
     const commands: Envelope[] = []
     const { app, page, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
       const e = decodeEnvelope(bytes); commands.push(e)
-      if (e.type === 'list_conversations') return [list()]
+      if (e.type === 'list_conversations') return [frame('conversations', { conversations: [{ ...row, last_shown_version: size }] })]
       if (e.type === 'request_history') return [pageReply(e.id, Array.from({ length: size }, (_, i) => ({
         id: i + 1, type: 'message', ts, payload: { conversation_id: row.id, message_id: `m${i}`,
           role: 'user', text: `Saved row ${i}` }
@@ -160,7 +163,7 @@ test('read setup is reused across committed same-row deltas on short and long th
       listeners: [...window.readWork.listeners.values()].reduce((sum, targets) => sum + targets.size, 0),
       subscriptions: window.readWork.subscriptions.size
     }))
-    await expect.poll(active).toEqual({ observers: 1, connected: true, listeners: 2, subscriptions: 1 })
+    await expect.poll(active).toEqual({ observers: 1, connected: true, listeners: 3, subscriptions: 1 })
     await page.evaluate(() => window.readWork.reset())
     const geometry = () => page.locator('.conversation__thread > :last-child').evaluate(el => {
       const r = el.getBoundingClientRect()
@@ -182,20 +185,21 @@ test('read setup is reused across committed same-row deltas on short and long th
     await test.info().attach(`read-work-${size}`, { body: JSON.stringify(counts), contentType: 'application/json' })
     expect.soft(counts).toEqual({ constructors: 0, discovery: 0, listeners: 0, subscriptions: 0 })
     daemon.pushFrame(end(size + 6))
+    // The assistant's completion changes its visible status at this version.
     await expect.poll(() => targets(commands).at(-1)).toBe(size + 6)
     daemon.pushFrame(frame('assistant_delta', { conversation_id: row.id, turn_id: 'next', seq: 0,
       text: 'New tail [the note](notes/Plan.md).' }, size + 7))
     await expect.poll(() => targets(commands).at(-1)).toBe(size + 7)
     await settle(page)
     expect((await geometry()).key).not.toBe(before.key)
-    await expect.poll(active).toEqual({ observers: 1, connected: true, listeners: 2, subscriptions: 1 })
+    await expect.poll(active).toEqual({ observers: 1, connected: true, listeners: 3, subscriptions: 1 })
     await page.getByRole('button', { name: 'the note', exact: true }).last().click()
     await expect(page.locator('.markdown-reader')).toBeVisible()
     await settle(page)
     await expect.poll(active).toEqual({ observers: 0, connected: true, listeners: 0, subscriptions: 0 })
     await page.getByRole('button', { name: 'Back', exact: true }).click()
     await settle(page)
-    await expect.poll(active).toEqual({ observers: 1, connected: true, listeners: 2, subscriptions: 1 })
+    await expect.poll(active).toEqual({ observers: 1, connected: true, listeners: 3, subscriptions: 1 })
     await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
     await page.getByRole('menuitem', { name: 'Archive', exact: true }).click()
     await settle(page)
@@ -203,7 +207,7 @@ test('read setup is reused across committed same-row deltas on short and long th
     await page.locator('.archive__back').click()
     await page.getByRole('button', { name: 'Seeded discussion', exact: true }).click()
     await settle(page)
-    await expect.poll(active).toEqual({ observers: 1, connected: true, listeners: 2, subscriptions: 1 })
+    await expect.poll(active).toEqual({ observers: 1, connected: true, listeners: 3, subscriptions: 1 })
   }
 })
 
@@ -211,7 +215,8 @@ test('stable callbacks exclude hidden, queued and received but uncommitted tails
   const commands: Envelope[] = []
   const { app, page, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
     const e = decodeEnvelope(bytes); commands.push(e)
-    return e.type === 'list_conversations' ? [list()] : []
+    if (e.type === 'request_history') return [pageReply(e.id, [])]
+    return e.type === 'list_conversations' ? [frame('conversations', { conversations: [{ ...row, last_shown_version: 0 }] })] : []
   } })
   await focus(app, page)
   daemon.pushFrame(delta(1, 0, 'Committed tail'))
@@ -235,6 +240,9 @@ test('stable callbacks exclude hidden, queued and received but uncommitted tails
     await expect.poll(() => targets(commands).at(-1)).toBe(index + 2)
   }
   await settle(page)
+  // Publish the authoritative next watermark before holding the canonical append's frame.
+  daemon.pushFrame(frame('conversations', { conversations: [{ ...row, last_shown_version: 5 }] }))
+  const pendingItem = Number(await page.locator('[data-read-row]').last().getAttribute('data-read-row'))
   // Hold the bridge's frame, with a receipt barrier from the real preload event.
   // Focus/scroll callbacks still run, and must use the displayed target rather than receipt.
   await page.evaluate(() => {
@@ -243,7 +251,7 @@ test('stable callbacks exclude hidden, queued and received but uncommitted tails
     const pending = new Map<number, FrameRequestCallback>()
     let handle = -1
     let delivered = 0
-    const off = window.pyry.onDaemonEvent(event => { if (event.type === 'assistantDelta') delivered++ })
+    const off = window.pyry.onDaemonEvent(event => { if (event.type === 'threadUpdate' && event.update.type === 'thread_text_append') delivered++ })
     window.requestAnimationFrame = callback => { pending.set(handle, callback); return handle-- }
     window.cancelAnimationFrame = handle => { if (!pending.delete(handle)) cancel(handle) }
     window.pendingReadFrame = { received: () => delivered, release: () => {
@@ -253,7 +261,8 @@ test('stable callbacks exclude hidden, queued and received but uncommitted tails
     } }
   })
   try {
-    daemon.pushFrame(delta(5, 4, ' Awaiting commit'))
+    daemon.pushFrame(frame('thread_text_append', { conversation_id: row.id, epoch: `scripted-thread:${row.id}`,
+      version: 5, item_id: pendingItem, base_rev: 4, rev: 5, text: ' Awaiting commit' }))
     await expect.poll(() => page.evaluate(() => window.pendingReadFrame.received())).toBe(1)
     await expect(page.locator('.bubble').last()).not.toContainText('Awaiting commit')
     const prior = targets(commands)
@@ -376,40 +385,6 @@ test('committed folded tails require focus, uncovered viewport and a closed read
   await page.screenshot({ path: test.info().outputPath('read-tail-1280.png') })
 })
 
-test('ID-less replay stays unknown until independently admitted history, and unseen live content restores attention', async ({ launchPairedApp }) => {
-  const commands: Envelope[] = []
-  const { app, page, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
-    const e = decodeEnvelope(bytes); commands.push(e)
-    return e.type === 'list_conversations' ? [list()] : []
-  } }, { onLaunched: async app => instrumentReadWork(await app.firstWindow()) })
-  await focus(app, page)
-  daemon.pushFrame(delta(undefined, 0, 'ID-less replay'))
-  await expect(page.locator('.bubble')).toHaveCount(1)
-  await settle(page)
-  expect(targets(commands)).toEqual([])
-  expect(await page.evaluate(() => window.readWork.observers.filter(o => o.read && o.targets.size > 0).length)).toBe(1)
-  await page.evaluate(() => window.readWork.reset())
-  expect(commands.filter(c => c.type === 'request_history')).toHaveLength(1)
-  const ask = commands.find(c => c.type === 'request_history')!
-  daemon.pushFrame(pageReply(ask.id, [{ id: 30, type: 'assistant_delta', ts,
-    payload: { conversation_id: row.id, turn_id: 't', seq: 0, text: 'ID-less replay' } }]))
-  await expect.poll(() => targets(commands)).toEqual([30])
-  await expect(page.locator('.bubble')).toHaveCount(1)
-  expect(await page.evaluate(() => ({ ...window.readWork.counts }))).toEqual({ constructors: 0, discovery: 0, listeners: 0, subscriptions: 0 })
-  daemon.pushFrame(markReply(30))
-  const dot = page.locator('.conversation-status-dot')
-  await expect(dot).toHaveClass(/--idle/)
-  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
-  await page.getByRole('menuitem', { name: 'Archive', exact: true }).click()
-  daemon.pushFrame(delta(31, 1, '\nUnseen while closed'))
-  await page.locator('.archive__back').click()
-  await expect(dot).toHaveClass(/--new-messages/)
-  daemon.pushFrame(markReply(30))
-  await expect(dot).toHaveClass(/--new-messages/)
-  expect(targets(commands)).toEqual([30])
-  expect(commands.filter(c => c.type === 'request_history')).toHaveLength(1)
-})
-
 for (const gate of ['visible', 'blurred', 'reader-covered', 'above-tail'] as const) {
   test(`late read contract rechecks the committed tail while ${gate}`, async ({ launchPairedApp }) => {
     const commands: Envelope[] = []
@@ -442,7 +417,7 @@ for (const gate of ['visible', 'blurred', 'reader-covered', 'above-tail'] as con
     }
     await settle(page)
     // Only the list changes: the durable tail was already committed before eligibility arrived.
-    daemon.pushFrame(list())
+    daemon.pushFrame(frame('conversations', { conversations: [{ ...row, last_shown_version: 31 }] }))
     const dot = page.locator('.conversation-status-dot')
     await expect(dot).toHaveClass(/--new-messages/)
     await settle(page)
@@ -453,7 +428,7 @@ for (const gate of ['visible', 'blurred', 'reader-covered', 'above-tail'] as con
       else await thread.evaluate(el => { el.scrollTop = el.scrollHeight })
     }
     await expect.poll(() => targets(commands)).toEqual([31])
-    daemon.pushFrame(list())
+    daemon.pushFrame(frame('conversations', { conversations: [{ ...row, last_shown_version: 31 }] }))
     await settle(page)
     expect(targets(commands)).toEqual([31])
     await expect(dot).toHaveClass(/--new-messages/)

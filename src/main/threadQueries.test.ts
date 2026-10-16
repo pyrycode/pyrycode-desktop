@@ -53,7 +53,7 @@ async function connected(serverId = 'a') {
     } } }
   })
   connection.start(); await vi.waitFor(() => expect(configs).toHaveLength(1))
-  const ack = encodeEnvelope({ id: 1, type: 'hello_ack', ts: 'stamp', payload: { protocol_version: 'v2', server_id: serverId, conn_id: 'conn', capabilities: [] } })
+  const ack = encodeEnvelope({ id: 1, type: 'hello_ack', ts: 'stamp', payload: { protocol_version: 'v2', server_id: serverId, conn_id: 'conn', capabilities: ['thread'] } })
   configs[0].onEvent({ type: 'handshake-complete', helloAck: ack })
   const emit = (bytes: Uint8Array) => configs.at(-1)!.onEvent({ type: 'message', plaintext: bytes })
   const ask = (q: ThreadQuery = query, requestId = 'request') => { connection.queryThread(q, requestId); return decodeEnvelope(sent.at(-1)!).id }

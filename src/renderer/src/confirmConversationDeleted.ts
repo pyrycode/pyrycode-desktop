@@ -7,7 +7,7 @@ export interface ConfirmConversationDeletedDeps extends ExitActiveConversationDe
   log: (event: RendererDiagnosticEvent) => void
 }
 
-/** A confirmed removal invalidates its owned view independently of which chat is on screen. */
+/** A confirmed removal exits its owned active view; runtime content cleanup has its own boundary. */
 export function confirmConversationDeleted(
   deps: ConfirmConversationDeletedDeps,
   conversationId: string,
@@ -24,8 +24,5 @@ export function confirmConversationDeleted(
   if (deps.getActiveConversation()?.id === conversationId) {
     exitActiveConversation(deps, conversationId)
     deps.log({ event: 'conversation-deletion', code: 'active-cleared' })
-  } else {
-    deps.clearTimelineFor(conversationId)
-    deps.log({ event: 'conversation-deletion', code: 'inactive-cleared' })
   }
 }

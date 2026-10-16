@@ -40,7 +40,7 @@ Terminal connection failure marks retained echoes `not-sent` while keeping their
 payloads. Existing explicit Reconnect changes them back to waiting and retries after
 authentication only if the pairing is unchanged. Compare `server`, `relay`, `token`
 and `server_static_pubkey` on every dial reload, using the copied
-[replay-pairing snapshot](daemon-connection-lifecycle.md#replay-cursor-lifetime).
+[`sendPairing` snapshot](daemon-connection-lifecycle.md#hello-and-held-send-pairing-lifetime).
 Initial bootstrap adopts the first pairing. Missing or changed
 pairing fails and releases the old FIFO; registry removal and connection `stop()`
 also fail and release it before driver teardown. Surviving echoes remain Not sent,

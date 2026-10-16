@@ -89,26 +89,23 @@ interleaving race-safe by construction (no interleaving needs its own handling).
 - The **first** dial keeps using the config `bootstrap` already loaded (no reason to reload microseconds later, and #82's first-dial not-paired/connect-failed messaging stays put); the provider drives only the automatic re-dials.
 - **Fail-closed:** a reconnect that finds no record (`load()` → `null`), or a throw from a malformed record / bad key / keychain failure, ends supervision via the synthetic `NO_PAIRED_RECORD_CLOSE_CODE` → the driver's `terminal` → this module's `failed('connection-closed')` — a non-connected event, never a crash (AC3). The record never leaves the background process (AC5). The full mechanics are in the [relay supervisor](relay-supervisor.md) and [noise relay driver](noise-relay-driver.md) docs; the [#83 codebase note](../codebase/83.md) has the design.
 
-## Replay cursor lifetime
+## Hello and held-send pairing lifetime
 
-Each host's connection holds a scalar replay cursor and a copied four-field pairing
-snapshot in main-process memory for this app run. Initial, automatic-reconnect and
-explicit-reconnect hellos send the latest cursor as `last_event_id`, omitting the
-key when no position exists. `last_event_id` requests the daemon's bounded retained
-tail for its current conversation after a daemon-wide event position. It does not
-request history. `last_seen_ts` has no daemon consumer and is never sent by this
-connection; the [hello builder](hello-exchange.md) retains only its compatibility
-input.
+Production initial, automatic-reconnect and explicit-reconnect hellos omit both
+`last_event_id` and `last_seen_ts` (#2025). The connection holds no replay cursor.
+Authoritative thread queries and complete checkpoints own content recovery; see
+[thread runtime](thread-runtime.md#restore-recovery-and-cleanup). Generic hello and
+codec compatibility inputs remain supported outside this production connection.
 
-On every dial, compare `server`, `relay`, `token` and `server_static_pubkey` with
-the snapshot. Equal values preserve the cursor across redials even when the store
-returns a fresh object. Any changed field or an absent record clears it. The
-[registry](daemon-connection-registry.md) retains a connection on pairing
-replacement, so connection lifetime alone cannot define cursor lifetime. Copy the
-named fields rather than retaining the caller's mutable record. Unpair removes
-the host's connection; pairing that host again creates an empty cursor. Other
-hosts keep their own positions. Nothing persists the cursor or exposes it as a
-renderer or log field.
+Each connection retains `sendPairing`, a copied main-memory snapshot of `server`,
+`relay`, `token` and `server_static_pubkey`. Compare it on every dial reload:
+equal fields preserve held composer sends even if the store returns a fresh
+object; a changed field or absent record fails and releases those sends. Initial
+bootstrap adopts the first pairing. The registry can retain a connection across
+pairing replacement, so connection lifetime alone cannot fence queued payloads.
+Removing this snapshot with replay tracking would let an old payload reach new
+credentials. Generation checks after asynchronous loads prevent stale work from
+replacing a successor pairing. The snapshot stays in main and is never forwarded or logged.
 
 ## Disconnected composer message delivery
 
@@ -180,31 +177,23 @@ daemon/relay/SQL proof [#1929](https://github.com/pyrycode/pyrycode-desktop/issu
 | `session.staticPrivateKey` | `pair.privateKey` | raw 32B device static |
 | `session.remoteStaticPublicKey` | `decodeServerKey(...)` | raw 32B |
 | `session.prologue` | `new Uint8Array(0)` | zero-length matches the daemon |
-| `session.hello` | `buildClientHello(...)` output | token + identity + optional pairing-scoped `last_event_id`; no `last_seen_ts` |
+| `session.hello` | `buildClientHello(...)` output | token + identity + capabilities; neither `last_event_id` nor `last_seen_ts` |
 | `onEvent` | `onDriverEvent` | the single event-mapping choke point |
 
 ## The driver-event → DaemonEvent mapping (`onDriverEvent`)
 
-### Inbound replay positions and resync
+### Admitted live metadata and inert legacy frames
 
-The generation-fenced `message` callback passes an envelope observer to
-`parseInboundMessage`. It runs once after the plaintext-size and envelope guards,
-before payload narrowing. Except for `resync`, a positive safe-integer `event_id`
-advances the cursor only when greater than the held value. Missing, nonnumeric,
-nonpositive, fractional and unsafe values leave it unchanged. Unknown frame types
-and malformed payloads still advance a valid admitted position while retaining
-their existing ignore/drop behavior. A rejected size or envelope guard cannot
-change the replay cursor; a superseded driver's events never reach the observer.
-Parser exceptions still interrupt thread queries as described below.
+The generation-fenced `message` callback retains an envelope observer passed to
+`parseInboundMessage`. It runs after plaintext-size and envelope admission and
+before payload narrowing, supplying live-session metadata even if a modeled
+payload later fails. Invalid bytes/envelopes never reach it. Parser exceptions
+still interrupt thread queries as described below.
 
-An admitted `resync` clears only this host's cursor regardless of payload shape,
-ignoring its own `event_id`. The decoder returns `null`: no renderer event and no
-automatic `request_history`. The next hello omits `last_event_id` until another
-valid event establishes a new position, which may be lower than the old cursor.
-Only the static `replay-cursor-reset` diagnostic with code `resync` is emitted;
-no cursor, host id or payload enters it. An expired or unavailable tail therefore
-leaves recovery to the existing history flow. Replayed events use the ordinary
-live-event path; the daemon's watermark owns duplicate suppression.
+Legacy `resync` and `history_page` are unmodeled frames: after ordinary admission
+they return `null`, with no renderer content, replay state or content/recovery
+request. An admitted `event_id` no longer establishes a replay cursor. Recovery
+uses thread queries/checkpoints rather than event-ring replay or gap filling.
 
 The single driver-event mapping point; outbound query failures also emit through
 the same connection-bound sink.
@@ -267,10 +256,10 @@ including all 54 thread-query cases present and passed (54 executed, 0 failed,
 success through preload` and `initial empty-epoch catch-up reaches authenticated
 transport`. Fake-transport Playwright gate 6 recorded 386 executed/passed,
 0 failed and 3 skipped; the gate report's named `thread` selection did not run,
-so that browser count supplies no named thread-test proof. Production handshake
-and capability requests are unchanged. Coordination/checkpoint decisions belong
-to [#1902](https://github.com/pyrycode/pyrycode-desktop/issues/1902); production
-activation and integration acceptance belong to [#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
+so that browser count supplies no named thread-test proof. Production now requires
+accepted `thread` alongside its existing `interactive` request. The
+[thread runtime](thread-runtime.md) owns coordinator inputs and checkpoint recovery.
+Its counted fake-suite proof remains separate from pending credentialed live acceptance.
 
 ## `failed`, not `disconnected`
 

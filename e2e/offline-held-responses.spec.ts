@@ -1,18 +1,31 @@
+import { encodeEnvelope } from '../src/main/transport/codec'
 import { test, expect, FIRST_SERVER_ID, SECOND_SERVER_ID, SEEDED_ROW, SECOND_SEEDED_ROW, type PairedApp } from './fixtures/launchPairedApp'
 import { DAEMON_EVENT_CHANNEL } from '../src/shared/ipc/events'
 import type { RendererCommand } from '../src/shared/ipc/commands'
 import { conversationStateFake } from './fixtures/conversationStateFake'
 
 async function event(app: PairedApp, value: object): Promise<void> {
+  const content = value as { type?: string; serverId?: string; conversationId?: string; turnId?: string; seq?: number; text?: string; queued?: unknown[] }
+  if (content.type === 'assistantDelta' || content.type === 'queueState') {
+    const daemon = app.servers.find(server => server.serverId === content.serverId)?.daemon
+    if (!daemon) throw new Error('Missing fixture host')
+    daemon.pushFrame(encodeEnvelope({ id: 1, ts: '2026-10-15T00:00:00Z',
+      type: content.type === 'assistantDelta' ? 'assistant_delta' : 'queue_state', payload: {
+        conversation_id: content.conversationId, ...(content.type === 'assistantDelta'
+          ? { turn_id: content.turnId, seq: content.seq, text: content.text } : { queued: content.queued }) } }))
+    await app.page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+    return
+  }
   await app.app.evaluate(({ BrowserWindow }, { channel, value }) => {
     BrowserWindow.getAllWindows()[0].webContents.send(channel, value)
-  }, { channel: DAEMON_EVENT_CHANNEL, value })
+  }, { channel: DAEMON_EVENT_CHANNEL, value: { envelopeSessionId: 'session', ...value, ...('conversations' in value && Array.isArray(value.conversations)
+    ? { conversations: value.conversations.map(row => ({ current_session_id: 'session', ...row })) } : {}) } })
   await app.page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
 }
 
 async function connection(app: PairedApp, type: string): Promise<void> {
   await event(app, { type, serverId: FIRST_SERVER_ID,
-    ack: { protocol_version: '1', server_id: 'test', conn_id: 'test', capabilities: [] },
+    ack: { protocol_version: '1', server_id: 'test', conn_id: 'test', capabilities: ['thread'] },
     error: { code: 'transport', message: 'Offline', retryable: true } })
 }
 
@@ -169,7 +182,7 @@ test('all unavailable statuses and missing or ambiguous ownership block both pro
     await event(app, { type: 'conversationsReceived', serverId: 'missing-status', conversations: [SEEDED_ROW] })
     await blocked()
     // A duplicate stamped row must not resolve to either host, even when that host is connected.
-    await event(app, { type: 'connected', serverId: 'other-connected', ack: {} })
+    await event(app, { type: 'connected', serverId: 'other-connected', ack: { capabilities: ['thread'] } })
     if (family === 'question') {
       await questions(app)
       await panel.getByRole('radio').first().press('Space')

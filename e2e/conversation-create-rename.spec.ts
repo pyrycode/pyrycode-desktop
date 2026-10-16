@@ -66,7 +66,7 @@ test('create → nav into thread, rename via the Channel-info sheet, both rows r
       return replies
     }
   })
-  const userRows = page.locator('.bubble[data-thread-role="user"]')
+  const userRows = page.locator('[data-thread-role="user"]')
   await page.getByPlaceholder('Message…').fill('Saved channel history')
   await page.getByRole('button', { name: 'Send', exact: true }).click()
   await expect(userRows).toHaveText([bubbleTextExactly('Saved channel history')])

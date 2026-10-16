@@ -1,3 +1,4 @@
+import type { MessageLifecycleDiagnostic } from '@shared/ipc/diagnostics'
 import type { ThreadSnapshot } from '../../store/threadItemStore'
 import type { MessageAttachment, ThreadItem } from '../../store/threadTimeline'
 import { formatTurnStats } from './turnStats'
@@ -11,6 +12,8 @@ export interface ThreadSendInputs {
     localSendPending: LocalSendPending | null }
   connection?: { hostId: string; status: ConnectionStatus }
   onAction?: (hostId: string, command: Extract<RendererCommand, { type: 'dequeueMessage' | 'sendQueuedNow' }>) => void
+  midTurnInput?: boolean
+  diagnose?: (record: MessageLifecycleDiagnostic) => void
   log?: (event: { event: string; code: string }) => void
 }
 export function threadQueueHandle(snapshot: ThreadSnapshot, source: Held, inputs?: ThreadSendInputs): number | null {
@@ -23,11 +26,15 @@ export function threadQueueHandle(snapshot: ThreadSnapshot, source: Held, inputs
 export function actOnThreadQueue(snapshot: ThreadSnapshot, source: Held, inputs: ThreadSendInputs | undefined,
   action: 'drop' | 'send-now'): void {
   const handle = threadQueueHandle(snapshot, source, inputs)
-  if (handle === null) return
+  if (handle === null || action === 'send-now' && inputs?.midTurnInput === false) return
   const payload = { conversation_id: snapshot.conversationId, queued_msg_id: handle }
   const command = action === 'drop' ? dequeueMessageCommand(payload) : sendQueuedNowCommand(payload)
   if (command.type !== 'dequeueMessage' && command.type !== 'sendQueuedNow') return
-  try { inputs?.onAction?.(snapshot.hostId, command) }
+  try {
+    inputs?.onAction?.(snapshot.hostId, command)
+    const messageId = usableThreadField(source, 'content.message_id')
+    if (action === 'drop' && typeof messageId === 'string') inputs?.diagnose?.({ event: 'message-cancel-requested', messageId, conversationId: snapshot.conversationId })
+  }
   catch { try { inputs?.log?.({ event: 'thread-queue-action', code: 'bridge-failed' }) } catch { /* Observe only. */ } }
 }
 
@@ -235,6 +242,14 @@ function nest(rows: ItemPresentation[], arrival: ReadonlyMap<number, number>): I
   for (const row of result) if (!row.marker) row.count = counts.get(row.source.id)?.size ?? 0
   return result
 }
+const retainedPresentations = new WeakMap<Held, ThreadItem | null>()
+function retainedPresentation(source: Held): ThreadItem | null {
+  if (!Object.isFrozen(source)) return presentation(source)
+  if (retainedPresentations.has(source)) return retainedPresentations.get(source) ?? null
+  const item = presentation(source)
+  retainedPresentations.set(source, item)
+  return item
+}
 function identity(s: Held): string | null {
   return typeof s.session === 'string' && s.session !== '' && typeof s.turn === 'string' && s.turn !== ''
     ? JSON.stringify([s.session, s.agent, s.turn, s.parent ?? null]) : null
@@ -242,7 +257,7 @@ function identity(s: Held): string | null {
 /** Adapt display facts only; every join uses the recorded attribution, including hidden endings. */
 export function threadItemPresentations(snapshot: ThreadSnapshot): ItemPresentation[] {
   const endings = new Map<string, string>(), last = new Map<string, ItemPresentation>()
-  const rows: ItemPresentation[] = snapshot.items.filter(s => s.shown === true).map(source => ({ source, item: presentation(source),
+  const rows: ItemPresentation[] = snapshot.items.filter(s => s.shown === true).map(source => ({ source, item: retainedPresentation(source),
     ancestors: [], depth: 0, count: 0, hasChildren: false }))
   for (const source of snapshot.items) {
     const key = identity(source), c = record(source.content)

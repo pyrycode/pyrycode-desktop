@@ -2,6 +2,9 @@ import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
 import { encodeEnvelope, decodeEnvelope } from '../src/main/transport/codec'
 import type { EnvelopeType } from '../src/shared/wire/types'
 
+// Scripted history is published as thread catch-up/pages by the shared fake daemon.
+test.use({ scriptedHistory: true })
+
 const other = { ...SEEDED_ROW, id: 'compaction-other', name: 'Other compaction discussion' }
 let frameId = 100
 const frame = (type: EnvelopeType, payload: unknown, in_reply_to?: number) => encodeEnvelope({

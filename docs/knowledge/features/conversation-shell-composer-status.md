@@ -202,10 +202,10 @@ when the producer reports truncation. No second text cap applies. Its shrinkable
 `ConversationScreen.tsx`) pick `agent === 'codex' ? 'Codex' : 'Claude'`; a client-owned name, the
 raw `agent` value is never rendered. `ComposerErrorSlotControl` reads its agent through
 `useConversationAgent(open?.id ?? null)` (the #1651 hook, exported from `RunConfigSections.tsx`) and
-passes it to `ComposerBannerReport`; the timeline's own banner and stopped-turn rows read the same
-`WireAgent` threaded down from `ConversationScreen`'s `openAgent` through `Timeline` and `TimelineRow`.
-Every new prop or parameter defaults to `'claude'`, so a Claude conversation, a conversation with no
-agent, and every pre-#1656 test are byte-identical to before.
+passes it to `ComposerBannerReport`. Authoritative banner and stopped-turn rows
+instead use the supplied item's recorded agent through `ThreadItemsView` and
+`TimelineRow`; missing attribution uses saved text/summary. The deleted `Timeline`
+no longer threads a current-conversation default into these rows.
 
 The next accepted typed or slash send inserts an optimistic user row and clears
 only this transient report. Empty/blocked attempts, daemon activity, trailing idle,
@@ -220,38 +220,13 @@ producer.
 
 ## History page failure and Retry
 
-A settled failure shows “Could not load older messages” with `role="status"` only
-for the displayed conversation's exact owning host while connected, behind every
-occupant in the priority above. An unowned slice, another host's equal conversation
-id, or another conversation cannot supply it. `ComposerHistoryFailure` uses the
-existing recovery layout and `button-small button-small--error`; Retry appears
-only for `retryable: true`. Daemon failure text never supplies the copy.
-
-`retryHistoryPage` rechecks the captured displayed conversation object, connected
-host, exact held failure object and retryability at activation. Navigation (even
-to a new object with the same id), disconnect or a new settlement invalidates the
-action. A local read in progress or outstanding request prevents dispatch. Pending
-and failed state retain the requested cursor and purpose (`older` or `newest`).
-Retry delegates to `requestHistoryPage`, resending that captured cursor with
-`HISTORY_PAGE_LIMIT = 200`; newest Retry sends `cursor: ''` even when retained
-backwards coverage reports `atStart: true`. Completed coverage blocks older Retry;
-legacy failures without cursor/purpose fall back to backwards coverage.
-The [existing history request path](request-history-send.md#the-one-fact-that-shapes-every-piece)
-preserves rows and successful oldest-end coverage. Starting a retry
-removes the settled message and button while pending; correlated success clears
-failure, and a new failure supplies its new retryability. No automatic retry is
-introduced. Fresh backwards demand can still ask after either classification,
-subject to current host ownership, pending/completed-walk guards and trusted
-upward input within two thread viewport heights of the top. Page arrival,
-programmatic scroll, resize and compensation create no backwards demand. See
-[opening/reconnect lifecycle](chat-history.md#received-state-admission-and-ownership).
-
-`historyRetry.test.ts` covers state and stale actions; `historyRetry.test.tsx`
-covers ownership, pending disappearance and priority through the real container.
-`e2e/history-retry.spec.ts` compares the full retry payload and fresh correlation
-id, holds the reply to prove one pending request and retained rows, then releases
-success. Immediate replies could conceal duplicate-demand bugs. It also delivers
-a nonretryable error and proves fresh upward demand remains available.
+Production Older and Retry actions use host-addressed authoritative thread queries
+and their owning query state. The legacy `retryHistoryPage`/`requestHistoryPage`
+cursor/purpose producers and exclusive tests retired with #2030; #2025 removes
+the remaining main/IPC request, reply/failure events and page decoding. See
+[thread recovery](thread-runtime.md#restore-recovery-and-cleanup) and
+[counted activation evidence](thread-runtime.md#main-request-and-recovery-retirement-validation).
+The shared recovery presentation remains available; no raw-history fallback exists.
 
 ## The usage-limit notice — moved to the Top overlay (#1321; moved by #1604)
 
@@ -341,102 +316,39 @@ spec](../../specs/architecture/1494-mcp-failure-status-row.md) for the full revi
 
 ## Background-task count pill, the slot's last occupant (#1435)
 
-The daemon's live background tasks were readable in exactly one place — the `BackgroundTaskPanel`
-behind the More actions menu — so a turn that ended with several tasks still running looked finished.
-This ticket adds the count as the trailing slot's **last** reading, appended to the end of the existing
-`??` chain: `recovery ?? refusal ?? notice ?? history ?? taskCount ?? null`, still gated inside the
-`status.type === 'connected'` arm. Every occupant documented above outranks it — since [#1494](#mcp-server-failure-notice-1494),
-that includes the MCP failure notice — and it is visible only when nothing else in the chain is.
+`ComposerTaskCount({ count, onToggle, open = false })` is the pure shared trailing
+pill. Production receives the count of active supplied task presentations from the
+[thread runtime](thread-runtime.md), matching the drawer's Running partition. Roster
+size, dropped-task counts and retained `selectLiveTaskCountFor` producer state cannot
+add tasks to this reading. Supplied inactive work remains accessible through the
+Background tasks menu even when the active count is zero.
 
-**The count was originally the raw roster size**, `roster.tasks.size + roster.droppedTasks`, read via
-`selectRosterFor(open.id)` — the same no-conditional-hook-call shape as the usage-limit read this slot used
-to hold beside it, before #1604 moved that read into `TopOverlayControl`. **Since
-[#1561](https://github.com/pyrycode/pyrycode-desktop/issues/1561) the count is the LIVE count**,
-[`backgroundTaskRosterStore`](background-task-roster-store.md)'s `selectLiveTaskCountFor(open.id)` — the
-listed tasks claude has not reported terminal on a `background_task_updated` (`status` exactly
-`completed`/`failed`/`stopped`), plus `droppedTasks`. The raw roster size kept the pill lit for a task
-that had already finished whenever the emptier roster that usually precedes the terminal update did not
-arrive first — observed live for 30+ minutes. The selector swap kept the read's shape: a fresh selector
-identity per render still costs a re-subscribe and never a loop, since `selectLiveTaskCountFor` returns a
-plain `number`, a stable primitive for `useSyncExternalStore` with no memo needed — the same property the
-old `selectRosterFor` read had via its stable held-entry-or-`null` reference. "No roster has ever arrived"
-and "observed, nothing alive" are distinct store readings the store itself keeps apart (for the panel),
-but both collapse to `count === 0` here, which is the reading this surface is entitled to make and the
-panel is not. The store, not this component, owns the arithmetic — see [Background-task roster store —
-internals § The pill's
-count](background-task-roster-store-internals.md#the-pills-count-selectlivetaskcountfor-1561) — so a later
-surface counting live background tasks cannot silently disagree with this pill about what counts as
-finished.
+The connected-only status slot keeps task count last, behind reconnect/errors,
+recovery/refusal, model/stopping/history and MCP notices. An absent occupant must
+reach the precedence chain as actual null, not an element whose view later returns
+null. `ComposerTaskCount` itself returns null at `count <= 0`; otherwise it renders
+a real button with “1 task running” or “N tasks running”. The visible text supplies
+the accessible name without a live region or task descriptions.
 
-**`ComposerTaskCount({ count, onToggle, open = false })`** is a pure, exported view in
-`ConversationScreen.tsx`, a prop rather than a store read — the same discipline `TopOverlay` follows for
-the usage pill it moved out of this file — because zustand v5's `useStore` reads `getInitialState()` under
-`renderToStaticMarkup`, so a container test can otherwise reach only one arm. Returns `null` at
-`count <= 0` (`<=` rather than `===`, since `droppedTasks` decodes through a plain `requireNumber` and a
-hostile or buggy daemon can drive the sum negative); otherwise a real
-`<button type="button" className="composer-status__tasks">` holding `'1 task running'` or
-`` `${count} tasks running` `` — a two-way conditional over two client-owned literals, no copy module
-(unlike #1321's `usageLimitNotice.ts`: one number and one word need no pinning module of their own). No
-`aria-label`, no live region — the visible text is already the accessible name, and a count that moves
-every turn would announce on each one.
+The count toggles the same `backgroundTasksOpen` boolean that the overflow-menu item
+opens and drawer Close clears. Production holds it in `PairedShell`, preserving
+visibility across conversation switches; the new thread scope supplies new task
+facts. Bare screens can use local state. While open, the pill adds
+`composer-status__tasks--open` and `aria-expanded="true"`; its Primary inset outline
+leaves the native focus ring free. See the
+[drawer contract](conversation-shell-background-tasks.md#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583).
 
-**[#1634](https://github.com/pyrycode/pyrycode-desktop/issues/1634) made the pill a toggle, not only an
-opener**, once the [background-task panel](conversation-shell-background-tasks.md) became a non-modal
-drawer that stays open across a conversation switch. `ConversationScreen` wires `onToggle` to
-`setPanelOpen(!panelOpen)`, where `setPanelOpen` is `PairedShell`'s lifted state when present (see
-[Background-task panel § Open state lifted](conversation-shell-background-tasks.md#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583)).
-The new `open` prop, defaulted to `false`, adds a `composer-status__tasks--open` class — an inset 1px
-`--color-primary` box-shadow, the design's Primary outline, chosen over the CSS `outline` property so the
-UA focus ring stays free — and an `aria-expanded="true"` attribute only while the drawer is open; at
-`open = false` both are absent, so the closed markup stays byte-identical to what every pre-#1634 test
-site already asserted — the five existing `ComposerTaskCount` test sites needed only the `onOpen` →
-`onToggle` rename, nothing else. The overflow menu's `Background tasks` item is unchanged: it still only
-opens, via the same `setPanelOpen`, and never toggles closed.
+`.composer-status__tasks` keeps neutral Pill tokens, body-small regular text and a
+shrinkable ellipsis chain (`flex: 0 1 auto; min-width: 0`). Its 16px line and 4px
+vertical padding yield the 24px resting row. Static captures need the caller's
+`.conversation` wrapper to inherit the application font; bare markup cannot prove
+typography. A JSX comment in an expression prop must use ordinary `/* … */` syntax,
+not the child-only `{/* … */}` form.
 
-**The count is a plain `number` all the way to the DOM**, which is the whole trust boundary: the roster
-also holds untrusted, model-influenced task `description` and `latestUpdate.patch`, and this slice reads
-neither. `ComposerErrorSlotControl` checks `taskCount === 0` before constructing the element (an absent
-occupant must reach the `??` chain as actual `null`, never as a non-null element whose component renders
-nothing — the standing rule #1321 also states, restated here because this is the chain's new tail).
-
-**`.composer-status__tasks`** takes the neutral Pill treatment `.composer__attachment-name` already
-implements (`--space-2`/`--space-1` padding, `--radius-xs`, `--text-body-small-*` at regular weight,
-`--color-primary-container`/`--color-on-primary-container` — read by token name, never the Figma export's
-light-scheme hex fallback). No `height` — 16px of line plus 4px twice already sums to the row's 24px rest
-height. Unlike the two error occupants' `flex: 0 0 auto`, this element ships `flex: 0 1 auto; min-width: 0`
-with an ellipsis chain — the #1321 rework leg's layout-hazard lesson applied in advance rather than
-re-learned. It costs little (the widest reachable string is ~37 characters, since JS `Number`→`String` is
-bounded around 24 digits and fits the 640px pane unshrunk) but means this occupant yields to the row before
-the row yields to the window, the way the unshrinkable usage-limit notice did not the first time.
-
-**Lessons learned (from the PR's own retrospective):**
-
-- **A `{/* … */}` comment is a syntax error in a JSX *expression* slot**, not merely unsupported style.
-  `trailing={…}` and `statusArea={(sendText) => (…)}` are expression positions, not children, so the JSX
-  comment form fails to parse there while a plain `/* … */` works. `tsc --noEmit` reported unrelated type
-  errors first; esbuild was the tool that actually named it.
-- **A static capture inherits nothing.** A first screenshot rendered the pill in the UA serif because the
-  fixture omitted `.conversation`, the ancestor that resolves `--font-sans` — it would have passed a glance
-  and every markup assertion while proving nothing about typography. Include any caller wrapper that
-  supplies inherited fonts, per [the visual-review recipe](visual-review.md).
-- `backgroundTaskRosterStore` is keyed by conversation id **alone**, with no server origin, so two paired
-  servers issuing the same conversation id would share an entry — pre-existing, not this ticket's to fix.
-  `BackgroundTaskPanel` has the identical exposure and shows task *descriptions* where this pill shows only
-  a number, so this ticket strictly reduces what's reachable rather than widening it.
-- **A pill still reading the same count after an ineffective frame does not prove the frame was applied
-  (#1561).** A `status: ''` frame sent to check that the store leaves the count alone reads identically to
-  the frame never having arrived, since the assertion is "count unchanged" either way. The #1561 e2e spec
-  proves the frame was applied by relying on a later, effective `stopped` frame for the *same* task: frames
-  arrive on one ordered channel, so the pill reaching zero afterward proves the earlier no-op frame was
-  processed and not merely unsent or dropped.
-
-Tested in `ConversationScreen.test.tsx` (vitest only — nothing under `e2e/` sent roster frames until
-[#1634](https://github.com/pyrycode/pyrycode-desktop/issues/1634)'s `background-task-drawer.spec.ts`): the
-count copy and its singular/plural split, the exact-empty absence at zero and at "never observed", the
-markup carrying `composer-status__tasks` and never `composer-status__error`, the open/closed modifier and
-`aria-expanded` pair (#1634 AC2), and the full `ComposerErrorSlot` precedence matrix with the pill yielding
-to every occupant above it in both directions. The e2e spec drives `background_task_roster` frames for two
-conversations on one host and covers the toggle and its outline, typing and sending with the drawer open,
-Escape against the options overlay and against a running turn, and the drawer surviving a conversation
-switch — see [Background-task panel](conversation-shell-background-tasks.md). See
-[#1435](https://github.com/pyrycode/pyrycode-desktop/issues/1435).
+`ConversationScreen.test.tsx` retains static count copy, singular/plural, zero and
+open-state assertions; `threadTaskPresentation.test.tsx` checks supplied activity
+and scoped task identity. Mounted `e2e/background-task-drawer.spec.ts`,
+`e2e/background-task-stop.spec.ts` and `e2e/thread-items.spec.ts` retain menu/count
+open state, task controls and keyboard/close behavior. Static renders execute no
+handlers or effects. Retained roster producer tests remain separate until #2024;
+they do not establish a roster-backed drawer or count.

@@ -9,8 +9,8 @@ Part of [Conversation shell](conversation-shell.md).
 
 ## Session-scoped live presentation
 
-The inactive `threadLiveInputs` projection supplies existing views from
-[summary-bound live state](session-id-store.md#summary-authority-in-the-inactive-thread-adapter).
+The production `threadLiveInputs` projection supplies existing views from
+[summary-bound live state](session-id-store.md#summary-authority-in-the-thread-runtime).
 Live readings remain independent of durable daemon items: turn/stall/retry/compaction,
 thinking/tool/task progress, resetting/rate limits, model/context, session facts/settings,
 MCP/slash/model inventories, suggestions, errors and outstanding permission/question
@@ -43,9 +43,10 @@ every family coexists can bless a stale retry indicator after an error or a stal
 thinking estimate in the next phase. The supplied-input specs in
 `threadLiveState.test.ts` and `threadLiveInputs.test.tsx` cover A→B replacement,
 delayed A readings, family clears, reused host/prompt IDs and atomic status/attention/error
-transitions. Static renders exercise the existing view inputs; production composition,
-integrated interaction and combined live proof remain with
-[#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
+transitions. Static renders exercise existing view inputs. Mounted production
+coverage also checks errors, session replacement and settings refresh through the
+[thread runtime](thread-runtime.md#validation-boundaries). Credentialed live proof
+remains separately pending.
 
 ## Model refusal records
 

@@ -116,9 +116,9 @@ test('picking Compact session sends /compact as an ordinary message (AC1, AC2, A
   await expect(panel).toBeHidden()
 
   // The command lands in the thread as a USER message, exactly as a typed one does — the same optimistic
-  // `userText` echo the send button produces (`.bubble[data-thread-role="user"]`). It follows the thread
+  // `userText` echo the send button produces (`[data-thread-role="user"]`). It follows the thread
   // down through the same `onMessageSent()` notify, whose behaviour thread-scroll-pin.spec.ts owns.
-  await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveText(
+  await expect(page.locator('[data-thread-role="user"]')).toHaveText(
     bubbleTextExactly('/compact'),
     { timeout: ROUNDTRIP_TIMEOUT_MS }
   )
@@ -141,7 +141,7 @@ test('picking Knowledge capture sends /knowledge-capture — the mapping is per 
   // A second entry carrying its own command is enough to prove the mapping is per-row rather than
   // hardcoded to one position. Since #1496 the two slash rows ARE these two, so this pair is the whole
   // mapping rather than a sample of it.
-  await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveText(
+  await expect(page.locator('[data-thread-role="user"]')).toHaveText(
     bubbleTextExactly('/knowledge-capture'),
     { timeout: ROUNDTRIP_TIMEOUT_MS }
   )

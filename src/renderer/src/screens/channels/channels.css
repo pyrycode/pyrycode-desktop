@@ -1046,6 +1046,34 @@
    A margin on each row rather than a padding on a list wrapper because there is no list wrapper: rows are
    flat siblings of the header, host and workspace rows (#703/#704), the ancestry 28 e2e specs click
    through. The adjacent-row rule below sets margin-top alone and leaves this longhand as it is. */
+.channel-list__app-status {
+  margin-left: var(--space-8);
+  color: var(--color-on-surface);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+}
+.channel-list__app-retry {
+  margin-left: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-primary);
+  font: inherit;
+  letter-spacing: var(--text-body-small-tracking);
+  cursor: pointer;
+}
+.channel-list__app-retry:hover { background: var(--color-state-hover); }
+.channel-list__app-retry:focus-visible {
+  outline: 1px solid var(--color-primary);
+  outline-offset: var(--space-1);
+}
+.channel-list__app-state {
+  margin-left: var(--space-2);
+  color: var(--color-on-surface);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+}
 .channel-list__row {
   display: flex;
   align-items: center;

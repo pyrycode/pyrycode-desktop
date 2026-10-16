@@ -81,7 +81,7 @@ test('status spacing and measured input clearance hold with a warning and five-l
   }
   const thread = page.locator('.conversation__thread')
   const input = page.locator('.composer__input')
-  await expect(thread.locator('.bubble[data-thread-role="assistant"]')).toHaveCount(20)
+  await expect(thread.locator('[data-thread-role="assistant"]')).toHaveCount(20)
   const distanceFromBottom = (): Promise<number> => thread.evaluate(
     el => el.scrollHeight - el.clientHeight - el.scrollTop
   )

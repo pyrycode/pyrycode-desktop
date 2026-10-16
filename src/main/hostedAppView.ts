@@ -1,17 +1,19 @@
 /// <reference types="electron-vite/node" />
 import { randomBytes } from 'node:crypto'
 import { STATUS_CODES } from 'node:http'
+import { join } from 'node:path'
 import { WebContentsView, session, type BrowserWindow, type Rectangle } from 'electron'
 import type { ConnectionRegistry } from './connectionRegistry'
 import type { DiagnosticLog } from './diagnosticLog'
 import type { HostedResourceInput, HostedResourceResult } from './transport/hostedResources'
 import lockdownSource from './hostedAppLockdown.js?raw'
+import { installHostedFetch } from './hostedFetch'
 
 export type HostedAppViewState = { type: 'loading' | 'ready' | 'disconnected' | 'unsupported' | 'unavailable' | 'closed' }
 const csp = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'"
 function denyRequest(_details: unknown, callback: (response: { cancel: boolean }) => void): void { callback({ cancel: true }) }
 
-/** Main-process authority only. No renderer IPC or production navigation entry. */
+/** Main-process authority only. No client renderer IPC or production navigation entry. */
 export function createHostedAppViews(registry: Pick<ConnectionRegistry, 'connectionFor'>, log?: DiagnosticLog) {
   const parents = new WeakMap<BrowserWindow, { close(): void }>()
   function open(parent: BrowserWindow, serverId: string, appId: string, bounds: Rectangle) {
@@ -32,17 +34,21 @@ export function createHostedAppViews(registry: Pick<ConnectionRegistry, 'connect
     const navigationStamp = randomBytes(16).toString('hex')
     const isolated = session.fromPartition(`hosted-${randomBytes(16).toString('hex')}`, { cache: false })
     const content = new WebContentsView({ webPreferences: { session: isolated,
+      preload: join(__dirname, '../preload/hosted.js'),
       nodeIntegration: false, contextIsolation: true, sandbox: true, webviewTag: false,
       navigateOnDragDrop: false, spellcheck: false } })
     const wc = content.webContents, abort = new AbortController(), listeners = new Set<() => void>()
     let state: HostedAppViewState = { type: 'loading' }, retired = false, navigation = 0
+    const stopFetch = installHostedFetch(wc, origin, appId, record.active_release,
+      (input, signal) => resource.request(input, signal), resource.cancelRequests,
+      () => log?.event({ event: 'hosted-view', code: 'fetch-denied' }))
     const notify = (): void => {
       for (const listener of [...listeners]) { try { listener() } catch { /* Observers cannot change policy. */ } }
     }
     const event = (code: string): void => log?.event({ event: 'hosted-view', code })
     function finish(type: HostedAppViewState['type']): void {
       if (retired) return
-      retired = true; state = { type }; abort.abort(); resource.retire(); off()
+      retired = true; state = { type }; resource.retire(); stopFetch(); abort.abort(); off()
       parent.removeListener('closed', onParentClosed)
       if (!parent.isDestroyed()) parent.contentView.removeChildView(content)
       if (parents.get(parent) === view) parents.delete(parent)

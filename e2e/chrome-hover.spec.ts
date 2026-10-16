@@ -102,8 +102,12 @@ for (const width of [1280, 800]) {
     daemon.pushFrame(encodeEnvelope({ id: 52, type: 'rate_limited', ts: '2026-10-07T00:00:00Z',
       payload: { conversation_id: SEEDED_ROW.id, status: 'rejected', limit_type: 'five_hour', resets_at: 4102444800, truncated_fields: null } }))
     const inert = page.locator('div.top-overlay-pill--error')
-    await expect(inert).toBeVisible()
-    await inert.hover()
-    expect(await inert.evaluate(el => getComputedStyle(el).backgroundImage)).toBe('none')
+    // Usage and connection explanations coexist; neither non-dismissible pill has an action layer.
+    await expect(inert).toHaveCount(2)
+    for (const pill of await inert.all()) {
+      await expect(pill).toBeVisible()
+      await pill.hover()
+      expect(await pill.evaluate(el => getComputedStyle(el).backgroundImage)).toBe('none')
+    }
   })
 }

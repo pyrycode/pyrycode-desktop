@@ -231,10 +231,10 @@ it('applies an unsolicited family clear only to a held reading in the same authe
   f.emit({ type: 'resetting', active: true, phase: 'restarting', handoff: 'written',
     conversationId: 'chat', serverId: 'one', envelopeSessionId: 'A' })
   expect(f.inputs().status.resetting).not.toBeNull()
-  f.emit({ type: 'sessionStateCleared', family: 'resetting', serverId: 'two', envelopeSessionId: 'A' })
-  f.emit({ type: 'sessionStateCleared', family: 'resetting', serverId: 'one', envelopeSessionId: 'B' })
+  f.emit({ type: 'sessionStateCleared', family: 'resetting', correlation: { id: 9, ts: '' }, serverId: 'two', envelopeSessionId: 'A' })
+  f.emit({ type: 'sessionStateCleared', family: 'resetting', correlation: { id: 9, ts: '' }, serverId: 'one', envelopeSessionId: 'B' })
   expect(f.inputs().status.resetting).not.toBeNull()
-  f.emit({ type: 'sessionStateCleared', family: 'resetting', serverId: 'one', envelopeSessionId: 'A' })
+  f.emit({ type: 'sessionStateCleared', family: 'resetting', correlation: { id: 9, ts: '' }, serverId: 'one', envelopeSessionId: 'A' })
   expect(f.inputs().status.resetting).toBeNull()
   f.emit({ type: 'runConfigReceived', conversationId: 'chat', sessionId: 'A', model: 'model-A', effort: 'high',
     yolo: false, permissionMode: 'default', used_tokens: 0, window_tokens: 100, serverId: 'one', envelopeSessionId: 'A' })

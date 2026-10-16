@@ -2,8 +2,8 @@
   "format": "pyrycode.daemon-exchange",
   "version": 2,
   "source": {
-    "capturedAt": "2026-10-16T11:57:27.747Z",
-    "desktopRevision": "327cbc173f2e288d9e018fcb3bebfe8055db84e8",
+    "capturedAt": "2026-10-16T12:30:22.594Z",
+    "desktopRevision": "00ec821f9380b00cf2dfc0dd4817ee15584106a5",
     "daemonRevision": "58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf",
     "daemonBinarySha256": "5f5b3b9ce42eda74024637f4929dd720d36c1226ce6e370eb62fbe9e6b22f7c0",
     "claudeVersion": "not-spawned"
@@ -11,7 +11,7 @@
   "scenario": {
     "id": "daemon-multi-agent",
     "inputs": {
-      "nonce": 1792151847765
+      "nonce": 1792153822611
     },
     "workspace": "/recorded/workspace"
   },
@@ -21,32 +21,32 @@
     "stop_background_task",
     "thread"
   ],
-  "deviceId": "c8059c775029369bf626e8305d8425255b9f3e4a0642c0f0be8439c489edae11",
+  "deviceId": "769db80296bb755349dac43159bc0c0503f9fcb650ea631c3565b2e6a710670d",
   "devices": [
-    "c8059c775029369bf626e8305d8425255b9f3e4a0642c0f0be8439c489edae11",
-    "c8059c775029369bf626e8305d8425255b9f3e4a0642c0f0be8439c489edae11"
+    "769db80296bb755349dac43159bc0c0503f9fcb650ea631c3565b2e6a710670d",
+    "769db80296bb755349dac43159bc0c0503f9fcb650ea631c3565b2e6a710670d"
   ],
   "barriers": [],
   "closures": [],
   "wire": [
     {
       "direction": "client",
-      "atMs": 283,
+      "atMs": 284,
       "message": {
         "id": 2,
         "type": "list_conversations",
-        "ts": "2026-10-16T11:57:28.196Z",
+        "ts": "2026-10-16T12:30:23.035Z",
         "payload": {}
       },
       "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 296,
+      "atMs": 300,
       "message": {
         "id": 2,
         "type": "turn_state",
-        "ts": "2026-10-16T11:57:27.820092Z",
+        "ts": "2026-10-16T12:30:22.647053Z",
         "payload": {},
         "conversation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "session_id": "77777777-7777-4777-8777-777777777777",
@@ -56,11 +56,11 @@
     },
     {
       "direction": "daemon",
-      "atMs": 296,
+      "atMs": 300,
       "message": {
         "id": 3,
         "type": "turn_state",
-        "ts": "2026-10-16T11:57:27.820092Z",
+        "ts": "2026-10-16T12:30:22.647053Z",
         "payload": {
           "conversation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
           "state": "idle"
@@ -72,11 +72,11 @@
     },
     {
       "direction": "daemon",
-      "atMs": 297,
+      "atMs": 301,
       "message": {
         "id": 4,
         "type": "conversations",
-        "ts": "2026-10-16T11:57:28.207364Z",
+        "ts": "2026-10-16T12:30:23.049282Z",
         "payload": {
           "conversations": [
             {
@@ -103,11 +103,11 @@
     },
     {
       "direction": "daemon",
-      "atMs": 306,
+      "atMs": 359,
       "message": {
         "id": 2,
         "type": "turn_state",
-        "ts": "2026-10-16T11:57:27.820092Z",
+        "ts": "2026-10-16T12:30:22.647053Z",
         "payload": {},
         "conversation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "session_id": "77777777-7777-4777-8777-777777777777",
@@ -117,11 +117,11 @@
     },
     {
       "direction": "daemon",
-      "atMs": 306,
+      "atMs": 359,
       "message": {
         "id": 3,
         "type": "turn_state",
-        "ts": "2026-10-16T11:57:27.820092Z",
+        "ts": "2026-10-16T12:30:22.647053Z",
         "payload": {
           "conversation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
           "state": "idle"
@@ -133,22 +133,22 @@
     },
     {
       "direction": "client",
-      "atMs": 307,
+      "atMs": 360,
       "message": {
         "id": 3,
         "type": "list_conversations",
-        "ts": "2026-10-16T11:57:28.220Z",
+        "ts": "2026-10-16T12:30:23.111Z",
         "payload": {}
       },
       "connection": 2
     },
     {
       "direction": "daemon",
-      "atMs": 307,
+      "atMs": 360,
       "message": {
         "id": 4,
         "type": "conversations",
-        "ts": "2026-10-16T11:57:28.220404Z",
+        "ts": "2026-10-16T12:30:23.111554Z",
         "payload": {
           "conversations": [
             {

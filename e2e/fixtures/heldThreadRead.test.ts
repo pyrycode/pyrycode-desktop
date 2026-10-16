@@ -119,7 +119,10 @@ describe('installHeldThreadRead', () => {
 
   it.each([0, 1])('classifies fatal evaluation %s without leaking arbitrary detail', async index => {
     const h = harness(index === 0 ? [new Error('private payload')] : ['after', new Error('private payload')])
-    await expect(installHeldThreadRead(h.app)).rejects.toThrow(index === 0 ? 'Held thread read installation failed' : 'Held thread read inspection failed')
+    const failure = await installHeldThreadRead(h.app).catch(error => error)
+    expect(failure).toBeInstanceOf(Error)
+    expect(failure.message).toBe(index === 0 ? 'Held thread read installation failed' : 'Held thread read inspection failed')
+    expect(failure).not.toHaveProperty('cause')
     expect(h.evaluations).toBe(index + 1)
   })
 

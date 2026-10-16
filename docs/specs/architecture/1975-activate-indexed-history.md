@@ -58,6 +58,12 @@ Keep existing classified results: invalid requests before I/O, unsupported versi
 
 None. The simpler atomic design stores protected lists in SQLite rather than coordinating two writable stores.
 
+## Documentation handoff
+
+- Pending documentation stage: `docs/knowledge/features/chat-history.md` (Storage and concurrency), `chat-history-api.md` (API), `chat-history-storage.md` (Protected collection), and `chat-history-results.md` (Results and failure preservation): production indexed activation, schema 5, protected lists, atomic two-format import, durable completion/retirement, cleanup retry and deletion fences; retire descriptions of unbound indexed storage.
+- Pending documentation stage: `docs/knowledge/features/chat-history-storage.md` (Window close and app quit) and `chat-history-api.md` (API): application-lifetime ownership, shutdown drain, conversation admission invalidation, identity reuse and credential-first unpair errors.
+- Pending documentation stage: `docs/knowledge/features/chat-history-testing.md` (Native runtime and packaged proof; Recording and removal): counted Linux migration/removal/lifecycle/native evidence and Node/Electron ABI preparation. Bounded pages remain main-only for #1931; historical failures retain their original status and macOS is outside this Linux run's verification scope.
+
 ## Security review
 
 **Verdict:** PASS
@@ -76,6 +82,8 @@ None. The simpler atomic design stores protected lists in SQLite rather than coo
 **Date:** 2026-10-15
 
 ## Revisions
+
+2026-10-16 — Additional rework guard `keeps invalid destination list decoding unreadable before importing either family` proves a raw destination JSON failure stays a read/validation error and leaves both families, completion and source intact before later same-queue recovery. Added the verifier's documentation-stage handoff above; no knowledge files are edited by the builder.
 
 2026-10-16 — Verifier rework for reviewed commit `54d7010a`, findings 1 and 2. Within the existing import transaction, validate all addressed destination records and collect missing snapshots before entering the mutation phase. Preserve classified backend/validation/protection errors; classify raw list insertion, completion-marker insertion and outer import COMMIT failures as `write-failed`. Share static error mapping with normal operations so stored list versions retain `unsupported-version` for reads, replacement and both removals. No public interface, durable state, authorization, queue or encryption changes. No in-flight branch overlaps these rework files. Forecast under 180 additional source/test/plan lines, no new exports or consumers, within the accepted activation floor exception.
 

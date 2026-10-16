@@ -98,6 +98,84 @@ it('rolls back an interrupted two-format import and retries without duplicates',
   expect(await next.store.execute(read('readThread'))).toEqual({ status: 'stored', snapshot: thread() })
 })
 
+it.each(['list insertion', 'marker insertion', 'outer commit'])('classifies an import %s failure and rolls back both families before queued retry', async mode => {
+  const h = await setup(), first = h.fresh()
+  const legacy = createIndexedLegacyHistory({ database: first.database, encryption: h.encryption, log: h.log })
+  const threads = createIndexedThreadHistory({ database: first.database, encryption: h.encryption, log: h.log })
+  expect(await legacy.execute({ ...read('replaceTimeline', 'b'), snapshot: timeline('b') })).toEqual({ status: 'ok' })
+  expect(await threads.execute({ ...read('replaceThread', 'b'), snapshot: thread('b') })).toEqual({ status: 'ok' })
+  await h.seed([timeline(), thread(), list])
+  const source = await h.persistence.read('chat-history')
+  first.database.transaction(db => db.exec(mode === 'outer commit' ? `
+    CREATE TABLE import_parent (id INTEGER PRIMARY KEY);
+    CREATE TABLE import_child (id INTEGER REFERENCES import_parent(id) DEFERRABLE INITIALLY DEFERRED);
+    CREATE TRIGGER fail_import AFTER INSERT ON history_import
+      BEGIN INSERT INTO import_child VALUES (1); END;
+  ` : `CREATE TRIGGER fail_import BEFORE INSERT ON ${mode === 'list insertion' ? 'history_lists' : 'history_import'}
+      BEGIN SELECT RAISE(FAIL, 'import rejected'); END;`))
+  const failing = first.store.execute(read()), queued = first.store.execute(read('readThread'))
+  for (const result of [await failing, await queued]) expect(result).toEqual({ status: 'error', code: 'write-failed' })
+  expect(await h.persistence.read('chat-history')).toEqual(source)
+  first.database.transaction(db => {
+    for (const table of ['history_import', 'history_lists'])
+      expect(db.prepare(`SELECT count(*) AS n FROM ${table}`).get()).toEqual({ n: 0 })
+    for (const table of ['legacy_scopes', 'thread_scopes'])
+      expect(db.prepare(`SELECT server FROM ${table}`).all()).toEqual([{ server: Buffer.from('b', 'utf16le') }])
+    expect(db.prepare('SELECT count(*) AS n FROM sqlite_master WHERE name = ?').get('fail_import')).toEqual({ n: 1 })
+  })
+  expect(await legacy.execute(read('readTimeline', 'b'))).toEqual({ status: 'stored', snapshot: timeline('b') })
+  expect(await threads.execute(read('readThread', 'b'))).toEqual({ status: 'stored', snapshot: thread('b') })
+  first.database.transaction(db => db.exec('DROP TRIGGER fail_import'))
+  expect(await first.store.execute(read())).toEqual({ status: 'stored', snapshot: timeline() })
+  await first.store.close()
+  const next = h.fresh()
+  expect(await next.store.execute(read())).toEqual({ status: 'stored', snapshot: timeline() })
+  expect(await next.store.execute(read('readThread'))).toEqual({ status: 'stored', snapshot: thread() })
+  expect(await next.store.execute({ operation: 'readList', serverId: 'a' })).toEqual({ status: 'stored', snapshot: list })
+  expect(next.database.transaction(db => db.prepare('SELECT * FROM history_import').all())).toEqual([{ singleton: 1, retired: 1 }])
+  expect(await h.persistence.read('chat-history')).toBeNull()
+})
+
+it.each([9, 1.5, '9'])('preserves a stored list with version %s across reads and mutations', async version => {
+  const h = await setup(), first = h.fresh()
+  await h.seed([timeline(), thread(), list])
+  expect(await first.store.execute(read())).toEqual({ status: 'stored', snapshot: timeline() })
+  const payload = Buffer.from(h.encryption.encrypt(Buffer.from(JSON.stringify({ ...list, version }))))
+  first.database.transaction(db => db.prepare('UPDATE history_lists SET payload = ?').run(payload))
+  await first.store.close()
+  h.secureStore.get = async () => { throw Error('completed import must not reopen source') }
+  const next = h.fresh()
+  for (const request of [{ operation: 'readList', serverId: 'a' }, { operation: 'replaceList', serverId: 'a', snapshot: list },
+    read('removeConversation'), { operation: 'removeServer', serverId: 'a' }]) {
+    expect(await next.store.execute(request)).toEqual({ status: 'error',
+      code: version === 9 ? 'unsupported-version' : 'unreadable' })
+    expect(next.database.transaction(db => db.prepare('SELECT payload FROM history_lists').all())).toEqual([{ payload }])
+    expect(await next.store.execute(read())).toEqual({ status: 'stored', snapshot: timeline() })
+    expect(await next.store.execute(read('readThread'))).toEqual({ status: 'stored', snapshot: thread() })
+  }
+  expect(await next.store.execute({ ...read('replaceThread', 'b'), snapshot: thread('b') })).toEqual({ status: 'ok' })
+  await next.store.close()
+  const reopened = h.fresh()
+  expect(await reopened.store.execute(read('readThread', 'b'))).toEqual({ status: 'stored', snapshot: thread('b') })
+  expect(reopened.database.transaction(db => db.prepare('SELECT payload FROM history_lists').all())).toEqual([{ payload }])
+})
+
+it('keeps invalid destination list decoding unreadable before importing either family', async () => {
+  const h = await setup(), first = h.fresh()
+  await h.seed([timeline(), thread(), list])
+  const source = await h.persistence.read('chat-history'), payload = Buffer.from(h.encryption.encrypt(Buffer.from('{')))
+  first.database.transaction(db => db.prepare('INSERT INTO history_lists VALUES (?, ?)').run(Buffer.from('a', 'utf16le'), payload))
+  expect(await first.store.execute(read())).toEqual({ status: 'error', code: 'unreadable' })
+  expect(await h.persistence.read('chat-history')).toEqual(source)
+  first.database.transaction(db => {
+    expect(db.prepare('SELECT payload FROM history_lists').all()).toEqual([{ payload }])
+    for (const table of ['legacy_scopes', 'thread_scopes', 'history_import'])
+      expect(db.prepare(`SELECT count(*) AS n FROM ${table}`).get()).toEqual({ n: 0 })
+    db.exec('DELETE FROM history_lists')
+  })
+  expect(await first.store.execute(read('readThread'))).toEqual({ status: 'stored', snapshot: thread() })
+})
+
 it.each(['timeline', 'daemon-items'])('classifies an outer %s replacement commit failure and preserves the committed snapshot', async kind => {
   const h = await setup(), first = h.fresh()
   const operation = kind === 'timeline' ? 'replaceTimeline' : 'replaceThread'

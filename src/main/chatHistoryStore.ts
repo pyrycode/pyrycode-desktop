@@ -29,6 +29,14 @@ function decode(bytes: Uint8Array): ChatHistorySnapshot[] {
   }
   return snapshots
 }
+function failure(error: unknown, fallback: 'unreadable' | 'write-failed' | 'remove-failed'): Extract<ChatHistoryResult, { status: 'error' }> {
+  if (typeof error === 'object' && error !== null && 'status' in error && error.status === 'error' && 'code' in error &&
+    (error.code === 'write-failed' || error.code === 'remove-failed' || error.code === 'unreadable' || error.code === 'encryption-unavailable' || error.code === 'unsupported-version'))
+    return { status: 'error', code: error.code }
+  return { status: 'error', code: error === UNSUPPORTED_CHAT_HISTORY_VERSION ? 'unsupported-version'
+    : error === INVALID_CHAT_HISTORY ? 'unreadable'
+      : error instanceof EncryptionUnavailableError ? 'encryption-unavailable' : fallback }
+}
 
 /** One main-process instance owns import and both indexed families for the app lifetime. */
 export function createChatHistoryStore(deps: {
@@ -58,28 +66,35 @@ export function createChatHistoryStore(deps: {
     if (database.transaction(db => db.prepare('SELECT singleton FROM history_import').get()) !== undefined) return
     const bytes = await secureStore.get(NAME)
     const snapshots = bytes === null ? [] : decode(bytes)
-    database.transaction(db => {
-      // A second owner may have completed while the protected read was pending.
-      if (db.prepare('SELECT singleton FROM history_import').get()) return
-      for (const snapshot of snapshots) {
-        if (snapshot.kind === 'list') {
-          if (list(db, snapshot.serverId) === null) saveList(db, snapshot)
-        } else {
+    let writing = false
+    try {
+      database.transaction(db => {
+        // A second owner may have completed while the protected read was pending.
+        if (db.prepare('SELECT singleton FROM history_import').get()) return
+        const missing = snapshots.filter(snapshot => {
+          if (snapshot.kind === 'list') return list(db, snapshot.serverId) === null
           const backend = snapshot.kind === 'timeline' ? legacy : threads
           const existing = backend.executeSync({ operation: snapshot.kind === 'timeline' ? 'readTimeline' : 'readThread',
             serverId: snapshot.serverId, conversationId: snapshot.conversationId })
           if (existing.status === 'page') throw INVALID_CHAT_HISTORY
           requireSuccess(existing)
-          if (existing.status === 'missing') {
+          return existing.status === 'missing'
+        })
+        // Validation is complete; raw failures now include mutation and the outer COMMIT.
+        writing = true
+        for (const snapshot of missing) {
+          if (snapshot.kind === 'list') saveList(db, snapshot)
+          else {
+            const backend = snapshot.kind === 'timeline' ? legacy : threads
             const result = backend.executeSync({ operation: snapshot.kind === 'timeline' ? 'replaceTimeline' : 'replaceThread',
               serverId: snapshot.serverId, conversationId: snapshot.conversationId, snapshot })
             if (result.status === 'page') throw INVALID_CHAT_HISTORY
             requireSuccess(result)
           }
         }
-      }
-      db.prepare('INSERT INTO history_import VALUES (1, 0)').run()
-    })
+        db.prepare('INSERT INTO history_import VALUES (1, 0)').run()
+      })
+    } catch (error) { throw failure(error, writing ? 'write-failed' : 'unreadable') }
   }
   async function retireSource(): Promise<boolean> {
     if (!database.transaction(db => db.prepare('SELECT singleton FROM history_import WHERE retired = 0').get())) return true
@@ -104,13 +119,7 @@ export function createChatHistoryStore(deps: {
       if (!encryption.isAvailable()) throw new EncryptionUnavailableError()
       await importSource()
     } catch (error) {
-      if (typeof error === 'object' && error !== null && 'status' in error && error.status === 'error' && 'code' in error &&
-        (error.code === 'write-failed' || error.code === 'unreadable' || error.code === 'encryption-unavailable' || error.code === 'unsupported-version'))
-        return { status: 'error', code: error.code }
-      return {
-        status: 'error', code: error === UNSUPPORTED_CHAT_HISTORY_VERSION ? 'unsupported-version'
-          : error instanceof EncryptionUnavailableError ? 'encryption-unavailable' : 'unreadable'
-      }
+      return failure(error, 'unreadable')
     }
     const { operation, serverId } = request
     let reading = true
@@ -145,13 +154,7 @@ export function createChatHistoryStore(deps: {
       const retired = await retireSource()
       return !retired && operation.startsWith('remove') ? { status: 'error', code: 'remove-failed' } : result
     } catch (error) {
-      if (typeof error === 'object' && error !== null && 'status' in error && error.status === 'error' && 'code' in error &&
-        (error.code === 'write-failed' || error.code === 'remove-failed' || error.code === 'unreadable' || error.code === 'encryption-unavailable' || error.code === 'unsupported-version'))
-        return { status: 'error', code: error.code }
-      return {
-        status: 'error', code: error instanceof EncryptionUnavailableError ? 'encryption-unavailable'
-          : reading ? 'unreadable' : operation.startsWith('remove') ? 'remove-failed' : 'write-failed'
-      }
+      return failure(error, reading ? 'unreadable' : operation.startsWith('remove') ? 'remove-failed' : 'write-failed')
     }
   }
   return {

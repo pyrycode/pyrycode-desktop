@@ -19,11 +19,19 @@ its catch-up cursor after a profile restart.
 On initial launch and every profile relaunch, the shared replay fixture probes
 `better-sqlite3` in Electron's main process before device binding and pairing. It
 loads the application's installed addon, queries an in-memory database and closes
-it. A failed probe produces the static diagnostic
+it. An observed false probe produces the static diagnostic
 `Replay requires working Electron SQLite; run npm run rebuild:electron before replay.`
 Loader errors and paths are not exposed. This prerequisite check does not prove
 protected-profile persistence or current provider behavior; see the
 [native-storage diagnosis and Linux replay evidence](knowledge/features/development-verification.md#replay-native-storage-prerequisite).
+
+The prerequisite and history's `mainRead` use synchronous inspector evaluation
+to bypass persistent collected promises after profile relaunch. An unavailable
+inspection remains distinct from a false addon probe or an empty history result;
+it fails within the existing five-second bound rather than claiming SQLite is
+unavailable. Playwright upgrades must retain checks for the adapter's internal
+local session access. See the [inspection contract](knowledge/features/e2e-harness-context-recovery.md#persistent-awaited-inspector-loss)
+and [counted Linux relaunch evidence](knowledge/features/development-verification.md#replay-inspection-after-profile-relaunch).
 
 Seven named read-only queries may reorder within an action. Every other request is an ordered barrier, including read marks. A query cannot borrow a future reply. Daemon frames retain recorded order and wait for all preceding requests, captured connection transitions and explicit test-side checkpoints. Missing, duplicate, extra or changed requests fail even after the final visible assertion. Diagnostics report counts and source provenance without payloads.
 

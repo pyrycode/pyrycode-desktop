@@ -121,7 +121,19 @@ never executes or claims the filesystem/OS proof.
 
 Observed push-overload closes are recorded at the exact application-message prefix with their actual WebSocket code. Replay forwards every preceding encrypted frame before reproducing that local close; explicit application reconnects and profile relaunches still come from the shared scenario. Capture adapters remain separate build inputs.
 
-The evidence observers also retain native identity semantics: queue markers include an ordered same-revision suffix, and a completed permission turn is counted once even when reconnect returns its item again. These repairs preserve every original matcher and strengthen the meaning of completion. An AST audit retains all 1,028 original expect expressions, plus all 1,036 from merged baseline `aebee62f`, normalizing only type assertions and the equivalent read-only inspection wrapper. The wrapper retries only the existing transient CDP inspection failure. Isolation read-back uses the same bounded treatment, preserving all isolation matchers. History observer installation inspects the actual IPC listener after a lost acknowledgement; a guarded installation can run again only after conclusive absence, and cannot duplicate a late listener or reset observations. All original matchers and expected values remain unchanged.
+The evidence observers also retain native identity semantics: queue markers include an ordered same-revision suffix, and a completed permission turn is counted once even when reconnect returns its item again. These repairs preserve every original matcher and strengthen the meaning of completion. An AST audit retains all 1,028 original expect expressions, plus all 1,036 from merged baseline `aebee62f`, normalizing only type assertions and the equivalent read-only inspection wrapper.
+
+History's `mainRead` now uses synchronous inspection to bypass persistent
+awaited-inspector promise loss after relaunch, polling only unavailable reads
+within the existing five-second bound. Valid false/empty observations retain
+their original assertions. The replay SQLite prerequisite uses the same scoped
+adapter; a false probe still rejects the addon with its rebuild diagnostic.
+Isolation read-back retains its existing bounded transient-error treatment and
+all isolation matchers. History observer installation inspects the actual IPC
+listener after a lost acknowledgement; a guarded installation can run again only
+after conclusive absence, and cannot duplicate a late listener or reset observations.
+All original matchers and expected values remain unchanged. See the
+[inspection contract and dependency-upgrade caveat](knowledge/features/e2e-harness-context-recovery.md#persistent-awaited-inspector-loss).
 
 
 The queue-drop scenario positively observes its native turn completion and rendered
@@ -140,6 +152,14 @@ wins the merge; a replacement item invalidates it. This integrates with the
 saved/live restoration fixes merged in PR #2058.
 
 ## Validation evidence
+
+The [Linux relaunch repair evidence](knowledge/features/development-verification.md#replay-inspection-after-profile-relaunch)
+records five consecutive two-worker paired runs, the complete guarded recorded
+suite and the configured application gate for #2072. It preserves the failed
+gate's unrelated visible-tail result separately. Both repaired scenarios passed
+without changing capture bytes or provenance, strict matching, causal barriers
+or exchange-completion checks. These offline results add no live/physical-effect
+acceptance; the existing system-prompt-reset fixme remains excluded.
 
 On October 16, all 29 active cases passed fresh live capture on Desktop
 `8bd3abb9`, using the isolated `58f46aa5` daemon (macOS binary SHA-256

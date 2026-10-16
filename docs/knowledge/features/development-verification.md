@@ -66,6 +66,70 @@ matcher and causal barriers unchanged. These are recorded offline Linux results;
 current provider behavior and live physical effects are not established, and
 macOS is outside this ticket's verification scope.
 
+## Replay inspection after profile relaunch
+
+Bounded `app.evaluate` polling cannot recover persistent inspector await-promise
+loss. At unchanged main `5c0793c7`, controlled inspection of `__threadHistoryAsks`
+failed six consecutive times with `Runtime.callFunctionOn: Promise was collected`.
+Even an awaited constant failed while the same-process synchronous history read
+succeeded with `awaitPromise: false`; scheduling a Node turn did not restore it.
+The original #2069 failures at `340f6a961a` retained only Playwright's rewritten
+destroyed-context error: thread lost `assertReplayNativeStorage` after relaunch
+(6 requests remaining), and history exhausted `mainRead` (14 remaining).
+The unchanged rerun passed both with zero remaining; #2068 hit the same history
+boundary. The controlled reproduction establishes the mechanism at that boundary;
+the original reports do not expose their underlying protocol errors.
+
+[`readReplayMainProcess`](../../../e2e/fixtures/replayNativeStorage.ts) bypasses
+the awaited path only for the SQLite prerequisite and history's synchronous
+`mainRead` observations. Public `evaluateHandle` also forces `awaitPromise` and
+is not an alternative. The adapter obtains the current app's local inspector
+session on every call; it never caches a session across relaunch. Playwright's
+internal `_connection.toImpl(app)._nodeSession` access is isolated here and depends
+on the lockfile-pinned implementation. Dependency upgrades must retain the
+synchronous-inspection regressions and both relaunch replay checks. See the
+[inspection contract](e2e-harness-context-recovery.md#persistent-awaited-inspector-loss)
+for valid empty values, bounded unavailability and mutation boundaries.
+
+The [verifier evidence](https://github.com/pyrycode/pyrycode-desktop/pull/2073#issuecomment-6221253088)
+records Linux x64 on 2026-10-16, implementation `db6c6bb9`, reviewed head
+`20fd3f8b`, main `5c0793c7`. These are retained results, not documentation reruns:
+
+- Controlled regression `checks storage when the inspector loses every
+  awaitPromise acknowledgement`: original **6 executed, 5 passed, 1 failed,
+  0 skipped**; repaired targeted run **23 executed/passed, 0 failed/skipped**,
+  including that case and all four observer-registration cases.
+- Five consecutive focused guarded runs each used two actual workers,
+  `--fully-parallel --workers 2 --retries 0`: **2 executed/passed, 0 failed/skipped**
+  per run, **10 executed/passed, 0 failed/skipped** total. Both named scenarios
+  were present and passed in every run:
+  `daemon-built thread streams, places an agent, reconnects, resets and reopens saved items`
+  and `a real daemon lazily fills a served gap after more than 200 entries written while Electron is closed`.
+  Every thread exchange matched 45 requests/emitted 378 frames; history matched
+  32/emitted 63. All ten had zero remaining requests and zero forbidden launches.
+- Subsequent complete guarded `npm run e2e:recorded` used one worker, retries zero:
+  **29 executed/passed, 0 failed, 1 skipped**. Both named cases were present and
+  passed; all 29 exchanges had zero remaining requests, with zero forbidden launches.
+  The explicit skip remains `real claude picks up a saved channel system prompt at Reset session`.
+- Configured application gate used two actual workers, retries zero:
+  **492 executed, 491 passed, 1 failed, 4 skipped**. Both named cases passed on
+  their first attempt with the same complete exchanges above; all 29 replay
+  exchanges had zero remaining requests. The unrelated visible-tail failure is
+  tracked in #2074; its separate rerun was **2 executed/passed, 0 failed/skipped**.
+  This does not turn the original full gate into a failure-free run. Skips were
+  three macOS-only cases and the system-prompt-reset fixme.
+
+Capture bytes, assertions, strict matching and causal barriers are unchanged:
+Desktop source `00ec821f9380b00cf2dfc0dd4817ee15584106a5`, daemon source
+`58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`, binary SHA256
+`5f5b3b9ce42eda74024637f4929dd720d36c1226ce6e370eb62fbe9e6b22f7c0`.
+The [plan's evidence paths](../../specs/architecture/2072-replay-inspection.md#validation-evidence)
+retain diagnostics, red/green regression reports and `focused-1` through
+`focused-5` plus `recorded-full` reports under `/tmp/builder-2072/`.
+Offline replay establishes no fresh provider/daemon or physical-effect evidence;
+macOS is outside this Linux ticket's verification scope. The SQLite ABI
+prerequisite above still applies independently of inspection availability.
+
 ## Owned history mutation evidence
 
 A one-item edit after full replacement can conceal an unbounded production append

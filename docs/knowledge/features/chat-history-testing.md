@@ -206,54 +206,36 @@ Claude test is required for this unbound storage backend.
 ## Recording and removal
 
 [`chatHistoryWriter.test.ts`](../../../src/renderer/src/store/chatHistoryWriter.test.ts)
-injects stores, receipt context, scheduling and storage to prove coalescing,
-return-to-saved-value suppression, newest-during-write retention, failure recovery,
-successful coverage, attribution refusal and capture before eleven-chat eviction.
-Equal-id cases alternate stamped hosts before and after buffered writes flush,
-checking distinct text, turn completion and coverage without crossover. Explicit
-saved restoration followed by a same-host receipt must keep recording even when
-both lists claim the id. Separate refusal cases retain unknown/directly installed
-rows through a later stamp and reject missing origins and ambiguous local echoes;
-a store-cleared host replacement must not be treated as retained contamination.
-Cancellation regressions must include later live content and retained coverage;
-checking only echo addition or its immediate removal misses a writer that has
-silently stopped recording the held chat.
-
-Removal regressions hold membership checks and protected writes, then use fresh
-storage instances to verify absent lists and omitted timelines, stale admission
-rejection, other-host preservation and fresh saves after re-pairing. Writer tests
-also hold removal through shutdown for both outcomes.
-[`chat-history-removal.test.ts`](../../../e2e/chat-history-removal.test.ts) combines
-receipt-stamped holders, the real scoped-clear selector and protected storage.
-Its same-session re-pair must save only fresh text for an omitted timeline. Manually
-clearing all timelines or restarting before re-pairing masks the retained-slice bug.
-The recording Playwright scenario re-pairs before restart, then checks persistence
-after restart and no added history downloads.
-
-Conversation-deletion regressions hold real protected-store list and timeline writes,
-deliver confirmation with buffered and later stale captures, and await flush/stop
-before fresh-instance reads. They check both removed records, same-host peers and
-another host's equal id. Empty/partial lists and eviction must retain timelines;
-failed cleanup must preserve content without a success diagnostic. The recording
-Playwright test holds confirmation after the delete command, proves retention, then
-waits for the actual `removeConversation` result to be `ok` before asserting absence
-and restarting. Renderer disappearance or an early missing read cannot prove cleanup
-or ordering; the scenario withholds list refresh responses throughout deletion. Its two
-`__conversationRemovals` counter reads go through the shared `readMainProcess` helper, bounded at
-five seconds, so a transient loss of Electron's inspection context does not redden the scenario (see
-[E2E test harness § Tolerating a transient inspection-context loss on
-reads](e2e-harness-context-recovery.md#tolerating-a-transient-inspection-context-loss-on-reads)); the counting
-wrapper's own install stays a single un-retried call.
+injects required list/item stores, receipt context, scheduling and storage. It
+covers host-matched received-list admission, coalescing, return-to-saved-value
+suppression, newest-during-write retention, contained write failures and shutdown.
+Generic persistence/removal assertions use authoritative snapshots.
+`retains ordered deletion when a late item holder is cleared before draining`
+pins the independent removal queue key: clearing a late holder must cancel its
+pending item save without cancelling disk removal. Pending-unpair tests hold both
+settlement outcomes through shutdown, and old in-flight completions cannot restore
+comparison state after successful removal.
 
 [`daemonItemCache.test.ts`](../../../src/renderer/src/store/daemonItemCache.test.ts)
-injects the optional thread source into the same writer. It holds an in-flight save
-while newer snapshots and an epoch replacement arrive, then checks the final owned
-snapshot and the equal-id peer host. Hydration schedules no write; subsequent owned
-facts remain saveable. Confirmation during buffered/held saves clears the held
-conversation, suppresses later captures and queues removal behind admitted writes.
-Successful/failed unpair cases exercise the pause, off-screen scopes, delayed reads,
-other-host preservation and fresh same-host reuse rather than restarting away
-ownership bugs. `stop()` must detach the thread observer and finish its owned work.
+proves that legacy rows, receipts, row identities and echoes create no writes while
+the authoritative writer is mounted. The exclusion fixture must carry a stamped
+receipt: unstamped mutations were already rejected by the old writer and would
+pass before branch removal. It also holds a save through newer snapshots and epoch
+replacement, checks equal-id host isolation, and verifies hydration schedules no
+write while later owned changes remain saveable.
+`does not deduplicate fresh identical items against a pre-unpair in-flight save`
+pins the host-generation fence; using different fresh content could conceal stale
+successful-comparison state. Successful/failed unpair covers pauses, off-screen
+scopes, delayed reads, other-host preservation and same-host reuse.
+
+[`chat-history-removal.test.ts`](../../../e2e/chat-history-removal.test.ts) is a
+Vitest integration module using authoritative holders and real protected storage.
+It holds list or item writes, confirms deletion with later stale captures, and
+awaits flush/stop before fresh-service reads. Same-host peers and another host's
+equal id survive. Omission, empty lists and memory cleanup retain cached records;
+only confirmation removes them. Failed cleanup preserves content without a success
+diagnostic. Its same-session re-pair must save only fresh items from an omitted
+scope: clearing every holder manually or restarting first would mask the bug.
 
 [`daemonItemHistory.test.ts`](../../../src/main/daemonItemHistory.test.ts) uses the
 existing protected filesystem seam and fresh storage services to check coexistence
@@ -267,9 +249,11 @@ ids; diagnostics remain content-free and inert keys cannot affect object prototy
 
 ## Restoration
 
-Daemon restoration uses `readSavedTimeline({ threads, ... })` and `readThread`,
-separately from the legacy holder path below. `daemonItemCache.test.ts` covers
-stored/missing/error/rejected reads settling after live admission, cancellation,
+Restoration requires `readSavedTimeline({ threads, ... })` and requests only
+`readThread`. The authoritative cache harness checks the exact request and admits
+only daemon-item snapshots at the requested host/conversation; timeline, list,
+wrong-coordinate and unexpected-status results fail without importing data.
+`daemonItemCache.test.ts` covers stored/missing/error/rejected reads settling after live admission, cancellation,
 replacement reads, epoch-string reuse and conversation/host/global cleanup. Its
 incomplete/repair fixture restores checkpoint 100, applied version 300 and unfinished
 version 250: a certificate through 200 clears repair but leaves later live success
@@ -304,25 +288,16 @@ Existing legacy browser/liveness proofs below do not establish daemon-item live
 acceptance. Production uses the protected collection, not indexed partial paging.
 
 [`savedTimelineRestorer.test.ts`](../../../src/renderer/src/store/savedTimelineRestorer.test.ts)
-covers explicit admission, row identity metadata and coverage, equal-id host
-isolation, delayed success/failure after invalidation, and eleven-chat eviction
-and reload. Echo regressions cover same-host reopening, cross-host replacement and
-rejection of a delayed read after sending. Writer tests pair restoration with a
-subsequent same-host receipt:
-restoration and eviction must write nothing, but later content must save with the
-restored owner and coverage. Static screen tests cover local notices, host-bound
-display and partial-row cursor suppression both connected and offline, normal rendering
-after live receipts, and held versus restored queue visibility. Healthy-host interaction
-tests assert no `.conversation__banner` at all, so they still reject an additional
-connection warning caused by another host's failure.
-`beginLocalTimelineRead(host, id)!.complete(null)` is the shortest way to stage a
-settled-empty local read in a static screen test: it parses a synthesized empty
-snapshot and settles `localRead: 'loaded'` with no items, which is otherwise awkward
-to reach through the store's public surface. Removing a piece of rendered copy
-silently deletes every `not.toContain`/absence assertion aimed at it too — those
-assertions keep passing against a screen that renders nothing at all, so a copy
-removal needs a sweep for such assertions and a flip to a positive claim about what
-does render (\#1447).
+retains direct legacy `beginLocalTimelineRead` store-admission tests, including
+coverage, identities, host isolation, invalidation and eviction/reload. Its
+injected legacy-reader cases retire with the removed renderer branch; those store
+tests do not establish a production `readTimeline` path. Direct newest-demand and
+bridge/frame tests remain, while exclusive frame-persistence fixtures retire.
+The shared fake publisher remains active for authoritative browser scenarios.
+For direct legacy store tests, `beginLocalTimelineRead(host, id)!.complete(null)`
+stages a settled-empty read. An absence assertion alone can pass against a screen
+that renders nothing: when removing copy, pair updated assertions with a positive
+claim about what the screen now renders.
 
 [`savedListRestorer.test.ts`](../../../src/renderer/src/store/savedListRestorer.test.ts)
 covers ordered host isolation with equal ids, missing/empty/error results, duplicate
@@ -340,79 +315,66 @@ list values `[0, 2]`. A store update alone cannot prove a saved mark. See
 [`message-reply.spec.ts`](../../../e2e/message-reply.spec.ts)'s enabled
 `received history is saved for equal ids on different hosts and replies reopen offline`
 uses two hosts advertising `seed-conversation` with distinct assistant replies.
-It polls each protected `readTimeline` result, visits the second chat, disconnects
+It polls each protected `readThread` result, visits the second chat, disconnects
 the first host, then reopens its saved chat offline and quotes only its original
-reply into that host's draft. Both saved timelines remain independent afterward.
+reply into that host's draft. Both saved daemon-item records remain independent
+afterward.
 Draft isolation and ordinary saved/offline reply tests remain enabled: either
 could pass while received persistence is broken, so neither substitutes for this
 regression. See [counted fake-transport evidence](development-verification-what-each-test-tier-proves.md#equal-id-received-history).
 
 [`chat-history-recording.spec.ts`](../../../e2e/chat-history-recording.spec.ts)
-exercises the mounted production observer and handler, real composer cancellation,
-quit/relaunch and window close/reopen. It freezes renderer timers after earlier
-saves, verifies the final content is still absent on disk, then closes: a test
-that waits for the debounce before quitting cannot prove the flush. Reusing the
-user-data directory proves disconnected local reads without a new handshake,
-including the last list, partial live text and loaded older page. The suite also
-covers pairing-rejected access, saved-host validation and zero added history
-requests. It also proves restored sidebar browsing after normal quit/relaunch,
-a rejected host beside a usable connected host, and mounted local read failures.
-The pairing-recovery regression must expect the saved row after startup rejection;
-row absence no longer proves rejection. Keep the decoded rejection and actual
-repair-click assertions. Restored message UI is exercised by opening and copying
-received content after restart, including a rejected host beside a connected one.
-A held-IPC result crosses repair opening/cancellation before release, then proves
-reading and copying without renderer commands during opening or scrolling. Command
-observation must precede main's host routing: absent socket traffic can hide a
-renderer command discarded offline. In the held-IPC scenario, observing
-`pyry:command` at main avoids CDP function-breakpoint observation stalling the test.
-Reload fixtures wait for saved-list persistence and use a newly named received row
-as their receipt barrier; saved rows can return without a status replay, so row
-count alone is not that barrier. The test encryption backend does not prove the OS
-keychain adapter.
+retains the active `local list read failures stay beside the saved host` case.
+The exact nine already-skipped legacy-only cases from the
+[cleanup inventory](https://github.com/pyrycode/pyrycode-desktop/issues/2020#issuecomment-6200547647)
+were deleted by #2029, together with their private fixtures:
 
-Repeated-page persistence needs separate receipt and save barriers. Restored rows
-and enabled Send can precede the newest reply; focusing the thread creates no
-history demand. Install `observeCommands` and a `historyPageReceived` listener
-before opening the saved chat, match the host/conversation/expected cursor, then
-await delivery separately from successful protected replacement. The receipt is
-not proof of the writer's buffered save. Keep immediate fake replies
-so synchronization does not remove restoration-overlap coverage; a held reply is
-useful for diagnosis, not a replacement for that timing.
+- `confirmed deletion removes saved content through restart without waiting for a list refresh`
+- `explicit unpair discards buffered history across restart while same-server repair retains it`
+- `receipt saturation still saves a repeated page and later live content across fresh relaunches`
+- `records received content, drains buffered quit, and reads locally after relaunch`
+- `window close saves accepted deltas before their frame and reopening restores the full reply`
+- `restores a pairing-rejected saved host beside a usable connected host`
+- `pending saved reading survives opening and cancelling host repair`
+- `saved coverage survives offline restart, reconnect, live receipts and connected reopening`
+- `protected restoration joins partial pages while retaining an expanded tool and content anchor`
 
-The receipt-saturation scenario keeps 500 receipts × 200 ids, evicts only `page-0`
-for `repeat`, and preserves oldest-end coverage and the single assistant's key
-`-8`. It verifies exactly one newest command (`cursor: ''`, limit 200), retains the
-separate 20-second repeated-page receipt wait, then polls successful protected
-replacement for five seconds before comparing the complete saved snapshot once.
-Later live content uses a host/conversation/message-id-specific `messageReceived`
-listener installed before the push, followed by its own five-second save check.
-It retains key `42` with next key `43` and checks complete saved-snapshot equality
-after a third fresh Electron launch. Reused profiles reconnect through the first
-launch's still-running fake; script and observe that daemon. See
-[cause and counted validation](development-verification-history.md#served-page-persistence-verification).
+Authoritative cache/removal/restart tests and all 15 `thread-activation.spec.ts`
+cases remain. They cover offline restoration/live overlap, complete and interrupted
+checkpoints, deletion/unpair, saved-checkpoint reconnect and older paging. No
+broader suite was disabled, and no skip or assertion was weakened by this removal.
+When seeding protected state, await a successful buffered save separately from the
+received-event barrier; receipt or rendered text alone does not prove persistence.
 
-Polling a record containing 100,000 receipt ids can consume the deadline while
-transferring an old read even after a replacement succeeds. The scenario installs
-one forwarding wrapper around the real protected handler in `onLaunched`, after
-handler readiness and before navigation. It records item counts only for matching
-host/conversation `replaceTimeline` calls returning `ok`. Poll the small observation
-through `readMainProcess` for counts `1`, then `2`; retain the full snapshot
-assertions to detect incorrect persisted state. Installation is single-shot, and
-the original handler is restored before closing. A held-save control confirms
-receipt alone cannot release this barrier. Rendered text is also a poor receipt
-barrier under contention; the typed event avoids coupling persistence proof to
-layout readiness. Alternating CDP/main command observers both reproduced the race,
-so this scenario keeps its existing `observeCommands`.
+### Counted validation for renderer persistence removal
+
+After #2033's scroll-readiness repair merged through main
+`1366e69e1e23d1ae264735f449ed86ff2dd7373b`, the completed builder run on
+`79c7a4aae729c53019295a507de748b530089c43` superseded the earlier one-failure
+run. The [plan](../../specs/architecture/2029-renderer-history-persistence.md#validation-after-blocker-repair)
+records 432 executed, 432 passed, 0 failed and 10 existing skips, with two workers,
+both projects and zero retries/flaky results. All 15 thread-activation cases passed.
+
+The dispatcher's verifier gate 6 on `9971072191ad45844bfae3d5581a218e97f9f024`
+independently recorded **432 executed, 432 passed, 0 failed, 10 skipped**.
+Its named results explicitly include passed
+`local list read failures stay beside the saved host` and
+`gaps, long hidden runs and target changes preserve a valid anchor and clean observations`.
+The [verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2032#issuecomment-6204463520)
+also confirms all 15 thread-activation cases passed, plus unit results of
+10,224 executed and passed, 0 failed and 30 skipped across 416 files. Build and
+docs guard passed.
+The 10 browser skips were three macOS-only cases and seven pre-existing legacy
+scenarios; they are not execution evidence for those paths. No live spec changed
+and this refactor required no live-Claude run.
 
 ## History continuity and overlap
 
-The continuity scenario starts with incomplete saved coverage, restarts offline,
-reads, then reconnects and asks newest once while retaining saved partial-assistant
-presentation. Later same-host live text resumes normal rendering; trusted upward
-input asks older with the saved cursor. A connected restart checks ordered content,
-retained coverage and no duplicate rows. Holding the local read proves zero asks
-before settlement, then exactly one newest ask without further reader input.
+Production offline/live continuity and checkpoint overlap are covered by
+`thread-activation.spec.ts` and the authoritative cache restart fixtures above.
+The retired recording continuity cases no longer provide browser proof for legacy
+cursor/receipt persistence. Remaining legacy producer fixtures below describe
+reconstruction behavior, not the renderer's authoritative restore path.
 
 [`real-daemon-history-on-open.spec.ts`](../../../e2e/real-daemon-history-on-open.spec.ts)
 saves a baseline with served/display evidence, fully exits Electron through the

@@ -250,16 +250,20 @@ the existing string/array bounds. Invalid requests are classified before storage
 malformed saved metadata uses `unreadable`. Neither path replaces valid saved data,
 and diagnostics remain static event/code values without content or coordinates.
 
-`createChatHistoryWriter` accepts optional `threads` alongside existing stores;
-changed owned snapshots use `replaceThread` through its coalescing drain. Hydration
+`createChatHistoryWriter` requires `threads` and `lists`; its only replacements
+are `replaceThread` for changed authoritative snapshots and `replaceList` for
+received lists with a matching host receipt. Legacy timeline observations and
+`replaceTimeline` submission are removed from the renderer. Hydration
 is excluded from saves, and later received changes remain eligible. Confirmed
 deletion clears that held scope and suppresses both saved formats; successful
 unpair invalidates all that host's held threads and reads. See
 [storage ordering](chat-history.md#storage-and-concurrency).
 
-`readSavedTimeline` accepts optional `threads` and then uses `readThread`; without
-it, legacy callers keep `readTimeline`. It returns `{ done, cancel }` and checks
-record kind and exact coordinates before completing the store-owned local read.
+`readSavedTimeline` requires `threads` and requests only `readThread`. It returns
+`{ done, cancel }` and admits only `daemon-items` with the exact requested host and
+conversation before completing the store-owned local read. The retained legacy
+IPC/storage operations above and shared format admission are unchanged; they are
+not renderer writer/restorer paths.
 `beginLocalRead(host, conversation)` returns null for held scopes; otherwise its
 one-shot complete/fail/cancel handle uses a process-local token. A replacement read,
 admitted state or scoped cleanup invalidates it, even when identity strings are

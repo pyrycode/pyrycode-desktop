@@ -8,7 +8,6 @@ import { createChatHistoryStore } from '../src/main/chatHistoryStore'
 import { createThreadItemStore } from '../src/renderer/src/store/threadItemStore'
 import { createChatHistoryWriter } from '../src/renderer/src/store/chatHistoryWriter'
 import { createConversationListStore } from '../src/renderer/src/store/conversationListStore'
-import { createConversationTimelineStore } from '../src/renderer/src/store/conversationTimelineStore'
 import { readSavedTimeline } from '../src/renderer/src/store/savedTimelineRestorer'
 
 const roots: string[] = []
@@ -21,7 +20,7 @@ async function cache() {
       encrypt: bytes => bytes.map(b => b ^ 173), decrypt: bytes => bytes.map(b => b ^ 173) } }) })
   const storage = fresh(), source = createThreadItemStore(), api = source.getState()
   const writer = createChatHistoryWriter({ threads: source, lists: createConversationListStore(),
-    timelines: createConversationTimelineStore(), receipt: () => null, log: () => {},
+    receipt: () => null, log: () => {},
     write: request => storage.execute(request), schedule: () => () => {} })
   return { fresh, source, api, writer }
 }

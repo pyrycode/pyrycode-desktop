@@ -18,7 +18,7 @@ Confirmed conversation deletion removes both saved conversation formats
 and that host/conversation's list entry.
 Observing, saving, flushing and restoration create no lifecycle demand themselves.
 Offline opening and scrolling retain the existing host-scoped request gates. Disk
-retention is independent of the renderer holder's ten-conversation memory limit.
+retention is independent of the legacy holder's ten-conversation memory limit.
 
 ## API
 
@@ -31,7 +31,9 @@ Every snapshot has `version: 1`, `serverId` and a `kind` of `list`, `timeline` o
 `daemon-items`. Legacy timelines remain valid stored records for retained APIs and
 cleanup, but the ordinary app never reads them for display. They never become
 authoritative daemon items. Both formats may coexist at the same coordinates.
-The legacy coverage and receipt contracts below describe that retained format.
+The legacy coverage, receipt and display contracts below describe retained formats
+and producer/store behavior, not renderer persistence. The renderer no longer
+observes or restores those timelines; shared admission is unchanged.
 
 Both legacy backends use the unchanged `parseChatHistorySnapshot` admission and
 allowlisted projection for full snapshots. Indexed disk reconstruction preserves
@@ -87,13 +89,13 @@ While offline, before the oldest saved row, the view shows “Older messages req
 a connection.” unless coverage explicitly reports `atStart: true`; neither a short nor an empty
 saved snapshot proves completeness. This notice sends no request.
 
-The holder retains successful `ConversationSlice.coverage` independently of transient
-`history`; the writer also retains it beside each observed timeline.
+The retained legacy holder keeps successful `ConversationSlice.coverage`
+independently of transient `history`.
 `HistoryRequestState` alone is insufficient: `markHistoryRequested` and
 `recordHistoryFailure` replace its loaded cursor and `atStart`. A served page
-updates rows before `recordHistoryPage` publishes successful settlement. The writer
-captures `slice.coverage`, not the newest response's loaded cursor/start flag:
-using the latter would lose the oldest paging end on restart. A live-only timeline stays `unknown`,
+updates rows before `recordHistoryPage` publishes successful settlement. Legacy
+snapshot coverage describes the oldest paging end, not the newest response's
+loaded cursor/start flag. A live-only timeline stays `unknown`,
 and a successfully received empty page still establishes coverage.
 
 ### Served provenance and page suppression
@@ -127,12 +129,10 @@ The first represented newest admission captures display-only restored keys befor
 draw and retains their boundary until provable overlap or a selected fresh backwards
 `atStart`; held/newest completion cannot close it. Covered spans still need walking.
 Refusal removes only the selected gap's resume cursor and remembers it; other gaps,
-rows and oldest-end coverage survive. The writer compares gaps and newest-origin
-evidence even when rows are unchanged. Protected restoration retains this evidence
-and identities, resetting pending/failure state. Replacement, host removal and
-conversation clearing discard slice evidence; confirmed deletion removes its saved
-record. Eviction drops memory evidence while buffered saves/disk records remain
-for an owned fresh read. See [reader demand and Retry](conversation-timeline-store-internals.md#the-opening-ask-1259).
+rows and oldest-end coverage survive. The retained format admits gap/newest-origin
+evidence independently of row changes and preserves its identities. Replacement,
+host removal and conversation clearing discard slice evidence; confirmed deletion removes its saved
+record. Eviction drops memory evidence without deleting legacy disk records. See [reader demand and Retry](conversation-timeline-store-internals.md#the-opening-ask-1259).
 
 Version-1 timelines optionally retain `served: { ids, highestId?, receipts }`.
 `ids` is the sorted unique set of durable `HistoryEntry.id` values observed in
@@ -162,11 +162,11 @@ Runtime receipts form a bounded retention window: after moving an exact repeat
 (same ids, cursor and start flag) to the newest position, `recordHistoryPage`
 expires oldest whole receipts until both receipt count and aggregate receipt-id
 count are at most 100,000. It rebuilds exact coverage and its maximum from the
-survivors before writer capture. Exclusive evidence from expired receipts becomes
+survivors in the retained store. Exclusive evidence from expired receipts becomes
 unknown; only independently retained display evidence can still suppress those
 contributions. Display rows, row allocation and pager settlement are preserved.
 One page exceeding the entire id bound clears all served
-provenance while still allowing successful settlement and later content saves.
+provenance while still allowing successful settlement.
 Disk admission rejects oversized metadata rather than trimming it. Repeated spans
 with changed cursors can exhaust the aggregate bound even with few distinct ids
 and unchanged rows; bounding only unique coverage would eventually stop saving.
@@ -231,7 +231,7 @@ and trusted reader-driven backwards/gap paging remain unchanged, without recover
 fetches or loops. Receipt high-water alone cannot mark content read. See
 [committed-tail observation](conversation-last-read-store.md#how-it-works).
 
-Runtime retention is bounded at 100,000 contributions before writer capture.
+Legacy runtime retention is bounded at 100,000 contributions.
 At saturation, consecutive retained assistant fragments for the same row compact
 into an `id`/`lastId` range; only contiguous contributed ids qualify, never gaps
 filled from receipts. Compaction drops timestamp evidence, keeping reverse live
@@ -245,9 +245,8 @@ Receipt expiry alone never retires display evidence. See
 
 Optional `rowIdentity: { rowKeys, nextRowKey }` preserves client-owned allocation
 through protected saving and restoration. Keys are unique signed safe integers
-aligned one-to-one with durable `items`. The writer filters keys with the same
-durable-row predicate as rows, while retaining the allocator beyond omitted live-only
-rows and placement reservations. `nextRowKey` must exceed every retained key and
+aligned one-to-one with durable `items`.
+`nextRowKey` must exceed every retained key and
 leave headroom for 100,000 rows plus one placement reservation
 (`<= Number.MAX_SAFE_INTEGER - 100_001`). A safe integer alone is insufficient.
 Restoration installs supplied keys and allocator unchanged; retained receipts
@@ -262,13 +261,10 @@ display evidence and row identities. Legacy display-only rows imply no entry ids
 completeness. Settled saved presentation survives newest pending/admission/failure;
 clearing it on demand would make a partial saved assistant appear to stream.
 
-The writer observes served, display and gap changes even when row references are unchanged;
-contribution, receipt/cursor/start, gap-resume and allocator changes participate in canonical snapshot
-comparison and saving. Contribution row references are filtered to the same retained
-durable keys as snapshot items. Restoration itself still schedules no save and restores
-no live phase, pending send, permission or recovery state. Metadata inherits
-[received-host ownership and removal](#received-state-admission-and-ownership);
-content, ids and cursors never enter diagnostics.
+These legacy metadata fields remain admitted by the shared parser and storage
+APIs, but changes to rows, receipts, gaps, contributions or allocation no longer
+schedule renderer saves. Legacy local-read store admission remains independently
+testable; production restoration admits only daemon-item snapshots.
 
 ### Durable display rows
 
@@ -279,12 +275,11 @@ running cost — [#1565](https://github.com/pyrycode/pyrycode-desktop/issues/156
 field-by-field, so a reload never restores them; `attachmentOffer`
 ([#1621](https://github.com/pyrycode/pyrycode-desktop/issues/1621), a file the assistant sent, see
 [Conversation shell § The assistant-offered file row](conversation-shell-message-bubble-attachments.md#the-assistant-offered-file-row-1621))
-is dropped whole — the report is live-only with no wire replay, so `chatHistoryWriter.ts`'s
-`isDurable` type guard filters the kind out of the timeline's `items` before capture, and the on-disk
-parser in `src/shared/chatHistory.ts` has no arm for it. `chatHistoryContract.test.ts` pins
-`DurableThreadItem` equal to `ThreadItem` minus both carve-outs, so a future live-only `ThreadItem`
-kind that skips narrowing that type and adding a writer filter fails the type check rather than
-silently reaching disk. In this table, `?` marks an optional field, and `attachmentOffer` has no row
+is excluded from the retained shared format: the on-disk parser in
+`src/shared/chatHistory.ts` has no arm for it. `chatHistoryContract.test.ts` pins
+`DurableThreadItem` equal to `ThreadItem` minus both carve-outs. This is a retained
+format/type contract; the renderer writer no longer filters or captures legacy
+rows. In this table, `?` marks an optional field, and `attachmentOffer` has no row
 at all:
 
 | Row kind | Retained fields beyond `kind` |
@@ -368,266 +363,84 @@ and [bounded-work fixtures](chat-history-testing.md#bounded-legacy-page-regressi
 
 ### Received-state admission and ownership
 
-`PairedShell` retains `createNewestHistoryDemand` across effect replay. Each actual
-opening of a connected host/conversation asks once with `cursor: ''` and
-`HISTORY_PAGE_LIMIT = 200`, regardless of held backwards `atStart`. Leaving and
-returning creates a new opening; re-clicks, renders, metadata refresh and effect
-replay do not. Offline opening sends nothing; the first connected transition and
-each later owning-host connection edge ask once for the still-open target.
+[`useChatHistoryWriter`](../../../src/renderer/src/store/chatHistoryWriter.ts)
+mounts once from [`App`](app-shell.md#where-the-daemon-bridge-lives) across routes.
+`createChatHistoryWriter` requires `threads` and `lists`; production supplies
+`threadRuntime.items` and `conversationListStore`. It observes only received lists
+and authoritative item snapshots, submitting `replaceList` and `replaceThread`.
+It has no legacy timeline subscription, receipt/row-key/echo observation,
+`replaceTimeline` path or timeline-frame flush hook. Legacy renderer producers and
+their direct store/bridge tests remain; main, preload, shared format admission,
+indexed reconstruction and legacy storage APIs remain valid for other consumers.
+Producer retirement belongs to #2030 and saved-format retirement to #2026.
 
-Lifecycle demand waits for its owned saved read (stored, missing, failed or
-superseded by live data) and any outstanding same-host request. Departure, host
-replacement or connection loss invalidates a delayed ask. Main settles an
-interrupted request before reconnect's newest ask. Read/page settlement releases
-only existing demand; it never creates another opening or an automatic range fill.
-The controller consumes demand before marking pending to prevent subscription replay;
-shell eligibility checks run after admission/writer capture, while connection loss
-is observed synchronously so rapid connection edges survive.
+List admission still requires preload's synchronous `conversationsReceived` receipt
+with a string `serverId`, and a changed `byServer` array for that exact host.
+The [receipt context](daemon-event-channel-plumbing.md#3-the-preload-subscription-srcpreloadindexts)
+is restored in `finally`; active selection cannot establish ownership.
+Read pushes update attention immediately but do not themselves save a list; a later
+received list captures the reconciled read marks. Startup state, local list
+restoration and clears schedule no list write.
 
-Backwards downloads require trusted upward wheel/trackpad input over the thread, or
-ArrowUp/PageUp/Home with the thread itself focused. A visible gap marker
-between the measured header/input overlays takes priority, choosing the first
-boundary encountered from newer toward older rows. Without one, the current offset must be
-within the near-top band — two viewport heights, scaled by the thread's own measured
-height — before that input scrolls. Input outside
-the band only scrolls locally; entering the band needs another qualifying input.
-The same focusable region contains empty and short threads, so first-page demand
-does not depend on overflow. Composer navigation, synthetic events, ordinary
-scroll events, mounting, resize, bottom pinning and prepend compensation create no
-backwards demand.
-
-`requestOlderHistory` reads successful coverage at demand time: unknown coverage
-uses `cursor: ''`, while received coverage uses the exact oldest-end cursor,
-including one restored from disk. Only `atStart: true` establishes completion;
-short, empty and all-undrawable pages do not. One request may be outstanding per
-host/conversation, shared by newest, older, gap and Retry. Backwards demand during a
-local read or pending request is discarded; lifecycle demand defers instead.
-Remaining in the band
-after a response also requires new input. There is no timer or automatic walk.
-
-Oldest-end `atStart` does not close unresolved gaps elsewhere in the held log;
-[visible-gap demand](conversation-shell-scroll-pin.md#user-demand-and-prepend-position)
-still takes priority. History fixtures must respect durable entry chronology:
-IDs increase with time, wire pages are newest-first, and an uninterrupted older
-continuation uses IDs below the preceding page's oldest ID. Serving larger IDs
-as supposedly older rows can invent disjoint spans and make correct gap requests
-look like broken terminal stopping. The
-[`history-walk.spec.ts`](../../../e2e/history-walk.spec.ts) fixture serves 16 through 3,
-then an empty nonterminal page, then 2, then 1. Its terminal-row input exposes this
-trap; see the [controlled regression and counted evidence](development-verification-evidence-that-cannot-pass-too-early.md#history-page-receipt-and-terminal-demand).
-
-Requests and failures retain same-host rows, prepend metadata and successful
-coverage. Pending/failed history retains the requested cursor and purpose (`older`,
-`newest`, `gap` or `gap-newest`), plus the selected gap's client identity. Main clears
-outstanding history correlations before emitting classified
-failure events on connection drop, terminal/error, pairing rejection or explicit
-redial, including when no server failure reply arrived. Unavailable/build/send
-failures also settle immediately. This releases pending state without retrying:
-new qualifying upward input while connected can ask again for an oldest-end page
-even when its failure classification is nonretryable. Ordinary gap failures wait
-for Retry; `history-invalid-cursor` has no Retry but permits fresh reader input
-to use a usable newest origin or acquire one page for that gap. Acquisition and
-arrival never continue the walk automatically. Unrelated gaps remain eligible.
-The separate [composer Retry action](conversation-shell-composer-status.md#history-page-failure-and-retry)
-requires `retryable: true`, the displayed conversation and its connected owning host,
-and the same held failure at activation. It calls `requestHistoryPage` with the
-captured cursor/purpose and `limit: 200`; newest Retry resends `''` despite held
-`atStart`. Gap Retry additionally requires that the captured failed gap still
-exists, and also bypasses oldest-end completion. Legacy failures fall back to
-backwards coverage. Pending state removes the failure affordance and rejects
-duplicate demand without changing rows or successful coverage. A partial history walk
-retains its oldest-end cursor through newest refreshes. Offline scrolling only exposes held
-content. Host-stamped requests cannot borrow another host's cursor, and stale
-cross-host failures cannot settle its replacement slice.
-
-Owned page admission supersedes a loading saved read and clears its token, including
-empty/all-undrawable and legacy settlement. Late stored/missing completion, failure
-or cancellation cannot replace admitted rows or evidence. Starting, settling or
-cancelling a saved read preserves an independently correlated same-host request;
-otherwise reopening could send a duplicate that main ignores and consume its one refresh.
-
-The retained [contribution join](conversation-timeline-store-internals.md#the-page-half--the-join)
-admits overlap and split assistant turns once in chronological order, preserving
-held live/saved rows, surviving row keys and tool expansion. Existing following
-and parked-reader behavior remains. [Scroll compensation](conversation-shell-scroll-pin.md#user-demand-and-prepend-position)
-preserves a surviving row at zero offset as well as through native nonzero
-anchoring; compensation itself cannot request another page.
+Item ownership comes from the authoritative store's host/conversation scope.
+The writer compares immutable snapshot references and skips the private `restored`
+identity so hydration schedules no save. Later authoritative changes remain
+saveable, preserving complete checkpoints, certified ranges, repair and unfinished
+batch fences exactly as held. Projection through `parseChatHistorySnapshot`
+detaches coordinates and content synchronously before scheduling.
+Local unaccepted sends, permissions and session state never enter this cache.
+See [buffering and removal ordering](chat-history-storage.md#buffered-replacements).
 
 [`createSavedListRestorer`](../../../src/renderer/src/store/savedListRestorer.ts)
-mounts once in `PairedShell` and observes saved identities in `serverInfoStore`,
-independently of connection state. It calls only `chatHistory`'s `readList` operation
-and verifies a stored result's list kind and host identity. The explicit
-`conversationListStore.beginLocalListRead(serverId)` handle installs host-stamped
-rows directly, preserving snapshot order within existing sidebar grouping and
-keeping equal conversation ids on different hosts separate. It never fabricates
-a daemon event or calls the received-list setter.
-
-Admission is store-owned: an existing host list or local read prevents another
-read. Unique tokens invalidate both late success and late failure after a received
-list, host/global clear, or cancellation, including clears before any rows exist.
-Other hosts retain their arrays by reference. The restorer attempts each held
-identity once, cancels departed hosts, and cancels outstanding handles on teardown.
-IPC itself is not abortable; cancelled results cannot change the store. Cancellation
-removes pending read state so a later mount can retry, while loaded/failed results
-remain settled across navigation.
-
-A saved list is local display data, not current server state. Restoration never
-selects a chat, changes selection after navigation, or creates connection or working
-state. `SessionState.statuses` remains connection truth: offline row browsing keeps
-the existing host-scoped action gates and sends no history or session-configuration
-request. List restoration does not restore timeline messages or establish timeline
-recording ownership. Received lists still replace their host's displayed list.
+mounts once in `PairedShell` and observes saved identities independently of connection
+status. It requests only `readList`, verifies kind and host, and completes the
+store-owned `beginLocalListRead(serverId)` handle. It preserves saved order without
+fabricating a daemon event or calling the received-list setter. Existing lists or
+reads prevent duplicate admission. Received lists, cancellation and host/global
+clears invalidate late successes and failures, including clears before rows exist.
+Departed hosts and teardown cancel outstanding handles; IPC itself is not abortable.
+A cancelled read can be retried by a later mount; loaded/failed reads stay settled.
+Other hosts' arrays retain their identity. Restoration never selects a chat or
+creates connection, working or recovery state.
 
 [`readSavedTimeline`](../../../src/renderer/src/store/savedTimelineRestorer.ts)
-defaults to `readTimeline` for legacy callers. `PairedShell` starts it from every
-clicked host-stamped sidebar row, regardless of connection status, and retains those coordinates explicitly:
-active metadata reseeding projects wire fields and can discard an incidental host stamp.
-The view checks the selected host against the held slice in either connection state;
-another host's rows under an equal conversation id cannot substitute.
-Reconnect and received list refreshes retain that selected timeline. Actual selected-host
-status controls offline notices; local-read status controls saved-row presentation and
-exclusion of unrelated conversation-id-only queue rows.
+keeps its runtime name but requires `threads` and always requests `readThread`.
+It accepts stored results only of kind `daemon-items` with the exact requested
+host and conversation. Wrong kinds/coordinates, unexpected results, classified
+errors and rejected IPC fail the current handle without importing data; missing
+records complete it with null. There is no `readTimeline` fallback.
 
-`conversationTimelineStore.beginLocalTimelineRead(serverId, conversationId)`
-installs a pending slice in the existing ten-slot holder at the viewed tail. A
-same-host local read (including a settled failure) or nonempty held timeline is
-reused; unowned or differently owned content is replaced. Completion validates the
-snapshot and exact coordinates, then admits it only while its process-local
-`localReadOwner` symbol, host and loading status still match. Same-host session-error
-replacement/clearing preserves ownership even though the slice object changes;
-opening and settlement retain the current live notice rather than restoring one
-from disk or the original pending object. Live content, local sends, host replacement,
-clear, eviction and cancellation invalidate late success and failure. Settled handles
-cannot settle twice. See [notice/read interaction](conversation-timeline-store.md#edge-cases-and-limitations).
-Opening eleven saved chats and reopening the first therefore reads it again from
-disk without increasing the memory bound.
+`threadRuntime.restore` invokes this reader, which opens the store-owned
+`beginLocalRead(host, conversation)` handle and returns `{ done, cancel }`.
+Held scopes prevent duplicate reads.
+Process-local tokens fence delayed completion and failure after cancellation,
+replacement reads, live admission, epoch replacement or conversation/host/global
+clear, even if coordinate or epoch strings are reused. Hydration certifies no new
+progress. Restoration creates no transport request or raw event; opening, reconnect,
+older demand and Retry use the [thread coordinator](thread-runtime.md#restore-recovery-and-cleanup)
+and introduce no legacy content request.
 
-Composer echoes must already have explicit ownership before reopening. Composer
-passes the host synchronously resolved by `connectedConversationHostNow` to
-`dispatchLocalEcho(serverId, conversationId, userText)`. That write retains only
-same-host rows, stamps the slice and invalidates any pending read. An unstamped echo
-would be replaced on connected reopening; admitting unowned rows during restoration
-would weaken host isolation. The writer still requires its existing message-id and
-unique-list-owner checks before saving an echo.
-
-Cancellation removes only the pending slice, never saved data, and cannot abort
-IPC or change selection. Sidebar activation, active-id changes, actual departure
-from the thread and shell teardown cancel pending reads. Opening host repair keeps
-the origin thread mounted, so its read must survive the modal and cancellation of
-repair. Cancelling on every non-thread route would leave the retained view loading
-forever after the correctly rejected result; read lifetime follows the retained
-background route. Metadata-only active-row refreshes do not cancel it.
-
-[`useChatHistoryWriter`](../../../src/renderer/src/store/chatHistoryWriter.ts)
-mounts once from [`App`](app-shell.md#where-the-daemon-bridge-lives), observing
-`conversationListStore` and `conversationTimelineStore` across routes. It projects
-through `parseChatHistorySnapshot` synchronously, detaching content and host
-coordinates before scheduling any write.
-
-Preload's [receipt context](daemon-event-channel-plumbing.md#3-the-preload-subscription-srcpreloadindexts)
-exposes only the event type and main-stamped `serverId` during a daemon subscriber's
-synchronous call, restoring the previous context in `finally`. This gives store
-observers the supplying host without a second event subscription whose ordering
-could misattribute content. List recording accepts changed `byServer` arrays only
-during `conversationsReceived`, preserving received order and reconciled read fields.
-Read pushes patch held attention immediately but do not themselves write history; a later list
-reply captures the monotonic held mark. Timeline updates folded
-during daemon delivery use that receipt's origin, never the active host at save time.
-
-Frame-deferred deltas retain the original receipt host. The mounted writer uses
-`subscribeTimelineWrites` to capture each changed staged fold, including intermediate
-equal-id host replacements, while rendering receives one final batch publication.
-That final publication is excluded from the write observer. Explicit null means
-the arrival lacked host evidence; it cannot borrow a later boundary's receipt.
-Looking up the preload receipt at frame publication would refuse ordinary received
-text, and observing only the final state would lose replaced-host snapshots.
-Injected writers without this optional channel retain synchronous subscriptions.
-See [timeline publication](conversation-timeline-store-internals.md#the-store-srcrenderersrcstoretimelinestorets).
-
-Outside daemon delivery, these local edits qualify:
-
-- An appended `userText` echo with a message id and `localSendPending`, whose
-  preceding rows retain their references and order. Its host must be the unique
-  `byServer` list claiming that conversation.
-- Removal of one previously admitted echo object with a nonempty message id,
-  matching `removeUserEcho`: surviving rows retain their references and order,
-  and history/prepend metadata is unchanged. A weak set tracks admitted row
-  identities without retaining evicted rows. Cancellation keeps the held owner
-  and successful coverage, even when it removes the only row and saves an empty
-  timeline. An append-only rule misclassifies this edit as restoration and stops
-  later recording; removing an arbitrary restored row cannot authorize a save.
-- Evidence-only gap/newest-cursor changes with unchanged rows and an established
-  matching stamped owner, including explicit owned restoration. Refusal changes
-  durable evidence without changing content; requiring a receipt would lose its
-  invalidation on restart. Such changes cannot establish ownership from renderer
-  state and retain the writer's list-claim checks.
-
-Timeline slices are keyed only by conversation id, so the writer pins an owner
-while each slice is held. Explicit main-stamped receipts establish the supplying
-host independently of other hosts' equal-id list claims. Active selection never
-establishes ownership. Missing receipt origin and ambiguous unstamped echoes
-refuse recording with `unknown-ownership`, preserving existing saved copies.
-
-Clean received host replacement requires an explicitly stamped previous host
-different from the receipt origin and a new slice stamp matching that origin.
-`receivedSlice` clears rows, coverage and served receipts on this transition; the writer releases
-the old observation and comparison metadata before admitting the new owner.
-Removing only the list-claim check would leave the old observation blocking this
-replacement. Previously captured snapshots stay detached and buffered by host,
-kind and conversation, so alternation before a flush cannot transfer rows or
-coverage between hosts.
-
-A new stamp on previously unowned content is insufficient: the store retains
-those rows. A later receipt cannot repair an unknown observation while that
-content remains held. Clearing/evicting the slice releases its observation
-metadata; explicit saved restoration is a separate admission path. Main
-independently checks saved-host membership again.
-
-Startup-empty state, activation, direct snapshot installation, list/holder clears
-and memory eviction are not deletion signals. Directly installed nonempty rows
-in a timeline have no observed owner and cannot establish one by later live delivery.
-Both list and timeline restoration use explicit handles, outside live reducers.
-The writer recognizes a newly admitted `restored` marker before receipt checks,
-adopting its host and coverage without scheduling a save. Starting a local read
-clears prior observation/comparison metadata. Reconnect and metadata-only list refresh
-do not reset restored ownership. A later stamped same-host received change
-continues recording under that owner with the restored coverage, including when
-both hosts' lists claim the id. Clean received host replacement uses the clearing
-transition above; retained unknown rows remain refused.
-Failed requests, network failure and rejected or expired pairings do not delete saved
-content. Opening/cancelling repair and successful same-server repair retain timelines
-and never enter the explicit removal lifecycle. Missing or partial lists are not
-timeline-deletion signals; received lists still replace the saved list. Received empty
-lists/pages and cancellation of an observed echo remain valid durable changes.
-
-Confirmed `conversationDeleted` delivery is an explicit deletion signal. The writer
-subscribes through `window.pyry.onDaemonEvent` and captures the main-stamped
-`serverId` and confirmed `id` synchronously before queuing `removeConversation`.
-Store observation alone misses this event: the list bridge only requests a separate
-refresh, and the synchronous receipt context carries no deleted id. Removal runs
-even without a held timeline or matching list entry, independently of selection or
-the refresh response. Missing supplying-host context reports `unknown-ownership`
-and never borrows the active host. Other conversations on that host and equal ids
-on other hosts remain saved. Sending a delete command without confirmation, including
-rejection or network failure, removes no saved timeline. Persistence removal does
-not itself change legacy renderer display state; an injected thread source is cleared
-on confirmed deletion.
+Confirmed `conversationDeleted` delivery queues `removeConversation` using its
+main-stamped host and confirmed id, even without a held scope or list entry.
+Missing host origin reports `unknown-ownership` and never borrows selection.
+The writer clears that authoritative scope and cancels its local read, removes
+buffered item content, filters delayed list captures and suppresses later item
+captures for that host/id. The ordered backend operation removes both saved
+conversation formats and the list entry. Other hosts' equal ids and same-host peers
+survive. A delete command without confirmation removes no saved content.
 
 [`runUnpairServer`](../../../src/renderer/src/screens/settings/unpairServerAction.ts)
 begins the renderer-local [removal lifecycle](../../../src/renderer/src/store/chatHistoryRemoval.ts)
-before invoking main and settles it before refreshing identities. While pending,
-writers pause draining that host and allow other hosts' buffered work to proceed.
-Failure resumes the paused operations and retains conversation-deletion suppression.
-Success discards pending operations, the host's deleted-id set and comparison
-state, invalidates observation ownership and prevents an in-flight completion from
-repopulating deduplication state, including when main reported cleanup failure.
-
-Successful settlement also clears every held timeline stamped with that host's
-`serverId`, including omitted, restored and pending-read slices; other host-stamped
-slices survive. Enumerating only the latest list misses retained timelines. Resetting
-ownership alone would block later receipts, while restoring ownership over old rows
-would save erased text again. Clearing the actual slices invalidates pending local
-reads and lets fresh receipts after same-session re-pairing save only fresh content.
+before invoking main. The writer pauses that host's drain while allowing others
+to proceed. Failure resumes buffered work and retains deletion suppression.
+Success discards pending/comparison state, resets deletion suppression, advances
+the host generation and removes all authoritative host scopes and pending reads,
+including scopes omitted from the latest list. An old in-flight save cannot
+repopulate comparison state after this generation change: otherwise fresh identical
+items after same-session re-pairing could be incorrectly deduplicated.
+Clearing only listed scopes would also let omitted erased content survive re-pairing.
+Network failure, rejected/expired pairing, repair, list omission and memory cleanup
+are not disk-deletion signals. See [shutdown draining](chat-history-storage.md#window-close-and-app-quit).
 
 ### Admission limits
 
@@ -692,6 +505,6 @@ to #1974, and local-page consumers/partial writes to #1931.
 
 See [the testing reference](chat-history-testing.md) for writer admission,
 restoration, removal, protected persistence and durable-contract coverage.
-Close regressions hold the accepted tail's frame through shutdown and check both
-protected fragments and reopened content. When seeding a protected snapshot,
+Authoritative cache tests retain shutdown, restart and checkpoint coverage.
+When seeding a protected snapshot,
 wait for the opening page's buffered save first or it can overwrite the seed.

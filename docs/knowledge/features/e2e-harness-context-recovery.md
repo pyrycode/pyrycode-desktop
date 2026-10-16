@@ -45,6 +45,8 @@ replace the caller's original count assertion.
 The shared client scenarios retain that read-only contract in `mainRead`. Isolation
 read-back also retries only the exact transient error, for five seconds; it still
 requires the actual switches, an existing window and hidden state when configured.
+The indexed-history lifecycle check uses `readMainProcess` only for the post-close
+window count; its close/activate controls and original `toBe(0)` remain unchanged.
 `historyQueryEvidence.ts` addresses a separate lost installation acknowledgement:
 the installed IPC listener has a main-process identity marker. Inspection must
 confirm that exact listener. Only conclusive absence after transient loss permits

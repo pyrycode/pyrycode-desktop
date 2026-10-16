@@ -150,13 +150,16 @@ changes as drift and exits unsuccessfully when they occur; there is no claim of 
 drift-free provider transcript or silent baseline regeneration.
 
 The complete integrated unit suite passed 9,205 tests in 399 files, skipped six
-existing opt-in cases and failed zero, in 47.63 seconds with four workers. The
-full default application rerun and final Linux replay confirmation are pending.
-Linux source `32aadb0b` already passed three independent fresh live history cases,
-zero retries, including all 205 closed-app posts, saved-checkpoint catch-up and
-fresh-profile paging. A prior Linux guarded run at `8e9dd6ec` passed all 29 cases;
-the latest source's first replay attempt failed a bounded inspector read and
-remains a failed report. Its independent confirmation is pending.
+existing platform/opt-in cases and failed zero, in 47.63 seconds with four workers. The
+full default application rerun is pending. Linux source `32aadb0b` passed three
+independent fresh live history cases (3 passed, zero failed/skipped, 149.873
+seconds) and all 29 guarded replays (29 passed, zero failed, one existing fixme,
+133.816 seconds), with no retries or forbidden executable launches. The Linux
+daemon binary SHA-256 is
+`83dddbd5d18eb08136c3d5a7d52fa68dc591021a73cfb695a40e499066bc9141`.
+Live history covers all 205 closed-app posts, saved-checkpoint catch-up and
+fresh-profile paging. An earlier bounded inspector-read failure remains a failed
+report; the successful independent run keeps the original five-second bound.
 
 The packaged macOS history proof passed with the production encryption backend,
 not the fixture backend. The complete Go check, including race-enabled native

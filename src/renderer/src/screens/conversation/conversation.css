@@ -4250,6 +4250,14 @@ button.top-overlay-pill:hover,
   align-items: flex-start;
   gap: var(--space-3);
   padding: var(--space-2) var(--space-1);
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
 }
 
 /* The unselected M3 radio (Figma 20:119): a 20px ring, 2px --color-on-surface-variant, transparent.
@@ -4501,17 +4509,16 @@ button.top-overlay-pill:hover,
   background: var(--color-surface);
 }
 
-/* #257 — the operable affordance. The interactive controls share #188's classes; the operable ones are
-   distinguished by the attributes #257 adds (role="button" on rows/segments, the dropped aria-readonly
-   on the switch), so cursor/focus key off those attributes and the read-only markup is untouched. The
+/* The operable controls share the inert controls' classes; model buttons use native disabled state,
+   effort segments use role="button", and the switch drops aria-readonly. The
    focus ring reuses the composer/status-row idiom (1px --color-outline). */
-.run-config__model-row[role='button'],
+.run-config__model-row:not(:disabled),
 .run-config__effort-segment[role='button'],
 .run-config__switch:not([aria-readonly]) {
   cursor: pointer;
 }
 
-.run-config__model-row[role='button']:focus-visible,
+.run-config__model-row:not(:disabled):focus-visible,
 .run-config__effort-segment[role='button']:focus-visible,
 .run-config__switch:not([aria-readonly]):focus-visible {
   outline: 1px solid var(--color-outline);

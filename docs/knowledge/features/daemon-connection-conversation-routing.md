@@ -10,10 +10,11 @@ conversation id: `sendMessage`, `requestSessionSettings`, `promoteConversation`,
 `unarchiveConversation`, `deleteConversation`, `renameConversation`, `changeWorkspace`,
 `dequeueMessage`, and the attachment-retrieval channel. The id these commands send **is** the routing
 key, so no renderer file changed and no wire type widened. (`requestModelList`, `newSession`,
-`requestHistory`, `requestSystemPrompt` and `setSystemPrompt` later joined this set once their own
+`requestSystemPrompt` and `setSystemPrompt` later joined this set once their own
 tickets gave the daemon a conversation id to name; `interrupt` joined too, in
 [#1092](https://github.com/pyrycode/pyrycode-desktop/issues/1092), once it left #1120's server-scoped
-router — see § The four plain call sites, below.)
+router — see § The four plain call sites, below.) `requestHistory` and its dispatch
+were removed in #2025; authoritative thread queries use explicit owning-host routing.
 
 Like the registry, it is Electron-free and unit-tested with fakes — `src/main/index.ts` has no unit
 test in this repo, so the lookup-and-refuse decision lives in an injectable module and the root keeps
@@ -99,7 +100,7 @@ replacement, deletion or pairing removal can therefore leave another host eligib
 redirecting the removed host's pending observation.
 
 Ordinary command cleanup must preserve those surviving claims: deleting the whole claim set would
-make a valid read depend on whether `sendMessage` or `requestHistory` ran first. The null index slot
+make a valid read depend on whether an ordinary `sendMessage` route ran first. The null index slot
 keeps them within `MAX_INDEXED_CONVERSATIONS`, without choosing a new ordinary owner. Repeated
 cleanup remains inert. Ordinary routing waits for fresh stamped ownership evidence; reconnecting or
 re-pairing the removed host alone restores neither that route nor its removed read claim. Fresh list

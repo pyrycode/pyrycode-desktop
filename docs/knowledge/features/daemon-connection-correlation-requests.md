@@ -1,8 +1,8 @@
-# Daemon connection — request/history/attachment correlation
+# Daemon connection — request and attachment correlation
 
 Split out of [Daemon connection correlation](daemon-connection-correlation.md) for size. Diagnostic
 logging, then the request-response correlation stores for conversation creation, agent switching,
-attachment upload and retrieval, run-configuration reads, and conversation history.
+attachment upload and retrieval, run-configuration reads, and the retired history boundary.
 
 # Diagnostic logging ([#128](../codebase/128.md))
 
@@ -52,7 +52,7 @@ no gate checks, and this one does not add a third claim to keep straight.
   renaming](daemon-connection-correlation-system-prompt-and-mcp.md#workspace-renaming).
   Success, Cancel and unmount detach its result/session-state listeners and clear its
   local deadline; a later rejection cannot reopen it. Pending entries remain unbounded, on
-  `pendingHistoryRequests`' accepted argument: an entry costs one number, only this client's own sends add
+  the other request stores' accepted argument: an entry costs one number, only this client's own sends add
   one, every match or dial removes one.
 - **Bareness does not mean single-caller, and the shipped code comment overstated that it did.** The
   #396 code review caught this during #1307's own review: `create_conversation` has **three** live callers
@@ -69,7 +69,7 @@ no gate checks, and this one does not add a third claim to keep straight.
   writing this store's next consumer.
 
 `security-sensitive`, builder self-review **PASS**, one accepted SHOULD FIX (the unbounded set, the
-`pendingCreateFolders`/`pendingHistoryRequests` posture) and one SHOULD FIX #1308 discharged by
+`pendingCreateFolders` posture) and one SHOULD FIX #1308 discharged by
 construction rather than by a fix (the stale-rejection-after-confirmation case, above); the residual
 concurrent-caller ambiguity while a create is genuinely in flight is accepted as structural, not tracked as
 an open item. See [Conversation create](conversation-create.md) for the full transport slice this
@@ -265,52 +265,11 @@ would misattribute the same way it would for `pendingSettings`.
 either, which is accepted as correct rather than a regression — a session id this client cannot tie to
 a request it sent is exactly the input that index must not accept.
 
-# Conversation-history correlation ([#1222](https://github.com/pyrycode/pyrycode-desktop/issues/1222))
+# Retired conversation-history correlation
 
-A seventh correlation store, the `pendingConfigRequests` shape exactly: `pendingHistoryRequests: Map<number,
-string>`, mapping a sent `request_history`'s `envelopeId` to the conversation id that request named. It
-exists for the same reason `pendingConfigRequests` does — `HistoryPagePayload` carries no
-`conversation_id` at all, not a field that could disambiguate it, so the only place "which conversation
-does this page describe" exists is this client's own memory of what it asked. The one difference from
-that sibling worth naming: a run-config read is one ask at a time in practice, where a scroll-back walk
-is a *sequence* — [#1224](https://github.com/pyrycode/pyrycode-desktop/issues/1224) may have an ask
-outstanding while the operator keeps scrolling — so more than one entry can legitimately be live at
-once.
-
-- **Set — after the send, `pendingConfigRequests`' order.** `envelopeId` is captured into one local,
-  read by the build, the counter advance, and the `set` alike, and the map is written only *after*
-  `driver.sendMessage` returns — a build/send throw leaves no entry under an unspent id, which matters
-  here for the reason it matters everywhere in this file: a phantom entry would answer whichever
-  request next re-mints that id, handing one conversation's transcript to another.
-- **Match + delete — inside `case 'history-page':`, gating a success reply, not a rejection.**
-  `inbound.inReplyTo === undefined` short-circuits before the map lookup (no event); a
-  `pendingHistoryRequests.get` miss short-circuits the same way (a stale reply from a cleared
-  connection, a duplicate of an already-matched page, or a daemon forging a page for a request never
-  sent); a hit `delete`s the entry and emits `historyPageReceived` carrying the recorded conversation id
-  — never the numeric `in_reply_to` itself. Both silent branches: the only values a diagnostic could
-  carry are the conversation id and the wire routing id, and neither may reach a sink.
-- **Match + delete — `case 'daemon-error':` gains a fourth precedence-tier member**, checked alongside
-  `pendingSettings`/`pendingCreateFolders`/`pendingRetrievals`. A hit deletes the entry and emits
-  `historyRequestFailed{conversationId, reason, retryable}`, where `reason` is
-  `inbound.historyReject ?? 'unclassified'` — the daemon can refuse this verb with a code outside its
-  own published five (an entry too large for any page draws a correlated `message.too_long` instead;
-  see [Request history send § The reject path](request-history-send.md) for the sibling narrower this
-  reads) — and `retryable` is computed **here, at this single emit**, `true` only for
-  `'history-unavailable'`,
-  so the walk driver ([#1224](https://github.com/pyrycode/pyrycode-desktop/issues/1224)) cannot
-  re-derive it wrong into a retry loop against a relay that is merely withholding the frame. A match
-  consumes the frame entirely, ahead of the reassembler/modal-FIFO fallbacks below it, on the same
-  "an envelope id is minted once, so at most one store can hold it" reasoning every member of this tier
-  shares.
-- **Reset — `dial()` clears the map next to its siblings.** A reconnect recycles envelope ids from 2,
-  so a surviving entry would attribute the new connection's first page to a dead one's conversation —
-  a live misdelivery, not a theoretical one, given the recycling.
-- **No cap**, the same evidence-based, no-observed-failure posture as every sibling store in this file.
-  An entry costs one number and one short string, deleted on every match; the only way to accumulate
-  them is this client sending asks a daemon never answers, a rate this client controls rather than a
-  remote one.
-
-`security-sensitive`, builder self-review **PASS**, no MUST FIX findings. See [Request history
-send](request-history-send.md) for the full design, including the outbound builder, the fail-closed
-decode, the sibling `HistoryRejectReason` narrower, and the two `DaemonEvent` arms this correlation
-feeds.
+\#2025 removes `pendingHistoryRequests`, `abandonHistoryRequests`, the page success
+arm and history-specific daemon-error classification/failure IPC. No history map
+participates in teardown or error precedence. Thread queries retain their own
+registered request/host/conversation identity and checkpoint recovery; settings,
+prompts, attachments and other supported correlation stores retain their owners.
+See [thread queries](daemon-connection-lifecycle.md#thread-history-queries).

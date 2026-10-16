@@ -160,9 +160,12 @@ observed `attachment_id`, while changed bytes or substituted attachments still f
 
 Earlier failed runs remain failures: transient Electron inspector reads, a lost
 observer-installation acknowledgement, one Linux paging-progress timeout, a
-macOS fake-server HTTP 501 before Electron launch, and loopback handshake
+macOS fake-server HTTP 400/501 before Electron launch, and loopback handshake
 starvation under unrestricted unit concurrency. Read and installation handling
-are bounded as described above; unit verification uses four workers. No test
+are bounded as described above; unit verification uses four workers. The test
+forwarder now explicitly binds its advertised IPv4 loopback address. Its 46
+forwarding/responder/setup checks pass; the earlier HTTP failures do not establish
+a root cause and remain recorded failures. No test
 retry or assertion weakening converts those runs into successful evidence.
 
 The dedicated Codex scenario's provider warning retains the path of its isolated

@@ -109,7 +109,7 @@ const DEFAULT_READY_TIMEOUT_MS = 1000
  * network, so it runs unconditionally under `npm test`.
  */
 export function startFakeRelayForwarder(): Promise<FakeRelayForwarder> {
-  const wss = new WebSocketServer({ port: 0 })
+  const wss = new WebSocketServer({ host: '127.0.0.1', port: 0 })
 
   let clientLeg: WebSocket | null = null
   let serverLeg: WebSocket | null = null

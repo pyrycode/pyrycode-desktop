@@ -78,9 +78,10 @@ export function createThreadLiveState(deps: ThreadLiveDeps) {
     const report = (code: string) => deps.log?.event({ event: 'thread-live-state', code })
     function owned(event: DaemonEvent, family: SessionStateFamily, binding: Binding): boolean {
       if ('conversationId' in event) return event.conversationId !== '' && event.conversationId === binding.conversationId
-      // An unsolicited withdrawal names the whole family, rather than the
-      // event identity it replaces. The exact host/session guards run first.
-      if (event.type === 'sessionStateCleared' && get().readings.has(family)) return true
+      // Reset completion is an unsolicited withdrawal of the held operation,
+      // without a request ID. Exact host/session guards run before this check.
+      if (event.type === 'sessionStateCleared' && family === 'resetting' &&
+          event.inReplyTo === undefined && get().readings.has(family)) return true
       const held = get().readings.get(family)?.get(identity(event))
       if ((event.type === 'modalDismissed' || event.type === 'questionDismissed') && held !== undefined) return true
       const request = event.inReplyTo === undefined ? undefined : requests.get(event.inReplyTo)

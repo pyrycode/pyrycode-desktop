@@ -71,3 +71,20 @@ Retain fixed-text subprocess errors; never echo CLI argv, pairing output or cred
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-16
+
+## Revisions
+
+2026-10-16 — Diagnosis requires prerequisite [#2050](https://github.com/pyrycode/pyrycode-desktop/issues/2050), linked as blocked-by; implementation is deferred. No fixture option or Desktop production change restores the required cold-query proof against the supplied daemon. Temporary diagnostic edits were preserved under `/tmp/builder-2046/diagnostic-history-on-open.spec.ts` and removed from the working spec; no failing test change is committed.
+
+The source-stamped reproduction separates the boundaries: baseline accepted, pending delivery **0**, recorded baseline **1**, authoritative baseline item received by Desktop **1**, visible bubble **0**, protected baseline/checkpoint **absent**. Initial queries produce `daemon-error` without `thread_items`. This rules out a held channel post and missing thread publication. Both enabling real Claude and posting before opening (with a positive authoritative publication barrier) still fail. `spawnClaude: false` is not the demonstrated cause, so its shared and scenario defaults remain unchanged.
+
+The daemon's `threadShadow.follow` unloads idle usable state after recording its consumed version. Its rediscovery does not reload unchanged history. `installDaemonThreadRelay` calls bounded `Store.CatchUp`/`Store.HistoryPage`, which deliberately neither load nor wait for recovery; `V2SessionManager.runThreadQuery` refuses non-usable state. Existing daemon `TestDaemonThreadQueriesReadiness` explicitly asserts that a cold query stays `StateNotLoaded` and passed (1 executed, 1 passed). A Desktop retry or accepting an unknown-epoch live addition cannot certify the missing cold history window. The prerequisite needs daemon demand/recovery lifecycle integration around the bounded providers, outside this ticket's allowed scope. Daemon #3337 optimizes an already initiated load and does not own initiating query demand.
+
+### Linux evidence and pending work
+
+- Desktop runtime `1700f67f`, plan-only test HEAD `75b19322`; `npm install` and `npm run build` passed. No daemon source changes.
+- Clean daemon source `0917625fc6e91eeb2a16556f09e5ba0bbf62aabf`, binary `/tmp/builder-2046/pyry`, version `dev-0917625fc6e91eeb2a16556f09e5ba0bbf62aabf`, SHA256 `c3c701f23fc51149c16d252212a3cf42a352c2158d46353cc755596192a99428`.
+- Configured `live-claude-gate.py desktop` selected the exact named scenario with retries 0. Each diagnostic report executed **1**, passed **0**, failed **1**, skipped **0**: `old-mode-report.json`, `publication-report.json`, `real-session-report.json`, `query-boundary-report.json`, `post-before-open-report.json`, all under `/tmp/builder-2046/`. These are failures, not acceptance.
+- Count-only `baseline-delivery-boundary` attachment for the post-before-open variant: `accepted=true, pending=0, recorded=1, visible=0, publication.threadItems=1, publication.queryFailures=[daemon-error], publication.replies=[], protected.checkpoint=null, protected.baselineItems=0`.
+- An earlier `baseline-report.json` launched before the build finished and failed on missing `out/main/index.js`; excluded from causal evidence. The subsequent diagnostic launches all used the completed build.
+- No saved-history success attachment exists: the scenario stops before that boundary. After #2050, preserve #2048's daemon-item-only adaptation, restore the exact unskipped title, finish baseline/restart/paging proof, merge final main and run pre-verify/build plus applicable Linux checks. Dispatcher owns final counted live acceptance and retained report/saved-history attachment. No PR is opened for this dependency handoff; macOS remains outside scope.

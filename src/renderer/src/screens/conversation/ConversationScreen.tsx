@@ -707,6 +707,28 @@ function useThreadScrollPin(conversationId: string | null, presentation?: object
   // The offset the pin itself last wrote, while the scroll event that write queued is still outstanding. See
   // `reassertPinnedToBottom` for why this exists and why it cannot go stale.
   const pinnedOffset = useRef<number | null>(null)
+  const coveredPosition = useRef<{
+    conversationId: string | null; width: number; height: number; top: number
+  } | null>(null)
+  const preserveCoveredPosition = (el: HTMLDivElement): void => {
+    if (!paneRef.current?.hasAttribute('data-covered')) {
+      coveredPosition.current = null
+      return
+    }
+    if (coveredPosition.current?.conversationId !== conversationId) coveredPosition.current = null
+    const before = viewport.current
+    const resized = el.clientWidth !== before.width || el.clientHeight !== before.height
+    if (!resized || before.width === 0) return
+    // Hidden rows cannot provide native scroll anchors. Remember the processed position
+    // before a resize clamp replaces it, whichever of scroll/layout/observation runs first.
+    coveredPosition.current ??= { conversationId, width: before.width, height: before.height,
+      top: pinnedOffset.current ?? scrollOffset.current }
+    const saved = coveredPosition.current
+    if (!following.current && el.clientWidth === saved.width && el.clientHeight === saved.height) {
+      el.scrollTop = saved.top
+      pinnedOffset.current = el.scrollTop
+    }
+  }
   const topAnchor = useRef<{
     row: Element
     top: number
@@ -853,6 +875,7 @@ function useThreadScrollPin(conversationId: string | null, presentation?: object
     const el = ref.current
     const pane = paneRef.current
     if (pane === null) return
+    if (el !== null) preserveCoveredPosition(el)
     const header = pane?.querySelector<HTMLElement>('.conversation__top-chrome')
     const input = pane?.querySelector<HTMLElement>('.conversation__input-chrome')
     measureThreadChrome(pane)
@@ -885,6 +908,7 @@ function useThreadScrollPin(conversationId: string | null, presentation?: object
       // an unmount, and the null path is that case.
       const region = ref.current
       const currentPane = paneRef.current
+      if (region !== null) preserveCoveredPosition(region)
       if (currentPane) measureThreadChrome(currentPane)
       if (region !== null) {
         syncRows(region)
@@ -937,6 +961,7 @@ function useThreadScrollPin(conversationId: string | null, presentation?: object
       chromeTargets.current.clear()
       topAnchor.current = null
       observedRegion.current = null
+      coveredPosition.current = null
     }
   }, [])
 
@@ -982,6 +1007,7 @@ function useThreadScrollPin(conversationId: string | null, presentation?: object
       // Timeline is not memoized, so a stable identity buys nothing and React attaches this directly.
       onScroll: (event) => {
         const el = event.currentTarget
+        preserveCoveredPosition(el)
         const movingDown = el.scrollTop > scrollOffset.current
         scrollOffset.current = el.scrollTop
         rememberTop(el)

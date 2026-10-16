@@ -317,7 +317,14 @@ The covered pane contains the full-pane thread and its fixed top/input chrome (s
 [layout contract](conversation-shell-chrome.md#layout-contract)). While the reader is open it carries
 `data-covered`, which sets `visibility: hidden` on the whole subtree — out of the tab order
 and the accessibility tree, and unable to take a pointer hit or a drop, but present in the
-layout, so **the thread's scroll position survives the round trip** rather than resetting.
+layout. This keeps thread/composer state mounted; hidden rows still lose native scroll
+anchors during resize, so mounting alone cannot preserve their offset. The
+[scroll pin's covered-position record](conversation-shell-scroll-pin.md#covered-reader-resize-preservation)
+captures the processed offset before the first covered viewport change and restores
+released readers when the original viewport width and height return. Following readers
+retain bottom pinning. Back at different dimensions keeps the current native position;
+uncovering or leaving the conversation clears the record, and each open captures anew.
+
 `MarkdownReaderView` and its only scrollport, `.markdown-reader__body`, use absolute
 `inset: 0` over the whole chat pane. The body sits at local level 0 beneath fixed
 `.markdown-reader__chrome` at level 1. Chrome includes the existing Back/title/Note actions
@@ -348,16 +355,20 @@ when needed at minimum width/125% zoom. Shared focus, Escape and outside-click h
 remain in the menu component. See [layout and input verification](development-verification-layout-and-input.md#layout-and-input)
 for the focused browser proof and retained captures.
 
-The layout scenarios in `e2e/markdown-reader-menu.spec.ts` normalize focus before
-testing preservation: after Plan version 1 loads, focus Back and settle the covered
-thread before recording its position. Otherwise the baseline can retain reply metadata
+The layout scenarios in `e2e/markdown-reader-menu.spec.ts` first prove native upward
+wheel movement and settle before opening. After Plan version 1 loads, focus Back and
+settle the covered thread before recording its position. Otherwise the baseline can retain reply metadata
 that later menu focus collapses. After pointer Back, assert the original thread position
 and draft before preparing the next click. Focus the note link to hold metadata open,
 then settle thread and link geometry before pointer delivery; hover can otherwise grow
 the row and move the link after Playwright measures it. Reopen must show Plan version 3
-with exactly one new host read and unique request IDs, then keyboard Back must close it.
+with exactly one new host read and unique request IDs. Reopening at the other native
+size, resizing away and back, then using keyboard Back must preserve that open's own
+settled offset, proving the prior record is not replayed. Phase diagnostics survive
+assertion failures before reopen through the test-wide `finally` attachment.
 See [the geometry contract](development-verification-layout-and-input.md#layout-and-input)
-and [controlled evidence and counted runs](development-verification-layout-evidence.md#reader-reopen-input-verification).
+and the [reopen input](development-verification-layout-evidence.md#reader-reopen-input-verification)
+and [resize preservation evidence](development-verification-layout-evidence.md#reader-resize-scroll-preservation).
 
 **Why this matters beyond visual continuity**: `Composer`'s pending-attachment set and its
 upload listener (`useAttachmentUpload`) are mount-local state. The first shipped cut's early

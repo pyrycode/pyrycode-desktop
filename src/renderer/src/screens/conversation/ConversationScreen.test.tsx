@@ -43,15 +43,13 @@ import {
   requestArchiveConversation,
   requestDeleteConversation,
   relayLeg,
-  daemonLeg,
-  selectOpenTimelineFor
+  daemonLeg
 } from './ConversationScreen'
 // #780's AC5 asserts one chrome from both sides, so the message-side renderer is imported here too.
 import { AssistantMarkdown } from './AssistantMarkdown'
 import { COMPOSER_ACTIONS_LABEL } from './ComposerActionsMenu'
 import { PERMISSION_MODE_LABELS } from './ComposerPermissionModeMenu'
 import { COMPOSER_ATTACH_LABEL } from './ComposerAttach'
-import { createConversationTimelineStore, conversationTimelineStore } from '../../store/conversationTimelineStore'
 import {
   CONNECTION_BANNER_COPY,
   COMPOSER_ERROR_CHIP_COPY,
@@ -75,7 +73,6 @@ import { sessionIdStore } from '../../store/sessionIdStore'
 import { runConfigStore } from '../../store/runConfigStore'
 import { reportedContextStore } from '../../store/reportedContextStore'
 import { runSettingsWriteStore } from '../../store/runSettingsWriteStore'
-import { queueStore } from '../../store/queueStore'
 
 // No DOM harness (jsdom/Testing Library) — mirrors PairingScreen.test.tsx. MessageThread
 // is pure (Message[] in, markup out), so a server-rendered string proves the render:
@@ -4134,87 +4131,6 @@ describe('requestDeleteConversation', () => {
   })
 })
 
-// #758: the chat pane's thread binding — the selector the container hands to
-// `useConversationTimelineStore`, so the thread on screen is the OPEN conversation's own retained
-// timeline rather than the flat, single-thread store `activateConversation` resets on every switch.
-//
-// Tested HERE, at the selector, rather than through the container below, because this repo's renderer
-// tier CANNOT see a seeded store: `vitest.config.ts` is `environment: 'node'` and zustand v5's `useStore`
-// reads `getInitialState()` under `renderToStaticMarkup` (the note at the head of this file, restated in
-// six sibling describes). A `setState` before a server render is invisible, so every container test in
-// this file renders the EMPTY stores — which is exactly this selector's `null` branch, and cannot
-// distinguish one conversation's rows from another's. The screen-level proof of that distinction is
-// `e2e/conversation-switch-keeps-both-threads.spec.ts`, the only tier in this repo that can click.
-//
-// The fixture drives the REAL store through its real write path (`dispatchFor`), so the copy-on-write
-// identity these assertions rest on is the shipped one and not a hand-built map's.
-describe('selectOpenTimelineFor', () => {
-  // Two conversations, each holding one row of its own. A FRESH `new Map()` per store, never
-  // `initialConversationTimelineState` — that exported constant holds a module-shared mutable map
-  // (conversationTimelineStore.ts:340-349).
-  function twoHeldThreads(): ReturnType<typeof createConversationTimelineStore> {
-    const store = createConversationTimelineStore({ timelines: new Map() })
-    store.getState().dispatchFor('conv-a', { type: 'userText', text: 'alpha' })
-    store.getState().dispatchFor('conv-b', { type: 'userText', text: 'beta' })
-    return store
-  }
-
-  it("hands back the open conversation's own held slice, never a neighbour's (AC1)", () => {
-    const store = twoHeldThreads()
-    const thread = selectOpenTimelineFor('conv-a')(store.getState())
-    expect(thread?.items).toEqual([{ kind: 'userText', text: 'alpha' }])
-    // The chrome travels with the rows — the whole slice is one value, so the phase and the four
-    // scalars can no more come from another conversation than the rows can.
-    expect(thread?.localSendPending).not.toBeNull()
-    // The HELD timeline itself, not a copy. That `Object.is` identity is what makes the switch cheap: a
-    // write for another conversation rebuilds the outer map but copies every survivor by reference, so
-    // this screen does not re-render (`withNewSliceAtHead`'s by-reference survivor copy). Since #1259 a
-    // key holds a `ConversationSlice` — the timeline plus the state of the ask that backfilled it — so
-    // the identity to assert is the slice's `timeline` half, which is exactly what `selectTimelineFor`
-    // projects. That indirection is also what keeps a history-request write from waking this screen.
-    expect(thread).toBe(store.getState().timelines.get('conv-a')?.timeline)
-  })
-
-  it("reads null for an open conversation with nothing retained — never a neighbour's rows (AC3)", () => {
-    const store = twoHeldThreads()
-    // `null` means "nothing is held", the reading the container renders as the shipped empty thread.
-    // It must not be an empty slice and must not resolve onto a neighbour.
-    expect(selectOpenTimelineFor('conv-c')(store.getState())).toBeNull()
-  })
-
-  it('reads null when nothing is open, even with a slice held under the empty-string id', () => {
-    const store = twoHeldThreads()
-    // The `?? ''` sentinel regression guard (BackgroundTaskPanel.tsx:342's idiom, rejected here): `''`
-    // is an ORDINARY key in this store — `dispatchFor` mints a slice for whatever id the daemon
-    // asserts — so substituting it for "no conversation open" would render that slice as the open
-    // conversation's thread while nothing is open. Branching performs no lookup at all.
-    store.getState().dispatchFor('', { type: 'userText', text: 'from an empty conversation id' })
-    expect(selectOpenTimelineFor(null)(store.getState())).toBeNull()
-  })
-
-  it('shows the thread as it now stands after a switch away and back (AC2)', () => {
-    const store = twoHeldThreads()
-    const away = selectOpenTimelineFor('conv-a')(store.getState())
-    // `conv-b` is on screen; a row arrives for `conv-a` while the operator is elsewhere.
-    store.getState().dispatchFor('conv-b', { type: 'userText', text: 'beta again' })
-    store.getState().dispatchFor('conv-a', { type: 'userText', text: 'arrived while away' })
-    const back = selectOpenTimelineFor('conv-a')(store.getState())
-    expect(back?.items).toEqual([
-      { kind: 'userText', text: 'alpha' },
-      { kind: 'userText', text: 'arrived while away' }
-    ])
-    expect(back).not.toBe(away)
-  })
-
-  it("a write for another conversation leaves the open one's slice identical", () => {
-    const store = twoHeldThreads()
-    const before = selectOpenTimelineFor('conv-a')(store.getState())
-    store.getState().dispatchFor('conv-b', { type: 'userText', text: 'beta again' })
-    // Same object → zustand's `Object.is` short-circuit → no re-render for the conversation on screen.
-    expect(selectOpenTimelineFor('conv-a')(store.getState())).toBe(before)
-  })
-})
-
 describe('ConversationScreen — store binding', () => {
   const CONNECTED: ConnectionStatus = {
     type: 'connected',
@@ -4997,49 +4913,12 @@ it('disables the held running-turn interrupt when sending is unavailable', () =>
 })
 
 describe('saved timeline notices', () => {
-  // #1908: every selected host draws through the daemon-built item view, so a saved legacy timeline,
-  // its partial reply and its held queue are never drawn, connected or not.
-  it.each([false, true])('never draws a saved legacy timeline for a selected host (connected=%s)', connected => {
-    const reset = stageOpenConnection(connected ? { type: 'connected', ack: { protocol_version: '1', server_id: 'host', conn_id: 'c', capabilities: ['thread'] } } : { type: 'disconnected' })
-    const store = createConversationTimelineStore(undefined, () => 'host')
-    const held = vi.spyOn(conversationTimelineStore, 'getInitialState').mockImplementation(() => store.getState())
-    const queue = vi.spyOn(queueStore, 'getInitialState').mockReturnValue({
-      ...queueStore.getInitialState(), backlogs: new Map([['open', [{ queued_msg_id: 4, text: 'Held queued work', ts: '2026-09-13' }]]])
-    })
-    try {
-      store.getState().beginLocalTimelineRead('host', 'open')!.complete({ version: 1, kind: 'timeline',
-        serverId: 'host', conversationId: 'open', items: [{ kind: 'assistantText', turnId: 'partial', text: 'Saved partial' }],
-        prependedRows: 0, coverage: { status: 'unknown' } })
-      store.getState().dispatchFor('open', { type: 'assistantDelta', turnId: 'new', seq: 0, text: 'New live reply' })
-      const html = renderToStaticMarkup(<ConversationScreen savedTimelineTarget={{ serverId: 'host', conversationId: 'open' }} />)
-      expect(html).toContain('conversation__message-area')
-      for (const text of ['Saved partial', 'New live reply', 'Held queued work']) expect(html).not.toContain(text)
-    } finally { queue.mockRestore(); held.mockRestore(); reset() }
-  })
   it('distinguishes local failure, pending and offline saved results', () => {
     const render = (status: 'loading' | 'loaded' | 'failed') =>
       renderToStaticMarkup(<SavedTimelineNotice status={status} />)
     expect(render('failed')).toContain('Could not read saved messages on this device.')
     expect(render('loading')).toContain('Loading saved messages…')
     expect(render('loaded')).toContain('Offline. Showing saved messages.')
-  })
-  // #1447's AC1, both connection states in one case: an empty local copy is the ordinary state of a chat
-  // first opened on this machine, not a fault, so it gets no notice at all. The offline leg's second
-  // assertion is the other half of that AC — the #279 banner is what announces a disconnection, and it
-  // still does, which is why the notice going quiet here costs the reader nothing.
-  it.each([false, true])('shows no saved-timeline notice for a loaded, empty local read (connected=%s)', connected => {
-    const reset = stageOpenConnection(connected
-      ? { type: 'connected', ack: { protocol_version: '1', server_id: 'host', conn_id: 'c', capabilities: [] } }
-      : { type: 'disconnected' })
-    const store = createConversationTimelineStore(undefined, () => 'host')
-    const held = vi.spyOn(conversationTimelineStore, 'getInitialState').mockImplementation(() => store.getState())
-    try {
-      store.getState().beginLocalTimelineRead('host', 'open')!.complete(null)
-      const html = renderToStaticMarkup(<ConversationScreen savedTimelineTarget={{ serverId: 'host', conversationId: 'open' }} />)
-      expect(html).not.toContain('No messages are saved on this device.')
-      expect(html).not.toContain('Offline. Showing saved messages.')
-      expect(html.includes(CONNECTION_BANNER_COPY)).toBe(!connected)
-    } finally { held.mockRestore(); reset() }
   })
 })
 

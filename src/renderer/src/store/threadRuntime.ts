@@ -287,10 +287,7 @@ export const threadRuntime = createThreadRuntime({ send: command => window.pyry.
   read: request => window.pyry.chatHistory(request), log: event => window.pyry.sendDiagnostic(event),
   frame: { request: callback => window.requestAnimationFrame(callback), cancel: handle => window.cancelAnimationFrame(handle) } })
 
-/**
- * The legacy content writers are unhooked from the production route (#1908): every paired host is a
- * thread host, so no host's events reach them. Deleting them is #2020.
- */
+/** Unattributed non-content bridges retain their existing event contract. */
 export const onLegacyContentEvent: typeof window.pyry.onDaemonEvent = listener => window.pyry.onDaemonEvent(event => {
   if (event.serverId === null) listener(event)
 })

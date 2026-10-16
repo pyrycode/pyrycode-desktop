@@ -22,10 +22,9 @@ import {
   type ConversationListState,
   type ServerConversationSummary
 } from './conversationListStore'
-import { conversationTimelineStore } from './conversationTimelineStore'
 import { threadRuntime } from './threadRuntime'
 import { threadItemPresentations } from '../screens/conversation/threadItemPresentation'
-import { notificationPreviewFromItems, notificationPreviewIn, type NotifyEvent } from './notificationPreview'
+import { notificationPreviewFromItems, type NotifyEvent } from './notificationPreview'
 import { pushNotificationPrefStore } from './pushNotificationPrefStore'
 
 /**
@@ -296,7 +295,7 @@ export function usePushNotify(targets: NotificationTargets): void {
         (event) => {
           const snapshot = event.serverId === null ? null : threadRuntime.items.getState().snapshot(event.serverId, event.conversationId)
           return snapshot ? notificationPreviewFromItems(threadItemPresentations(snapshot).flatMap(row => row.item ? [row.item] : []), event)
-            : notificationPreviewIn(conversationTimelineStore.getState(), event)
+            : null
         }
       ),
     [targets]

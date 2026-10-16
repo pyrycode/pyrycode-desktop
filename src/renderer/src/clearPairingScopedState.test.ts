@@ -5,18 +5,10 @@ import {
   clearPairingScopedState,
   type ClearPairingScopedStateDeps
 } from './clearPairingScopedState'
-import { createTimelineStore } from './store/timelineStore'
 import { createSessionIdStore } from './store/sessionIdStore'
 import { createAnnouncedModelStore } from './store/announcedModelStore'
 import { createActiveConversationStore } from './store/activeConversationStore'
 import { createSessionStore, initialSessionState } from './store/sessionStore'
-import { createConversationTimelineStore, selectTimelineFor } from './store/conversationTimelineStore'
-import {
-  createConversationLastReadStore,
-  selectLastReadFor,
-  type ConversationLastReadStorage,
-  type LastReadMark
-} from './store/conversationLastReadStore'
 import {
   createSlashCommandListStore,
   selectSlashCommandListFor
@@ -27,11 +19,6 @@ import {
   selectConversations,
   selectConversationsFor
 } from './store/conversationListStore'
-import { createQueueStore, selectBacklogFor, EMPTY_BACKLOG } from './store/queueStore'
-import {
-  createBackgroundTaskRosterStore,
-  selectRosterFor
-} from './store/backgroundTaskRosterStore'
 import { createModalStore, selectOutstanding, selectRejections } from './store/modalStore'
 import {
   createConversationActivityStore,
@@ -42,7 +29,6 @@ import {
   createReportedContextStore,
   selectReportedContextFor
 } from './store/reportedContextStore'
-import { initialTimelineState, type ThreadItem } from './store/threadTimeline'
 import type {
   BackgroundTask,
   ConversationCreatedPayload,
@@ -60,8 +46,6 @@ const conversation: ConversationCreatedPayload = {
   last_used_at: '2026-07-30T09:00:00Z',
   workspace_label: null
 }
-
-const seededItems: readonly ThreadItem[] = [{ kind: 'userText', text: 'a message on server A' }]
 
 const seededMessages: readonly MessagePayload[] = [
   { conversation_id: 'a1', message_id: 'm1', role: 'user', text: 'hello server A' }
@@ -99,14 +83,11 @@ function spyDeps(): {
   clearAllSlashCommandLists: ReturnType<typeof vi.fn>
   clearAllModelLists: ReturnType<typeof vi.fn>
   clearAllConversations: ReturnType<typeof vi.fn>
-  clearAllBacklogs: ReturnType<typeof vi.fn>
-  clearAllRosters: ReturnType<typeof vi.fn>
   dispatchModal: ReturnType<typeof vi.fn>
   clearAllActivity: ReturnType<typeof vi.fn>
   clearAllUsageLimits: ReturnType<typeof vi.fn>
   clearAllReportedContext: ReturnType<typeof vi.fn>
   dispatchSession: ReturnType<typeof vi.fn>
-  clearAllLastRead: ReturnType<typeof vi.fn>
 } {
   const clearActiveConversation = vi.fn()
   const clearSessionId = vi.fn()
@@ -116,14 +97,11 @@ function spyDeps(): {
   const clearAllSlashCommandLists = vi.fn()
   const clearAllModelLists = vi.fn()
   const clearAllConversations = vi.fn()
-  const clearAllBacklogs = vi.fn()
-  const clearAllRosters = vi.fn()
   const dispatchModal = vi.fn()
   const clearAllActivity = vi.fn()
   const clearAllUsageLimits = vi.fn()
   const clearAllReportedContext = vi.fn()
   const dispatchSession = vi.fn()
-  const clearAllLastRead = vi.fn()
   return {
     deps: {
       clearActiveConversation,
@@ -134,14 +112,11 @@ function spyDeps(): {
       clearAllSlashCommandLists,
       clearAllModelLists,
       clearAllConversations,
-      clearAllBacklogs,
-      clearAllRosters,
       dispatchModal,
       clearAllActivity,
       clearAllUsageLimits,
       clearAllReportedContext,
       dispatchSession,
-      clearAllLastRead
     },
     clearActiveConversation,
     clearSessionId,
@@ -151,34 +126,11 @@ function spyDeps(): {
     clearAllSlashCommandLists,
     clearAllModelLists,
     clearAllConversations,
-    clearAllBacklogs,
-    clearAllRosters,
     dispatchModal,
     clearAllActivity,
     clearAllUsageLimits,
     clearAllReportedContext,
     dispatchSession,
-    clearAllLastRead
-  }
-}
-
-/** An in-memory `ConversationLastReadStorage`, so the integration cases can read back what the clear
- *  PERSISTED rather than only what it left in memory — the on-disk half of AC2, and the half that fails
- *  silently while every in-memory assertion stays green. Deliberately a closure over a mutable value, the
- *  conversationLastReadStore.test.ts fake's shape. */
-function fakeLastReadStorage(seed: ReadonlyMap<string, LastReadMark> = new Map()): {
-  storage: ConversationLastReadStorage
-  persisted: () => ReadonlyMap<string, LastReadMark>
-} {
-  let value: ReadonlyMap<string, LastReadMark> = seed
-  return {
-    storage: {
-      read: () => value,
-      write: (next) => {
-        value = next
-      }
-    },
-    persisted: () => value
   }
 }
 
@@ -194,14 +146,11 @@ describe('clearPairingScopedState', () => {
       clearAllSlashCommandLists,
       clearAllModelLists,
       clearAllConversations,
-      clearAllBacklogs,
-      clearAllRosters,
       dispatchModal,
       clearAllActivity,
       clearAllUsageLimits,
       clearAllReportedContext,
       dispatchSession,
-      clearAllLastRead
     } = spyDeps()
 
     clearPairingScopedState(deps)
@@ -219,10 +168,6 @@ describe('clearPairingScopedState', () => {
     expect(clearAllModelLists).toHaveBeenCalledWith()
     expect(clearAllConversations).toHaveBeenCalledTimes(1)
     expect(clearAllConversations).toHaveBeenCalledWith()
-    expect(clearAllBacklogs).toHaveBeenCalledTimes(1)
-    expect(clearAllBacklogs).toHaveBeenCalledWith()
-    expect(clearAllRosters).toHaveBeenCalledTimes(1)
-    expect(clearAllRosters).toHaveBeenCalledWith()
     expect(dispatchModal).toHaveBeenCalledTimes(1)
     expect(dispatchModal).toHaveBeenCalledWith({ type: 'reset' })
     expect(clearAllActivity).toHaveBeenCalledTimes(1)
@@ -233,8 +178,6 @@ describe('clearPairingScopedState', () => {
     expect(clearAllReportedContext).toHaveBeenCalledWith()
     expect(dispatchSession).toHaveBeenCalledTimes(1)
     expect(dispatchSession).toHaveBeenCalledWith({ type: 'reset' })
-    expect(clearAllLastRead).toHaveBeenCalledTimes(1)
-    expect(clearAllLastRead).toHaveBeenCalledWith()
   })
 
   it('the pairing-scoped set is exactly these stores', () => {
@@ -243,12 +186,9 @@ describe('clearPairingScopedState', () => {
     expect(Object.keys(deps).sort()).toEqual([
       'clearActiveConversation',
       'clearAllActivity',
-      'clearAllBacklogs',
       'clearAllConversations',
-      'clearAllLastRead',
       'clearAllModelLists',
       'clearAllReportedContext',
-      'clearAllRosters',
       'clearAllSlashCommandLists',
       'clearAllUsageLimits',
       'clearAnnouncedModel',
@@ -260,85 +200,7 @@ describe('clearPairingScopedState', () => {
     ])
   })
 
-  it('the slash-command clear runs BEFORE the one effect that can throw (#955)', () => {
-    const { deps, clearAllSlashCommandLists, clearAllLastRead } = spyDeps()
-
-    clearPairingScopedState(deps)
-
-    expect(clearAllSlashCommandLists.mock.invocationCallOrder[0]).toBeLessThan(
-      clearAllLastRead.mock.invocationCallOrder[0]
-    )
-  })
-
-  it('the model-list clear runs BEFORE the one effect that can throw (#977)', () => {
-    const { deps, clearAllModelLists, clearAllLastRead } = spyDeps()
-
-    clearPairingScopedState(deps)
-
-    expect(clearAllModelLists.mock.invocationCallOrder[0]).toBeLessThan(
-      clearAllLastRead.mock.invocationCallOrder[0]
-    )
-  })
-
-  it('the roster clear runs BEFORE the one effect that can throw (#1139)', () => {
-    const { deps, clearAllRosters, clearAllLastRead } = spyDeps()
-
-    clearPairingScopedState(deps)
-
-    expect(clearAllRosters.mock.invocationCallOrder[0]).toBeLessThan(
-      clearAllLastRead.mock.invocationCallOrder[0]
-    )
-  })
-
-  it('the modal clear runs BEFORE the one effect that can throw (#1140)', () => {
-    const { deps, dispatchModal, clearAllLastRead } = spyDeps()
-
-    clearPairingScopedState(deps)
-
-    expect(dispatchModal.mock.invocationCallOrder[0]).toBeLessThan(
-      clearAllLastRead.mock.invocationCallOrder[0]
-    )
-  })
-
-  it('the activity clear runs BEFORE the one effect that can throw (#1145)', () => {
-    const { deps, clearAllActivity, clearAllLastRead } = spyDeps()
-
-    clearPairingScopedState(deps)
-
-    expect(clearAllActivity.mock.invocationCallOrder[0]).toBeLessThan(
-      clearAllLastRead.mock.invocationCallOrder[0]
-    )
-  })
-
-  it('the usage-limit clear runs BEFORE the one effect that can throw (#1320)', () => {
-    const { deps, clearAllUsageLimits, clearAllLastRead } = spyDeps()
-
-    clearPairingScopedState(deps)
-
-    expect(clearAllUsageLimits.mock.invocationCallOrder[0]).toBeLessThan(
-      clearAllLastRead.mock.invocationCallOrder[0]
-    )
-  })
-
-  it('the reported-context clear runs BEFORE the one effect that can throw (#1420)', () => {
-    const { deps, clearAllReportedContext, clearAllLastRead } = spyDeps()
-
-    clearPairingScopedState(deps)
-
-    expect(clearAllReportedContext.mock.invocationCallOrder[0]).toBeLessThan(
-      clearAllLastRead.mock.invocationCallOrder[0]
-    )
-  })
-
-  it('real stores: the ended pairing preserves legacy timelines and clears conversation, session, model, menus and read marks (AC1, AC2)', () => {
-    const timeline = createTimelineStore({
-      ...initialTimelineState,
-      items: seededItems,
-      phase: 'thinking'
-    })
-    const keyedTimelines = createConversationTimelineStore()
-    keyedTimelines.getState().dispatchFor('a1', { type: 'userText', text: 'a message on server A' })
-    keyedTimelines.getState().dispatchFor('a2', { type: 'userText', text: 'another on server A' })
+  it('real stores: the ended pairing clears conversation, session, model and menus (AC1, AC2)', () => {
     const sessionId = createSessionIdStore({ sessionId: 'session-on-A' })
     const announcedModel = createAnnouncedModelStore({
       announced: new Map([['a1', { model: 'model-on-A', truncated: false }]])
@@ -357,13 +219,6 @@ describe('clearPairingScopedState', () => {
       statuses: new Map(),
       messages: seededMessages
     })
-    const lastReadStorage = fakeLastReadStorage(
-      new Map([
-        ['a1', 4],
-        ['a2', 9]
-      ])
-    )
-    const lastRead = createConversationLastReadStore(lastReadStorage.storage)
     const slashCommands = createSlashCommandListStore()
     slashCommands
       .getState()
@@ -378,29 +233,18 @@ describe('clearPairingScopedState', () => {
     modelLists.getState().setModelList({ conversationId: 'a2', models: [], droppedModels: 0 })
 
     clearPairingScopedState(
-      realDeps(
-        sessionId,
+      realDeps(sessionId,
         announcedModel,
         active,
         session,
-        lastRead,
         slashCommands,
         modelLists
       )
     )
-
-    expect(timeline.getState().items).toBe(seededItems)
-    expect(keyedTimelines.getState().timelines.size).toBe(2)
-    expect(selectTimelineFor('a1')(keyedTimelines.getState())?.items).toHaveLength(1)
-    expect(selectTimelineFor('a2')(keyedTimelines.getState())?.items).toHaveLength(1)
     expect(active.getState().activeConversation).toBeNull()
     expect(sessionId.getState().sessionId).toBeNull()
     expect(announcedModel.getState().announced.size).toBe(0)
     expect(session.getState()).toMatchObject(initialSessionState)
-    expect(lastRead.getState().marks.size).toBe(0)
-    expect(selectLastReadFor('a1')(lastRead.getState())).toBeNull()
-    expect(selectLastReadFor('a2')(lastRead.getState())).toBeNull()
-    expect(lastReadStorage.persisted().size).toBe(0)
     expect(slashCommands.getState().menus.size).toBe(0)
     expect(selectSlashCommandListFor('a1')(slashCommands.getState())).toBeNull()
     expect(selectSlashCommandListFor('a2')(slashCommands.getState())).toBeNull()
@@ -409,51 +253,32 @@ describe('clearPairingScopedState', () => {
     expect(selectModelListFor('a2')(modelLists.getState())).toBeNull()
   })
 
-  it('real stores: clearing an already-clear set is a no-op, timeline items by reference', () => {
-    const timeline = createTimelineStore()
-    const keyedTimelines = createConversationTimelineStore()
+  it('real stores: clearing an already-clear set preserves empty menu identities', () => {
     const sessionId = createSessionIdStore()
     const announcedModel = createAnnouncedModelStore()
     const active = createActiveConversationStore()
     const session = createSessionStore()
-    const lastReadStorage = fakeLastReadStorage()
-    const lastRead = createConversationLastReadStore(lastReadStorage.storage)
     const slashCommands = createSlashCommandListStore()
     const modelLists = createModelListStore()
-    const itemsBefore = timeline.getState().items
-    const keyedStateBefore = keyedTimelines.getState()
-    const lastReadStateBefore = lastRead.getState()
     const slashCommandStateBefore = slashCommands.getState()
     const modelListStateBefore = modelLists.getState()
-    const queue = createQueueStore()
-    const queueStateBefore = queue.getState()
 
     clearPairingScopedState(
-      realDeps(
-        sessionId,
+      realDeps(sessionId,
         announcedModel,
         active,
         session,
-        lastRead,
         slashCommands,
         modelLists,
-        createConversationListStore(),
-        queue
+        createConversationListStore()
       )
     )
-
-    expect(timeline.getState()).toMatchObject(initialTimelineState)
-    expect(timeline.getState().items).toBe(itemsBefore)
-    expect(keyedTimelines.getState()).toBe(keyedStateBefore)
     expect(active.getState().activeConversation).toBeNull()
     expect(sessionId.getState().sessionId).toBeNull()
     expect(announcedModel.getState().announced.size).toBe(0)
     expect(session.getState()).toMatchObject(initialSessionState)
-    expect(lastRead.getState()).toBe(lastReadStateBefore)
-    expect(lastReadStorage.persisted().size).toBe(0)
     expect(slashCommands.getState()).toBe(slashCommandStateBefore)
     expect(modelLists.getState()).toBe(modelListStateBefore)
-    expect(queue.getState()).toBe(queueStateBefore)
   })
 
   it('real stores: a departed server’s conversations cannot appear under the new pairing (#1086 AC5)', () => {
@@ -472,12 +297,10 @@ describe('clearPairingScopedState', () => {
     conversations.getState().setConversations([{ ...summary, id: 'c-other' }], 'srv-other')
 
     clearPairingScopedState(
-      realDeps(
-        createSessionIdStore(),
+      realDeps(createSessionIdStore(),
         createAnnouncedModelStore(),
         createActiveConversationStore(),
         createSessionStore(),
-        createConversationLastReadStore(),
         createSlashCommandListStore(),
         createModelListStore(),
         conversations
@@ -486,78 +309,6 @@ describe('clearPairingScopedState', () => {
     expect(selectConversations(conversations.getState())).toBeNull()
     expect(selectConversationsFor('srv-old')(conversations.getState())).toBeNull()
     expect(selectConversationsFor('srv-other')(conversations.getState())).toBeNull()
-  })
-
-  it('real stores: a backlog queued on the ended pairing cannot outlive it, and the connected edge alone would NOT evict it (#1138)', () => {
-    const queue = createQueueStore()
-    const queued: QueuedItem = {
-      queued_msg_id: 7,
-      text: 'queued on the machine we just left',
-      ts: '2026-09-01T12:00:00Z'
-    }
-    queue.getState().setBacklog({ conversationId: 'c-drained', queued: [queued] })
-    const before = queue.getState()
-    queue.getState().resetBacklogsFor(new Set())
-    expect(queue.getState()).toBe(before)
-    expect(selectBacklogFor('c-drained')(queue.getState())).toEqual([queued])
-
-    clearPairingScopedState(
-      realDeps(
-        createSessionIdStore(),
-        createAnnouncedModelStore(),
-        createActiveConversationStore(),
-        createSessionStore(),
-        createConversationLastReadStore(),
-        createSlashCommandListStore(),
-        createModelListStore(),
-        createConversationListStore(),
-        queue
-      )
-    )
-    expect(queue.getState().backlogs.size).toBe(0)
-    expect(selectBacklogFor('c-drained')(queue.getState())).toBe(EMPTY_BACKLOG)
-  })
-
-  it('real stores: a background task started on the ended pairing cannot outlive it, and the connected edge alone would NOT evict it (#1139 AC4)', () => {
-    const rosters = createBackgroundTaskRosterStore()
-    const row: BackgroundTask = {
-      task_id: 'bt-1',
-      task_type: 'local_bash',
-      description: 'rm -rf /srv/deploy/stale && ./deploy.sh --machine-we-just-left',
-      truncated_fields: null
-    }
-    rosters.getState().setRoster({ conversationId: 'c-listed', tasks: [row], droppedTasks: 0 })
-    rosters.getState().setStartedTask({
-      conversationId: 'c-unlisted',
-      taskId: 'bt-2',
-      toolCallId: 'tc-9',
-      taskType: 'local_bash',
-      description: 'tail -f /var/log/pyry/server-a.log',
-      truncatedFields: null
-    })
-    const before = rosters.getState()
-    rosters.getState().resetRostersFor(new Set())
-    expect(rosters.getState()).toBe(before)
-    expect(selectRosterFor('c-listed')(rosters.getState())).not.toBeNull()
-
-    clearPairingScopedState(
-      realDeps(
-        createSessionIdStore(),
-        createAnnouncedModelStore(),
-        createActiveConversationStore(),
-        createSessionStore(),
-        createConversationLastReadStore(),
-        createSlashCommandListStore(),
-        createModelListStore(),
-        createConversationListStore(),
-        createQueueStore(),
-        rosters
-      )
-    )
-    expect(rosters.getState().rosters.size).toBe(0)
-    expect(selectRosterFor('c-listed')(rosters.getState())).toBeNull()
-    expect(selectRosterFor('c-unlisted')(rosters.getState())).toBeNull()
-    expect(rosters.getState().unlistedStarts.size).toBe(0)
   })
 
   it('real stores: no prompt, suppression entry or rejection from the ended pairing is readable, and the connected edge alone would NOT evict them (#1140 AC4)', () => {
@@ -587,17 +338,13 @@ describe('clearPairingScopedState', () => {
     expect(selectOutstanding(modals.getState())).toHaveLength(1)
 
     clearPairingScopedState(
-      realDeps(
-        createSessionIdStore(),
+      realDeps(createSessionIdStore(),
         createAnnouncedModelStore(),
         createActiveConversationStore(),
         createSessionStore(),
-        createConversationLastReadStore(),
         createSlashCommandListStore(),
         createModelListStore(),
         createConversationListStore(),
-        createQueueStore(),
-        createBackgroundTaskRosterStore(),
         modals
       )
     )
@@ -628,17 +375,13 @@ describe('clearPairingScopedState', () => {
     expect(selectActivityFor('c-listed')(activity.getState())?.turnRunning).toBe(true)
 
     clearPairingScopedState(
-      realDeps(
-        createSessionIdStore(),
+      realDeps(createSessionIdStore(),
         createAnnouncedModelStore(),
         createActiveConversationStore(),
         createSessionStore(),
-        createConversationLastReadStore(),
         createSlashCommandListStore(),
         createModelListStore(),
         createConversationListStore(),
-        createQueueStore(),
-        createBackgroundTaskRosterStore(),
         createModalStore(),
         activity
       )
@@ -667,17 +410,13 @@ describe('clearPairingScopedState', () => {
     expect(selectUsageLimitFor('c-dated', 1_700_000_000)(usageLimits.getState())).not.toBeNull()
 
     clearPairingScopedState(
-      realDeps(
-        createSessionIdStore(),
+      realDeps(createSessionIdStore(),
         createAnnouncedModelStore(),
         createActiveConversationStore(),
         createSessionStore(),
-        createConversationLastReadStore(),
         createSlashCommandListStore(),
         createModelListStore(),
         createConversationListStore(),
-        createQueueStore(),
-        createBackgroundTaskRosterStore(),
         createModalStore(),
         createConversationActivityStore(),
         usageLimits
@@ -722,17 +461,13 @@ describe('clearPairingScopedState', () => {
     expect(selectReportedContextFor('c-also-ran')(reportedContext.getState())).not.toBeNull()
 
     clearPairingScopedState(
-      realDeps(
-        createSessionIdStore(),
+      realDeps(createSessionIdStore(),
         createAnnouncedModelStore(),
         createActiveConversationStore(),
         createSessionStore(),
-        createConversationLastReadStore(),
         createSlashCommandListStore(),
         createModelListStore(),
         createConversationListStore(),
-        createQueueStore(),
-        createBackgroundTaskRosterStore(),
         createModalStore(),
         createConversationActivityStore(),
         createUsageLimitStore(),
@@ -750,12 +485,9 @@ function realDeps(
   announcedModel: ReturnType<typeof createAnnouncedModelStore>,
   active: ReturnType<typeof createActiveConversationStore>,
   session: ReturnType<typeof createSessionStore>,
-  lastRead: ReturnType<typeof createConversationLastReadStore>,
   slashCommands: ReturnType<typeof createSlashCommandListStore>,
   modelLists: ReturnType<typeof createModelListStore>,
   conversations: ReturnType<typeof createConversationListStore> = createConversationListStore(),
-  queue: ReturnType<typeof createQueueStore> = createQueueStore(),
-  rosters: ReturnType<typeof createBackgroundTaskRosterStore> = createBackgroundTaskRosterStore(),
   modals: ReturnType<typeof createModalStore> = createModalStore(),
   activity: ReturnType<typeof createConversationActivityStore> = createConversationActivityStore(),
   usageLimits: ReturnType<typeof createUsageLimitStore> = createUsageLimitStore(),
@@ -770,14 +502,11 @@ function realDeps(
     clearAllSlashCommandLists: () => slashCommands.getState().clearAllSlashCommandLists(),
     clearAllModelLists: () => modelLists.getState().clearAllModelLists(),
     clearAllConversations: () => conversations.getState().clearAllConversations(),
-    clearAllBacklogs: () => queue.getState().clearAllBacklogs(),
-    clearAllRosters: () => rosters.getState().clearAllRosters(),
     dispatchModal: (event) => modals.getState().dispatch(event),
     clearAllActivity: () => activity.getState().clearAllActivity(),
     clearAllUsageLimits: () => usageLimits.getState().clearAllUsageLimits(),
     clearAllReportedContext: () => reportedContext.getState().clearAllReportedContext(),
     dispatchSession: (action) => session.getState().dispatch(action),
-    clearAllLastRead: () => lastRead.getState().clearAllLastRead()
   }
 }
 

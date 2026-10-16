@@ -2,9 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { DaemonEvent, StampedDaemonEvent } from '@shared/ipc/events'
 import { confirmConversationDeleted, type ConfirmConversationDeletedDeps } from './confirmConversationDeleted'
 import { subscribeConversationDeleted } from './store/conversationDeletedBridge'
-import { createConversationTimelineStore, selectTimelineFor } from './store/conversationTimelineStore'
 import { createActiveConversationStore } from './store/activeConversationStore'
-import { createTimelineStore } from './store/timelineStore'
 import { createSessionIdStore } from './store/sessionIdStore'
 import { createRunConfigStore } from './store/runConfigStore'
 import { createRunSettingsWriteStore } from './store/runSettingsWriteStore'
@@ -12,13 +10,10 @@ import { createSystemPromptStore } from './store/systemPromptStore'
 import { createSystemPromptWriteStore } from './store/systemPromptWriteStore'
 
 function harness(open: string | null = 'b') {
-  const keyed = createConversationTimelineStore(undefined, () => 'h')
-  for (const id of ['a', 'b', 'c']) keyed.getState().dispatchFor(id, { type: 'userText', text: id })
+  const owners = new Map<string, string | undefined>([['a', 'h'], ['b', 'h'], ['c', 'h']])
   const active = createActiveConversationStore()
   if (open !== null) active.getState().setActiveConversation({ id: open, name: null,
     is_promoted: false, cwd: '/fixture', last_used_at: '', workspace_label: null })
-  const flat = createTimelineStore()
-  flat.getState().dispatch({ type: 'userText', text: 'open thread' })
   const session = createSessionIdStore({ sessionId: 'session-b' })
   const config = createRunConfigStore({ snapshot: { model: 'model-b', effort: 'high',
     yolo: false, permissionMode: 'default', usedTokens: 1, windowTokens: 100 } })
@@ -29,7 +24,7 @@ function harness(open: string | null = 'b') {
   const nav = vi.fn()
   const log = vi.fn()
   const deps: ConfirmConversationDeletedDeps = {
-    getTimelineServerId: id => { keyed.flushTimeline(); return keyed.getState().timelines.get(id)?.serverId },
+    getTimelineServerId: id => owners.get(id),
     log,
     getActiveConversation: () => active.getState().activeConversation,
     clearActiveConversation: () => active.getState().clearActiveConversation(),
@@ -45,29 +40,25 @@ function harness(open: string | null = 'b') {
   let listener: ((event: DaemonEvent) => void) | undefined
   const stop = subscribeConversationDeleted(cb => { listener = cb; return () => { listener = undefined } },
     (id, serverId) => confirmConversationDeleted(deps, id, serverId))
-  const others = [active, flat, session, config, settings, prompt, promptWrite]
+  const others = [active, session, config, settings, prompt, promptWrite]
   const before = others.map(store => store.getState())
   const unchanged = () => others.forEach((store, i) => expect(store.getState()).toBe(before[i]))
-  return { keyed, active, flat, session, config, settings, prompt, promptWrite, nav, log, deps, stop,
+  return { owners, active, session, config, settings, prompt, promptWrite, nav, log, deps, stop,
     emit: (event: DaemonEvent | StampedDaemonEvent) => listener?.(event), unchanged }
 }
 
 describe('confirmed conversation deletion', () => {
-  it('owned inactive deletion preserves legacy slices and active state', () => {
+  it('owned inactive deletion preserves active state', () => {
     const h = harness()
-    const before = h.keyed.getState().timelines
     h.emit({ type: 'conversationDeleted', id: 'a', serverId: 'h' })
-    expect(h.keyed.getState().timelines).toBe(before)
-    for (const id of ['b', 'c']) expect(h.keyed.getState().timelines.get(id)).toBe(before.get(id))
     h.unchanged()
     expect(h.nav).not.toHaveBeenCalled()
     expect(h.log).not.toHaveBeenCalled()
   })
 
-  it('preserves legacy slices with no active conversation', () => {
+  it('leaves no active conversation unchanged', () => {
     const h = harness(null)
     h.emit({ type: 'conversationDeleted', id: 'a', serverId: 'h' })
-    expect(selectTimelineFor('a')(h.keyed.getState())).not.toBeNull()
     h.unchanged()
     expect(h.nav).not.toHaveBeenCalled()
   })
@@ -75,16 +66,11 @@ describe('confirmed conversation deletion', () => {
   it.each(['a', 'b'])('refuses unowned confirmations with %s active', open => {
     const h = harness(open)
     for (const serverId of [undefined, null, 'other']) {
-      const before = h.keyed.getState()
       h.emit({ type: 'conversationDeleted', id: 'a', serverId })
-      expect(h.keyed.getState()).toBe(before)
       h.unchanged()
     }
-    const slice = h.keyed.getState().timelines.get('a')!
-    h.keyed.setState({ timelines: new Map(h.keyed.getState().timelines).set('a', { ...slice, serverId: undefined }) })
-    const before = h.keyed.getState()
+    h.owners.set('a', undefined)
     h.emit({ type: 'conversationDeleted', id: 'a', serverId: 'h' })
-    expect(h.keyed.getState()).toBe(before)
     h.unchanged()
     expect(h.nav).not.toHaveBeenCalled()
     expect(h.log.mock.calls.every(([record]) => Object.keys(record).sort().join() === 'code,event')).toBe(true)
@@ -93,9 +79,7 @@ describe('confirmed conversation deletion', () => {
   it('clears active state before navigating', () => {
     const h = harness('a')
     h.nav.mockImplementation(() => {
-      expect(selectTimelineFor('a')(h.keyed.getState())).not.toBeNull()
       expect(h.active.getState().activeConversation).toBeNull()
-      expect(h.flat.getState().items).toEqual([{ kind: 'userText', text: 'open thread' }])
       expect(h.session.getState().sessionId).toBeNull()
       expect(h.config.getState().snapshot).toBeNull()
       expect(h.settings.getState().pending.size).toBe(0)
@@ -110,30 +94,13 @@ describe('confirmed conversation deletion', () => {
     expect(h.nav).toHaveBeenCalledTimes(1)
   })
 
-  it.each(['', '__proto__', 'constructor', 'absent'])('repeated confirmations use exact Map keys: %s', id => {
-    const h = harness()
-    if (id !== 'absent') h.keyed.getState().dispatchFor(id, { type: 'userText', text: 'owned' })
-    const before = h.keyed.getState().timelines
-    h.emit({ type: 'conversationDeleted', id, serverId: 'h' })
-    expect(h.keyed.getState().timelines).toBe(before)
-    for (const [key, slice] of before) {
-      if (key !== id) expect(h.keyed.getState().timelines.get(key)).toBe(slice)
-    }
-    const cleared = h.keyed.getState()
-    h.emit({ type: 'conversationDeleted', id, serverId: 'h' })
-    expect(h.keyed.getState()).toBe(cleared)
-    h.unchanged()
-  })
-
   it('ignores events without confirmed deletion', () => {
     const h = harness()
-    const before = h.keyed.getState()
     h.emit({ type: 'conversationsReceived', conversations: [] })
     h.emit({ type: 'conversationsReceived', conversations: [{ id: 'a', name: null,
       is_promoted: false, is_archived: true, cwd: '/fixture', last_used_at: '', last_message_ts: '',
       workspace_label: null }] })
     h.emit({ type: 'sessionSettingsRejected', changeId: 'rejected' })
-    expect(h.keyed.getState()).toBe(before)
     expect(h.log).not.toHaveBeenCalled()
     h.unchanged()
   })
@@ -142,7 +109,6 @@ describe('confirmed conversation deletion', () => {
     const h = harness()
     h.stop()
     h.emit({ type: 'conversationDeleted', id: 'a', serverId: 'h' })
-    expect(selectTimelineFor('a')(h.keyed.getState())).not.toBeNull()
     expect(h.log).not.toHaveBeenCalled()
   })
 

@@ -26,50 +26,6 @@ async function settle(page: Page) {
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
 }
 
-test.skip('leave and reopen defers newest until the owned saved read and original request settle', async ({ launchPairedApp }) => {
-  const asks: Envelope[] = []
-  const { app, page, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
-    const env = decodeEnvelope(bytes)
-    if (env.type === 'list_conversations') return [seedConversationsFrame()]
-    if (env.type === 'request_history') asks.push(env)
-    return []
-  } }, { onLaunched: async app => {
-    await observe(app)
-    await app.evaluate(({ ipcMain }) => {
-      const original = (ipcMain as any)._invokeHandlers.get('pyry:chat-history')
-      if (!original) throw new Error('Missing history handler')
-      let reads = 0
-      ipcMain.removeHandler('pyry:chat-history')
-      ipcMain.handle('pyry:chat-history', (event, request) => {
-        if (request.operation !== 'readThread') return original(event, request)
-        if (++reads === 1) return { status: 'error', code: 'unreadable' }
-        return new Promise(resolve => {
-          ;(globalThis as any).__releaseOpeningRead = () => resolve({ status: 'missing' })
-        })
-      })
-    })
-  } })
-  await expect.poll(() => asks.length).toBe(1)
-  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
-  await page.getByRole('menuitem', { name: 'Archive', exact: true }).click()
-  await page.locator('.archive__back').click()
-  await page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
-  await expect.poll(() => app.evaluate(() => typeof (globalThis as any).__releaseOpeningRead)).toBe('function')
-  await settle(page)
-  expect(await count(app)).toBe(1)
-  await app.evaluate(() => (globalThis as any).__releaseOpeningRead())
-  await expect(page.getByText('Loading saved messages…', { exact: true })).toHaveCount(0)
-  await settle(page)
-  expect(await count(app)).toBe(1)
-  daemon.pushFrame(history(asks[0].id, 1))
-  await expect.poll(() => asks.length).toBe(2)
-  expect(asks.map(e => e.payload.cursor)).toEqual(['', ''])
-  daemon.pushFrame(history(asks[1].id, 0))
-  await expect(page.locator('.conversation__thread .bubble')).toHaveCount(1)
-  await settle(page)
-  expect(await count(app)).toBe(2)
-})
-
 test('opening asks once and only trusted upward input asks for subsequent pages', async ({ launchPairedApp }) => {
   const asks: Envelope[] = []
   const { app, page, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {

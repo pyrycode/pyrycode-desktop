@@ -1,12 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
 import { exitActiveConversation, type ExitActiveConversationDeps } from './exitActiveConversation'
-import { createTimelineStore } from './store/timelineStore'
 import { createSessionIdStore } from './store/sessionIdStore'
 import { createActiveConversationStore } from './store/activeConversationStore'
-import { createConversationTimelineStore, selectTimelineFor } from './store/conversationTimelineStore'
 import { createRunConfigStore } from './store/runConfigStore'
 import { createRunSettingsWriteStore } from './store/runSettingsWriteStore'
-import { initialTimelineState, type ThreadItem } from './store/threadTimeline'
 import type { ConversationCreatedPayload } from '@shared/wire/types'
 
 const conversation = (id: string): ConversationCreatedPayload => ({
@@ -17,8 +14,6 @@ const conversation = (id: string): ConversationCreatedPayload => ({
   last_used_at: '2026-08-20T09:00:00Z',
   workspace_label: null
 })
-
-const seededItems: readonly ThreadItem[] = [{ kind: 'userText', text: 'a message from A' }]
 
 function spyDeps(active: ConversationCreatedPayload | null): {
   deps: ExitActiveConversationDeps
@@ -188,45 +183,29 @@ describe('exitActiveConversation', () => {
     expect(navigateToList).not.toHaveBeenCalled()
   })
 
-  it('real stores: the exit preserves legacy timelines and drops the session and active conversation', () => {
-    const timeline = createTimelineStore({ ...initialTimelineState, items: seededItems })
-    const keyedTimelines = seededKeyedTimelines()
+  it('real stores: the exit drops the session and active conversation', () => {
     const sessionId = createSessionIdStore({ sessionId: 's1' })
     const active = createActiveConversationStore({ activeConversation: conversation('a') })
     const navigateToList = vi.fn()
-    const bBefore = selectTimelineFor('b')(keyedTimelines.getState())
 
     exitActiveConversation(realDeps(sessionId, active, navigateToList), 'a')
-
-    expect(timeline.getState().items).toBe(seededItems)
-    expect(selectTimelineFor('a')(keyedTimelines.getState())?.items).toEqual(seededItems)
-    expect(selectTimelineFor('b')(keyedTimelines.getState())).toBe(bBefore)
-    expect(bBefore).not.toBeNull()
     expect(sessionId.getState().sessionId).toBeNull()
     expect(active.getState().activeConversation).toBeNull()
     expect(navigateToList).toHaveBeenCalledTimes(1)
   })
 
   it('real stores: a mismatched id leaves the live thread and its session id intact (AC4)', () => {
-    const timeline = createTimelineStore({ ...initialTimelineState, items: seededItems })
-    const keyedTimelines = seededKeyedTimelines()
     const sessionId = createSessionIdStore({ sessionId: 's1' })
     const active = createActiveConversationStore({ activeConversation: conversation('a') })
     const navigateToList = vi.fn()
-    const keyedStateBefore = keyedTimelines.getState()
 
     exitActiveConversation(realDeps(sessionId, active, navigateToList), 'b')
-    expect(timeline.getState().items).toBe(seededItems)
-    expect(keyedTimelines.getState()).toBe(keyedStateBefore)
-    expect(selectTimelineFor('b')(keyedTimelines.getState())).not.toBeNull()
     expect(sessionId.getState().sessionId).toBe('s1')
     expect(active.getState().activeConversation).toEqual(conversation('a'))
     expect(navigateToList).not.toHaveBeenCalled()
   })
 
   it('real stores: a duplicate delivery of the same id navigates nothing — idempotent by the gate', () => {
-    const timeline = createTimelineStore({ ...initialTimelineState, items: seededItems })
-    const keyedTimelines = seededKeyedTimelines()
     const sessionId = createSessionIdStore({ sessionId: 's1' })
     const active = createActiveConversationStore({ activeConversation: conversation('a') })
     const navigateToList = vi.fn()
@@ -237,14 +216,6 @@ describe('exitActiveConversation', () => {
     expect(navigateToList).toHaveBeenCalledTimes(1)
   })
 })
-
-/** Two conversations' threads held at once — the operator's open one and one he is not reading. */
-function seededKeyedTimelines(): ReturnType<typeof createConversationTimelineStore> {
-  const store = createConversationTimelineStore()
-  store.getState().dispatchFor('a', { type: 'userText', text: 'a message from A' })
-  store.getState().dispatchFor('b', { type: 'userText', text: 'a message from B' })
-  return store
-}
 
 function realDeps(
   sessionId: ReturnType<typeof createSessionIdStore>,

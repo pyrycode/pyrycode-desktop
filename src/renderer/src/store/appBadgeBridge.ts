@@ -16,13 +16,7 @@ import type { ConversationSummary } from '@shared/wire/types'
 import type { RendererCommand } from '@shared/ipc/commands'
 import { resolveConversationStatus, type ConversationStatus } from './conversationStatus'
 import { isConversationUnread } from './conversationUnread'
-import { conversationReadRouteStore } from './conversationReadRouteStore'
 import { conversationListStore, selectConversations } from './conversationListStore'
-import { modalStore, selectHasOutstandingFor } from './modalStore'
-import { conversationActivityStore, selectActivityFor } from './conversationActivityStore'
-import { conversationTimelineStore, selectTimelineFor } from './conversationTimelineStore'
-import { conversationLastReadStore, selectLastReadFor } from './conversationLastReadStore'
-import { questionBatchStore, selectBatchFor } from './questionBatchStore'
 
 /**
  * How many of `conversations` resolve to a status that needs the operator. The list is the CALLER's to
@@ -41,30 +35,11 @@ export function countAttentionConversations<T extends { id: string }>(
   return count
 }
 
-/**
- * One conversation's status from the five stores the sidebar dot reads, read now. The same five
- * selectors and the same composition as `ConversationStatusDotControl`, over `getState()` rather than
- * hooks. Back-to-back synchronous reads, so not a torn read (conversationUnread.ts states why). A pending
- * question batch waits on the operator exactly as a prompt does (#1700), so either one is input-required.
- */
+/** Compose admitted live attention with received owning-host unread evidence. */
 export function conversationStatusNow(row: Pick<ConversationSummary, 'id' | 'read_up_to' | 'latest_entry_id' | 'last_shown_version'> & { serverId?: string | null }): ConversationStatus {
-  const conversationId = row.id
-  const native = typeof row.serverId === 'string' ? threadRuntime.live(row.serverId, row.id).getState() : null
-  if (native?.binding?.sessionId) {
-    const input = threadLiveInputs(native)
-    return resolveConversationStatus(input.hasOutstanding, input.activity, isConversationUnread(null, null, row, true))
-  }
-  return resolveConversationStatus(
-    selectHasOutstandingFor(conversationId)(modalStore.getState()) ||
-      selectBatchFor(conversationId)(questionBatchStore.getState()) !== undefined,
-    selectActivityFor(conversationId)(conversationActivityStore.getState()),
-    isConversationUnread(
-      selectTimelineFor(conversationId)(conversationTimelineStore.getState()),
-      selectLastReadFor(conversationId)(conversationLastReadStore.getState()),
-      row,
-      typeof row.serverId === 'string' || conversationReadRouteStore.getState().epochFor(row.serverId, row.id) !== undefined
-    )
-  )
+  const live = threadRuntime.live(row.serverId ?? '', row.id).getState()
+  const input = threadLiveInputs(live)
+  return resolveConversationStatus(input.hasOutstanding, input.activity, isConversationUnread(row))
 }
 
 /** The badge count now: every paired server's rows, archived ones left out as the sidebar does, and
@@ -77,17 +52,11 @@ export function attentionCountNow(): number {
   )
 }
 
-/** Wake `listener` on a write to any store the count reads; the returned handle removes all six. */
+/** Wake on list or admitted live-state changes; teardown removes both subscriptions. */
 export function subscribeToAttentionStores(listener: () => void): () => void {
   const offs = [
     conversationListStore.subscribe(listener),
-    conversationReadRouteStore.subscribe(listener),
-    threadRuntime.state.subscribe(listener),
-    modalStore.subscribe(listener),
-    conversationActivityStore.subscribe(listener),
-    conversationTimelineStore.subscribe(listener),
-    conversationLastReadStore.subscribe(listener),
-    questionBatchStore.subscribe(listener)
+    threadRuntime.state.subscribe(listener)
   ]
   return () => offs.forEach((off) => off())
 }

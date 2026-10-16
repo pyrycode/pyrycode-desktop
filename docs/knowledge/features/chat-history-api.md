@@ -418,8 +418,13 @@ IPC/storage operations above and shared format admission are unchanged; they are
 not renderer writer/restorer paths.
 `beginLocalRead(host, conversation)` returns null for held scopes; otherwise its
 one-shot complete/fail/cancel handle uses a process-local token. A replacement read,
-admitted state or scoped cleanup invalidates it, even when identity strings are
-reused. Delayed stored, missing or failed reads cannot replace admitted facts.
+explicit reset, replacement of a held epoch or scoped cleanup invalidates it, even
+when identity strings are reused. Initial epoch admission and same-owner publication
+preserve it. Full validated saved results merge by revision and original arrival
+order with same-epoch admitted facts, preserving saved progress obligations through
+exact completion observations. Missing/failure cannot erase admitted facts, and
+a different saved epoch cannot replace the admitted epoch. See
+[store restoration rules](thread-item-store.md#snapshots-and-completed-batches).
 Restoration sends no transport requests or raw events and certifies no progress.
 The [thread runtime](thread-runtime.md#restore-recovery-and-cleanup) uses this
 authoritative restore path in production. Indexed partial reads remain separate

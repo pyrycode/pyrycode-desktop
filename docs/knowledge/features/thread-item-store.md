@@ -144,19 +144,41 @@ reader activation and partial application remain #1931.
 
 `beginLocalRead(hostId, conversationId)` provides the narrowly scoped disk hydration
 seam. A held scope returns null; an absent one receives a one-shot `complete`,
-`fail`, `cancel` handle owned by a private process-local token. A replacement read,
-epoch admission, published facts or conversation/host/global cleanup invalidates
-that token. Late success, missing data or failure cannot replace admitted state,
-including after the same host/conversation/epoch strings are reused.
+`fail`, `cancel` handle owned by a private process-local token. Initial epoch
+admission and same-owner publication preserve that token. While the read is pending,
+a full live addition can establish the first epoch; a patch cannot supply its missing
+base. Cancellation, a superseding read, explicit reset (even with the same epoch
+string), replacement of a held epoch and conversation/host/global cleanup retire
+the token. Delayed stored, missing or failed results then have no authority, including
+after identical coordinate/epoch strings are reused.
 
-Completion revalidates exact coordinates through the shared daemon-record parser,
-detaches and freezes the snapshot, and publishes it directly with a fresh generation.
-It retains item ids/revisions, held order, unknown JSON/null clears, epoch, applied
-version, complete checkpoint, ranges, optional older availability, repair and
-unfinished progress. No raw event replay, server request, batch completion or new
-coverage is manufactured. A missing result leaves the scope absent. The private
-restored marker lets the [history writer](chat-history-storage.md#buffered-replacements)
-exclude hydration from saves while accepting later owned changes.
+Completion retains full `parseChatHistorySnapshot` validation and exact coordinates
+before detaching/freezing saved facts. Without overlap it preserves supplied held
+order. With same-epoch admitted state, saved-only ids survive; compatible overlaps
+keep the higher full revision, with admitted facts winning equal revisions. Each
+winner retains its supplied placement and optional-field clears. Saved arrival order
+(supplied item order for older snapshots) precedes live-only admission order, so
+numeric ties and unordered items remain stable across revision changes. Timestamps
+never order items. Kind conflicts keep the admitted item and require repair;
+a different saved epoch cannot replace the admitted epoch.
+
+The pending token records received progress observations, not item payload history.
+Hydration folds their exact completion intervals, ranges and boundary readings over
+saved metadata using the [owned-mutation rules](../decisions/0014-authenticated-owned-thread-mutations.md).
+Saved checkpoint, applied/unfinished progress, repair and intact ranges survive
+unless admitted completion actually covers the obligation. A higher live scalar
+checkpoint cannot bypass a saved fence. Older-boundary availability wins, with
+exhaustion retained at an equal boundary. Hydration itself certifies no interval,
+missing coverage, daemon completeness or read acknowledgement.
+
+The merged slice retains the admitted generation, keeping surviving same-lifecycle
+batch handles valid; only an otherwise absent scope needs a fresh generation.
+Missing and failed reads settle without removing admitted facts; a saved-empty
+snapshot still contributes validated metadata. Missing without admitted state leaves
+the scope absent. The private restored marker publishes no `owned` change and cannot
+replay the last received mutation through the
+[history writer](chat-history-storage.md#buffered-replacements). Later received
+publications still persist normally.
 
 `beginBatch(hostId, conversationId, epoch)` returns null without matching ownership.
 Its handle has `applyItems`, `commit` and `abandon`. Applying full items can publish
@@ -233,6 +255,13 @@ ahead of checkpoint, otherwise zero. Using applied version for every snapshot
 would overstate the unfinished obligation when newer live facts coexist with a
 lower pending batch, preventing its actual completion from releasing the fence.
 
+The same fences apply when saved progress arrives after live admission. Saved
+checkpoint 100, applied version 300, repair through 150 and unfinished version 250
+still resume from 100 after a live fact at 400. An admitted completion through 200
+can clear repair but leaves unfinished 250 fencing later live success; covering
+250 releases that fence. Folding only the latest scalar metadata would discard
+the saved obligations before the server had covered them.
+
 Protected full reads and bounded local pages retain that normalized unfinished
 version independently of applied version, including already-covered values. Pages
 also preserve complete checkpoint, repair and optional `olderAvailable` without
@@ -245,7 +274,8 @@ certification can establish that progress.
 ## Epochs and cleanup ownership
 
 `acceptEpoch(hostId, conversationId, epoch, reset = false)` explicitly establishes
-ownership; updates cannot choose a new epoch. Reaccepting a held same epoch is
+ownership. A full live addition may establish initial ownership only during a pending
+local read; updates cannot replace a held epoch. Reaccepting a held same epoch is
 idempotent unless `reset` is true. A new epoch resets only that conversation's
 items, version/checkpoint, ranges, older availability, repair and pending progress,
 and creates a new generation. The coordinator passes `true` for explicit daemon
@@ -266,6 +296,9 @@ off-screen conversations:
 Cleared scopes read absent and repeated cleanup is a no-op. Other hosts/conversations
 keep their held references. Old batch application/commit cannot recreate a cleared
 scope, including after the same host/conversation/epoch is accepted again.
+Cleanup also retires a pending read when no slice exists. Initial admission keeps
+that read alive; hydration into the same lifecycle must preserve the generation
+already captured by its batch handles.
 
 The [thread query coordinator](#thread-query-coordinator) owns requests, recovery and reply certification;
 [protected disk persistence](chat-history-api.md#owned-authoritative-mutations) consumes received owned changes.
@@ -414,7 +447,7 @@ Claude. It covers revision races, replayed/empty appends, atomic replacement pre
 inert JSON, repair/unfinished-batch fencing, certified boundaries and generation reuse
 after each cleanup operation.
 
-The [cache testing reference](chat-history-testing.md#restoration) covers local-read
+The [cache testing reference](chat-history-testing-restoration.md#restoration) covers local-read
 ownership, protected fresh-instance restoration and restart regressions for
 already-covered unfinished progress and first-arrival ties.
 

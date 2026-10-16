@@ -33,11 +33,14 @@ Opening first starts an owned protected `readThread` through `readSavedTimeline`
 Only `daemon-items` can hydrate the runtime. A legacy saved timeline is never drawn
 or converted. Protected indexed storage is the application backend; the renderer
 still restores complete authoritative snapshots. Bounded local paging remains
-separate work. See [storage activation](chat-history-testing.md#native-runtime-and-packaged-proof).
+separate work. See [storage activation](chat-history-testing-native.md#native-runtime-and-packaged-proof).
 
-While a saved read is pending, query demand waits. A connected opening or reconnect
-then supplies the saved epoch and complete checkpoint to the coordinator. Applied
-version, unfinished batches and item presence cannot certify resumable progress.
+While a saved read is pending, query demand waits but same-owner live additions
+can already render. Local settlement merges saved-only rows and winning revisions
+with those live rows, keeping both visible while the server reply remains held.
+A connected opening or reconnect then supplies the admitted snapshot's epoch and
+complete checkpoint to the coordinator. Applied version, unfinished batches and
+item presence cannot certify resumable progress.
 Live/reply overlap follows item revisions. Interrupted or abandoned batches retain
 received facts without certifying completion. Repair resumes the complete
 checkpoint. A correlated reset retires the old scope and starts the new epoch's
@@ -47,6 +50,11 @@ Navigation cancels the selected local read and abandons application of its query
 The coordinator retains sent-query ownership until terminal delivery or expiry.
 Local read tokens, request IDs and store generations reject stale callbacks even
 when host, conversation or epoch strings are later reused.
+Initial epoch admission and same-owner publications preserve the read; explicit
+reset or epoch replacement retires it. Runtime selection/generation checks also
+prevent late settlement from recreating a removed restoring indicator or read route.
+Restoration creates no owned save, read acknowledgement or current-session/prompt
+authority; pending local sends keep their separate ownership.
 
 Confirmed deletion clears the owning conversation's retained items, pending sends,
 live binding, completion and read authority. Successful unpair retires those

@@ -108,9 +108,11 @@ type ThreadProgress = {
   metadata: Omit<ThreadSnapshot, 'items' | 'ranges' | 'arrivalOrder'>
   /** Exact completed version interval, never inferred from a later live checkpoint. */
   completion?: { fromVersion: number; version: number }
+  availability?: { start: number; available: boolean }
 }
 export type OwnedThreadChanges = ThreadProgress & {
   acceptEpoch: boolean
+  resetId?: string
   /** Earlier owned observations, in admission order, retained through coalescing/retry. */
   priorProgress?: readonly ThreadProgress[]
   items: ThreadSnapshot['items']
@@ -326,7 +328,11 @@ function retainedMetadata(value: unknown, hostId: string, conversationId: string
     ...(v.olderAvailable === undefined ? {} : { olderAvailable: bool(v.olderAvailable) }) }
 }
 /** Selected facts share admission with full snapshots, without claiming complete membership. */
-export const threadHistoryCodec = { items: retainedItems, ranges: retainedRanges, metadata: retainedMetadata }
+export const threadHistoryCodec = { items: retainedItems, ranges: retainedRanges, metadata: retainedMetadata,
+  nodes(value: unknown): number {
+    if (typeof value !== 'object' || value === null) return 1
+    return 1 + Object.values(value).reduce<number>((n, child) => n + threadHistoryCodec.nodes(child), 0)
+  } }
 
 function retainedThread(value: unknown, hostId: string, conversationId: string): ThreadSnapshot {
   const v = record(value), items = retainedItems(v.items), ranges = retainedRanges(v.ranges)
@@ -507,7 +513,7 @@ export function parseChatHistoryRequest(value: unknown): ChatHistoryRequest {
   if (v.operation === 'mutateThread') {
     if (Object.keys(v).some(k => !['operation', 'serverId', 'conversationId', 'change'].includes(k))) return invalid()
     const conversationId = id(v.conversationId), c = record(v.change)
-    if (Object.keys(c).some(k => !['metadata', 'acceptEpoch', 'completion', 'priorProgress', 'items', 'removeIds', 'ranges'].includes(k))) return invalid()
+    if (Object.keys(c).some(k => !['metadata', 'acceptEpoch', 'resetId', 'completion', 'availability', 'priorProgress', 'items', 'removeIds', 'ranges'].includes(k))) return invalid()
     const metadata = retainedMetadata(c.metadata, serverId, conversationId)
     const progress = (value: unknown): ThreadProgress => {
       const p = record(value)
@@ -519,11 +525,17 @@ export function parseChatHistoryRequest(value: unknown): ChatHistoryRequest {
           fromVersion > version || version > held.checkpoint) return invalid()
         return { fromVersion, version }
       })
-      return { metadata: held, ...(completion === undefined ? {} : { completion }) }
+      const availability = optional(p.availability, value => {
+        const a = record(value)
+        if (Object.keys(a).some(k => !['start', 'available'].includes(k)) || completion === undefined) return invalid()
+        return { start: readId(a.start), available: bool(a.available) }
+      })
+      return { metadata: held, ...(completion === undefined ? {} : { completion }),
+        ...(availability === undefined ? {} : { availability }) }
     }
     const priorProgress = optional(c.priorProgress, value => array(value, value => {
       const p = record(value)
-      if (Object.keys(p).some(k => !['metadata', 'completion'].includes(k))) return invalid()
+      if (Object.keys(p).some(k => !['metadata', 'completion', 'availability'].includes(k))) return invalid()
       return progress(p)
     }))
     const items = retainedItems(c.items)
@@ -531,6 +543,7 @@ export function parseChatHistoryRequest(value: unknown): ChatHistoryRequest {
     if (ids.size !== items.length || new Set(removeIds).size !== removeIds.length || removeIds.some(id => ids.has(id))) return invalid()
     return { operation: 'mutateThread', serverId, conversationId, change: {
       ...progress(c), acceptEpoch: bool(c.acceptEpoch),
+      ...(c.resetId === undefined ? {} : { resetId: id(c.resetId) }),
       ...(priorProgress === undefined ? {} : { priorProgress }),
       items, removeIds, ranges: retainedRanges(c.ranges)
     } }

@@ -53,7 +53,7 @@ export function createChatHistoryWriter(deps: {
   }
 
   function merge(previous: Mutation, next: Mutation): Mutation {
-    if (previous.change.metadata.epoch !== next.change.metadata.epoch) return next
+    if (previous.change.metadata.epoch !== next.change.metadata.epoch || next.change.resetId !== undefined) return next
     const items = new Map(previous.change.items.map(item => [item.id, item]))
     const removeIds = new Set([...previous.change.removeIds, ...next.change.removeIds])
     for (const entry of next.change.items) {
@@ -68,8 +68,10 @@ export function createChatHistoryWriter(deps: {
       else ranges.push({ ...range })
     }
     return { ...next, change: { ...next.change, acceptEpoch: previous.change.acceptEpoch || next.change.acceptEpoch,
+      ...(previous.change.resetId === undefined ? {} : { resetId: previous.change.resetId }),
       priorProgress: [...previous.change.priorProgress ?? [],
-        { metadata: previous.change.metadata, ...(previous.change.completion === undefined ? {} : { completion: previous.change.completion }) },
+        { metadata: previous.change.metadata, ...(previous.change.completion === undefined ? {} : { completion: previous.change.completion }),
+          ...(previous.change.availability === undefined ? {} : { availability: previous.change.availability }) },
         ...next.change.priorProgress ?? []],
       items: [...items.values()], removeIds: [...removeIds], ranges } }
   }

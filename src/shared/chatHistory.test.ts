@@ -25,6 +25,21 @@ const timeline = { version: 1, kind: 'timeline', serverId: 'host', conversationI
 const summary = { id: 'chat', name: null, is_promoted: false, is_archived: true, cwd: '/display', last_message_ts: '', last_used_at: 'date', workspace_label: null }
 
 describe('chat history records and requests', () => {
+  it('detaches reset identities and boundary observations and rejects malformed ownership', () => {
+    const metadata = { hostId: 'h', conversationId: 'c', epoch: 'e', version: 2, checkpoint: 2, uncommittedVersion: 0, repair: null }
+    const observation = { metadata, completion: { fromVersion: 0, version: 2 }, availability: { start: 100, available: false } }
+    const request = { operation: 'mutateThread', serverId: 'h', conversationId: 'c', change: {
+      ...observation, resetId: 'reset', acceptEpoch: true, priorProgress: [observation], items: [], removeIds: [], ranges: []
+    } }
+    const parsed = parseChatHistoryRequest(request)
+    observation.availability.start = 0
+    expect(parsed).toMatchObject({ change: { availability: { start: 100 }, priorProgress: [{ availability: { start: 100 } }] } })
+    for (const patch of [{ resetId: 2 }, { resetId: 'x'.repeat(8193) },
+      { availability: { start: -1, available: true } }, { availability: { start: 1, available: 'yes' } },
+      { completion: undefined, availability: { start: 1, available: true } },
+      { priorProgress: [{ ...observation, availability: { start: 1, available: true, extra: 1 } }] }
+    ]) expect(() => parseChatHistoryRequest({ ...request, change: { ...request.change, ...patch } })).toThrow()
+  })
   it('matches every current ThreadItem field and preserves ordered rows and coverage', () => {
     expect(parseChatHistorySnapshot(JSON.parse(JSON.stringify(timeline)))).toEqual(timeline)
     for (const coverage of [{ status: 'unknown' }, { status: 'received', cursor: '', atStart: true }]) {

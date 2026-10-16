@@ -30,7 +30,7 @@ export interface ThreadItemStore {
     fail: () => void
     cancel: () => void
   } | null
-  acceptEpoch: (hostId: string, conversationId: string, epoch: string) => void
+  acceptEpoch: (hostId: string, conversationId: string, epoch: string, reset?: boolean) => void
   applyUpdate: (hostId: string, update: ThreadUpdate) => ThreadApplyResult
   requireRepair: (hostId: string, conversationId: string, epoch: string, version: number) => ThreadApplyResult
   beginBatch: (hostId: string, conversationId: string, epoch: string) => Batch | null
@@ -72,12 +72,15 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
     const reads = new Map<string, Map<string, symbol>>()
     const read = (host: string, conversation: string): Slice | undefined => get().hosts.get(host)?.get(conversation)
     function publish(host: string, conversation: string, slice: Slice,
-      change: { item?: HeldItem; ranges?: readonly Range[]; acceptEpoch?: boolean; completion?: OwnedThreadChanges['completion'] } = {}): void {
+      change: { item?: HeldItem; ranges?: readonly Range[]; acceptEpoch?: boolean; resetId?: string;
+        availability?: OwnedThreadChanges['availability']; completion?: OwnedThreadChanges['completion'] } = {}): void {
       reads.get(host)?.delete(conversation)
       if (slice.snapshot !== slice.restored) {
         const { items: ignoredItems, ranges: ignoredRanges, arrivalOrder: ignoredArrival, ...metadata } = slice.snapshot
         void ignoredItems; void ignoredRanges; void ignoredArrival
         slice = { ...slice, owned: { metadata, acceptEpoch: change.acceptEpoch ?? false,
+          ...(change.resetId === undefined ? {} : { resetId: change.resetId }),
+          ...(change.availability === undefined ? {} : { availability: change.availability }),
           ...(change.completion === undefined ? {} : { completion: change.completion }),
           items: change.item === undefined ? [] : [change.item],
           removeIds: [], ranges: change.ranges ?? [] } }
@@ -151,12 +154,12 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
           fail: end, cancel: end
         }
       },
-      acceptEpoch(host, conversation, epoch) {
-        if (read(host, conversation)?.snapshot.epoch === epoch) return
+      acceptEpoch(host, conversation, epoch, reset = false) {
+        if (!reset && read(host, conversation)?.snapshot.epoch === epoch) return
         publish(host, conversation, { generation: Symbol(), uncommittedVersion: 0, byId: new Map(), snapshot: Object.freeze({
           hostId: host, conversationId: conversation, epoch, items: Object.freeze([]), arrivalOrder: Object.freeze([]),
           version: 0, checkpoint: 0, uncommittedVersion: 0, ranges: Object.freeze([]), repair: null
-        }) }, { acceptEpoch: true })
+        }) }, { acceptEpoch: true, ...(reset ? { resetId: crypto.randomUUID() } : {}) })
         log?.event({ event: 'thread-items-epoch' })
       },
       requireRepair(host, conversation, epoch, version) {
@@ -237,7 +240,10 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
               snapshot: Object.freeze({ ...s, ranges, olderAvailable,
               uncommittedVersion: c.version >= slice.uncommittedVersion ? 0 : slice.uncommittedVersion,
               version: Math.max(s.version, c.version), checkpoint: Math.max(s.checkpoint, c.version), repair: null }) },
-              { ranges: c.ranges, completion: { fromVersion: c.fromVersion, version: c.version } })
+              { ranges: c.ranges, completion: { fromVersion: c.fromVersion, version: c.version },
+                ...(c.olderAvailable === undefined || c.ranges.length === 0 ? {} : {
+                  availability: { start: Math.min(...c.ranges.map(r => r.start)), available: c.olderAvailable }
+                }) })
             log?.event({ event: 'thread-items-batch', code: 'committed' })
             return { type: 'applied' }
           },

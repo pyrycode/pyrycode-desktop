@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { createHash } from 'node:crypto'
 import Database from 'better-sqlite3'
 import { createHistoryDatabase } from './historyDatabase'
 import { createIndexedThreadHistory } from './indexedThreadHistory'
@@ -56,6 +57,98 @@ function owned(s: { serverId: string; conversationId: string; thread: ThreadSnap
   void ignoredItems; void ignoredRanges; void ignoredArrival
   return ask('mutateThread', { change: { metadata, acceptEpoch: true, items: [], removeIds: [], ranges: [], ...extra } }, s.serverId, s.conversationId)
 }
+
+it('successive owned additions keep ordering paths and record work bounded without rewriting placements', async () => {
+  const h = setup(), s = snapshot(0)
+  let reads = 0, writes = 0
+  h.database.transaction(db => {
+    const prepare = db.prepare.bind(db)
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      const statement = prepare(sql)
+      if (sql.startsWith('SELECT')) {
+        const get = statement.get.bind(statement), all = statement.all.bind(statement)
+        vi.spyOn(statement, 'get').mockImplementation((...args) => { const r = get(...args); reads += r ? 1 : 0; return r })
+        vi.spyOn(statement, 'all').mockImplementation((...args) => { const r = all(...args); reads += r.length; return r })
+      } else {
+        const run = statement.run.bind(statement)
+        vi.spyOn(statement, 'run').mockImplementation((...args) => { writes++; return run(...args) })
+      }
+      return statement
+    })
+  })
+  let first: unknown
+  for (let id = 0; id < 513; id++) {
+    reads = 0; writes = 0
+    expect(await h.store.execute(owned(s, { items: [{ id, rev: 1, kind: 'future', order: id }] }))).toEqual({ status: 'ok' })
+    if ([16, 128, 512].includes(id)) { expect(reads).toBeLessThan(500); expect(writes).toBeLessThan(300) }
+    const row = h.database.transaction(db => db.prepare("SELECT payload FROM thread_records WHERE kind = 'item' AND ordinal = 0").get())
+    if (id === 0) first = row
+    else expect(row).toEqual(first)
+  }
+  vi.restoreAllMocks()
+  h.database.close()
+  const fresh = h.fresh()
+  expect((await page(fresh.store, newest(2))).items.map(i => i.id)).toEqual([511, 512])
+  expect(await fresh.store.execute(ask('readThread'))).toMatchObject({ status: 'stored', snapshot: { thread: { items: expect.any(Array) } } })
+})
+
+it('separately flushed JSON aggregates reject overflow atomically and stay readable after reopen', async () => {
+  const h = setup(), s = snapshot(0)
+  const entry = (id: number) => ({ id, rev: 1, kind: 'future', data: Array(60000).fill(null) })
+  expect(await h.store.execute(owned(s, { items: [entry(1)] }))).toEqual({ status: 'ok' })
+  expect(await h.store.execute(owned(s, { items: [entry(2)] }))).toEqual(error('write-failed'))
+  h.database.close()
+  const fresh = h.fresh()
+  expect((await page(fresh.store, newest(2))).items).toEqual([entry(1)])
+  expect(await fresh.store.execute(ask('readThread'))).toMatchObject({ status: 'stored', snapshot: { thread: { items: [entry(1)] } } })
+  expect(await fresh.store.execute(owned(s, { removeIds: [1], items: [entry(2)] }))).toEqual({ status: 'ok' })
+})
+
+it('balanced owned ordering preserves ties, movements, internal removals and authenticated parent routes', async () => {
+  const h = setup(), s = snapshot(0)
+  const ids = Array.from({ length: 40 }, (_, i) => i).sort((a, b) => (a * 17) % 41 - (b * 17) % 41)
+  const items = ids.map(id => ({ id, kind: 'future', rev: 1, order: id % 20 }))
+  for (const item of items) expect(await h.store.execute(owned(s, { items: [item] }))).toEqual({ status: 'ok' })
+  const revised = { ...items[10], rev: 2, order: -1 }, removed = ids.filter((_, i) => i % 3 === 0 && i !== 10)
+  expect(await h.store.execute(owned(s, { items: [revised], removeIds: removed }))).toEqual({ status: 'ok' })
+  h.database.close()
+  const fresh = h.fresh(), expected = items.filter(i => !removed.includes(i.id)).map(i => i.id === revised.id ? revised : i).sort((a, b) => a.order - b.order)
+  expect(await fresh.store.execute(ask('readThread'))).toMatchObject({ status: 'stored', snapshot: { thread: { items: expected } } })
+  expect((await page(fresh.store, newest(3))).items).toEqual(expected.slice(-3))
+  fresh.database.transaction(db => db.prepare("UPDATE thread_auth SET payload = path WHERE tree = 'parent'").run())
+  expect(await fresh.store.execute(owned(s, { items: [{ ...revised, rev: 3 }] }))).toEqual(error('write-failed'))
+})
+
+it('converts an admitted fractional ordering root transactionally while retaining exact placements', async () => {
+  const h = setup(), s = snapshot(0), item = { id: 1, rev: 1, kind: 'future', order: 1 }
+  await h.store.execute(owned(s, { items: [item] }))
+  // Independent old-format singleton radix root, bound to the existing protected placement.
+  h.database.transaction(db => {
+    const row = db.prepare("SELECT scope, payload FROM thread_records WHERE kind = 'header'").get() as { scope: string; payload: Buffer }
+    const envelope = JSON.parse(Buffer.from(h.encryption.decrypt(row.payload)).toString()), value = envelope.value
+    const node = db.prepare("SELECT payload FROM thread_auth WHERE tree = 'sequence'").get() as { payload: string }
+    const leaf = JSON.parse(node.payload).value, target = '0'.repeat(56)
+    let ref = { hash: '', count: 0 }
+    for (let length = target.length; length >= 0; length--) {
+      const path = target.slice(0, length), payload = JSON.stringify({ left: ref, right: { hash: '', count: 0 }, value: length === target.length ? leaf : null })
+      db.prepare('INSERT OR REPLACE INTO thread_auth VALUES (?, ?, ?, ?)').run(row.scope, 'order', path, payload)
+      ref = { hash: createHash('sha256').update(path + payload).digest('hex'), count: 1 }
+    }
+    const { sequence: _sequence, nodes: _nodes, ...old } = value.mutable
+    value.mutable = { ...old, roots: { ...old.roots, order: ref } }
+    db.prepare("UPDATE thread_records SET payload = ? WHERE kind = 'header'").run(h.encryption.encrypt(Buffer.from(JSON.stringify(envelope))))
+  })
+  const placements = () => h.database.transaction(db => db.prepare("SELECT * FROM thread_records WHERE kind = 'item'").all())
+  const before = placements()
+  h.database.transaction(db => db.exec("CREATE TRIGGER fail_conversion BEFORE INSERT ON thread_records WHEN new.kind = 'header' BEGIN SELECT RAISE(ABORT, 'injected'); END"))
+  expect(await h.store.execute(owned(s))).toEqual(error('write-failed'))
+  expect(placements()).toEqual(before)
+  h.database.transaction(db => db.exec('DROP TRIGGER fail_conversion'))
+  expect(await h.store.execute(owned(s))).toEqual({ status: 'ok' })
+  expect(placements()).toEqual(before)
+  h.database.close()
+  expect(await h.fresh().store.execute(ask('readThread'))).toMatchObject({ status: 'stored', snapshot: { thread: { items: [item] } } })
+})
 
 it('owned revisions preserve unloaded items and evidence across a fresh owner', async () => {
   const h = setup(), s = snapshot()
@@ -258,7 +351,11 @@ it('ordinary owned validation, serialization and protected record work stay boun
     expect(decrypt).toHaveBeenCalledTimes(3); expect(encrypt).toHaveBeenCalledTimes(3)
     vi.restoreAllMocks(); return work
   }
-  expect(await measure(1000)).toEqual(await measure(10))
+  const large = await measure(1000), small = await measure(10)
+  // Fixed-width lookup plus logarithmic sequence paths; payload work is constant.
+  expect(large.slice(2)).toEqual(small.slice(2))
+  expect(large[0] - small[0]).toBeLessThan(40)
+  expect(large[1] - small[1]).toBeLessThan(40)
 })
 
 // Genuine committed pre-upgrade envelopes, independent of the new writer.

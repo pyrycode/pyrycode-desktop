@@ -29,6 +29,70 @@ async function cache(intercept?: (request: ChatHistoryRequest, execute: () => Pr
   return { fresh, source, api, writer }
 }
 
+it.each(['separate', 'coalesced', 'held-failure'] as const)('explicit same-epoch reset replaces owned history through %s saves', async mode => {
+  let hold = false, release!: (result: ChatHistoryResult) => void
+  const { fresh, api, writer } = await cache((_request, execute) => hold ? new Promise(resolve => { release = resolve }) : execute())
+  const add = (id: number) => api.applyUpdate('a', { type: 'thread_item_added', payload: { conversation_id: 'c', epoch: 'e', version: 20,
+    item: { id, rev: 1, kind: 'assistant_message', shown: true, active: false, status: 'done', summary: '', content: {} } } })
+  try {
+    api.acceptEpoch('a', 'c', 'e'); add(1)
+    api.beginBatch('a', 'c', 'e')!.commit({ fromVersion: 0, version: 20, ranges: [{ start: 10, end: 20 }] })
+    if (mode === 'separate') await writer.flush()
+    hold = mode === 'held-failure'
+    const draining = hold ? writer.flush() : undefined
+    // The fourth argument is explicit daemon reset intent, unlike holder deletion.
+    api.acceptEpoch('a', 'c', 'e', true)
+    api.beginBatch('a', 'c', 'e')!.commit({ fromVersion: 0, version: 4, ranges: [{ start: 1, end: 4 }] })
+    if (draining) { release({ status: 'error', code: 'write-failed' }); await draining; hold = false }
+    await writer.flush()
+    expect(await fresh().execute({ operation: 'readThread', serverId: 'a', conversationId: 'c' })).toMatchObject({ status: 'stored', snapshot: {
+      thread: { items: [], ranges: [{ start: 1, end: 4 }], version: 4, checkpoint: 4 }
+    } })
+  } finally { await writer.stop() }
+})
+
+it('a lost reset acknowledgement does not reset newer facts when the same owned batch retries', async () => {
+  let lose = false
+  const { fresh, api, writer } = await cache(async (_request, execute) => {
+    const result = await execute()
+    if (lose) { lose = false; throw Error('lost reset acknowledgement') }
+    return result
+  })
+  try {
+    api.acceptEpoch('a', 'c', 'e'); await writer.flush()
+    api.acceptEpoch('a', 'c', 'e', true)
+    api.beginBatch('a', 'c', 'e')!.commit({ fromVersion: 0, version: 4, ranges: [{ start: 1, end: 4 }] })
+    lose = true; await writer.flush()
+    api.applyUpdate('a', { type: 'thread_item_added', payload: { conversation_id: 'c', epoch: 'e', version: 5,
+      item: { id: 5, rev: 5, order: 5, kind: 'assistant_message', shown: true, active: false, status: 'done', summary: '', content: {} } } })
+    await writer.flush()
+    expect(await fresh().execute({ operation: 'readThread', serverId: 'a', conversationId: 'c' })).toMatchObject({ status: 'stored', snapshot: {
+      thread: { items: [{ id: 5 }], version: 5, checkpoint: 5, ranges: [{ start: 1, end: 4 }] }
+    } })
+  } finally { await writer.stop() }
+})
+
+it.each([
+  [200, true, false], [50, true, true], [100, true, false], [100, false, false]
+] as const)('saved exhaustion at 100 survives boundary %s with availability %s', async (start, available, expected) => {
+  for (const coalesced of [false, true]) {
+    const { fresh, api, writer } = await cache()
+    try {
+      api.acceptEpoch('a', 'c', 'e')
+      api.beginBatch('a', 'c', 'e')!.commit({ fromVersion: 0, version: 1, ranges: [{ start: 100, end: 110 }], olderAvailable: false })
+      if (!coalesced) await writer.flush()
+      api.deleteConversation('a', 'c'); api.acceptEpoch('a', 'c', 'e')
+      api.beginBatch('a', 'c', 'e')!.commit({ fromVersion: 0, version: 2, ranges: [{ start, end: start + 10 }], olderAvailable: available })
+      await writer.flush()
+      // Metadata-only recreation must not change the retained certified boundary.
+      api.deleteConversation('a', 'c'); api.acceptEpoch('a', 'c', 'e'); await writer.flush()
+      expect(await fresh().execute({ operation: 'readThread', serverId: 'a', conversationId: 'c' })).toMatchObject({ status: 'stored', snapshot: {
+        thread: { olderAvailable: expected }
+      } })
+    } finally { await writer.stop() }
+  }
+})
+
 it.each([
   ['saved', 5], ['pending', 5], ['saved', 10], ['pending', 10]
 ] as const)('completion through %s/%s stays version-bound across coalescing and held failure', async (seed, through) => {

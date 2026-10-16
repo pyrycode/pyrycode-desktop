@@ -20,10 +20,12 @@ const columns = 'kind, ordinal, arrival, item_order, range_ordinal, range_start,
 const INVALID_CONTINUATION = new Error('invalid local history continuation')
 const MAX_CONTINUATION_LENGTH = 65536
 type Ref = { hash: string; count: number }
+type SequenceRef = Ref & { key: string; height: number }
 type Leaf = { ordinal: number; digest: string; position: string | null; id: number | null }
 type Roots = { ids: Ref; order: Ref; ranges: Ref; sort: Ref }
-type Mutable = { roots: Roots; nextOrdinal: number; nextArrival: number }
+type Mutable = { roots: Roots; nextOrdinal: number; nextArrival: number; sequence?: SequenceRef; nodes?: number }
 const empty = (): Ref => ({ hash: '', count: 0 })
+const emptySequence = (): SequenceRef => ({ ...empty(), key: '', height: 0 })
 const digest = (value: Uint8Array | string): string => createHash('sha256').update(value).digest('hex')
 const numericKey = (n: number): string => n.toString(16).padStart(14, '0')
 const bits = (key: string): string => [...key].map(c => Number.parseInt(c, 16).toString(2).padStart(4, '0')).join('')
@@ -35,16 +37,14 @@ function sortKey(value: unknown, arrival: number): string {
   else bytes[0] ^= 128
   return bytes.toString('hex') + numericKey(arrival)
 }
-function between(lower: string, upper: string | null): string {
-  let prefix = '', i = 0
-  for (;;) {
-    const a = i < lower.length ? Number.parseInt(lower[i], 16) : 0
-    const b = upper !== null && i < upper.length ? Number.parseInt(upper[i], 16) : 15
-    if (b - a > 1) return prefix + Math.floor((a + b) / 2).toString(16)
-    prefix += a.toString(16)
-    if (a !== b) upper = null
-    i++
-  }
+function sequenceReference(value: unknown): SequenceRef {
+  const v = object(value), key = v.key, height = natural(v.height)
+  const ref = reference({ hash: v.hash, count: v.count })
+  if (typeof key !== 'string' || !/^(?:[0-9a-f]{14})?$/.test(key) || height > 64 ||
+    (ref.count === 0) !== (key === '') || (ref.count === 0) !== (height === 0)) throw INVALID_CHAT_HISTORY
+  const parsed = { ...ref, key, height }
+  if (!same(parsed, value)) throw INVALID_CHAT_HISTORY
+  return parsed
 }
 function reference(value: unknown): Ref {
   const r = object(value), hash = r.hash, count = natural(r.count)
@@ -55,8 +55,11 @@ function reference(value: unknown): Ref {
 function mutable(value: unknown): Mutable {
   const v = object(value), r = object(v.roots)
   const roots = { ids: reference(r.ids), order: reference(r.order), ranges: reference(r.ranges), sort: reference(r.sort) }
-  const parsed = { roots, nextOrdinal: natural(v.nextOrdinal), nextArrival: natural(v.nextArrival) }
-  if (!same(parsed, value) || roots.ids.count !== roots.order.count || roots.ids.count !== roots.sort.count) throw INVALID_CHAT_HISTORY
+  const parsed = { roots, nextOrdinal: natural(v.nextOrdinal), nextArrival: natural(v.nextArrival),
+    ...(v.sequence === undefined ? {} : { sequence: sequenceReference(v.sequence) }),
+    ...(v.nodes === undefined ? {} : { nodes: natural(v.nodes) }) }
+  if (!same(parsed, value) || roots.ids.count !== (parsed.sequence ?? roots.order).count || roots.ids.count !== roots.sort.count ||
+    (parsed.nodes ?? 0) > MAX_CHAT_HISTORY_ITEMS) throw INVALID_CHAT_HISTORY
   return parsed
 }
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -68,6 +71,10 @@ function object(value: unknown): Record<string, unknown> {
 }
 function natural(value: unknown): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw INVALID_CHAT_HISTORY
+  return value
+}
+function resetIdentity(value: unknown): string {
+  if (typeof value !== 'string' || value.length > 4096) throw INVALID_CHAT_HISTORY
   return value
 }
 function order(value: unknown): number | null {
@@ -97,6 +104,8 @@ function header(value: unknown, server: string, conversation: string, legacy = f
   if (itemCount > MAX_CHAT_HISTORY_ITEMS || rangeCount > MAX_CHAT_HISTORY_ITEMS || typeof v.hasArrival !== 'boolean') throw INVALID_CHAT_HISTORY
   if (!legacy && (typeof v.generation !== 'string' || !/^[0-9a-f-]{36}$/.test(v.generation))) throw INVALID_CHAT_HISTORY
   const parsed = { metadata, itemCount, rangeCount, hasArrival: v.hasArrival,
+    ...(v.resetId === undefined ? {} : { resetId: resetIdentity(v.resetId) }),
+    ...(v.availabilityStart === undefined ? {} : { availabilityStart: natural(v.availabilityStart) }),
     ...(v.mutable === undefined ? {} : { mutable: mutable(v.mutable) }),
     ...(!legacy && typeof v.generation === 'string' ? { generation: v.generation } : {}) }
   if (!same(parsed, value)) throw INVALID_CHAT_HISTORY
@@ -108,6 +117,112 @@ export function createIndexedThreadHistory(deps: {
   database: ReturnType<typeof createHistoryDatabase>; encryption: SecretEncryption; log: DiagnosticLog
 }) {
   const { database, encryption, log } = deps
+  // An AVL sequence preserves arbitrary admitted held order without fractional labels.
+  // Parent rows are hints only: rank authenticates the hinted route from the current root.
+  function sequence(db: Database.Database, identity: string) {
+    type Node = { left: SequenceRef; right: SequenceRef; value: Leaf }
+    const pending = new Map<string, string | null>()
+    const readText = (name: string, key: string): unknown => pending.has(name + ':' + key) ? pending.get(name + ':' + key)
+      : db.prepare<[string, string, string], { payload: unknown }>('SELECT payload FROM thread_auth WHERE scope = ? AND tree = ? AND path = ?')
+        .get(identity, name, key)?.payload
+    function read(ref: SequenceRef, balanced = true): Node {
+      const text = readText('sequence', ref.key)
+      if (!ref.count || typeof text !== 'string' || digest(ref.key + text) !== ref.hash) throw INVALID_CHAT_HISTORY
+      const v = object(JSON.parse(text)), left = sequenceReference(v.left), right = sequenceReference(v.right), l = object(v.value)
+      const value: Leaf = { ordinal: natural(l.ordinal), digest: String(l.digest), position: String(l.position), id: natural(l.id) }
+      if (!/^[0-9a-f]{64}$/.test(value.digest) || value.position !== numericKey(value.ordinal) ||
+        ref.key !== value.position || ref.count !== left.count + right.count + 1 ||
+        ref.height !== Math.max(left.height, right.height) + 1 || balanced && Math.abs(left.height - right.height) > 1 ||
+        !same(v, { left, right, value })) throw INVALID_CHAT_HISTORY
+      return { left, right, value }
+    }
+    function write(n: Node): SequenceRef {
+      const key = numericKey(n.value.ordinal), payload = JSON.stringify(n)
+      pending.set('sequence:' + key, payload)
+      for (const child of [n.left, n.right]) if (child.count) pending.set('parent:' + child.key, key)
+      return { hash: digest(key + payload), count: n.left.count + n.right.count + 1, key,
+        height: Math.max(n.left.height, n.right.height) + 1 }
+    }
+    function balance(n: Node): SequenceRef {
+      if (n.left.height > n.right.height + 1) {
+        let left = read(n.left)
+        if (left.right.height > left.left.height) {
+          const pivot = read(left.right)
+          n.left = write({ ...pivot, left: write({ ...left, right: pivot.left }) }); left = read(n.left, false)
+        }
+        return write({ ...left, right: write({ ...n, left: left.right }) })
+      }
+      if (n.right.height > n.left.height + 1) {
+        let right = read(n.right)
+        if (right.left.height > right.right.height) {
+          const pivot = read(right.left)
+          n.right = write({ ...pivot, right: write({ ...right, left: pivot.right }) }); right = read(n.right, false)
+        }
+        return write({ ...right, left: write({ ...n, right: right.left }) })
+      }
+      return write(n)
+    }
+    function rank(root: SequenceRef, key: string): number {
+      const route = [key]
+      while (route.at(-1) !== root.key) {
+        const parent = readText('parent', route[route.length - 1])
+        if (typeof parent !== 'string' || !parent || route.includes(parent) || route.length > 64) throw INVALID_CHAT_HISTORY
+        route.push(parent)
+      }
+      let ref = root, rank = 0
+      for (let i = route.length - 1; i >= 0; i--) {
+        if (ref.key !== route[i]) throw INVALID_CHAT_HISTORY
+        const n = read(ref)
+        if (i === 0) return rank + n.left.count
+        if (n.left.key === route[i - 1]) ref = n.left
+        else if (n.right.key === route[i - 1]) { rank += n.left.count + 1; ref = n.right }
+        else throw INVALID_CHAT_HISTORY
+      }
+      throw INVALID_CHAT_HISTORY
+    }
+    function window(root: SequenceRef, start: number, end: number): Leaf[] {
+      const result: Leaf[] = []
+      function visit(ref: SequenceRef, offset: number): void {
+        if (!ref.count || offset >= end || offset + ref.count <= start) return
+        const n = read(ref), at = offset + n.left.count
+        visit(n.left, offset)
+        if (at >= start && at < end) result.push(n.value)
+        visit(n.right, at + 1)
+      }
+      visit(root, 0); return result
+    }
+    function set(root: SequenceRef, at: number, value: Leaf | null, insert = false): SequenceRef {
+      function update(ref: SequenceRef, index: number): SequenceRef {
+        if (!ref.count) {
+          if (!value || !insert || index !== 0) throw INVALID_CHAT_HISTORY
+          return write({ left: emptySequence(), right: emptySequence(), value })
+        }
+        const n = read(ref)
+        if (index < n.left.count || insert && index === n.left.count) n.left = update(n.left, index)
+        else if (index > n.left.count) n.right = update(n.right, index - n.left.count - 1)
+        else if (value) n.value = value
+        else {
+          pending.set('sequence:' + ref.key, null); pending.set('parent:' + ref.key, null)
+          if (!n.left.count) return n.right
+          if (!n.right.count) return n.left
+          const successor = window(n.right, 0, 1)[0]
+          n.right = set(n.right, 0, null); n.value = successor
+        }
+        return balance(n)
+      }
+      const result = update(root, at)
+      if (result.count) pending.set('parent:' + result.key, '')
+      return result
+    }
+    function flush(): void {
+      for (const [address, payload] of pending) {
+        const [name, key] = address.split(':')
+        if (payload === null) db.prepare('DELETE FROM thread_auth WHERE scope = ? AND tree = ? AND path = ?').run(identity, name, key)
+        else db.prepare('INSERT OR REPLACE INTO thread_auth VALUES (?, ?, ?, ?)').run(identity, name, key, payload)
+      }
+    }
+    return { rank, window, set, flush }
+  }
   // The protected header authenticates these content-free paths. Replaying any old
   // leaf or branch fails against its parent's current digest, including after reopen.
   function tree(db: Database.Database, identity: string, name: keyof Roots) {
@@ -201,6 +316,8 @@ export function createIndexedThreadHistory(deps: {
   }
   function writeHeader(db: Database.Database, identity: string, h: ReturnType<typeof header>): void {
     const value = { metadata: h.metadata, itemCount: h.itemCount, rangeCount: h.rangeCount, hasArrival: h.hasArrival,
+      ...(h.resetId === undefined ? {} : { resetId: h.resetId }),
+      ...(h.availabilityStart === undefined ? {} : { availabilityStart: h.availabilityStart }),
       ...(h.mutable ? { mutable: h.mutable } : {}), generation: h.generation }
     protect(db, identity, { kind: 'header', ordinal: 0, arrival: null, item_order: null, range_ordinal: null, range_start: null, range_end: null }, value)
   }
@@ -241,8 +358,9 @@ export function createIndexedThreadHistory(deps: {
     const h = header(decode(first, identity), server, conversation, legacy)
     if (h.mutable) {
       const m = h.mutable
-      if (m.roots.order.count !== h.itemCount || m.roots.ranges.count !== h.rangeCount) throw INVALID_CHAT_HISTORY
-      const placements = tree(db, identity, 'order').window(m.roots.order, 0, h.itemCount)
+      if ((m.sequence ?? m.roots.order).count !== h.itemCount || m.roots.ranges.count !== h.rangeCount) throw INVALID_CHAT_HISTORY
+      const placements = (m.sequence ? sequence(db, identity).window(m.sequence, 0, h.itemCount)
+        : tree(db, identity, 'order').window(m.roots.order, 0, h.itemCount))
         .map(l => selectedRow(db, identity, 'item', l))
       const ranges = tree(db, identity, 'ranges').window(m.roots.ranges, 0, h.rangeCount)
         .map(l => decode(selectedRow(db, identity, 'range', l), identity))
@@ -309,21 +427,22 @@ export function createIndexedThreadHistory(deps: {
   }
   function activate(db: Database.Database, identity: string, h: ReturnType<typeof header>, snapshot: ThreadSnapshot): Mutable {
     const m: Mutable = { roots: { ids: empty(), order: empty(), ranges: empty(), sort: empty() },
-      nextOrdinal: Math.max(snapshot.items.length, snapshot.ranges.length), nextArrival: snapshot.items.length }
+      nextOrdinal: Math.max(snapshot.items.length, snapshot.ranges.length), nextArrival: snapshot.items.length,
+      sequence: emptySequence(), nodes: snapshot.items.reduce((n, item) => n + threadHistoryCodec.nodes(item), 0) }
     const placements = db.prepare<[string], Row>(`SELECT ${columns} FROM thread_records WHERE scope = ? AND kind != 'header' ORDER BY kind, ordinal`).all(identity)
-    const ids = tree(db, identity, 'ids'), ordered = tree(db, identity, 'order'), ranges = tree(db, identity, 'ranges'), sorted = tree(db, identity, 'sort')
+    const ids = tree(db, identity, 'ids'), ordered = sequence(db, identity), ranges = tree(db, identity, 'ranges'), sorted = tree(db, identity, 'sort')
     for (const r of placements) {
       const value = decode(r, identity, h.generation), { payload: ignored, ...indexes } = r
       void ignored
       if (r.kind === 'item' && !h.hasArrival) indexes.arrival = r.ordinal
       const rewritten = protect(db, identity, indexes, value)
       if (!(rewritten.payload instanceof Uint8Array)) throw INVALID_CHAT_HISTORY
-      const position = numericKey(r.ordinal) + '8'
+      const position = numericKey(r.ordinal)
       const leaf = { ordinal: r.ordinal, digest: digest(rewritten.payload), position: r.kind === 'item' ? position : null,
         id: r.kind === 'item' ? natural(object(value).id) : null }
       if (r.kind === 'item') {
         m.roots.ids = ids.set(m.roots.ids, numericKey(natural(leaf.id)), leaf)
-        m.roots.order = ordered.set(m.roots.order, position, leaf)
+        m.sequence = ordered.set(m.sequence ?? emptySequence(), r.ordinal, leaf, true)
         const held = snapshot.items[r.ordinal]
         m.roots.sort = sorted.set(m.roots.sort, sortKey(held.order, indexes.arrival ?? r.ordinal), leaf)
       } else m.roots.ranges = ranges.set(m.roots.ranges, numericKey(natural(r.range_start)), leaf)
@@ -342,7 +461,7 @@ export function createIndexedThreadHistory(deps: {
       const row = db.prepare<[string], Row>(`SELECT ${columns} FROM thread_records WHERE scope = ? AND kind = 'header' AND ordinal = 0`).get(identity)
       if (!row) throw INVALID_CHAT_HISTORY
       h = header(decode(row, identity), request.serverId, request.conversationId)
-      if (h.metadata.epoch !== metadata.epoch) {
+      if (h.metadata.epoch !== metadata.epoch || c.resetId !== undefined && c.resetId !== h.resetId) {
         if (!c.acceptEpoch) throw INVALID_CHAT_HISTORY
         db.prepare('DELETE FROM thread_scopes WHERE identity = ?').run(identity)
         identity = null; h = undefined
@@ -355,7 +474,9 @@ export function createIndexedThreadHistory(deps: {
       h = { metadata: { hostId: request.serverId, conversationId: request.conversationId, epoch: metadata.epoch,
         version: 0, checkpoint: 0, uncommittedVersion: 0, repair: null },
         itemCount: 0, rangeCount: 0, hasArrival: true, generation: randomUUID(),
-        mutable: { roots: { ids: empty(), order: empty(), ranges: empty(), sort: empty() }, nextOrdinal: 0, nextArrival: 0 } }
+        ...(c.resetId === undefined ? {} : { resetId: c.resetId }),
+        mutable: { roots: { ids: empty(), order: empty(), ranges: empty(), sort: empty() }, nextOrdinal: 0, nextArrival: 0,
+          sequence: emptySequence(), nodes: 0 } }
     }
     if (!h) throw INVALID_CHAT_HISTORY
     let m = h.mutable
@@ -365,14 +486,37 @@ export function createIndexedThreadHistory(deps: {
       m = activate(db, identity, h, snapshot.thread)
       h.hasArrival = true
     }
-    const ids = tree(db, identity, 'ids'), ordered = tree(db, identity, 'order'), ranges = tree(db, identity, 'ranges'), sorted = tree(db, identity, 'sort')
+    const ids = tree(db, identity, 'ids'), ordered = sequence(db, identity), ranges = tree(db, identity, 'ranges'), sorted = tree(db, identity, 'sort')
+    if (m.sequence === undefined || m.nodes === undefined) {
+      // One-time transactional conversion authenticates all retained facts first.
+      const saved = load(db, request.serverId, request.conversationId)
+      if (!saved) throw INVALID_CHAT_HISTORY
+      const leaves = tree(db, identity, 'order').window(m.roots.order, 0, h.itemCount)
+      m.sequence = emptySequence(); m.nodes = 0
+      for (let i = 0; i < leaves.length; i++) {
+        const value = saved.thread.items[i], row = selectedRow(db, identity, 'item', leaves[i])
+        const leaf = { ...leaves[i], position: numericKey(row.ordinal) }
+        m.sequence = ordered.set(m.sequence, i, leaf, true)
+        m.roots.ids = ids.set(m.roots.ids, numericKey(value.id), leaf)
+        m.roots.sort = sorted.set(m.roots.sort, sortKey(value.order, natural(row.arrival)), leaf)
+        m.nodes += threadHistoryCodec.nodes(value)
+      }
+      m.roots.order = empty()
+    }
+    let sequenceRoot = m.sequence, nodes = m.nodes
+    if (h.availabilityStart === undefined && h.rangeCount) {
+      const oldest = ranges.window(m.roots.ranges, 0, 1)[0]
+      const row = selectedRow(db, identity, 'range', oldest)
+      h.availabilityStart = threadHistoryCodec.ranges([decode(row, identity)])[0].start
+    }
     function erase(id: number): void {
       const leaf = ids.get(mutableState.roots.ids, numericKey(id))
       if (!leaf) return
       const row = selectedRow(db, owner, 'item', leaf), value = object(item(db, row, owner, { ...currentHeader, mutable: mutableState }))
       if (value.id !== id || leaf.position === null) throw INVALID_CHAT_HISTORY
       mutableState.roots.ids = ids.set(mutableState.roots.ids, numericKey(id), null)
-      mutableState.roots.order = ordered.set(mutableState.roots.order, leaf.position, null)
+      sequenceRoot = ordered.set(sequenceRoot, ordered.rank(sequenceRoot, leaf.position), null)
+      nodes -= threadHistoryCodec.nodes(value)
       mutableState.roots.sort = sorted.set(mutableState.roots.sort, sortKey(value.order, natural(row.arrival)), null)
       db.prepare("DELETE FROM thread_records WHERE scope = ? AND kind = 'item' AND ordinal = ?").run(owner, leaf.ordinal)
       db.prepare('DELETE FROM thread_payloads WHERE scope = ? AND item_id = ?').run(owner, id)
@@ -385,38 +529,39 @@ export function createIndexedThreadHistory(deps: {
       const entry = pending.get(id)
       if (!entry) return
       const value = entry, previous = ids.get(mutableState.roots.ids, numericKey(id))
-      let arrival: number, ordinal: number, retainedPosition: string | null = null
+      let arrival: number, ordinal: number, retainedRank: number | null = null
       if (previous) {
         const row = selectedRow(db, owner, 'item', previous), held = object(item(db, row, owner, { ...currentHeader, mutable: mutableState }))
         if (held.id !== id || held.kind !== value.kind || previous.position === null) throw INVALID_CHAT_HISTORY
         if (natural(held.rev) >= value.rev) { pending.delete(id); return }
         arrival = natural(row.arrival); ordinal = row.ordinal
-        if (same(held.order, value.order)) retainedPosition = previous.position
-        if (retainedPosition === null) {
-          mutableState.roots.order = ordered.set(mutableState.roots.order, previous.position, null)
+        nodes -= threadHistoryCodec.nodes(held)
+        if (same(held.order, value.order)) retainedRank = ordered.rank(sequenceRoot, previous.position)
+        if (retainedRank === null) {
+          sequenceRoot = ordered.set(sequenceRoot, ordered.rank(sequenceRoot, previous.position), null)
           mutableState.roots.sort = sorted.set(mutableState.roots.sort, sortKey(held.order, arrival), null)
         }
       } else {
         arrival = natural(mutableState.nextArrival++); ordinal = natural(mutableState.nextOrdinal++)
       }
       const sort = sortKey(value.order, arrival)
-      let position = retainedPosition
-      if (position === null) {
+      let rank = retainedRank
+      if (rank === null) {
         const nextRank = sorted.rank(mutableState.roots.sort, sort)
         const next = sorted.window(mutableState.roots.sort, nextRank, nextRank + 1)[0]
-        const upper = next?.position ?? null, rank = upper === null ? mutableState.roots.order.count : ordered.rank(mutableState.roots.order, upper)
-        const lower = ordered.window(mutableState.roots.order, rank - 1, rank)[0]?.position ?? ''
-        position = between(lower, upper)
+        rank = next?.position === null || next?.position === undefined ? sequenceRoot.count : ordered.rank(sequenceRoot, next.position)
       }
+      nodes += threadHistoryCodec.nodes(value)
+      if (nodes > MAX_CHAT_HISTORY_ITEMS) throw INVALID_CHAT_HISTORY
       const payload = Buffer.from(encryption.encrypt(Buffer.from(JSON.stringify({ scope: owner, epoch: metadata.epoch,
         id, rev: value.rev, value }))))
       db.prepare('INSERT OR REPLACE INTO thread_payloads VALUES (?, ?, ?, ?)').run(owner, id, value.rev, payload)
       const row = protect(db, owner, { kind: 'item', ordinal, arrival, item_order: order(value.order),
         range_ordinal: null, range_start: null, range_end: null }, { id, rev: value.rev, digest: digest(payload) })
       if (!(row.payload instanceof Uint8Array)) throw INVALID_CHAT_HISTORY
-      const leaf = { ordinal, digest: digest(row.payload), position, id }
+      const leaf = { ordinal, digest: digest(row.payload), position: numericKey(ordinal), id }
       mutableState.roots.ids = ids.set(mutableState.roots.ids, numericKey(id), leaf)
-      mutableState.roots.order = ordered.set(mutableState.roots.order, position, leaf)
+      sequenceRoot = ordered.set(sequenceRoot, rank, leaf, retainedRank === null)
       mutableState.roots.sort = sorted.set(mutableState.roots.sort, sort, leaf)
       pending.delete(id)
     }
@@ -458,9 +603,16 @@ export function createIndexedThreadHistory(deps: {
       const retainUnfinished = !(certified && completion.version >= unfinished)
       const uncommittedVersion = Math.max(next.uncommittedVersion ?? 0,
         retainUnfinished && (unfinished > next.checkpoint || fenced) ? unfinished : 0)
-      h.metadata = threadHistoryCodec.metadata({ ...old, ...next, version: Math.max(old.version, next.version), checkpoint,
+      let olderAvailable = old.olderAvailable ?? (h.availabilityStart === undefined ? next.olderAvailable : undefined)
+      const boundary = progress.availability
+      if (boundary && (h.availabilityStart === undefined || boundary.start < h.availabilityStart ||
+        boundary.start === h.availabilityStart && olderAvailable !== false)) {
+        h.availabilityStart = boundary.start; olderAvailable = boundary.available
+      }
+      h.metadata = threadHistoryCodec.metadata({ ...old, ...next, olderAvailable, version: Math.max(old.version, next.version), checkpoint,
         uncommittedVersion, repair }, request.serverId, request.conversationId)
     }
+    m.sequence = sequenceRoot; m.nodes = nodes
     h.mutable = m; h.generation = randomUUID(); h.itemCount = m.roots.ids.count; h.rangeCount = m.roots.ranges.count
     if (h.itemCount > MAX_CHAT_HISTORY_ITEMS || h.rangeCount > MAX_CHAT_HISTORY_ITEMS) throw INVALID_CHAT_HISTORY
     ids.flush(); ordered.flush(); ranges.flush(); sorted.flush()
@@ -469,10 +621,11 @@ export function createIndexedThreadHistory(deps: {
   function mutablePage(db: Database.Database, identity: string, h: ReturnType<typeof header>, limit: number,
     token: Record<string, unknown> | null): ThreadHistoryResult {
     const m = h.mutable
-    if (!m || h.itemCount !== m.roots.order.count || h.rangeCount !== m.roots.ranges.count) throw INVALID_CHAT_HISTORY
+    if (!m || h.itemCount !== (m.sequence ?? m.roots.order).count || h.rangeCount !== m.roots.ranges.count) throw INVALID_CHAT_HISTORY
     if (token && (token.identity !== h.generation || typeof token.before !== 'number' || token.before > h.itemCount)) throw INVALID_CONTINUATION
     const end = token ? natural(token.before) : h.itemCount, start = Math.max(0, end - limit)
-    const leaves = tree(db, identity, 'order').window(m.roots.order, start, end)
+    const leaves = m.sequence ? sequence(db, identity).window(m.sequence, start, end)
+      : tree(db, identity, 'order').window(m.roots.order, start, end)
     const selected = leaves.map(l => selectedRow(db, identity, 'item', l))
     const items = threadHistoryCodec.items(selected.map(r => item(db, r, identity, h)))
     const rt = tree(db, identity, 'ranges'), evidence = new Map<number, Row>()

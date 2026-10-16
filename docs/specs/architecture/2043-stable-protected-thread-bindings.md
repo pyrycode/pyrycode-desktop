@@ -78,3 +78,7 @@ None. Estimated written work: 270 production + 270 tests/helpers + 90 plan/secur
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-16
+
+## Revisions
+
+2026-10-16: adversarial implementation review identified replay of an older protected placement under a retained owner. Bind every item placement and range envelope to the header's current generation; only the header binds directly to the stable owner. Payload envelopes continue binding the stable owner and epoch. This rejects old placement/evidence replay after replacement without re-encrypting unchanged payloads. `rejects protected payload association tampering: replayed-placement` covers the invariant. Security verdict remains PASS with this binding required.

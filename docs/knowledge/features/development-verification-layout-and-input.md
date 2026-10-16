@@ -262,6 +262,27 @@ there is no click retry, fixed sleep or timeout increase. The
 [controlled failure and repaired input](development-verification-layout-evidence.md#reader-reopen-input-verification)
 establish the setup race; unchanged green repetitions alone cannot establish its cause.
 
+Covered-thread preservation has a separate boundary: native resize can clamp a
+released thread even after its positive baseline settled. The reader cases retain
+a trusted upward wheel before ordinary opening and prove it moved, then normalize
+Back focus before taking the immutable baseline. Settle measured thread geometry
+at every native size/zoom phase, keeping native size/zoom and renderer reflow as
+separate observations. Compare exact position and draft after pointer Back at the
+original dimensions/zoom, before resizing or focusing the reopen link. Reopening
+at the alternate size and making another resize round trip checks that keyboard
+Back preserves the new open's own record. Keep full-pane, notice clearance,
+final-content/menu bounds and pointer/keyboard/request-correlation assertions.
+
+Local `thread-scroll-phases` diagnostics record thread offset, content/viewport
+dimensions, link bounds, native outer/content size, zoom and focus at baseline,
+resize/zoom and Back, alongside timestamped scroll/resize samples. A test-wide
+`finally` removes the probe listeners and attaches evidence even if an assertion
+fails before reopen. The [controlled failure and Linux validation](development-verification-layout-evidence.md#reader-resize-scroll-preservation)
+show persistent settled-state loss despite later phase settlement; they do not
+recover the historical 1300→1020 schedule. Stable bottom geometry does not prove
+following intent, and a readiness-only change cannot restore an already-clamped
+held offset. See [the production contract](conversation-shell-scroll-pin.md#covered-reader-resize-preservation).
+
 Stacking levels are relative to ancestor contexts. The message area's level 0
 contains rows, pills and drawer; sharp top/input chrome at level 1 keeps controls
 and their menus above them. Existing level-2 sheets and later dialog siblings retain

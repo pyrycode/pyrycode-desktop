@@ -79,12 +79,14 @@ async function assistantCount(page: Page): Promise<number> {
   }).length)
 }
 
-async function turn(page: Page): Promise<void> {
+async function turn(page: Page, proof: Awaited<ReturnType<typeof observe>>): Promise<void> {
+  const completedBefore = proof.ends().length
   const before = await assistantCount(page)
   await page.getByPlaceholder('Message…').fill(`Reply with one short word. run=${scenarioNonce()}`)
   await page.getByRole('button', { name: 'Send', exact: true }).click()
   await expect.poll(() => assistantCount(page), { timeout: TURN }).toBeGreaterThan(before)
   await expect(page.locator('.bubble__cursor')).toHaveCount(0, { timeout: TURN })
+  await expect.poll(() => proof.ends().length, { timeout: TURN }).toBe(completedBefore + 1)
 }
 
 test('real GPT-6 Luna channel replies with Low effort from creation', async ({ relay, daemon }, testInfo) => {
@@ -104,7 +106,7 @@ test('real GPT-6 Luna channel replies with Low effort from creation', async ({ r
       await seedRow.click()
       await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
       await expect.poll(() => proof.settings().length, { timeout: ROUNDTRIP }).toBeGreaterThan(0)
-      await turn(page)
+      await turn(page, proof)
       const beforeRefresh = proof.settings().length
       await seedRow.click()
       await expect.poll(() => proof.settings().length, { timeout: ROUNDTRIP }).toBeGreaterThan(beforeRefresh)
@@ -177,7 +179,7 @@ test('real GPT-6 Luna channel replies with Low effort from creation', async ({ r
       await expect(page.locator('[data-thread-role="user"]')).toHaveCount(0)
       await expect(page.locator('[data-thread-role="assistant"]')).toHaveCount(0)
 
-      await turn(page)
+      await turn(page, proof)
       await expect.poll(() => proof.ends().some(end => end.serverId === seed.serverId &&
         end.conversationId === channelId && end.stopReason === 'end_turn' && end.isError !== true &&
         (!end.outcome || end.outcome === 'success') && (!end.terminalReason || end.terminalReason === 'completed') &&

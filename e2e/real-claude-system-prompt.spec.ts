@@ -1,4 +1,5 @@
 import { scenarioNonce } from './fixtures/clientScenario'
+import { installTurnCompletionEvidence } from './fixtures/turnCompletionEvidence'
 import { type Page } from '@playwright/test'
 import { test, expect, encodePairingPayload, type SpawnedDaemon } from './fixtures/clientScenario'
 import { confirmCreateChat } from './fixtures/confirmCreateChat'
@@ -260,6 +261,10 @@ async function saveStoredPrompt(page: Page, prompt: string): Promise<void> {
  * it is the quiesce signal — capturing replies before it would race a still-streaming row.
  */
 async function takeTurn(page: Page, message: string, baseline: number): Promise<string[]> {
+  const completed = () => page.evaluate(() => (window as typeof window & {
+    turnCompletionEvidence: { count: () => number }
+  }).turnCompletionEvidence.count())
+  const completedBefore = await completed()
   const sendButton = page.getByRole('button', { name: 'Send' })
   await expect(sendButton).toBeEnabled({ timeout: TURN_TIMEOUT_MS })
   await page.getByPlaceholder('Message…').fill(message)
@@ -269,6 +274,7 @@ async function takeTurn(page: Page, message: string, baseline: number): Promise<
     .poll(() => nonEmptyAssistantCount(page), { timeout: TURN_TIMEOUT_MS })
     .toBeGreaterThan(baseline)
   await expect(page.locator(CURSOR_SELECTOR)).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
+  await expect.poll(completed, { timeout: TURN_TIMEOUT_MS }).toBe(completedBefore + 1)
   return assistantTexts(page)
 }
 
@@ -298,6 +304,7 @@ async function pairAndConnect(
   relay: { url: string },
   pairFields: SpawnedDaemon['pairFields']
 ): Promise<void> {
+  await page.evaluate(installTurnCompletionEvidence)
   const payload = encodePairingPayload({
     server: pairFields.server,
     relay: `${relay.url}/v1/client`,

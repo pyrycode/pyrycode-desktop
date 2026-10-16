@@ -122,3 +122,6 @@ Add fresh protected-disk/reopen regressions comparing separately flushed and coa
 
 **Reviewer:** Codex (self-review using `builder/security-review.md`)
 **Date:** 2026-10-16
+
+
+The initial manual regressions failed on preserved `d163c99e`: partial completion with saved or pending fences and loss of later pending obligations before the first save (8 passed, 3 failed in the restart fixture). The interval/ordered-observation repair passed all 189 focused cases. Review then reproduced acknowledgement loss: the disk commit succeeded, IPC rejected, and retry revived a repair interval already behind the saved checkpoint. Main now ignores incoming repair observations whose start is below and end is at/below the saved checkpoint; a repair newly raised at the current checkpoint still persists. The regression checks both fresh-reopen equality after retry and preservation of that new equal-bound obligation. All 190 focused cases pass with this extension. No test assertion, timeout, retry, skip or browser configuration was weakened.

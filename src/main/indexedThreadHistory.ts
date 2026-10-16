@@ -446,10 +446,14 @@ export function createIndexedThreadHistory(deps: {
       const bound = completion || fenced ? certified ? completion.version : old.checkpoint : next.checkpoint
       const checkpoint = Math.max(old.checkpoint, Math.min(next.checkpoint, bound))
       const oldRepair = old.repair !== null && !(certified && completion.version >= old.repair.throughVersion) ? old.repair : null
+      // A lost acknowledgement can replay an observation already covered by the saved checkpoint.
+      // A new repair raised at that checkpoint still owns an obligation, even with equal bounds.
+      const nextRepair = next.repair !== null && (next.repair.fromVersion >= old.checkpoint ||
+        next.repair.throughVersion > old.checkpoint) ? next.repair : null
       const missingCoverage = completion !== undefined && !certified
-      const repairThrough = Math.max(oldRepair?.throughVersion ?? 0, next.repair?.throughVersion ?? 0,
+      const repairThrough = Math.max(oldRepair?.throughVersion ?? 0, nextRepair?.throughVersion ?? 0,
         missingCoverage ? completion.version : 0, checkpoint)
-      const repair = oldRepair || next.repair || missingCoverage ? { fromVersion: checkpoint, throughVersion: repairThrough } : null
+      const repair = oldRepair || nextRepair || missingCoverage ? { fromVersion: checkpoint, throughVersion: repairThrough } : null
       const unfinished = old.uncommittedVersion ?? 0
       const retainUnfinished = !(certified && completion.version >= unfinished)
       const uncommittedVersion = Math.max(next.uncommittedVersion ?? 0,

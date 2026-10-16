@@ -99,6 +99,35 @@ it('later pending repair and unfinished progress survive an earlier completion b
   } finally { await writer.stop() }
 })
 
+it('retry after a lost acknowledgement does not revive already completed repair obligations', async () => {
+  let loseAcknowledgement = true
+  const { fresh, api, writer } = await cache(async (_request, execute) => {
+    const result = await execute()
+    if (loseAcknowledgement) { loseAcknowledgement = false; throw Error('lost acknowledgement') }
+    return result
+  })
+  try {
+    api.acceptEpoch('a', 'c', 'e')
+    api.beginBatch('a', 'c', 'e')!.commit({ fromVersion: 0, version: 2, ranges: [] })
+    api.requireRepair('a', 'c', 'e', 10)
+    api.beginBatch('a', 'c', 'e')!.commit({ fromVersion: 2, version: 10, ranges: [] })
+    api.applyUpdate('a', { type: 'thread_item_added', payload: { conversation_id: 'c', epoch: 'e', version: 12,
+      item: { id: 1, rev: 12, kind: 'assistant_message', active: false, shown: true,
+        status: 'done', summary: '', content: { text: 'received' } } } })
+    await writer.flush()
+    const request = { operation: 'readThread', serverId: 'a', conversationId: 'c' }
+    const committed = await fresh().execute(request)
+    expect(committed).toMatchObject({ status: 'stored', snapshot: { thread: { checkpoint: 12, repair: null } } })
+    await writer.flush()
+    expect(await fresh().execute(request)).toEqual(committed)
+    api.requireRepair('a', 'c', 'e', 12)
+    await writer.flush()
+    expect(await fresh().execute(request)).toMatchObject({ status: 'stored', snapshot: { thread: {
+      checkpoint: 12, repair: { fromVersion: 12, throughVersion: 12 }
+    } } })
+  } finally { await writer.stop() }
+})
+
 it('same-epoch holder recreation saves only owned facts and metadata without erasing unloaded history', async () => {
   const { fresh, source, api, writer } = await cache()
   api.acceptEpoch('a', 'c', 'e')

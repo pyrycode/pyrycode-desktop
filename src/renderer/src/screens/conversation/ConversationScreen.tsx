@@ -395,9 +395,12 @@ export function ConversationScreen({
       )}
       </div>
       <div className="conversation__message-area">
-      {authoritative && !daemonOutdated && authoritativeSnapshot === null && queryState?.type === 'loading' && <p role="status">Loading messages…</p>}
-      {authoritative && !daemonOutdated && authoritativeSnapshot === null && queryState?.type === 'failed' && <ComposerHistoryFailure retryable
-        onRetry={() => { if (selectedHost !== null) threadRuntime.query('retry', selectedHost) }} />}
+      {authoritative && !daemonOutdated && authoritativeSnapshot === null && <div className="conversation__thread" aria-live="polite">
+        {queryState?.type === 'loading' && <p role="status">Loading messages…</p>}
+        {queryState?.type === 'failed' && <ComposerHistoryFailure retryable
+          onRetry={() => { if (selectedHost !== null) threadRuntime.query('retry', selectedHost) }} />}
+        <ThreadPromptSlot host={selectedHost} conversationId={openConversationId} />
+      </div>}
       {authoritative && authoritativeSnapshot && <ThreadItemsTimeline snapshot={authoritativeSnapshot} pin={threadPin}
         standaloneStatus={false}
         backgroundTasksOpen={panelOpen} onBackgroundTasksOpenChange={setPanelOpen}
@@ -429,7 +432,6 @@ export function ConversationScreen({
           }} />}
           <ThreadPromptSlot host={selectedHost} conversationId={openConversationId} />
         </>} />}
-      {authoritative && !daemonOutdated && authoritativeSnapshot === null && <ThreadPromptSlot host={selectedHost} conversationId={openConversationId} />}
       <TopOverlayControl onRepairHost={onRepairHost} threadLive={authoritative ? threadLive : undefined} />
       </div>
       {/* #962/#967: the region between the thread and the status area is EMPTY, and that emptiness is the

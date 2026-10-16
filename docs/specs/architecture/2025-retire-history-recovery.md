@@ -75,3 +75,7 @@ None. Shared declarations with surviving storage or fake consumers remain; only 
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-16
+
+## Revisions
+
+2026-10-16: Typecheck and units found exclusive page assertions in six additional mixed parser specs: `modelRefusal.test.ts`, `toolParent.test.ts`, `stoppedTurn.test.ts`, `turnEndMetrics.test.ts`, `compaction.test.ts` and `toolDenied.test.ts` under `src/main/transport/`. Retire only their history branches, preserving their live parsing and metrics assertions. This follows the planned exclusive-fixture removal without changing production scope.

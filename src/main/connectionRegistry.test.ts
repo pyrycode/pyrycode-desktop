@@ -168,7 +168,6 @@ function createFactoryFake() {
         mcpToggles.push([conversationId, serverName, enabled])
       },
       stopBackgroundTask: (conversationId, taskId) => { taskStops.push([conversationId, taskId]) },
-      requestHistory: noop,
       requestSystemPrompt: noop,
       requestConversations: noop,
       requestRecentWorkspaces: noop,

@@ -72,8 +72,6 @@ import type {
   SystemPromptPayload,
   HostSystemPromptPayload,
   SessionSettingsUpdatedPayload,
-  HistoryEntry,
-  HistoryPagePayload,
   ToolUsePayload,
   ToolProgressPayload,
   ToolResultPayload,
@@ -209,76 +207,9 @@ export type DaemonErrorOutcome =
   | 'unclassified'
 
 /**
- * How the daemon refused one `request_history` (#1222), as CLIENT-OWNED values — the closed set from
- * the daemon's § Conversation history (v2) → Rejects, mapped off its untrusted `code` string here.
- *
- * IT IS A SECOND TYPE BESIDE DaemonErrorOutcome RATHER THAN FIVE MEMBERS ADDED TO IT, and that is a
- * decision worth reading before "unifying" the two. DaemonErrorOutcome is not a free-standing
- * vocabulary: `AttachmentTransferFailure` (attachmentTransfer.ts) inherits it WHOLE,
- * `AttachmentUploadFailure` (shared/ipc/attachmentUpload.ts) mirrors that mechanically across IPC, and
- * a renderer copy table is keyed on the mirror. So a `history-invalid-cursor` added there would land in
- * the attachment-upload failure union and demand composer copy for a failure no upload can produce.
- * The two unions describe different verbs and stay separate; what they SHARE is every property below.
- *
- * The `switch` IS the trust boundary, exactly as narrowDaemonErrorOutcome's is: it COMPARES the
- * untrusted string against client-owned constants and RETURNS a client-owned constant, so the daemon's
- * string is never the operand of an index, a join or a resolve, and nothing is retained from the
- * payload. A `Record`-keyed table is the shape to avoid for that reason — it would make untrusted text
- * a lookup path, the thing CLAUDE.md forbids.
- *
- * RETRYABILITY IS NOT ON THIS TYPE. `history.unavailable` is the group's one retryable member — a
- * corrupt segment, an I/O failure, or a log that is wired but not open, none of them a fault in the
- * request — and the flag is computed once at the single emit in daemonConnection rather than here, so
- * the walk driver (#1224) cannot re-derive it wrong into a retry loop. This differs from
- * DaemonErrorOutcome's documented-not-computed posture on purpose: those flags live in two upstream
- * files, where these are one verb's, published in one section.
- *
- * THE SET IS NOT EXHAUSTIVE OVER WHAT A REQUEST_HISTORY CAN DRAW, which is why the narrower below
- * returns `undefined` rather than an `unclassified` member. § Page size publishes a real case: when one
- * stored entry cannot fit in any page the daemon emits it anyway and its own transport answers
- * `message.too_long`, which narrows to a DaemonErrorOutcome and not to any member here.
- */
-export type HistoryRejectReason =
-  /** The `conversation_id` is not of canonical shape, or names no conversation in the daemon's
-   *  registry. NOT retryable. One condition, one gate — the registry holds canonical ids only, so a
-   *  malformed id fails membership. Deliberately DISTINGUISHABLE from the cursor's answer below, unlike
-   *  `attachment.not_found`'s merge, because there is no second id here to build a path-existence
-   *  oracle over. Also the permanent answer for a conversation the daemon no longer hosts: deleting one
-   *  and the idle sweep both drop it from the registry while its log stays on disk. */
-  | 'conversation-not-found'
-  /** The payload did not decode. NOT retryable. A DECODE FAILURE IS A REJECTED FRAME, NEVER AN
-   *  EMPTY-BUT-SUCCESSFUL REQUEST: every key is optional to Go's decoder, so a truncated or hostile
-   *  payload would otherwise decode to an empty conversation id, which names nothing and must never be
-   *  joined into a path where an empty component resolves to the log root. The daemon's message is
-   *  static and echoes nothing from the payload; nothing crosses from it here either. */
-  | 'history-invalid-request'
-  /** The `limit` was NEGATIVE. NOT retryable. `0` is not a reject — it asks the daemon to choose — and
-   *  an ask ABOVE the ceiling is not one either; it is clamped. `buildRequestHistory` normalises an
-   *  absent or non-positive ask to `0`, so a conforming send of this client's cannot draw this. */
-  | 'history-invalid-page-size'
-  /** The `cursor` did not decode, was minted for another conversation, or names a position no longer in
-   *  the log. NOT retryable. ONE MERGED ANSWER for all three, and the merge is a disclosure decision
-   *  rather than an imprecision: the distinctions are exactly what a probe would want, so a client that
-   *  cannot tell them apart cannot leak them. The refusal never echoes the cursor back, and nothing
-   *  here undoes that. */
-  | 'history-invalid-cursor'
-  /** The daemon could not read the log — a corrupt segment, an I/O failure, or a log that is wired but
-   *  not open. THE GROUP'S ONE RETRYABLE MEMBER, and the only one that is not a fault in the request:
-   *  it can clear without the client changing anything. Nothing retries it here; see the type header. */
-  | 'history-unavailable'
-
-/**
  * Which of `set_system_prompt`'s two published refusals a correlated `error` frame carries (#1249) —
  * the client-owned form of the daemon's `code`, narrowed at this boundary so no daemon string crosses
  * IPC.
- *
- * `HistoryRejectReason`'s twin, sharing its placement argument and its `undefined`-outside-the-set
- * return. It is a THIRD union rather than members bolted onto either neighbour for the reason the
- * first split states: `DaemonErrorOutcome` answers "what class of failure is this" over EVERY frame,
- * and these two answer "is this ONE VERB's refusal, and which". `conversation.not_found` appearing in
- * both this union and `HistoryRejectReason` is that separation working as designed, not duplication to
- * fold: the same wire code means "no such conversation to read a page from" there and "no such
- * conversation to write a prompt to" here, and a consumer of one has no business narrowing the other.
  *
  * BOTH MEMBERS ARE NON-RETRYABLE, and neither carries a byte of what was supplied. The daemon's
  * message for each is static, and nothing crosses from it: this narrower reads `code` and drops it.
@@ -440,7 +371,7 @@ interface FrameTimestamp {
  * open or resolve.
  *
  * IT TAKES NO FrameTimestamp, and the neighbouring `compacting` arm — which DOES mix it in — is the
- * wrong half of the family to copy here. That mix-in marks exactly the arms decodeHistoryEvent draws;
+ * wrong half of the family to copy here. That mix-in marks exactly the arms the retained history vocabulary represents;
  * `resetting` is ephemeral status with no replay ring and no durable history upstream, so it gains no
  * arm there, and stamping a `ts` would advertise a join nothing can perform.
  *
@@ -483,7 +414,7 @@ interface FrameTimestamp {
  * enumerate claude's lines; the deltas received do not sum to the turn's total).
  *
  * IT TAKES NO FrameTimestamp, and the omission is the design rather than an oversight. That mix-in
- * marks exactly the arms `decodeHistoryEvent` draws, which need (`type`, `ts`) as the join key between a
+ * marks exactly the arms the retained history vocabulary represents, which need (`type`, `ts`) as the join key between a
  * served page and what the live stream already drew. This type gains no arm there — a stored one is
  * still skipped — so there is no page half for a `ts` to join against, and stamping it would advertise a
  * join nothing can perform. `model-announced` above is the precedent.
@@ -517,7 +448,7 @@ interface FrameTimestamp {
  * both when negative and when past setTimeout's ~24.8-day clamp. See RateLimitedPayload.
  *
  * IT TAKES NO FrameTimestamp, for the kind above's reason: that mix-in marks exactly the arms
- * `decodeHistoryEvent` draws, this type gains no arm there, and stamping it would advertise a join
+ * the retained history vocabulary represents, this type gains no arm there, and stamping it would advertise a join
  * nothing can perform.
  *
  * NOTHING DECODED REACHES THE LOG. `status` and `limit_type` are claude-authored text that crossed the
@@ -572,7 +503,7 @@ interface FrameTimestamp {
  * anything proportional to any of them.
  *
  * IT TAKES NO FrameTimestamp, for the two kinds above's reason: that mix-in marks exactly the arms
- * `decodeHistoryEvent` draws, this type gains no arm there, and stamping it would advertise a join
+ * the retained history vocabulary represents, this type gains no arm there, and stamping it would advertise a join
  * nothing can perform.
  *
  * NOTHING DECODED REACHES THE LOG. `model` is claude-authored text that crossed the subprocess trust
@@ -585,7 +516,7 @@ interface FrameTimestamp {
  *
  * The `mcp-status` kind (#1489) carries the decoded MCPStatusPayload — claude's MCP server list for one
  * conversation, published live and as the answer to `mcp_status_request`. Conversation-scoped like the
- * kinds above, and like them it takes NO FrameTimestamp, because this type gains no `decodeHistoryEvent`
+ * kinds above, and like them it takes NO FrameTimestamp, because this type gains no the retained history vocabulary
  * arm. The fail-closed defence is one required string, a list-shape guard and one required number, plus
  * a per-row narrowing of FIVE plain `requireString`s where ONE BAD ROW DROPS THE WHOLE FRAME rather than
  * yielding a partial list. `servers: []` is a POSITIVE report of no servers and `dropped_servers` is
@@ -836,22 +767,11 @@ type InboundPayload =
       // minimum rides along only when narrowUpdateRequired accepted it as a digits-only
       // MAJOR.MINOR.PATCH; any other value is dropped here and never logged.
       updateRequired?: { minClientVersion?: string }
-      // The history verb's refusal (#1222), narrowed off the SAME untrusted `code` string `outcome` is
-      // and by the same comparand idiom — see HistoryRejectReason for why it is a second field rather
-      // than five members added to that union.
-      //
-      // OPTIONAL, where `outcome` is deliberately required, and the divergence is the point. That one
-      // is required so no consumer has a field-missing state to mishandle across four correlations;
-      // here absence has exactly ONE meaning — "this code is outside the published history set" — read
-      // at exactly ONE emit, which maps it to the `'unclassified'` member of the IPC-side failure. That
-      // member is not a hedge: a `message.too_long` correlated to a `request_history` is a published
-      // case (§ Page size), and a walk that dropped it would stall with no terminal.
-      historyReject?: HistoryRejectReason
       // The system-prompt WRITE verb's refusal (#1249), narrowed off the SAME untrusted `code` string
-      // the two fields above are and by the same comparand idiom — see SystemPromptRejectReason for
+      // `outcome` is and by the same comparand idiom — see SystemPromptRejectReason for
       // why it is a third field rather than two members added to either union.
       //
-      // OPTIONAL for `historyReject`'s reason exactly: absence has ONE meaning — "this code is outside
+      // OPTIONAL: absence has ONE meaning — "this code is outside
       // the published set for this verb" — read at ONE emit, which maps it to the `'unclassified'`
       // member of the IPC-side failure so that a correlated refusal always settles the write.
       //
@@ -941,23 +861,6 @@ type InboundPayload =
   | { kind: 'slash-command-list'; slashCommandList: SlashCommandListPayload }
   | { kind: 'model-list'; modelList: ModelListPayload }
   | { kind: 'attachment-stored'; attachmentStored: AttachmentStoredPayload }
-  | {
-      kind: 'history-page'
-      // ALREADY-DECODED since #1227: `entries` holds typed timeline events, not the wire's
-      // `{ type, payload }` pairs. `parseHistoryPagePayload` still narrows the wire shape one step
-      // earlier and still fails the WHOLE page closed on a malformed entry envelope; what this field
-      // carries is what survived the second, per-entry payload-decode stage.
-      historyPage: DecodedHistoryPage
-      // OPTIONAL, like `session-settings`' and unlike `attachment-chunk`'s required one — and for the
-      // opposite reason to that neighbour's. A retrieval chunk cannot legitimately arrive unsolicited,
-      // so one without a correlation handle is MALFORMED; a page without one is merely uncorrelatable,
-      // and the fail-closed drop one layer up is the behaviour wanted rather than a decode failure.
-      //
-      // IT IS THE ONLY HANDLE THERE IS. The page carries no `conversation_id` — a decision, not an
-      // omission — so which conversation it describes is knowable only from which envelope it answers.
-      // The consumer keeps its outstanding asks keyed by envelope id and this is what it matches on.
-      inReplyTo?: number
-    }
   | {
       kind: 'system-prompt'
       systemPrompt: SystemPromptPayload
@@ -1518,418 +1421,6 @@ function parseSystemPromptPayload(payload: unknown): SystemPromptPayload {
 }
 
 /**
- * Narrow ONE element of a `history_page`'s `entries` into a HistoryEntry (#1222). Fail-closed: all four
- * fields are required-present, and every zero value is a real VALUE rather than an absence — `id: 0`
- * is a log's first entry, `ts: ''` and `type: ''` would be malformed rather than empty, and
- * `payload: {}` is an entry whose stored frame had a bare body. Returns a FRESH four-key literal, so a
- * page-borne extra property (an `event_id`, a `conversation_id` the daemon never promised) cannot ride
- * along. Its messages name the failure category only — a value here is replayed content.
- *
- * `type` IS NOT NARROWED to `EnvelopeType` or to any closed set, and reaching for one is the reflex to
- * resist. It is a stored string nothing re-validates, spanning the whole live-lane vocabulary plus
- * `session_transition` plus the operator's own `message`, so a client MUST tolerate one it does not
- * recognise; an allowlist here would fail-close a valid future frame. That is the same
- * no-cross-validate posture parseQueuedItem states, applied to a type name rather than to a bound.
- *
- * `payload` goes through requireRecord and is then CARRIED BY REFERENCE, unparsed and uninterpreted at
- * THIS stage. Validating its shape is all this boundary can do: what is IN it is replayed content
- * carrying exactly the trust class of the live frame it mirrors, and nothing about it is more trusted for
- * having been stored. See HistoryEntry for the two rules a consumer inherits.
- *
- * #1227 adds the SECOND stage that reads it — `decodeHistoryPage`, running after this one — so the
- * reference this function returns no longer reaches IPC: every decoded arm is a fresh literal of scalars,
- * and nothing off the `JSON.parse` result survives into the emitted event. What this function still owns
- * is the ENVELOPE posture, and it is unchanged: one malformed entry envelope throws the WHOLE page. Do
- * not relax it to a skip to match the payload stage's — that would silently drop a shipped guarantee.
- */
-function parseHistoryEntry(raw: unknown): HistoryEntry {
-  if (!isRecord(raw)) {
-    throw new WireDecodeError('malformed history_page entry')
-  }
-  const id = requireNumber(raw, 'id')
-  if (!Number.isSafeInteger(id) || id < 0) throw new WireDecodeError('malformed history_page entry')
-  const type = requireString(raw, 'type')
-  const payload = requireRecord(raw, 'payload')
-  const ts = requireString(raw, 'ts')
-  return { id, type, payload, ts }
-}
-
-/**
- * Narrow an opaque payload into a HistoryPagePayload (#1222). Fail-closed on every field.
- *
- * `entries` takes parseQueueStatePayload's inline shape — `Array.isArray` then `.map` through the row
- * narrower — so ONE BAD ELEMENT THROWS THE WHOLE PAGE CLOSED rather than yielding a page with the bad
- * entries skipped, and the result is a FRESH array. An EMPTY array is VALID and is not an absence: the
- * daemon always writes the key and an empty page carries `[]`, never `null` and never an omitted key,
- * so `null` fails closed here.
- *
- * `cursor` is read with requireString and NOT requireNonEmptyString, and that choice is load-bearing
- * rather than incidental: the reply's cursor is EMPTY whenever `at_start` is true, so the sibling
- * helper would fail-close the terminal page of every walk. `''` is a VALUE here — the same reading its
- * outbound twin gives it — and it is carried, never parsed and never rewritten.
- *
- * `at_start` is checked for TYPE, never truthiness — `false` is what every mid-walk page carries.
- *
- * NO COUNT BOUND AND NO SIZE BOUND, deliberately (the parseBackgroundTaskRosterPayload posture, ADR
- * 0002). The frame-level MAX_PLAINTEXT_BYTES guard at the top of parseInboundMessage already fails an
- * oversized frame before this runs, and the daemon clamps the entry count at construction, re-asking a
- * too-large page at a smaller size rather than truncating one — so a second bound here would defend a
- * failure that cannot reach this code, and one below the daemon's 4096 would silently drop valid pages.
- * Nothing is allocated from a daemon-supplied count either: the array is built by mapping an
- * already-materialised one, never `new Array(claimed)`.
- *
- * BOTH `cursor` AND `at_start` ARE CARRIED AS SENT and neither is inferred from the other or from the
- * entry count. `at_start` is the ONLY termination signal — a page that fills exactly at the log's first
- * entry reports it false with a usable cursor, and a short page says nothing at all, because the daemon
- * may serve fewer entries than asked to fit the envelope cap. Normalising either into an end-of-log
- * flag here would break the walk at exactly the boundary it exists to find. #1224 walks; nothing here
- * acts on them.
- */
-function parseHistoryPagePayload(payload: unknown): HistoryPagePayload {
-  if (!isRecord(payload)) {
-    throw new WireDecodeError('malformed history_page payload')
-  }
-  const raw = payload.entries
-  if (!Array.isArray(raw)) {
-    throw new WireDecodeError('missing required field: entries')
-  }
-  const entries = raw.map(parseHistoryEntry)
-  const cursor = requireString(payload, 'cursor')
-  const at_start = requireBoolean(payload, 'at_start')
-  return { entries, cursor, at_start }
-}
-
-/**
- * ONE STORED HISTORY ENTRY, DECODED (#1227) — the typed timeline event a page entry became, beside the
- * entry's own durable log `id` and its `ts`. Both survive the decode because #1225 joins a loaded page to
- * the live stream on `ts` and cannot recover one lost here; `id` is the on-disk log id and is NEVER joined
- * against an `event_id` (see HistoryEntry).
- *
- * The wire `{ type, payload }` pair does NOT survive. `HistoryEntry` stays the pre-decode wire type,
- * mirroring the daemon field-for-field; this is what crosses IPC instead of it.
- */
-export interface DecodedHistoryEntry {
-  id: number
-  ts: string
-  event: DecodedHistoryEvent
-}
-
-type DecodedModelRefusalEvent = {
-  originalModel: string
-  refusalCategory: string
-  banner: string
-  truncatedFields: readonly string[] | null
-  droppedFields: readonly string[] | null
-} & (
-  | { type: 'modelRefusalFallback'; fallbackModel: string; scope: string }
-  | { type: 'modelRefusalNoFallback' }
-)
-
-/**
- * A stored entry's payload decoded into the shape its LIVE `DaemonEvent` twin carries (#1227) — one arm
- * per type the timeline draws, which is the set of non-null arms in the renderer's
- * `translateTimelineEvent` minus its client-side `connected` edge, plus the operator's own `message`.
- * A consumer can therefore run the window's existing live-lane mapping over one of these unchanged.
- *
- * NO ARM CARRIES A `conversationId`, and that is the point rather than an omission. Every one of the
- * eleven parsers requires the payload's `conversation_id` — on the live lane it is the routing key, and
- * the fail-closed read is what makes `?? ''` misattribution impossible there — but the value it reads is
- * DAEMON-ASSERTED, while a page is attributed by CORRELATION to the conversation this client asked
- * about. Carrying both would hand a consumer two ids that can disagree and a routing decision it must
- * never be given, which is the misattribution #1222's correlation exists to remove. So the id is dropped
- * here, one layer earlier than `translateTimelineEvent` drops it on every live arm — a filter plus a
- * fresh named-field literal, never a pass-through of the parsed payload. `session_transition`'s
- * `previous_session_id` is dropped on the same terms the live emit drops it: no consumer.
- *
- * DECODING MAKES THE SHAPE TRUSTED AND NEVER THE CONTENT, and the type system carries no signal for that.
- * `assistantDelta.text`, `toolUse.name` / `inputSummary` and BOTH the keys and the values of its `input`
- * map, `toolResult.resultSummary` / `resultDetail`, `unrecognizedMessage.raw` / `messageType`,
- * `sessionTransition.workspaceCwd` and `message.text` are all replayed daemon-, claude- or
- * operator-authored strings carrying EXACTLY the trust class of the live frame they mirror — nothing about
- * one is more trusted for having been stored. Every one is PLAIN TEXT ONLY at the render boundary: never
- * into a raw-markup sink (no innerHTML / dangerouslySetInnerHTML), never into an attribute or a URL, and
- * never a filename, a cache key or a lookup path. `workspaceCwd` is the trap worth naming twice — it is a
- * daemon-supplied filesystem path and this client never resolves, joins or opens it. #1223 owns the DOM
- * sink and inherits this contract through the mirrored `HistoryTimelineEvent` in shared/ipc/events.ts.
- *
- * `toolUse.input` and `toolResult.resultDetail` stay OPTIONAL, so absence keeps meaning "the wire omitted
- * it" (an older daemon) rather than collapsing into an empty map or an empty string, which are different
- * facts — the contract their live arms already state.
- */
-export type DecodedHistoryEvent =
-  | { type: 'backgroundTaskStarted'; taskId: string; toolCallId: string; taskType: string; description: string }
-  | { type: 'backgroundTaskUpdated'; taskId: string; status: string }
-  | DecodedModelRefusalEvent
-  | { type: 'assistantDelta'; turnId: string; seq: number; text: string; parentToolUseId?: string }
-  | ({ type: 'turnEnd'; turnId: string; stopReason: string; outcome?: string; isError?: boolean; terminalReason?: string; errorCategory?: string } & TurnEndMetrics)
-  | { type: 'turnState'; state: WireTurnState }
-  | {
-      type: 'toolUse'
-      turnId: string
-      toolUseId: string
-      parentToolUseId?: string
-      name: string
-      inputSummary: string
-      input?: Readonly<Record<string, string>>
-    }
-  | {
-      type: 'toolDenied'
-      turnId: string
-      toolUseId: string
-      toolName: string
-      decisionReasonType: string
-      decisionReason: string
-      message: string
-      truncatedFields: readonly string[] | null
-      droppedFields: readonly string[] | null
-    }
-  | {
-      type: 'toolResult'
-      turnId: string
-      toolUseId: string
-      parentToolUseId?: string
-      isError: boolean
-      resultSummary: string
-      resultDetail?: string
-    }
-  | {
-      type: 'sessionTransition'
-      newSessionId: string
-      reason: WireSessionTransitionReason
-      occurredAt: string
-      workspaceCwd: string | null
-    }
-  | { type: 'stallDetected' }
-  | { type: 'apiRetry'; active: boolean; current: number; total: number }
-  | { type: 'compacting'; active: boolean; compactResult?: string; compactError?: string }
-  | {
-      type: 'unrecognizedMessage'
-      site: WireUnrecognizedSite
-      messageType: string
-      raw: string
-      truncated: boolean
-    }
-  // The operator's own message, the one type that appears ONLY in history — the daemon pushes no
-  // `message` frame on the interactive lane. Nested and snake-cased, mirroring the live
-  // `messageReceived` arm's reuse of the wire payload verbatim, with the drop expressed in the type
-  // itself: `Omit` is what makes "the conversation id does not cross" a compile-time fact rather than a
-  // convention the emit has to remember.
-  | { type: 'messageReceived'; message: Omit<MessagePayload, 'conversation_id'> }
-
-/**
- * A served page whose entries have been decoded (#1227). `cursor` and `at_start` keep their WIRE names
- * and their values — the snake→camel flip stays at the IPC emit, this channel's convention — and both
- * cross exactly as served: `at_start` is the only termination signal, and nothing here infers either from
- * the other or from how many entries survived the decode.
- */
-export interface DecodedHistoryPage {
-  servedIds?: readonly number[]
-  entries: readonly DecodedHistoryEntry[]
-  cursor: string
-  at_start: boolean
-}
-
-/**
- * Decode ONE stored entry's payload against the live-lane parser for its type (#1227), or return `null`
- * when the timeline does not draw that type.
- *
- * IT MIRRORS `parseInboundMessage`'s type-to-parser pairing AND SHARES NONE OF ITS BODY, deliberately.
- * That switch is bound to raw plaintext and interleaved with per-case diagnostics keyed on the frame's
- * bytes; refactoring it to be reachable from here would be a large mechanical change to a
- * security-sensitive file for no gain. The pairing is duplicated; the parsers are not.
- *
- * A `switch` STATEMENT, NEVER AN OBJECT-LITERAL DISPATCH TABLE, and that is a security constraint rather
- * than a style choice. `type` is a stored, daemon-authored string that nothing re-validates, so
- * `TABLE[type]` would be a LOOKUP PATH on untrusted input: `'__proto__'` resolves to `Object.prototype`
- * (truthy, and then called) and `'constructor'` is worse. A switch compares values and touches no
- * prototype chain. The same rule binds any later "which types do we draw?" set — a `Set`, never a bare
- * object used as a map.
- *
- * `default: return null` is what AC3 rests on, and the types it silently covers are worth naming: the
- * ten this client DOES decode on the live lane and never draws in a thread (`background_task_roster`, `model_announced`, `model_list`, `slash_command_list`, and — since #1312,
- * #1318, #1454 and #1514 — `thinking_progress`, `rate_limited`, `context_usage` and `resetting`, whose
- * live-lane parsers each deliberately came with no
- * arm here), any type a later daemon invents — and `modal_shown` /
- * `question_shown`. THAT LAST PAIR IS THE SHARPEST CASE: no prompt may ever reach the window from history
- * as something answerable, because resolving a modal that closed hours ago is a real action taken on a
- * replayed frame. Having no arm is what guarantees it, for a future daemon that starts logging one and for
- * a hostile one that plants one alike. Do not add an arm for either.
- *
- * THROWS on a payload that does not fit its type — the parser's own fail-closed behaviour, unchanged. The
- * caller turns that into a skip; nothing is caught here, so no arm can accidentally half-decode.
- */
-function decodeHistoryEvent(
-  type: string,
-  payload: Record<string, unknown>
-): DecodedHistoryEvent | null {
-  switch (type) {
-    case 'background_task_started': {
-      const p = parseBackgroundTaskStartedPayload(payload)
-      return { type: 'backgroundTaskStarted', taskId: p.task_id, toolCallId: p.tool_call_id,
-        taskType: p.task_type, description: p.description }
-    }
-    case 'background_task_updated': {
-      const p = parseBackgroundTaskUpdatedPayload(payload)
-      return { type: 'backgroundTaskUpdated', taskId: p.task_id, status: p.status }
-    }
-    case 'assistant_delta': {
-      const p = parseAssistantDeltaPayload(payload)
-      return { type: 'assistantDelta', turnId: p.turn_id, seq: p.seq, text: p.text, parentToolUseId: p.parent_tool_use_id }
-    }
-    case 'turn_end': {
-      const p = parseTurnEndPayload(payload)
-      return { type: 'turnEnd', turnId: p.turn_id, stopReason: p.stop_reason,
-        outcome: p.outcome, isError: p.is_error, terminalReason: p.terminal_reason, errorCategory: p.error_category,
-        ...turnEndMetricsOf(p) }
-    }
-    case 'turn_state': {
-      const p = parseTurnStatePayload(payload)
-      return { type: 'turnState', state: p.state }
-    }
-    case 'tool_use': {
-      const p = parseToolUsePayload(payload)
-      return {
-        type: 'toolUse',
-        turnId: p.turn_id,
-        toolUseId: p.tool_use_id,
-        parentToolUseId: p.parent_tool_use_id,
-        name: p.name,
-        inputSummary: p.input_summary,
-        // Assigned unconditionally, never a conditional spread — the live emit's discipline. An absent
-        // map stays absent rather than becoming `{}`, which is the different fact that the daemon sent
-        // no fields for this call.
-        input: p.input
-      }
-    }
-    case 'model_refusal_fallback': {
-      const p = parseModelRefusalFallbackPayload(payload)
-      return { type: 'modelRefusalFallback', originalModel: p.original_model, refusalCategory: p.refusal_category,
-        banner: p.banner, truncatedFields: p.truncated_fields, droppedFields: p.dropped_fields,
-        fallbackModel: p.fallback_model, scope: p.scope }
-    }
-    case 'model_refusal_no_fallback': {
-      const p = parseModelRefusalNoFallbackPayload(payload)
-      return { type: 'modelRefusalNoFallback', originalModel: p.original_model, refusalCategory: p.refusal_category,
-        banner: p.banner, truncatedFields: p.truncated_fields, droppedFields: p.dropped_fields }
-    }
-    case 'tool_denied': {
-      const p = parseToolDeniedPayload(payload)
-      return {
-        type: 'toolDenied',
-        turnId: p.turn_id,
-        toolUseId: p.tool_use_id,
-        toolName: p.tool_name,
-        decisionReasonType: p.decision_reason_type,
-        decisionReason: p.decision_reason,
-        message: p.message,
-        truncatedFields: p.truncated_fields,
-        droppedFields: p.dropped_fields
-      }
-    }
-    case 'tool_result': {
-      const p = parseToolResultPayload(payload)
-      return {
-        type: 'toolResult',
-        turnId: p.turn_id,
-        toolUseId: p.tool_use_id,
-        parentToolUseId: p.parent_tool_use_id,
-        isError: p.is_error,
-        resultSummary: p.result_summary,
-        resultDetail: p.result_detail
-      }
-    }
-    case 'session_transition': {
-      const p = parseSessionTransitionPayload(payload)
-      return {
-        type: 'sessionTransition',
-        newSessionId: p.new_session_id,
-        reason: p.reason,
-        occurredAt: p.occurred_at,
-        // Wire nullability preserved, never coerced to ''.
-        workspaceCwd: p.workspace_cwd
-      }
-    }
-    case 'stall': {
-      // Parsed for its fail-closed effect and nothing else: a stored `stall` whose payload names no
-      // conversation is malformed and is skipped, exactly as the live lane refuses one.
-      parseStallPayload(payload)
-      return { type: 'stallDetected' }
-    }
-    case 'api_retry': {
-      const p = parseApiRetryPayload(payload)
-      return { type: 'apiRetry', active: p.active, current: p.current, total: p.total }
-    }
-    case 'compacting': {
-      const p = parseCompactingPayload(payload)
-      return { type: 'compacting', active: p.active, compactResult: p.compact_result, compactError: p.compact_error }
-    }
-    case 'unrecognized_message': {
-      const p = parseUnrecognizedMessagePayload(payload)
-      return {
-        type: 'unrecognizedMessage',
-        site: p.site,
-        messageType: p.message_type,
-        raw: p.raw,
-        truncated: p.truncated
-      }
-    }
-    case 'message': {
-      // The SSOT's prose says a stored operator message is typed `send_message`; the daemon's third
-      // history producer appends `protocol.TypeMessage` — `"message"` — carrying a MessagePayload, so
-      // this is the right pairing and the prose is stale (pyrycode#2115).
-      const p = parseMessagePayload(payload)
-      return {
-        type: 'messageReceived',
-        message: { message_id: p.message_id, role: p.role, text: p.text }
-      }
-    }
-    default:
-      return null
-  }
-}
-
-/**
- * Decode one served page's entries (#1227), dropping the ones that cannot cross.
- *
- * TWO FAIL POSTURES COEXIST ON THIS PATH AND NEITHER MAY BE COLLAPSED INTO THE OTHER.
- * `parseHistoryPagePayload` / `parseHistoryEntry` above fail the WHOLE page closed when an entry's
- * ENVELOPE (`id`, `type`, `payload`, `ts`) is malformed — #1222's shipped guarantee, unchanged. The skip
- * here belongs to the payload-decode stage only, and its reason is different in kind: an undrawn type and
- * a payload that does not fit its type are both ORDINARY, since a page is a replay of everything the log
- * holds and this client draws a subset of it. One bad entry must never cost the page, and a page every
- * entry of which was skipped crosses as an EMPTY page rather than as a failure — #1224's walk must still
- * be able to step past it, and a dropped page would stall the walk with no terminal.
- *
- * NEVER THROWS, which is what lets `parseInboundMessage` run it AFTER the diagnostic line without
- * breaking its narrow-before-logging invariant.
- *
- * The catch binds NO error. That is deliberate and is the AC4 half about logs: the parsers' messages name
- * a failure CATEGORY only, but a caught error that nothing can name is a stronger guarantee than one that
- * merely happens not to be interpolated today. Nothing daemon-authored — not the failure text, not the
- * entry's `type`, `id`, `ts` or any payload field — reaches a message, an event or a log line from here.
- *
- * Order is preserved among the survivors; skipped entries leave no hole and shift nothing.
- */
-function decodeHistoryPage(page: HistoryPagePayload): { page: DecodedHistoryPage; skipped: number } {
-  const entries: DecodedHistoryEntry[] = []
-  let skipped = 0
-  for (const entry of page.entries) {
-    let event: DecodedHistoryEvent | null
-    try {
-      event = decodeHistoryEvent(entry.type, entry.payload)
-    } catch {
-      event = null
-    }
-    if (event === null) {
-      skipped += 1
-      continue
-    }
-    entries.push({ id: entry.id, ts: entry.ts, event })
-  }
-  return { page: { entries, servedIds: page.entries.map(entry => entry.id), cursor: page.cursor, at_start: page.at_start }, skipped }
-}
-
-/**
  * Narrow an opaque payload into an AssistantDeltaPayload (#199). Fail-closed: every field is
  * required-present — `seq:0` and `text:''` are valid VALUES
  * (a turn's first slice / an empty slice), never absences, so requireNumber / requireString check the
@@ -1983,7 +1474,7 @@ function parseTurnEndPayload(payload: unknown): TurnEndPayload {
 
 /**
  * The six turn-end numbers of a decoded TurnEndPayload, snake→camel, as a fresh literal of named
- * fields (#1565). Shared by the history translation in decodeHistoryEvent and the live emit in
+ * fields (#1565). Used by the live emit in
  * daemonConnection.ts, so both paths carry the same set; spreading its result never smuggles a
  * later decoder field across IPC.
  */
@@ -2097,7 +1588,7 @@ function parseCompactingPayload(payload: unknown): CompactingPayload {
  * reading a consumer most needs — so a truthiness test would read the whole signal as an absence.
  *
  * NEITHER TOKEN IS LOOKED UP, only compared. No dispatch table, no Set, no object index: the chain
- * compares values and touches no prototype chain, which is decodeHistoryEvent's
+ * compares values and touches no prototype chain, which is the
  * switch-never-a-lookup-table rule applied one level down to a string the peer controls. Returning a
  * fresh literal rather than a spread makes the same guarantee from the other side — unknown
  * server-added keys (a spurious `turn_id`, a planted `__proto__`) are tolerated for forward-compat but
@@ -3987,56 +3478,10 @@ function narrowDaemonErrorOutcome(payload: unknown): DaemonErrorOutcome {
 }
 
 /**
- * Map a daemon `error` frame's payload onto a client-owned HistoryRejectReason (#1222), or `undefined`
- * when the code is outside the history verb's published set.
- *
- * narrowDaemonErrorOutcome's twin, sharing every property that matters and diverging in exactly one:
- * it returns `undefined` rather than an `unclassified` member. That is not a weaker contract — it is
- * the honest one. This narrower answers "is this ONE VERB's refusal, and which", where its neighbour
- * answers "what class of failure is this" over every frame; a code outside this set is not an
- * unclassified history reject, it is not a history reject at all. § Page size publishes the case that
- * makes this reachable rather than theoretical: an entry too large for any page is emitted anyway and
- * the daemon's own transport answers `message.too_long`, which its neighbour DOES classify. The single
- * consumer maps the absence to a terminal, so a correlated refusal always settles the ask.
- *
- * TOTAL BY CONSTRUCTION: it never throws and has no failure return, for the reason its neighbour's
- * docblock states in full — an error frame is terminal because it ARRIVED, not because its payload
- * parsed, and a throw here would silently kill every consumer of the `daemon-error` kind and hand a
- * hostile daemon a one-frame kill switch.
- *
- * The `switch` IS the trust boundary: the untrusted string is a COMPARAND against client-owned literals
- * and is then dropped, never an index, a join or a resolve, and nothing is retained from the payload —
- * so `code` needs no length bound, and the frame-level MAX_PLAINTEXT_BYTES guard already bounds a
- * hostile oversized frame before this runs.
- */
-function narrowHistoryRejectReason(payload: unknown): HistoryRejectReason | undefined {
-  // isRecord rejects null and arrays; a string / number / absent payload lands here too. Reading
-  // `payload.code` off a JSON.parse result is prototype-safe — a `__proto__` key round-trips as an
-  // ordinary OWN data property, and this never ASSIGNS, which is the only real hazard.
-  if (!isRecord(payload)) return undefined
-  const code = payload.code
-  if (typeof code !== 'string') return undefined
-  switch (code) {
-    case 'conversation.not_found':
-      return 'conversation-not-found'
-    case 'history.invalid_request':
-      return 'history-invalid-request'
-    case 'history.invalid_page_size':
-      return 'history-invalid-page-size'
-    case 'history.invalid_cursor':
-      return 'history-invalid-cursor'
-    case 'history.unavailable':
-      return 'history-unavailable'
-    default:
-      return undefined
-  }
-}
-
-/**
  * Map a daemon `error` frame's payload onto a client-owned SystemPromptRejectReason (#1249), or
  * `undefined` when the code is outside the `set_system_prompt` verb's two published rejects.
  *
- * narrowHistoryRejectReason's twin, sharing every property that matters: it returns `undefined` rather
+ * A per-verb narrower: it returns `undefined` rather
  * than an `unclassified` member (this narrower answers "is this THIS VERB's refusal, and which", where
  * narrowDaemonErrorOutcome answers "what class of failure is this" over every frame), and the single
  * consumer maps that absence to a terminal so a correlated refusal always settles the write.
@@ -4145,7 +3590,7 @@ export function parseInboundMessage(
     throw new WireDecodeError('inbound plaintext exceeds max size')
   }
   const envelope = decodeEnvelope(plaintext)
-  // Replay position belongs to the admitted envelope, even when payload narrowing later fails.
+  // Live metadata belongs to the admitted envelope, even when payload narrowing later fails.
   observeEnvelope?.(envelope)
   const family = sessionStateFamily(envelope.type)
   const metadata = {
@@ -4198,8 +3643,6 @@ function parseInboundPayload(envelope: Envelope, plaintext: Uint8Array, diagnost
         revision: payload.revision, suggested_reply: text
       } }
     }
-    case 'resync':
-      return null
     case 'message': {
       const message = parseMessagePayload(envelope.payload)
       diagnosticLog?.event({
@@ -4295,46 +3738,6 @@ function parseInboundPayload(envelope: Envelope, plaintext: Uint8Array, diagnost
       // since it carries no conversation id of its own. `undefined` when the frame omits it, which
       // makes the consumer's correlation fail closed one layer up.
       return { kind: 'system-prompt', systemPrompt, inReplyTo: envelope.in_reply_to }
-    }
-    case 'history_page': {
-      // Narrow BEFORE logging so a malformed page throws first and leaves no record. NO decoded field
-      // is ever logged — not the cursor, not an entry's `type`, `id`, `ts` or `payload` — only the
-      // frame's byte length + one-way hash, reusing the existing content-free field set. The cursor is
-      // the one worth naming: the daemon's own reject messages are static and echo nothing from the
-      // request, and logging what came back would undo that from this side. Mirrors the
-      // session_settings arm above.
-      const wirePage = parseHistoryPagePayload(envelope.payload)
-      const pageHash = hashPlaintext(plaintext)
-      diagnosticLog?.event({
-        event: 'inbound-decoded',
-        code: 'history_page',
-        bytes: plaintext.length,
-        hash: pageHash
-      })
-      // The second, per-entry stage (#1227): decode each entry's payload against the live-lane parser
-      // for its type and drop the ones the timeline cannot draw. It runs AFTER the line above and never
-      // throws, so the narrow-before-logging invariant is untouched — the throwing narrow is still the
-      // one on the line before the log.
-      const { page: historyPage, skipped } = decodeHistoryPage(wirePage)
-      if (skipped > 0) {
-        // ONE AGGREGATED LINE PER PAGE, NEVER ONE PER ENTRY, and that is a security constraint. A page
-        // holds ~1200 entries inside one frame, a hostile daemon can send them all malformed and repeat
-        // the frame, and a per-entry line would hand it a three-orders-of-magnitude log-write amplifier
-        // against a disk-backed sink. Every field is content-free and already in the allowlisted set:
-        // `count` is this client's own reading of how many rows it could not draw — not daemon content —
-        // and `hash` is the page line's, so an operator can correlate the two. Deliberately absent: the
-        // skipped entries' `type`, `id`, `ts`, any payload field, and any parser message.
-        diagnosticLog?.event({
-          event: 'inbound-decode-skipped',
-          code: 'history_page_entry',
-          count: skipped,
-          hash: pageHash
-        })
-      }
-      // Propagate the ALREADY-decoded Envelope.in_reply_to — the page's ONLY correlation handle, since
-      // it names no conversation. `undefined` when the frame omits it, which makes the consumer's
-      // lookup fail closed and drop the page rather than attribute it to a guess.
-      return { kind: 'history-page', historyPage, inReplyTo: envelope.in_reply_to }
     }
     case 'assistant_delta': {
       // Narrow BEFORE logging so a malformed delta throws first and leaves no record. The decoded
@@ -4451,7 +3854,7 @@ function parseInboundPayload(envelope: Envelope, plaintext: Uint8Array, diagnost
       // the type, which logged a WIRE-SUPPLIED `envelope.type`; the code here is a static literal.
       //
       // NO `ts` on the returned arm — see the kind's paragraph on InboundDaemonMessage: the mix-in
-      // marks the arms decodeHistoryEvent draws, and this type gains no arm there.
+      // marks the arms the retained history vocabulary represents, and this type gains no arm there.
       // Nothing consumes this arm yet: daemonConnection's inbound switch has no catch-all, so the
       // report stops here until #1515 claims it.
       const resetting = parseResettingPayload(envelope.payload)
@@ -4468,7 +3871,7 @@ function parseInboundPayload(envelope: Envelope, plaintext: Uint8Array, diagnost
       // is logged: not the claude-authored filename, not the conversation_id, and not the attachment
       // id either, though a validated one would be allowed, because nothing needs it and it would add
       // a DiagnosticEvent field. The code is a static literal, never the wire-supplied envelope.type.
-      // NO `ts`: the frame is live-only and gains no decodeHistoryEvent arm. Nothing consumes this arm
+      // NO `ts`: the frame is live-only and gains no retained history arm. Nothing consumes this arm
       // yet; the IPC carry to the window is a later ticket.
       const attachmentOffered = parseAttachmentOfferedPayload(envelope.payload)
       diagnosticLog?.event({
@@ -4516,7 +3919,7 @@ function parseInboundPayload(envelope: Envelope, plaintext: Uint8Array, diagnost
       // code here is a static literal.
       //
       // NO `ts` on the returned arm — see the kind's paragraph on InboundDaemonMessage: the mix-in
-      // marks the arms decodeHistoryEvent draws, and this type gains no arm there.
+      // marks the arms the retained history vocabulary represents, and this type gains no arm there.
       // Nothing consumes this arm yet: daemonConnection's inbound switch has no catch-all, so the
       // reading stops here until the carry slice claims it.
       const thinkingProgress = parseThinkingProgressPayload(envelope.payload)
@@ -4549,7 +3952,7 @@ function parseInboundPayload(envelope: Envelope, plaintext: Uint8Array, diagnost
       // WIRE-SUPPLIED `envelope.type`; the code here is a static literal.
       //
       // NO `ts` on the returned arm — see the kind's paragraph on InboundDaemonMessage: the mix-in
-      // marks the arms decodeHistoryEvent draws, and this type gains no arm there.
+      // marks the arms the retained history vocabulary represents, and this type gains no arm there.
       // Nothing consumes this arm yet: daemonConnection's inbound switch has no catch-all, so the
       // report stops here until the carry slice claims it.
       const rateLimited = parseRateLimitedPayload(envelope.payload)
@@ -4572,7 +3975,7 @@ function parseInboundPayload(envelope: Envelope, plaintext: Uint8Array, diagnost
       // WIRE-SUPPLIED `envelope.type`; the code here is a static literal.
       //
       // NO `ts` on the returned arm — see the kind's paragraph on InboundDaemonMessage: the mix-in marks
-      // the arms decodeHistoryEvent draws, and this type gains no arm there.
+      // the arms the retained history vocabulary represents, and this type gains no arm there.
       // Nothing consumes this arm yet: daemonConnection's inbound switch has no catch-all, so the
       // reading stops here until the carry slice claims it.
       const contextUsage = parseContextUsagePayload(envelope.payload)
@@ -4591,7 +3994,7 @@ function parseInboundPayload(envelope: Envelope, plaintext: Uint8Array, diagnost
       // this line-delimited stream, no list length, and not the `conversation_id`. Only the frame's byte
       // length + one-way hash under a static code literal, reusing the existing content-free field set.
       //
-      // NO `ts` on the returned arm: this type gains no decodeHistoryEvent arm. Nothing consumes this
+      // NO `ts` on the returned arm: this type gains no retained history arm. Nothing consumes this
       // arm yet — daemonConnection's inbound switch has no catch-all, so the list stops here until #1490.
       const mcpStatus = parseMCPStatusPayload(envelope.payload)
       diagnosticLog?.event({
@@ -5136,15 +4539,9 @@ function parseInboundPayload(envelope: Envelope, plaintext: Uint8Array, diagnost
       // daemon-controlled text into a JSON-lines log an operator can send off-box in a debug bundle.
       // The unit test asserting the record omits the wire code is the deterministic guard for this.
       const outcome = narrowDaemonErrorOutcome(envelope.payload)
-      // The history verb's refusal (#1222), narrowed off the SAME untrusted `code` by the same
-      // comparand idiom and into a SEPARATE client-owned union — see HistoryRejectReason for why the
-      // two do not merge. Like `outcome` it cannot throw, so both consumers of this frame still fire
-      // however mangled its payload; and like `outcome` the daemon's string is dropped, so the logged
-      // `code` below stays the client-owned literal it must be.
-      const historyReject = narrowHistoryRejectReason(envelope.payload)
       // The system-prompt WRITE verb's refusal (#1249), narrowed off the SAME untrusted `code` by the
-      // same comparand idiom and into a THIRD client-owned union — see SystemPromptRejectReason for
-      // why the three do not merge. Like its two neighbours it cannot throw, so every consumer of this
+      // same comparand idiom and into a separate client-owned union — see SystemPromptRejectReason for
+      // why the classifications stay separate. Like its neighbours it cannot throw, so every consumer of this
       // frame still fires however mangled its payload; and like them the daemon's string is dropped,
       // so the logged `code` below stays the client-owned literal it must be.
       const systemPromptReject = narrowSystemPromptRejectReason(envelope.payload)
@@ -5173,7 +4570,6 @@ function parseInboundPayload(envelope: Envelope, plaintext: Uint8Array, diagnost
         pairingReject: isRecord(envelope.payload) && envelope.payload.code === 'auth.invalid_token'
           ? 'pairing-rejected' : undefined,
         updateRequired: narrowUpdateRequired(envelope.payload),
-        historyReject,
         systemPromptReject,
         mcpStatusReject
       }

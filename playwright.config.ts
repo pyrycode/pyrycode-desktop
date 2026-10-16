@@ -8,6 +8,7 @@ import { availableParallelism } from 'node:os'
 // and no `npx playwright install` step.
 
 const REAL_TIER = /(^|\/)real-[^/]*\.spec\.ts$/
+const CAPTURE_TIER = /(^|\/)capture-[^/]*\.spec\.ts$/
 
 // The specs that write or read the operating system clipboard, which every Electron process on the
 // machine shares. Two of them overlapping would read each other's text. A new spec that copies or pastes
@@ -61,7 +62,7 @@ export default defineConfig({
   // this default config would have ignored every one of them and exited 0 on a suite that never ran.
   // `(^|\/)` pins the match to a path boundary and `[^/]*` keeps it inside one segment, so the partition
   // now depends on the FILENAME alone — which is what both configs always claimed.
-  testIgnore: REAL_TIER,
+  testIgnore: [REAL_TIER, CAPTURE_TIER],
   // One X display per run on Linux, whatever command started it, so a gate and an agent's own run in one
   // container stop sharing the container's display. See e2e/fixtures/runDisplay.ts.
   globalSetup: './e2e/fixtures/runDisplay.ts',
@@ -79,7 +80,7 @@ export default defineConfig({
   // specs one after another at the end, after the parallel ones have finished.
   projects: [
     { name: 'clipboard', testMatch: CLIPBOARD_SPECS, workers: 1 },
-    { name: 'parallel', testIgnore: [REAL_TIER, ...CLIPBOARD_SPECS] }
+    { name: 'parallel', testIgnore: [REAL_TIER, CAPTURE_TIER, ...CLIPBOARD_SPECS] }
   ],
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,

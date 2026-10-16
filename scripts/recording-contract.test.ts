@@ -1,0 +1,34 @@
+import { describe, expect, it } from 'vitest'
+import { requestContract } from './recording-contract.mjs'
+
+const fixture = (conversation = 'recorded-chat') => ({ scenario: { id: 'permission-allow', historyRetry: true },
+  wire: [
+    { direction: 'client', message: { type: 'create_conversation', payload: { cwd: null } } },
+    { direction: 'client', message: { type: 'request_model_list', payload: { conversation_id: conversation } } },
+    { direction: 'client', message: { type: 'thread_catch_up', payload: { conversation_id: conversation, epoch: '', version: 0 } } },
+    { direction: 'client', message: { type: 'send_message', payload: { conversation_id: conversation, message_id: 'fresh-message', text: 'hello' } } },
+    { direction: 'client', message: { type: 'modal_answer', payload: { modal_id: 'fresh-modal', option_id: 'allow_once', answer_token: 'fresh-answer' } } }
+  ] })
+describe('recording request contract verification', () => {
+  it('accepts fresh opaque IDs and query reordering within the same action', () => {
+    const fresh = fixture('another-chat')
+    ;[fresh.wire[1], fresh.wire[2]] = [fresh.wire[2], fresh.wire[1]]
+    fresh.wire[3].message.payload.message_id = 'another-message'
+    fresh.wire[4].message.payload.modal_id = 'another-modal'
+    fresh.wire[4].message.payload.answer_token = 'another-answer'
+    expect(requestContract(fresh)).toBe(requestContract(fixture()))
+  })
+  it('detects changed choices, text, cursors and omitted query coverage', () => {
+    for (const mutate of [
+      (r: ReturnType<typeof fixture>) => { r.wire[4].message.payload.option_id = 'reject_once' },
+      (r: ReturnType<typeof fixture>) => { r.wire[3].message.payload.text = 'different' },
+      (r: ReturnType<typeof fixture>) => { r.wire[2].message.payload.version = 42 },
+      (r: ReturnType<typeof fixture>) => { r.wire.splice(1, 1) },
+      (r: ReturnType<typeof fixture>) => { [r.wire[2], r.wire[3]] = [r.wire[3], r.wire[2]] },
+      (r: ReturnType<typeof fixture>) => { r.scenario.historyRetry = false }
+    ]) {
+      const fresh = fixture(); mutate(fresh)
+      expect(requestContract(fresh)).not.toBe(requestContract(fixture()))
+    }
+  })
+})

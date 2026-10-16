@@ -43,7 +43,11 @@ then checks exact partial content, checkpoint and opaque continuation through a
 fresh owner while measuring cold opening. A separate fresh owner then enumerates
 all newest/before held windows, including opening omissions, and compares exact
 content/order with 801 unique identities alongside the opening and saturated
-persistence assertions.
+persistence assertions. Its `saved-recovery` stage loads two held windows, commits
+metadata-only invalidation, closes/reopens the database, then follows the paired
+capability/continuation to exact recovery of all 801 identities. Recovery elapsed
+time and recovered identity count are separate output fields; the original
+opening/traversal and 100,000-membership persistence assertions remain.
 Failure or missing/all-skipped evidence is nonzero. It adds no release channel.
 
 [`history-native.spec.ts`](../../../e2e/history-native.spec.ts) includes
@@ -57,6 +61,61 @@ direct smoke invocation rejects them before packaging imports or scratch creatio
 pins Windows rejection. Run the native proof on the operating system running the
 ticket; opposite-OS scheduling is outside scope. Existing NSIS x64/arm64 targets
 remain unchanged.
+
+### Counted saved traversal recovery validation
+
+The [recovery verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/2067#issuecomment-6218610544)
+records Linux x64 on 2026-10-16 at `5e84fc20d0ef7f175f7d3b2f1d1ce0e488b51340`:
+units **9,240 executed/passed, 0 failed, 3 skipped**; complete configured gate 8
+**468 executed/passed, 0 failed, 4 skipped**. The named
+`packaged protected history commits and reopens with production encryption` case
+is explicitly present and passed: **1 executed/passed, 0 failed, 0 skipped**, included
+in that gate. See [restoration evidence](chat-history-testing-restoration.md#counted-saved-traversal-recovery-validation)
+for both named mounted recovery passes and suite configuration.
+
+The verifier inspected `/tmp/pyry-history-native-fPNChw/runtime.stdout` and raw
+`runtime.stderr`: Electron 33.4.11 / embedded Node 20.18.3 / better-sqlite3 12.4.1,
+production `gnome_libsecret`, packaged/ASAR/native-unpacked true, stage complete.
+All **801 saved identities/content recovered after invalidation and fresh reopen**
+in **507 ms**; cold opening **123 ms**, initial conversion **3,866 ms**. The retained
+100,000-membership replacement assertion passed. Raw stderr keeps system-bus/GPU/
+colour diagnostics beside successful counted completion; empty stderr is not the
+success criterion. These are recorded production-protection results, not a fresh
+live run. Other operating systems and real Claude are outside this ticket's scope.
+
+The builder's [indexed measurements](../../specs/architecture/2064-saved-traversal-recovery.md#validation-evidence)
+at implementation `823b6dd2daca7e079d0237153956fd2d09bda786` separate 20-item recovery
+selection from structure, loaded depth and replacement. Depth is the number of
+before-pages after the initial newest page; depth 4 uses same-epoch replacement,
+and depths 1/8 use metadata mutation:
+
+| Fixture items | Loaded depth | Replacement | Records / payloads / decrypts | Structural reads | Recovery ms |
+| ---: | ---: | --- | --- | ---: | ---: |
+| 262 | 1 | no | 23 / 20 / 45 | 322 | 38.4 |
+| 262 | 4 | yes | 23 / 20 / 45 | 320 | 31.1 |
+| 262 | 8 | no | 23 / 20 / 45 | 319 | 31.5 |
+| 1,242 | 1 | no | 22 / 20 / 44 | 361 | 63.1 |
+| 1,242 | 4 | yes | 22 / 20 / 44 | 365 | 59.3 |
+| 1,242 | 8 | no | 22 / 20 / 44 | 365 | 74.7 |
+
+Both fixture sizes retain opening **206 records / 202 payloads / 408 decrypts**;
+structure is **1,583 / 1,992 reads**. Cold opening is **239.9 / 491.6 ms**, initial
+conversion **2,591.5 / 11,768.9 ms**. Existing 200-item held-traversal assertions
+remain. The verifier confirms the 20 selected payloads, 22–23 records, 44–45 decrypts
+and 319–365 structural reads. Payload work must stay independent of loaded depth
+and unrelated older/hidden/range history; authenticated structure may grow
+logarithmically. Replacement pays index rebuild during its write transaction;
+one-time retained conversion is measured separately. These are bounded-work
+measurements, not latency thresholds.
+
+The builder's separate packaged run (`/tmp/pyry-history-native-JGXDxb/runtime.stdout`
+and raw `runtime.stderr`) executed/passed **1**, failed/skipped **0**, with the same
+production runtime/protection flags. It recovered 801 identities in **709 ms**,
+with initial conversion **7,001 ms**, cold opening **197 ms** and retained
+100,000-membership replacement **10,314 ms**. It is included in the builder's
+468-executed, zero-failed, four-skipped full suite; the verifier's later measurements
+above are a distinct run. Historical failed migration/setup captures remain
+[recorded separately](chat-history-testing-restoration.md#counted-saved-traversal-recovery-validation).
 
 ### Counted unchanged saved traversal validation
 

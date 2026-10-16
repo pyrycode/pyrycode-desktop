@@ -98,3 +98,27 @@ New regressions in `indexedThreadHistory.test.ts` cover fresh-owner subset prese
 The final implementation is smaller than the initial conservative forecast: approximately 800 written lines including this plan and focused fixture extensions. The depth-cap sizing exception remains recorded; no new split or exported construction signature is introduced.
 
 2026-10-16 — Full-suite verification exposed repeated shared-path writes during large batches. The original candidate failed the visible-tail focus setup in two complete runs and in isolation, while untouched main passed the isolated case. Each tree now retains pending path updates within the enclosing synchronous transaction and flushes each changed path once before its protected header commits. The isolated case then passed. `coalesces shared protected paths into one write per path in an owned batch` pins this invariant on 400 items; no test assertion or suite configuration changed.
+
+
+## Manual completion: progress ownership
+
+Replace the unbound `certified` boolean with an optional completion interval containing the exact `fromVersion` and `version` admitted by `beginBatch.commit`. The writer retains ordered metadata/completion observations when it combines same-epoch changes, including when failed work rejoins newer pending work. Item revisions and ranges still coalesce; metadata replay touches the protected header only, with work proportional to received changes rather than saved history. Main folds observations in order against the saved checkpoint, admits completion only when its interval starts at or below that checkpoint, and limits fenced checkpoint advancement to the certified version. Each observation preserves uncovered saved and pending repair/unfinished obligations. Start newly created epochs from empty progress before applying observations. Holder recreation is never evidence of completed work.
+
+Add fresh protected-disk/reopen regressions comparing separately flushed and coalesced operations, saved and pending fences, partial completion, later live progress, repeated completion, and held failure with newer pending work. First demonstrate failures on the preserved revision. Retain the authenticated-path batching regression, run applicable units/build, complete configured fake suite and the admitted packaged protected-storage check on Linux. Keep review separate from implementation completion.
+
+### Security review of manual completion
+
+**Verdict:** PASS, with the identified progress-ownership defect addressed by the design above before implementation.
+
+- [Trust boundaries] `parseChatHistoryRequest` detaches and bounds every observation and completion interval, verifies exact host/conversation/epoch, and rejects invalid intervals before disk access. Metadata is not completion evidence.
+- [Tokens/secrets] No new credentials or secret representations; OS protection remains main-only and fails closed.
+- [File/storage] Progress folds and authenticated records commit in the existing transaction. Failed writes retain the last commit. Existing identity-generation and import-retirement fences remain active.
+- [Electron] The fixed typed IPC bridge admits only the extended owned request; no new channel, navigation, Node, SQL or filesystem access reaches the renderer.
+- [Cryptography] Existing protected roots and SHA-256 record bindings remain intact; completion evidence changes no encryption or replay checks.
+- [Network/I/O] No protocol, socket, relay or daemon change; received completion still comes only from the coordinator's admitted batch certificate.
+- [Errors/logs] Existing static diagnostic classifications only; no new content, metadata, paths or exception logging.
+- [Concurrency] Completion intervals retain chronological ownership across coalescing, same-epoch recreation and failed-write merging. Replay cannot let an earlier certificate discharge later obligations. Retry remains explicit/event-driven without spinning.
+- [Threat model] Malformed renderer observations fail admission and saved progress fences constrain accepted completion. Disk substitution/replay, unavailable keychain and stale deletion/unpair admission retain existing protections. Complete protected-disk rollback remains outside the existing guarantee.
+
+**Reviewer:** Codex (self-review using `builder/security-review.md`)
+**Date:** 2026-10-16

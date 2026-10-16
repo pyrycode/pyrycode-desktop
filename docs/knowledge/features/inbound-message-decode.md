@@ -238,8 +238,9 @@ named-field literal by the exported `turnEndMetricsOf`, shared by both the live 
 above — never a spread of the parsed payload, so a later decoder field cannot cross into the
 shared `TurnEndMetrics` IPC shape by accident. See [Thread timeline §
 Types](thread-timeline-internals.md#types) for where they land on `turnBoundary`/`turnEnd`
-and [Protected local chat history § Durable display rows](chat-history.md#durable-display-rows)
-for why they never reach disk.
+for their former row presentation. The old app-built row persistence exclusion
+is retired with its codec; current storage retains daemon items under the
+[protected snapshot contract](chat-history.md#snapshot-contract).
 
 ### Required model-refusal reports
 

@@ -150,14 +150,16 @@ below explains the old reconstruction path, not current executable regressions o
 authoritative restoration. See [completed inventory and validation](thread-runtime.md#renderer-producer-retirement-validation).
 
 [`real-daemon-history-on-open.spec.ts`](../../../e2e/real-daemon-history-on-open.spec.ts)
-saves a baseline with served/display evidence, fully exits Electron through the
+saves an authoritative epoch/checkpoint baseline, fully exits Electron through the
 shared protected-profile relaunch fixture, and writes 205 unique `pyry channel post`
 entries only in its awaited while-closed callback. Reopening asks newest once
 without upward input and exposes the gap. Fresh focused input fills it under the
 [demand and observation contract](chat-history-testing-contracts.md#demand-and-snapshot-contracts), retaining the
-baseline and all posts exactly once in order. `spawnClaude: false` proves real
-daemon storage/transport, not a Claude turn or production-relay delivery; see
-[counted live acceptance](live-e2e-runbook.md#current-real-claude-gate-state).
+baseline and all posts exactly once in order. The configured captured-client
+replay preserves these assertions and proves no current provider behavior. The
+source live scenario uses `spawnClaude: false`; even a live pass would establish
+daemon storage/transport rather than a Claude turn or production-relay delivery.
+See [current replay/native evidence and historical live failures](chat-history-testing-native.md#counted-legacy-storage-retirement-validation).
 
 Legacy row-fold overlap fixtures must place the live overlap at the newest end of the newest-first
 page. Putting an unmatched older entry first exercises the intentional
@@ -178,27 +180,14 @@ fix (above) inverted the unit assertion that comment was defending. Check that a
 cited spec's fixture actually drives the code path the comment claims, rather than
 trusting the citation.
 
-## Durable type contract
+## Retained storage contract
 
-The exact `DurableThreadItem`/`ThreadItem` equality assertion lives in
-[`store/chatHistoryContract.test.ts`](../../../src/renderer/src/store/chatHistoryContract.test.ts).
-A shared test importing renderer types crosses the composite Node project's file
-boundary; the renderer test project can see both contracts without changing
-production layering. Exact equality catches added optional fields that mutual
-assignability can miss. This proof depends on the web project's TypeScript check
-in `npm run build`; running Vitest alone does not establish it. Runtime parser
-fixtures still need to cover newly added fields.
-
-**The guard compares against `ThreadItem` minus a named exclusion, not against
-`ThreadItem` itself, since [#1565](https://github.com/pyrycode/pyrycode-desktop/issues/1565).**
-`turnBoundary`'s six `TurnEndMetrics` fields are deliberately
-[live-only](chat-history.md#snapshot-contract), so the old
-`expectTypeOf<DurableThreadItem>().toEqualTypeOf<ThreadItem>()` no longer typechecks once they
-exist on `ThreadItem`. A local `PersistedThreadItem` type omits `keyof TurnEndMetrics` from the
-`turnBoundary` arm and leaves every other arm untouched, and the assertion compares against that
-instead. The fix for a live-only field belongs here, narrowing the guard's comparison type —
-never widening `DurableThreadItem` to carry a field the persistence layer must keep stripping.
-
+Legacy `DurableThreadItem`, row codecs and their exact renderer-type equality
+fixture were deleted with the retired storage API. Lists and `ThreadSnapshot`
+remain the shared persistence contract. Parser/owned/page admission and protected
+fresh-owner tests cover retained behavior; see
+[ignore-policy and lifecycle regressions](chat-history-testing-contracts.md#demand-and-snapshot-contracts)
+and [current native evidence](chat-history-testing-native.md#counted-legacy-storage-retirement-validation).
 
 ## Packaged native storage check
 

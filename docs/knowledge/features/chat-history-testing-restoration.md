@@ -41,9 +41,11 @@ re-pair must save only fresh items from an omitted scope: clearing every holder
 manually or restarting first would mask the bug.
 
 [`daemonItemHistory.test.ts`](../../../src/main/daemonItemHistory.test.ts) uses the
-existing protected filesystem seam and fresh storage services to check coexistence
-of legacy/daemon records, equal conversation/item ids on two hosts, and ordered
-removal of both formats plus the saved-list entry. Main-handler unpair tests reject
+existing protected filesystem seam and fresh storage services to check retained
+held facts, equal conversation/item ids on two hosts, and ordered removal of
+authoritative records plus the saved-list entry. Mixed-source ignore and unreadable
+legacy cleanup now belong to `chatHistoryMigration.test.ts`. Main-handler unpair
+tests reject
 stale reads/writes, remove off-screen records and allow fresh same-host requests.
 Malformed IPC/disk metadata, bounded inert JSON, missing optional availability and
 unavailable encryption cases check classified failures and preservation of data.
@@ -69,10 +71,10 @@ window close exits/relaunches; the macOS same-process reactivation branch was no
 executed in this Linux run. The main-only close regression separately checks
 admitted import drain and rejected late calls.
 
-Full replacement decrypts old evidence and encrypts every replacement membership;
-row count alone understates its work. Saturated receipt storage can exceed a
-five-second observer deadline. Polling successful saves without admission/failure
-evidence cannot diagnose a lost write. The migration and packaged fixtures instead
+Full replacement validates retained items/evidence; visible row count alone
+understates its work. The packaged fixture now replaces 1,000 daemon items rather
+than exercising retired receipt memberships. Polling successful saves without
+admission/failure evidence cannot diagnose a lost write. The migration and packaged fixtures instead
 assert classified completion, queued/fresh-owner reads and exact content, while
 the packaged run records elapsed replacement time.
 

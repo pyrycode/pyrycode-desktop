@@ -34,7 +34,7 @@ attach an error to a newer list or a cleared host.
 | Result | Meaning |
 | --- | --- |
 | `{ status: 'missing' }` | No matching snapshot exists in readable storage. |
-| `{ status: 'stored', snapshot }` | A snapshot exists, including an explicitly saved empty list, timeline or daemon thread. |
+| `{ status: 'stored', snapshot }` | A snapshot exists, including an explicitly saved empty list or daemon thread. |
 | `{ status: 'ok' }` | A mutation completed, including an unchanged replacement or repeated removal. |
 | `{ status: 'error', code }` | A static failure classification; no caught exception details. |
 
@@ -50,11 +50,12 @@ attach an error to a newer list or a cleared host.
 | `remove-failed` | A removal mutation/COMMIT or pending-source cleanup failed for another reason. Source cleanup can fail after the database deletion committed. |
 
 First access, including a read, can import the protected version-1 collection and
-write durable completion state. The entire source and addressed destination records
-are validated before any import mutation; duplicate identities, unreadable input
+write durable completion state. Storage-only version/ownership recognition
+ignores retired timeline bodies; retained source and addressed destination records
+are validated before any import mutation. Duplicate retained identities, unreadable input
 and unsupported versions preserve the original source and last committed records.
-Both families, protected lists and completion share one transaction. A failure
-before commit leaves no partially imported family or completed marker, and later
+Retained lists/items and completion share one transaction. A failure
+before commit leaves no partial retained import or completed marker, and later
 queued work can retry. No invalid source or database becomes empty storage as
 recovery. This differs from the [paired-server store](paired-server-store.md)'s
 deliberate malformed-record overwrite during re-pairing.
@@ -100,25 +101,23 @@ ciphertext can survive replacement.
 Malformed saved metadata or index associations return `unreadable`, never an empty
 default. Validation failures precede mutation; later protection/SQL failures use
 `write-failed` or `remove-failed` and preserve the previous committed snapshot.
-Unavailable encryption is checked before opening/migrating either indexed family.
+Unavailable encryption is checked before opening/migrating indexed storage.
 
-Those family-only removals are internal primitives. Production store removal wraps
-both families and the protected list update in one transaction; validation or
-mutation failure in either rolls back all three. Host removal includes off-screen
-records. Handler admission invalidates queued pre-removal conversation/host work
+Those authoritative-only removals are internal primitives. Production store removal
+wraps authoritative cleanup, direct exact-owner legacy deletion and the protected
+list update in one transaction. Retained validation or SQL failure rolls back all
+three; ignored legacy payloads are never decrypted or reconstructed. Host removal
+includes off-screen records. Handler admission invalidates queued pre-removal conversation/host work
 while allowing fresh saved-host replacements at identical coordinates. Credential-first
 unpair preserves a matched erase even on history failure, reports static
 `history-unpair-cleanup: failed` and completes ordinary unpaired teardown; successful
 credential removal alone does not prove successful history deletion.
 
-New indexed legacy writes encrypt an envelope containing `indexedLegacyRecord: 1`, the
-committed `snapshotId` and the complete structural record with its payload. Decode
-compares the UUID and kind/order/parent/evidence indexes before record validation.
-The original row ciphertext held no row-key/order binding: validating a selected
-row's shape alone could accept ciphertext substituted under another structural
-identity. The encrypted envelope closes that substitution for new writes.
-Original unwrapped records remain readable, using selected codec/index checks for
-pages and canonical whole-scope checks for full reads. Reads do not rewrite them.
+Existing legacy ciphertext stays inert until addressed cleanup. There is no legacy
+write, read, codec or reconstruction API; retained schema tables/indexes do not
+confer a capability to read old rows as daemon items. Corrupt retired bytes do not
+block exact scoped cleanup. Compatibility handling and replay fences are described
+in [protected collection storage](chat-history-storage.md#protected-collection).
 
 Authoritative headers bind the stable owner and every header index; their protected
 value contains scalar metadata, item/range counts, arrival presence and continuation
@@ -143,19 +142,19 @@ Malformed owned IPC returns `invalid-request` before storage; malformed protecte
 reads return `unreadable`. The writer retains failed ownership for a later flush/event.
 
 Each content-record `payload` is protected by main-process `SecretEncryption` before it
-reaches SQLite, including header coverage/cursors, rows, attachment metadata, raw
-unknown display text, authoritative scalar/item/range facts and individual evidence
-payloads. Production encryption keeps the existing Linux `basic_text` rejection.
+reaches SQLite, including retained lists, authoritative scalar/item/range facts
+and inert item JSON. Existing legacy payloads remain protected bytes, without new
+writes or decoding. Production encryption keeps the existing Linux `basic_text` rejection.
 No content payload is SQL plaintext,
 including in journals or temporary files; `temp_store` is `MEMORY`. The reviewed
 unencrypted columns are:
 
 | Location | Columns and allowed values |
 | --- | --- |
-| `legacy_scopes` | `identity`: locally generated UUID; `server`, `conversation`: UTF-16LE BLOBs of admitted bounded ownership strings, compared byte for byte. |
-| `legacy_records` ownership | `scope`: committed-snapshot UUID referencing `legacy_scopes.identity`. |
-| Record selection/order | `kind`: `header`, `row`, `served`, `receipt`, `receipt-id`, `display`, `gap`, `gap-key` or `gap-refused`; `ordinal`, `parent`: nonnegative array positions (zero for unparented records). |
-| Evidence indexes | `entry_id`, `last_id`, `older_id`, `newer_id`: nonnegative safe integers or null; `row_key`: signed safe integer or null. |
+| Inert `legacy_scopes` | `identity`: locally generated UUID; `server`, `conversation`: UTF-16LE BLOBs of admitted bounded ownership strings, compared byte for byte. |
+| Inert `legacy_records` ownership | `scope`: committed-snapshot UUID referencing `legacy_scopes.identity`. |
+| Inert legacy selection/order | `kind`: `header`, `row`, `served`, `receipt`, `receipt-id`, `display`, `gap`, `gap-key` or `gap-refused`; `ordinal`, `parent`: nonnegative array positions (zero for unparented records). |
+| Inert legacy evidence indexes | `entry_id`, `last_id`, `older_id`, `newer_id`: nonnegative safe integers or null; `row_key`: signed safe integer or null. |
 | `thread_scopes` | `identity`: stable locally generated owner UUID, fresh on creation; `server`, `conversation`: exact UTF-16LE ownership BLOBs, including NUL/lone-surrogate distinctions. |
 | `thread_records` ownership/order | `scope`: stable owner UUID; `kind`: `header`, `item` or `range`; `ordinal`: nonnegative held/range position in retained scopes, stable record ordinal in mutable scopes (zero for header). |
 | `thread_payloads` lookup | `scope`: stable owner UUID; `item_id`, `revision`: admitted nonnegative safe integers. Primary key `(scope, item_id)`; payload is protected and deletion cascades from the owner. |
@@ -163,7 +162,7 @@ unencrypted columns are:
 | `thread_auth` | `scope`: stable owner UUID; `tree`, `path` and TEXT `payload`: structural index names/addresses, child hashes/counts/heights, shown/active flags, attribution digests, placement/range digests and numeric identities, plus untrusted parent hints. No raw daemon text. Authenticated by protected header roots. |
 | `history_lists` | `server`: exact UTF-16LE host BLOB; `payload` is an encrypted complete list snapshot, validated against that owner. |
 | `history_import` | `singleton`: fixed integer 1, whose presence means import completed; `retired`: 0 for pending cleanup or 1 for recorded retirement. |
-| Schema/index metadata | `user_version`: 7 after first owned transaction or opening-index conversion, 6 after retained protected conversion; additive legacy/list admission can stop at 5 (base creation uses 2). Indexes, including `legacy_receipt_start` and `thread_ranges`, duplicate only reviewed ownership and structural columns. |
+| Schema/index metadata | `user_version`: 7 after first owned transaction or opening-index conversion, 6 after retained protected conversion; additive/list admission can stop at 5 (base creation uses 2). Indexes, including `legacy_receipt_start` and `thread_ranges`, duplicate only reviewed ownership and structural columns. |
 
 Content-record `payload` is a ciphertext BLOB; `thread_auth.payload` is the
 content-free structural TEXT exception above. Timestamps, join strings, opaque cursors, attachment
@@ -240,28 +239,6 @@ Diagnostics use `history-storage-operation: thread-page` and
 `history-storage-result: page` on success, or the existing static failure code;
 they include no coordinates, tokens or payloads.
 
-The [legacy page methods](chat-history-api.md#main-only-bounded-legacy-pages)
-return distinct `newest-page` and `before-page` successes, with ordered selected
-items/keys, `savedCoverage`, partial evidence and a local continuation or null.
-These are page results, never `stored` snapshots. Only newest lookup can return
-`missing`; a newest lookup of a saved-empty scope succeeds with empty arrays.
-`savedCoverage` remains scope-level evidence; receipt/gap `partial: true` projections and separate
-`cursorAnchors` certify no additional daemon coverage. Local exhaustion, short
-pages and empty pages do not establish daemon completeness.
-
-Malformed requests, invalid limits and malformed, cross-owner, wrong-format,
-invalid-boundary or stale continuations return only
-`{ status: 'error', code: 'invalid-request' }`. A before-page scope deleted since
-the preceding read is also invalid. Selected decryption, decoding, record/index
-association or row/contribution binding failures return `unreadable` without
-content. Existing `encryption-unavailable` and `unsupported-version` classifications
-remain intact. Unselected payloads are not read or validated by paging, so a
-successful page does not certify the entire saved scope as readable. Full reads,
-replacement and removal retain their whole-scope validation contract.
-
-Each page and its evidence come from one transaction and committed UUID. Failed
-selected reads preserve saved records and roll back any schema migration; they
-never repair or discard data. Diagnostics use the existing static storage events:
-operation codes `readTimelineNewestPage`/`readTimelineBeforePage` and result code
-`stored` on success or a static error code. Requests, coordinates, continuations,
-payloads and caught exceptions never enter diagnostics.
+Retired legacy full/page requests return `invalid-request` before membership or
+storage access. Existing legacy-only scopes return `missing` through authoritative
+reads; no legacy page status, continuation or reconstruction result is exposed.

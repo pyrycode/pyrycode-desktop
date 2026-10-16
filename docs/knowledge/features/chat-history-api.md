@@ -6,23 +6,27 @@ main-process handler authorize saved-host operations independently of connection
 ## API
 
 [`src/shared/chatHistory.ts`](../../../src/shared/chatHistory.ts) defines
-`ChatHistorySnapshot`, `ThreadSnapshot`, `DurableThreadItem`, `ChatHistoryRequest` and
+`ChatHistorySnapshot`, `ThreadSnapshot`, `ChatHistoryRequest` and
 `ChatHistoryResult`, plus the pure `parseChatHistorySnapshot` and
 `parseChatHistoryRequest` validators. Shared code imports no renderer implementation.
 The [thread item store](thread-item-store.md) re-exports `ThreadSnapshot` from this
 contract. `kind: 'daemon-items'` records contain `{ version: 1, serverId,
 conversationId, thread }`; `thread.hostId` and `thread.conversationId` must match
 the outer coordinates. The outer format version and held thread's applied version
-are separate values. Version-1 `timeline` records keep app-built rows and merge
-evidence for retained legacy APIs. They coexist with daemon records at the same
-host/conversation, but production display reads only `daemon-items`. Legacy reads
-never convert rows into authoritative items and supply no fallback route.
+are separate values. Shared snapshots admit only `list` and `daemon-items`.
+`readTimeline`, `replaceTimeline` and bounded legacy page APIs, their request/result
+types, `DurableThreadItem`, `legacyHistoryCodec` and `createIndexedLegacyHistory`
+are removed. Retired requests return `invalid-request` before membership lookup
+or storage access; shared snapshot admission rejects `kind: 'timeline'`.
+Only the [protected collection importer](chat-history-storage.md#protected-collection)
+recognizes old timeline envelopes and ignores their payloads. It supplies no IPC
+ignore path, conversion or authoritative fallback.
 
 [`createChatHistoryStore({ secureStore, encryption, database, log })`](../../../src/main/chatHistoryStore.ts)
 returns `execute(request: unknown): Promise<ChatHistoryResult>` and async `close()`.
-It owns serialized import, protected lists and full operations over both indexed
-families. `close()` stops new admission, drains admitted work and closes the
-database; subsequent calls return `unreadable`. The composition root creates one
+It owns serialized retained import, protected lists, authoritative indexed operations
+and scoped cleanup of inert legacy records. `close()` stops new admission, drains
+admitted work and closes the database; subsequent calls return `unreadable`. The composition root creates one
 store/database for the app lifetime. Window close flushes without closing that
 owner; graceful quit flushes renderers, awaits handler `drain()` and then closes
 the store. See [shutdown ordering](chat-history-storage.md#window-close-and-app-quit).
@@ -36,17 +40,6 @@ connection is never consulted.
 The store validates independently but has no pairing dependency, so saved-host
 authorization belongs to the handler. Pairing records are reduced to membership,
 never forwarded to the caller.
-
-The independently callable
-[`createIndexedLegacyHistory({ database, encryption, log })`](../../../src/main/indexedLegacyHistory.ts)
-also returns `execute(unknown): Promise<ChatHistoryResult>`, accepting only
-`readTimeline`, `replaceTimeline`, `removeConversation` and `removeServer`.
-It parses and detaches requests before database access; unsupported operations,
-invalid snapshots and coordinate mismatches return `invalid-request`. Its removals
-delete only the addressed legacy SQLite scope(s) and indexed evidence. They do not
-update lists or daemon-item records. The application-bound operations in the table
-below retain their existing wider removal behavior. Saved-host authorization remains
-with `createChatHistoryHandler` in production.
 
 The authoritative family has its own main-only
 [`createIndexedThreadHistory({ database, encryption, log })`](../../../src/main/indexedThreadHistory.ts).
@@ -63,8 +56,8 @@ owner. Production `createChatHistoryStore` delegates full, owned and bounded pag
 operations to it;
 direct backend calls perform no saved-host authorization.
 
-Both backends retain detached-callable Promise `execute` methods and expose
-main-only synchronous `executeSync` seams for enclosing multi-family transactions.
+The backend retains a detached-callable Promise `execute` method and exposes a
+main-only synchronous `executeSync` seam for enclosing list/thread/cleanup transactions.
 The enclosing caller must throw classified error results to roll back its outer
 transaction; returning an error normally would commit it. No SQLite transaction
 may span asynchronous secure-store I/O.
@@ -78,16 +71,15 @@ Schema 1 migrates TEXT ownership keys to UTF-16LE BLOBs inside the calling opera
 transaction, then chains through schemas 2, 3, 4 and 5, retaining ciphertext and
 committed-snapshot UUIDs. Schema 3 adds only the partial `legacy_receipt_start`
 index on `(scope, entry_id, parent)` where `kind = 'receipt-id' AND ordinal = 0`.
-It lets adjacent-cursor selection skip non-start memberships in spanning receipts;
-indexing all memberships would still allow that lookup's work to grow with older
-history. Schema 4 additively creates `thread_scopes`, `thread_records` and the
+This index remains for schema compatibility; no legacy page reader survives.
+Schema 4 additively creates `thread_scopes`, `thread_records` and the
 `thread_ranges` index, preserving legacy data and the receipt-start index. Its
 idempotent creation also retains authoritative tables from the earlier schema-3
 branch layout. Schema 5 adds `history_lists(server, payload)` and
 `history_import(singleton, retired)`. List payloads are encrypted complete list
 snapshots; decoding validates their exact host ownership. The singleton's presence
 means import is complete; `retired: 0` means source cleanup is pending and
-`retired: 1` means cleanup was recorded. Lists and both families use exact UTF-16LE
+`retired: 1` means cleanup was recorded. Retained and inert legacy ownership uses exact UTF-16LE
 BLOB ownership, preserving NUL and lone-surrogate distinctions. A later validation
 or decryption failure in the same transaction rolls back its migrations, index and
 version changes too, allowing retry. Migration preserves strings already stored in schema 1; it cannot
@@ -102,7 +94,7 @@ supported schemas chain through schema 5 first. This one-time conversion retains
 each scope owner as its initial protected generation, preserving old continuations.
 Corrupt input, unavailable protection, conversion or later operation failure leaves
 the last commit intact and permits retry; no version marker commits ahead of
-conversion. Legacy/list-only operations need not initiate this protected upgrade.
+conversion. List-only operations need not initiate this protected upgrade.
 
 In the retained schema-6 representation, `thread_scopes.identity` is the stable
 owner. Item lookup uses
@@ -145,14 +137,16 @@ against the current root; rolling back every protected record remains outside th
 guarantee. Full/page readers support both representations.
 
 Before its first operation, the application store checks completion, then decrypts
-and validates the entire version-1 secure-store collection, including duplicate
-identities, through shared snapshot admission. It validates addressed destination
-records before mutation and imports only missing scopes/lists. Existing indexed
-content wins regardless of timestamps. Lists, both formats and completion commit
-together; no source I/O occurs inside that transaction. An absent source also
-commits completion. Failed import preserves the source and last committed records;
-later queued work can retry. Schema admission may already have committed during
-the completion check without importing any content.
+the version-1 secure-store collection. Storage-only recognition validates each
+version-1 timeline envelope's bounded ownership before ignoring its retired body.
+Retained lists/items use shared snapshot admission; duplicate retained identities
+reject the source. Addressed destinations are validated before importing only
+missing lists/authoritative scopes. Existing indexed content wins regardless of
+timestamps. Retained lists/items and completion commit together; no source I/O
+occurs inside that transaction. An absent or legacy-only source also commits
+completion. Failed import preserves the source and last committed records; later
+queued work can retry. Schema admission may already have committed during the
+completion check without importing content.
 
 Once complete, the store never reads/decrypts the source again. After a successful
 operation transaction it retries direct source deletion while retirement is pending,
@@ -375,53 +369,6 @@ attempt with the retained pair; there is no automatic retry loop or full-read
 fallback. See [runtime ownership](thread-runtime.md#independent-saved-traversal)
 and [ADR 0015](../decisions/0015-protected-saved-traversal-recovery.md).
 
-### Main-only bounded legacy pages
-
-The indexed legacy backend exposes `newestPage(unknown)` and `beforePage(unknown)`,
-each returning `Promise<LegacyHistoryPageResult>`. Their request objects have no
-`operation` field:
-
-| Method | Request fields | Successful result |
-| --- | --- | --- |
-| `newestPage` | `serverId`, `conversationId`, `limit` | `status: 'newest-page'`, selecting the final saved rows. |
-| `beforePage` | The same fields plus `continuation` | `status: 'before-page'`, selecting rows strictly before its held-order boundary. |
-
-Both admit only numeric integer limits 1–200 and exact bounded ownership strings;
-unknown request keys reject before database access. Results contain at most that
-many `items` with aligned `rowKeys`, preserving supplied held order, content and
-multiplicity independently of timestamps. Without saved `rowIdentity`, keys use
-the original whole-snapshot ordinal minus saved `prependedRows`, never a page-local
-index. A missing newest scope returns `missing`; a saved-empty scope returns
-`newest-page` with empty items/keys and `continuation: null`.
-
-Successful pages also contain `savedCoverage`, optional saved `newestCursor`,
-[selected partial evidence](chat-history.md#bounded-local-page-evidence) and
-`continuation`. A non-null `LegacyHistoryContinuation` has exactly
-`{ format: 'legacy-v1', serverId, conversationId, snapshotId, before }`.
-`snapshotId` identifies the committed UUID; `before` is the exclusive, positive
-safe-integer ordinal of an existing held row. It is a local structural position,
-separate from every opaque daemon cursor. Admission checks exact coordinates,
-format, committed identity and boundary existence. Reopening a fresh database
-owner preserves a continuation while that snapshot is unchanged. Every replacement,
-including identical content, rotates the UUID; deletion and delete/recreate also
-invalidate earlier continuations. Following returned continuations traverses the
-unchanged held rows backwards once, with each page internally in held order.
-Null means local exhaustion and certifies no daemon completeness.
-
-One synchronous transaction selects the header, rows and relevant evidence from
-one committed snapshot. Paging never calls the full reader or loads whole receipt
-or gap membership arrays to discover its window. Only before-boundary admission
-needs one additional order-only row read; contiguous replacement ordinals determine
-local exhaustion without another payload decode. The shared `legacyHistoryCodec`
-reuses record checks and validates selected row/contribution bindings and payload/index
-associations. A page is never submitted as a shortened snapshot to
-`parseChatHistorySnapshot`: complete receipt-union and whole-held-row validation
-remain required for full snapshots. See [page failures](chat-history-results.md#bounded-page-results).
-
-These methods add no IPC, preload or renderer capability. Full indexed storage and
-collection import are active; page IPC, renderer activation and partial writers
-remain #1931. The application-bound API continues below.
-
 ### Application-bound operations
 
 [`src/main/index.ts`](../../../src/main/index.ts) registers one handler over one
@@ -447,8 +394,8 @@ untouched. After a matched erase, cleanup failure or a thrown cleanup error pres
 the successful credential outcome, so label cleanup, connection teardown and the
 unpaired-state transition continue. `history-unpair-cleanup` records only static
 `ok` or `failed`; successful unpair alone does not establish successful history deletion.
-Successful cleanup removes the list and every timeline/daemon-item record for that
-`server` identity, including off-screen conversations absent from the latest list,
+Successful cleanup removes the list, authoritative records and ignored indexed
+legacy data for that `server` identity, including off-screen conversations absent from the latest list,
 while preserving other hosts' equal conversation/item ids.
 
 Conversation-scoped requests also capture a conversation generation at admission;
@@ -459,10 +406,11 @@ cannot undo confirmed deletion. Host removal similarly advances host admission.
 Fresh saved-host requests can intentionally replace content at identical host,
 conversation and epoch strings. These process-local fences order admitted work;
 the durable import-completion marker prevents retained-source replay after restart.
-Successful conversation removal atomically deletes both families and its list
-entry, retaining ordered peers and a saved-empty list when appropriate. Every
-replacement remains full; omitting a conversation from a list alone never deletes
-its saved snapshots.
+Successful conversation removal atomically deletes authoritative and ignored legacy
+data plus its list entry, retaining ordered peers and a saved-empty list when appropriate.
+Ignored legacy cleanup uses exact UTF-16LE ownership and cascades without decrypting
+or reconstructing retired payloads. Retained replacements remain full; omitting a
+conversation from a list alone never deletes its saved snapshots.
 
 Every request has `operation` and `serverId`. Additional fields are operation-specific:
 
@@ -470,23 +418,20 @@ Every request has `operation` and `serverId`. Additional fields are operation-sp
 | --- | --- | --- |
 | `readList` | None | Read the host's ordered list snapshot. |
 | `replaceList` | `snapshot` of kind `list` | Replace that list; omitted conversation records remain saved. |
-| `readTimeline` | `conversationId` | Read only the addressed legacy timeline. |
-| `replaceTimeline` | `conversationId`, `snapshot` of kind `timeline` | Replace only that legacy timeline in full, preserving supplied row order. |
 | `readThread` | `conversationId` | Read the addressed daemon-item record in full for retained callers. |
 | `openThreadPage` | `conversationId`, integer `limit` 1–200 | Select newest shown items plus active/dependency closure. |
 | `newestThreadPage` | `conversationId`, integer `limit` 1–200 | Select newest held-item window. |
 | `beforeThreadPage` | `conversationId`, integer `limit` 1–200, opaque `continuation` | Select preceding held-item window. |
 | `replaceThread` | `conversationId`, `snapshot` of kind `daemon-items` | Replace only that held thread snapshot in full. |
 | `mutateThread` | `conversationId`, `change` | Atomically apply validated owned facts/progress; preserve unowned items/evidence. |
-| `removeConversation` | `conversationId` | Atomically remove both conversation formats and its entry from the host's saved list. |
+| `removeConversation` | `conversationId` | Atomically remove authoritative and ignored legacy data and its entry from the host's saved list. |
 | `removeServer` | None | Remove every snapshot for that host, including conversations absent from its latest list. |
 
 Unknown request keys, malformed snapshots, a wrong snapshot kind, or mismatched
 snapshot/request coordinates produce `invalid-request` before any record access.
 Callers cannot supply a storage path or blob name. Snapshot schema extensions are
 discarded on projection rather than rejected, except unknown fields inside held
-daemon items, which remain inert JSON. Declared legacy tool `input` remains a
-string-to-string map with its supplied keys.
+daemon items, which remain inert JSON.
 
 Daemon validation requires nonnegative safe-integer item ids/revisions and progress,
 unique held ids, checkpoint no greater than applied version, and ordered,
@@ -511,7 +456,7 @@ host receipt. Full `replaceThread` remains available to retained callers/import.
 Legacy timeline observations and
 `replaceTimeline` submission are removed from the renderer. Hydration
 is excluded from saves, and later received changes remain eligible. Confirmed
-deletion clears that held scope and suppresses both saved formats; successful
+deletion clears that held scope and suppresses stale saved content; successful
 unpair invalidates all that host's held threads and reads. See
 [storage ordering](chat-history.md#storage-and-concurrency).
 
@@ -523,9 +468,8 @@ limit 200. It returns `{ done, cancel }`;
 validated partial page at the exact requested host/conversation before completing
 the store-owned read. Missing opening completes with null; saved-empty still
 contributes metadata. Unexpected full stored results fail. A retried invalidated
-opening uses the same bounded request, with no full-read fallback. The retained
-legacy IPC/storage operations above and shared format admission remain outside
-renderer writer/restorer paths.
+opening uses the same bounded request, with no full-read fallback. Retired
+timeline requests are rejected by the shared contract.
 `beginLocalRead(host, conversation)` refuses held scopes for opening.
 `beginLocalRead(host, conversation, true)` explicitly admits a held-page read only
 with an existing scope and no read already pending. Its one-shot complete/fail/cancel

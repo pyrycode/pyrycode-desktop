@@ -57,13 +57,13 @@ failed following refresh: read-first tests alone miss disk results erasing newly
 admitted rows and evidence. Empty/undrawable/legacy settlement retires loading read
 ownership while settled saved presentation survives.
 
-[`chatHistory.test.ts`](../../../src/shared/chatHistory.test.ts) checks row shapes, projection,
-detached inputs, limits and coordinates. Read-ID cases round-trip zero/safe maximum, restore older
-omitted fields and reject invalid values. Attribution cases round-trip parented/older parentless
-rows and reject malformed parents; `toolGroups.test.tsx` checks restored grouping.
+[`chatHistory.test.ts`](../../../src/shared/chatHistory.test.ts) checks retained list/item
+projection, detached inputs, limits, coordinates and owned/page admission. Read-ID
+cases round-trip zero/safe maximum, restore older omitted list fields and reject
+invalid values. Legacy row-schema and durable-type equality fixtures are retired.
 [`chatHistoryStore.test.ts`](../../../src/main/chatHistoryStore.test.ts) uses real
 temporary SQLite/protected-source files with injected reversible encryption to cover
-fresh-instance reads, empty-versus-missing records, host separation, retained unlisted timelines,
+fresh-instance reads, empty-versus-missing records, host separation, retained unlisted threads,
 held overlapping writes/removals and preservation after read/write/delete failures.
 These tests exercise the storage seams without proving the OS keychain adapter.
 [`chatHistoryHandler.test.ts`](../../../src/main/chatHistoryHandler.test.ts)
@@ -75,48 +75,29 @@ the [daemon-cache tests](chat-history-testing-restoration.md#recording-and-remov
 
 [`chatHistoryMigration.test.ts`](../../../src/main/chatHistoryMigration.test.ts)
 tests activated storage with real disk, fresh owners and reversible protection.
-Its 21 cases were present and passed in the
-[counted Linux unit run](chat-history-testing-native.md#counted-stable-binding-validation):
+The [current counted Linux validation](chat-history-testing-native.md#counted-legacy-storage-retirement-validation)
+records full-suite evidence without treating older module counts as fresh results.
+The retained migration regressions cover:
 
-| Named case (parameterized variants included) | What it establishes |
+| Case or boundary | What it establishes |
 | --- | --- |
-| `imports both exact formats once, preserves newer indexed content and never reopens the source after restart` | Exact parser-normalized formats/lists, ownership, existing indexed precedence, no source access after completion and no fixture plaintext in history files. |
-| `rolls back an interrupted two-format import and retries without duplicates` | Neither family nor completion survives a failed import; retry succeeds. |
-| `classifies an import %s failure and rolls back both families before queued retry` | List insertion, marker insertion and outer COMMIT fail as writes; source/committed peers survive and fresh-owner reads match after retry. |
-| `preserves a stored list with version %s across reads and mutations` | Safe-integer 9 remains unsupported; malformed 1.5/string versions stay unreadable across reads/replacement/removals, preserving ciphertext and both families. |
-| `keeps invalid destination list decoding unreadable before importing either family` | Complete destination validation precedes mutation; a raw JSON error cannot become a write error merely because another family needs importing. |
-| `classifies an outer %s replacement commit failure and preserves the committed snapshot` | Both families roll back successful nested replacements when the enclosing COMMIT fails. |
-| `preserves an unreadable %s source and recovers without poisoning the queue` | Invalid, unsupported-version and decrypt-failing sources stay intact; later work recovers. |
-| `retries retirement after commit without replaying removed records, even with reused identities` | Commit-before-cleanup interruption, restart, deletion and fresh replacements cannot replay the retained source. |
-| `orders a held import before %s removal and rejects queued stale saves after identical reuse` | Conversation deletion and credential-first host forgetting serialize import, reject stale work and preserve equal-id peers. |
-| `drains accepted import before close and rejects later admission` | Shutdown waits for admitted storage and refuses later calls. |
-| `preserves committed records and source when database admission or encryption is unavailable` | Unsupported schema/protection failure preserves originals and permits recovery. |
-| `commits a saturated receipt replacement through handler admission and preserves it across fresh owners` | Full receipt replacement and queued reads settle with exact persisted content. |
-| `keeps detached Promise backend execution callable` | The synchronous transaction seam does not add a `this` dependency to existing Promise methods. |
+| Mixed-source ignore and fresh reopen | Version-1 timeline ownership is validated while retired rows/receipts are not decoded; retained lists/items survive, with no imported legacy scopes or plaintext. |
+| Retired request rejection | `readTimeline`, `replaceTimeline`, `readTimelineNewestPage` and `readTimelineBeforePage` fail before membership or storage access. |
+| Invalid source admission | Invalid/oversized ownership, unknown kinds/versions, malformed retained records and duplicate retained identities preserve source bytes and leave no completion marker. |
+| Legacy-only source | Even duplicate ignored envelopes yield no authoritative data, complete retirement and never replay after fresh reopen. |
+| Exact indexed cleanup | Directly seed unreadable legacy bytes across case/NUL/lone-surrogate/U+FFFD owners. Reads remain missing; conversation deletion/unpair removes only addressed data, cascading records without reconstruction. Injected SQL failure rolls back cleanup. |
+| Schema-1 compatibility | TEXT ownership migrates to exact UTF-16LE keys without retired payload decoding, then scoped cleanup succeeds. |
+| Indexed precedence and import rollback | Existing authoritative data wins; list/item writes and completion commit together. Interrupted encryption, list/marker insertion and outer COMMIT failures preserve source/peers and permit queued retry. |
+| Retained validation | Unsupported/malformed list versions and invalid destination data remain classified and preserve ciphertext before any import mutation. |
+| Replacement COMMIT failure | A successful nested authoritative replacement rolls back when its enclosing COMMIT fails. |
+| Completion/retirement fences | Cleanup retries never reopen completed source bytes or resurrect removal after restart or identical identity reuse. Held import precedes deletion/unpair; generation fences reject queued stale work. |
+| Close and availability | Close drains admitted import and refuses late calls; unavailable protection/unsupported schemas preserve source and commits. |
+| Callable backend | Detached Promise `execute` remains callable without a `this` dependency. |
 
-[`indexedLegacyHistory.test.ts`](../../../src/main/indexedLegacyHistory.test.ts)
-uses real temporary SQLite databases with reversible test encryption. Fresh
-owners after close/reopen compare parser-normalized snapshots, including fragmented
-served/display/gap evidence, ordered child memberships, all durable row fields,
-optional absence, empty evidence and saved-empty versus missing. Equal/misleading
-timestamps must not affect supplied order. Case variants and equal conversation ids
-on different hosts remain distinct.
-
-The parameterized `isolates every UTF-16 %s across restart, replacement and removal`
-covers both ownership coordinates with distinct lone high/low surrogates, U+FFFD
-and a valid surrogate pair, checking missing peers as well as saved peers. Ordinary
-case-sensitive strings alone cannot reveal SQLite TEXT encoding collisions.
-The migration regression preserves identities and ciphertext, injects both migration
-and post-migration decryption failure, compares unchanged bytes, then retries.
-
-Trigger failures during insertion/cascading deletion and mid-write encryption failure
-exercise rollback, later recovery, peer isolation and fresh identity after replacement
-or delete/recreate. Corrupt indexes/payloads, unsupported schemas, unavailable
-encryption, invalid requests and mismatched coordinates must preserve committed data.
-Sentinel checks inspect all files in the history directory (including any sidecars)
-and captured diagnostics after success and rollback for message, attachment and
-cursor leakage; the durable-row fixture also checks raw unknown text on disk.
-These fixtures prove the protected persistence
-seam; production OS encryption requires the
-[packaged proof](chat-history-testing-native.md#native-runtime-and-packaged-proof).
-
+Legacy backend, row-codec and bounded-page exclusive suites were deleted with their
+APIs. Existing isolation, protected restart, progress and deletion/unpair assertions
+use retained authoritative snapshots. Keep ignored-byte cleanup tests independent
+of the removed writer: using a reconstruction helper would both revive the retired
+contract and let corrupt retired payloads block deletion. Reversible unit encryption
+proves storage behavior; [packaged production protection](chat-history-testing-native.md#native-runtime-and-packaged-proof)
+remains separate evidence.

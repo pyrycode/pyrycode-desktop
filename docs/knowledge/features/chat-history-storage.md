@@ -1,8 +1,8 @@
 # Protected local chat history — storage and lifecycle
 
 Part of [protected local chat history](chat-history.md). The application uses
-protected indexed SQLite storage for lists and both conversation formats. The old
-protected collection is a one-time migration source.
+protected indexed SQLite storage for lists and daemon items. The old protected
+collection is a one-time retained-data import source; legacy timeline bodies are ignored.
 
 ## Buffered replacements
 
@@ -71,30 +71,51 @@ across hosts. Reads wait for earlier operations, failures leave the queues
 usable, and an earlier pending save cannot overtake a later save or resurrect a
 later-removed record. Separate service instances or processes have no shared lock.
 
-`createChatHistoryStore` owns the supplied database and indexed legacy/thread
-backends. Schema 5 keeps complete encrypted list cells in `history_lists` beside
-both families and singleton completion/retirement state in `history_import`.
-Coordinates are exact UTF-16LE BLOBs; caller ids never become filenames. Lists
-validate their decrypted host against the requested owner. Full timeline/thread
-reads reconstruct only the addressed family; list reads decode only their cell.
-Retained replacements remain full replacements, including identical and empty
-snapshots. Ordinary thread mutations preserve unowned items/evidence using the
-[schema-7 authenticated layout](chat-history-api.md#api).
-Removing a conversation validates and deletes both formats and filters its saved
-list in one transaction without reordering peers. A resulting saved-empty list
-remains distinct from missing. Host removal includes off-screen records absent
-from its list and preserves other hosts' equal ids.
+`createChatHistoryStore` owns the supplied database and authoritative indexed
+backend. Schema 5 keeps complete encrypted list cells in `history_lists` beside
+authoritative tables, inert legacy tables and completion/retirement state in
+`history_import`. Coordinates are exact UTF-16LE BLOBs; caller ids never become
+filenames. Lists validate their decrypted host against the requested owner.
+Full thread reads reconstruct only authoritative items; list reads decode only
+their cell. Retained replacements remain full replacements, including identical
+and empty snapshots. Ordinary thread mutations preserve unowned items/evidence
+using the [schema-7 authenticated layout](chat-history-api.md#api).
 
+Conversation removal validates the retained thread/list, deletes the exact
+`legacy_scopes` ownership row and cascading `legacy_records` without decrypting
+or reconstructing them, removes the authoritative scope and filters the saved list
+in one transaction without reordering peers. A resulting saved-empty list remains
+distinct from missing. Host removal includes off-screen scopes absent from its
+list and preserves other hosts' equal ids. SQL or retained-data validation failure
+rolls back the transaction, including ignored-record cleanup. Corrupt retired
+payload bytes cannot block cleanup. Legacy tables, indexes and old schema migrations
+remain for compatibility; schema-1 ownership migration uses retained request
+identifier admission without inspecting retired content. There is no legacy
+reader/writer, background migration or table drop.
+
+The policy is **ignore, not migrate**: legacy timelines never become daemon items.
 Before the first operation, the store reads the fixed secure-store name
-`chat-history`, formerly `{ version: 1, snapshots: [...] }`. It validates the whole
-source, including duplicate identities and both formats, before importing anything.
-All addressed destinations are validated before mutation. Only missing lists and
-scopes are imported; existing indexed records win regardless of timestamps.
-Parser-normalized supplied order, optional absence and saved evidence survive;
-legacy rows never become authoritative items. Import and the completion row commit
-in one synchronous SQLite transaction. Backend classified failures are thrown
-through the enclosing transaction so either family's failure rolls back both.
-Secure-store reads/deletes are asynchronous and never occur inside that transaction.
+`chat-history`, formerly `{ version: 1, snapshots: [...] }`. After collection
+version admission, it recognizes `kind: 'timeline'` before retained snapshot
+validation: require numeric safe-integer version 1 and bounded `serverId` and
+`conversationId` strings, using `readThread` request admission for ownership only,
+then skip the body. Rows, receipts, coverage and other retired payload fields are
+never schema-decoded, imported, converted or drawn. The outer JSON must still
+be readable. Shared IPC/snapshot admission has no ignore path. Rejecting timeline
+kinds in the whole-collection parser would strand valid saved hosts in mixed files;
+applying the retired row schema would let irrelevant malformed bodies do the same.
+
+All retained list/item snapshots are strictly parsed before mutation. Invalid
+ownership, unknown kinds/versions, malformed retained records and duplicate retained
+identities keep fail-closed behavior; repeated ignored timeline identities are inert.
+Only missing retained lists/scopes are imported; existing indexed records win
+regardless of timestamps. Parser-normalized order, optional absence and saved
+evidence survive. Retained data and completion commit in one synchronous SQLite
+transaction. Classified backend failures are thrown through the enclosing
+transaction to roll back all retained writes and the marker. Secure-store I/O
+never occurs inside it. A legacy-only source produces no authoritative items;
+existing indexed legacy scopes likewise read as missing through thread APIs and
+may remain inert until addressed cleanup.
 
 Completion is durable even when the source is absent. Interruption before the
 import commit retries without duplicates; after commit the store never reopens or
@@ -125,9 +146,9 @@ store, retaining Linux `basic_text` rejection. Indexed payloads, including lists
 are encrypted before SQLite sees them; the directory is 0700, the database 0600
 and temporary storage is memory-only. Database/journal/temporary files must contain
 no payload plaintext. Unreadable sources and unsupported databases are preserved,
-never replaced with empty storage. Before completion, one bad source snapshot
-blocks import; afterward validation is scoped to affected indexed records.
-Retained timelines can outlive lists and grow independently of memory eviction.
+never replaced with empty storage. Before completion, a bad envelope or retained
+snapshot blocks import; ignored payload schema does not. Afterward validation is
+scoped to affected retained indexed records.
 Mutable authentication uses standard SHA-256 under OS-protected roots. No new
 network work or background pruning is involved.
 

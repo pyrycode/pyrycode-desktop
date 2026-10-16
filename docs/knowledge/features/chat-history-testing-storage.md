@@ -1,0 +1,119 @@
+# Protected history testing — indexed storage
+
+Part of [protected history testing](chat-history-testing.md).
+
+## Owned mutation regressions and counted validation
+
+The same protected-disk `indexedThreadHistory.test.ts` fixtures cover subset and
+metadata-only saves, highest revisions, explicit removal/epoch transition, stale
+tokens, range merging without placement rewrites, placement/range/branch replay,
+transactional rollback/retry and lazy schema-6 conversion. Aggregate admission uses
+two separately flushed 60,000-null items: the second rejects atomically and fresh
+full/page reads retain the first. Old fractional roots convert with exact placement
+bytes; tampered parent hints cannot authorize rank.
+
+Replacement-seeded edits can hide growing append cost. `successive owned additions
+keep ordering paths and record work bounded without rewriting placements` starts
+empty, adds through 513 items and checks mutations at 16/128/512: fewer than 500
+record reads and 300 writes, with the first placement unchanged. Shuffled additions,
+order movement, internal removal and fresh pages pin AVL behavior. `ordinary owned
+validation, serialization and protected record work stay bounded as unrelated
+history grows` compares 10/1,000 items: each revision has three decrypts, three
+encrypts and equal item-serialization counts, with fewer than 40 extra reads/writes
+for logarithmic sequence work. `coalesces shared protected paths into one write per
+path in an owned batch` checks one write per final path for 400 items. See the
+[focus classification](development-verification-layout-and-input.md#visible-tail-focus-reliability):
+batching resolved the observed timeout even in isolation; native-focus scheduling
+remains unproven. Keep this regression and the read spec.
+
+`e2e/daemon-item-cache.test.ts` compares separate, coalesced and held-failure saves
+through protected disk/reopen. It covers saved/pending repair and unfinished fences,
+partial/repeated completion, later live progress, same-epoch holder recreation,
+explicit same-epoch reset and lost acknowledgements. A retried completed repair
+cannot revive obligations behind checkpoint; a new repair at checkpoint persists.
+Certified older/newer/equal boundaries preserve oldest exhaustion through metadata-only
+saves. Writer fixtures retain newer work after failure and memory-only holder loss;
+existing removal/cache/arrival-restart proofs now exercise owned requests.
+
+The [final verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/2053#issuecomment-6212879270)
+records Linux x64 on `5005bf69a9eb04ea2d7e11dbccd50cfbc464680e`, 2026-10-16:
+
+| Run | Executed | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| Units, 391 passing files | 9,103 | 9,103 | 0 | 3 |
+| Complete configured fake suite, verifier gate 8 | 435 | 435 | 0 | 3 |
+| Packaged production-protection case, included above | 1 | 1 | 0 | 0 |
+
+The verifier confirms the repaired ordering, aggregate, reset and availability
+regressions passed. Gate 8 explicitly contains passed `read setup is reused across
+committed same-row deltas on short and long threads`. The packaged
+`packaged protected history commits and reopens with production encryption` case
+passed, including exact owned-update/reopen and 100,000 retained memberships.
+Its inspected `/tmp/pyry-history-native-rDa7aD/runtime.stdout` records Linux x64,
+Electron 33.4.11 / Node 20.18.3, better-sqlite3 12.4.1, `gnome_libsecret`,
+packaged/asar/native-unpacked true and stage complete. Fake suite: four workers,
+both configured projects, zero retries/flaky results or top-level errors. Build,
+install, native rebuilds and docs guard passed. Pre-verify ran three structural/security
+checks with `--no-suite`; counted units and build ran separately.
+
+Unit skips require live-relay credentials; browser skips are three macOS-only
+badge/window cases. Neither establishes live acceptance. macOS and live-Claude
+are outside this ticket's scope; no live-Claude run was required. Earlier failures
+remain failed in the [plan](../../specs/architecture/2044-owned-thread-changes.md):
+fractional ordering missed bounded append work, and an exploratory packaged run
+rejected `basic_text` until the existing admitted secret service was supplied.
+The earlier full fake run with 434 passed, 1 failed, 3 skipped hit teardown context
+loss repaired by [#2054](e2e-harness-context-recovery.md#disconnected-delivery-observations-and-cleanup),
+with separate controlled recovery proof and counted Linux verification; the upstream
+trigger and original cleanup execution remain unconfirmed. Final counted passes
+supersede those candidates; no assertion, timeout, retry, skip or suite configuration
+was weakened.
+
+## Bounded legacy page regressions
+
+The same on-disk `indexedLegacyHistory.test.ts` fixture covers callable page reads;
+an in-memory database or same-instance traversal alone would miss durable
+continuation and reopen failures. The 603-row traversal closes and creates fresh
+database owners between 200-row windows, preserving held order, repeated content,
+timestamp ties and ordinal-minus-prepended fallback keys. It compares the full
+snapshot after paging. Missing versus saved-empty and absent optional evidence
+need separate assertions; none establishes daemon completeness.
+
+Fragmented fixtures check selected display ranges, served ids and receipt
+memberships, original receipt identity/order and selected membership order,
+explicit `partial: true`, both gaps at a shared numeric boundary, selected legacy
+gap keys and omitted refused cursors. A separate range/anchor case checks that
+only the nearest receipt start supplies the adjacent cursor and that anchor ids
+stay outside selected served/receipt membership. Rendering the right rows alone
+would miss evidence widening or invented served provenance.
+
+Admission cases reject malformed limits/boundaries, wrong format, cross-owner
+reuse, identical replacement and delete/recreate continuations. Parameterized
+page ownership cases exercise both coordinates with distinct UTF-16 ids,
+including lone surrogates and U+FFFD. Selected corruption cases cover ciphertext,
+indexes, row/contribution bindings and protection errors without changing saved
+data; an unreadable unselected row stays untouched. Original unwrapped records
+remain page-readable. The schema-3 regression removes the receipt-start index,
+stages schema 2, injects selected decryption failure and checks rollback of the
+index/version and preservation of committed identity before successful retry.
+Query-plan inspection must show `legacy_receipt_start` for anchor selection:
+bounded returned payloads alone would miss scanning every non-start membership.
+
+The bounded-work regression instruments SQLite result records, JSON decodes and
+decrypts. Growing unrelated older history from 600 to 2,000 rows, with additional
+receipts/cursors and a single receipt spanning the older history and selected
+window, leaves the measured counts equal. Exactly 200 row payloads are read;
+only selected evidence/necessary anchors are processed, and at most one order-only
+row probe is allowed. Decodes and decrypts each equal the number of row/evidence
+payloads read. This is bounded by selected content and relevant evidence, not a
+promise of constant evidence size for every row: the heavily fragmented-row case
+retains all 1,200 contributions and memberships. Range queries batch at most 100
+predicates so one row cannot exceed SQLite's expression-depth limit.
+
+The [verifier verdict for the paging change](https://github.com/pyrycode/pyrycode-desktop/pull/2012#issuecomment-6190982424)
+records 10,319 unit tests executed/passed, 0 failed and 3 skipped, including all
+26 backend cases, on `de25c375f42755f5da20a4c4003c790e9525522a`. Its fake-transport
+gate recorded 428 executed/passed, 0 failed and 3 skipped. These callable
+main-process operations require no real-Claude or visual acceptance. Full indexed
+storage is now active; page IPC, renderer consumers and partial writes remain #1931.
+

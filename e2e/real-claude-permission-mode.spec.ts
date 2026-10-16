@@ -1,3 +1,4 @@
+import { chooseConnectedMenuItem } from './fixtures/chooseConnectedMenuItem'
 import { installPermissionModeEvidence } from './fixtures/permissionModeEvidence'
 import { scenarioDaemonRevision, scenarioInput, liveProof, scenarioMode } from './fixtures/clientScenario'
 import { execFile } from 'node:child_process'
@@ -68,9 +69,7 @@ test('operator bypass stays confirmed through a no-op write, then the menu retur
         const before = await proof()
         const deadline = Date.now() + ROUNDTRIP
         const timeout = () => Math.max(1, deadline - Date.now())
-        await page.locator('.composer__permission').click()
-        await page.getByRole('menu', { name: 'Permission mode', exact: true })
-          .getByRole('menuitem', { name, exact: true }).click()
+        await chooseConnectedMenuItem(page, page.locator('.composer__permission'), 'Permission mode', name, timeout())
         await expect.poll(async () => (await proof()).acks.length, { timeout: timeout() }).toBe(before.acks.length + 1)
         expect((await proof()).acks.at(-1) === initial.sessionId).toBe(true)
         await expect.poll(async () => (await proof()).readings.slice(before.readings.length).some(r =>

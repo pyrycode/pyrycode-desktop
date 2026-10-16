@@ -1,3 +1,4 @@
+import { chooseConnectedMenuItem } from './fixtures/chooseConnectedMenuItem'
 import { scenarioNonce } from './fixtures/clientScenario'
 import { type Page } from '@playwright/test'
 import { test, expect, encodePairingPayload } from './fixtures/clientScenario'
@@ -203,11 +204,8 @@ test('real claude restarts on Reset session and the turn stream survives it', as
   }, STATUS_LABEL_SELECTOR)
 
   // --- Restart claude (AC5). The operator's own route: open the Actions menu and pick the row. ---
-  await page.getByRole('button', { name: ACTIONS_LABEL, exact: true }).click()
-  await page
-    .getByRole('menu', { name: ACTIONS_LABEL, exact: true })
-    .getByRole('menuitem', { name: NEW_SESSION_ROW })
-    .click()
+  await chooseConnectedMenuItem(page, page.getByRole('button', { name: ACTIONS_LABEL, exact: true }),
+    ACTIONS_LABEL, NEW_SESSION_ROW)
 
   // EXACTLY ONE DELIMITER, drawn by the REAL daemon's own `session_transition`. This is the assertion the
   // fake tier cannot make: there the marker is a push this spec's author wrote. A timeout here means the

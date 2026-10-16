@@ -90,10 +90,14 @@ One new file, `src/renderer/src/screens/conversation/MarkdownReader.tsx`.
   as it would in a reply with the prop absent; following a link within a note is a later
   ticket, not a gap in this one.
 - **`MARKDOWN_OPEN_FAILED_NOTICE`** — the one client-owned string, `'Could not open the
-  file.'`, shown in the thread (not the reader, which has already closed by the time it
-  renders) as `<p className="conversation__banner" role="status">`. Never the path, never the
+  file.'`, shown after the reader closes as one non-dismissible Error pill in
+  [`TopOverlay`](conversation-shell.md#what-it-does). It reuses
+  `.top-overlay-pill--error` with `role="status"` for a polite announcement and no X;
+  there is no `conversation__banner` for this failure. Never the path, never the
   failure reason — a `failed` outcome for the current key is the reducer's only route to
-  `{ type: 'closed', notice: true }`. [#1630](https://github.com/pyrycode/pyrycode-desktop/issues/1630)
+  `{ type: 'closed', notice: true }`. The next open attempt clears it immediately,
+  and switching conversations drops it, including on return.
+  [#1630](https://github.com/pyrycode/pyrycode-desktop/issues/1630)
   reuses the same string for a failed **refresh**, but rendered inside the still-open reader
   (`.markdown-reader__notice`) over the old text rather than in the thread — the two call
   sites share the string because the failure reads the same to the operator either way, not
@@ -304,6 +308,12 @@ per-conversation `key` in `PairedShell`](paired-shell.md), so switching conversa
 remounts the screen, which drops the reducer state, clears the notice, and removes the
 listener — a late answer after that point reaches no subscriber to apply itself to.
 
+`ConversationScreen` passes `reader.state.type === 'closed' && reader.state.notice`
+through `TopOverlayControl` as `TopOverlay`'s optional boolean `markdownOpenFailed`.
+The overlay includes it in its empty-state guard, so the failure can appear alone
+or alongside usage and Re-pair feedback. It floats over the message area without
+moving the thread or composer; reader state and subscriptions still belong here.
+
 **The reader is a layer over the pane, not a replacement rendered by an early return** — that
 was the shipped shape's first cut, reworked during review (PR #1629). The thread and
 `Composer` always render, nested inside a full-pane wrapper:
@@ -369,6 +379,16 @@ assertion failures before reopen through the test-wide `finally` attachment.
 See [the geometry contract](development-verification-layout-and-input.md#layout-and-input)
 and the [reopen input](development-verification-layout-evidence.md#reader-reopen-input-verification)
 and [resize preservation evidence](development-verification-layout-evidence.md#reader-resize-scroll-preservation).
+
+The failure checks in `e2e/markdown-reader.spec.ts` locate exactly one Error pill in
+TopOverlay, assert the fixed text, polite status and absence of a button or failure
+band, and cover usage coexistence, repeated failures, next-open clearing and
+conversation departure/return. Measure the message's origin separately from its
+height when checking notice-induced movement: hovering the Markdown link reveals
+metadata and can legitimately grow the bubble. Compare the thread and composer
+boxes as well, so that allowance cannot hide a shifted pane. Static
+`TopOverlay.test.tsx` renders cover the empty guard and coexistence with usage and
+Re-pair; interaction and geometry require the browser scenario.
 
 **Why this matters beyond visual continuity**: `Composer`'s pending-attachment set and its
 upload listener (`useAttachmentUpload`) are mount-local state. The first shipped cut's early

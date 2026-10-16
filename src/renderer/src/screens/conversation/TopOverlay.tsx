@@ -17,6 +17,7 @@ import type { UsageLimitReading } from '../../store/usageLimitStore'
 import { isUsageReadingDismissed, usageLimitNotice } from './usageLimitNotice'
 import { COMPOSER_REPAIR_BUTTON_COPY, COMPOSER_RECONNECT_BUTTON_COPY, connectionNotice, shouldOfferReconnect } from './composerSend'
 import type { ConnectionStatus } from '../../store/sessionStore'
+import { MARKDOWN_OPEN_FAILED_NOTICE } from './MarkdownReader'
 
 /** The X's accessible name — client-owned, since the glyph itself says nothing to a screen reader. */
 export const USAGE_PILL_DISMISS_LABEL = 'Dismiss usage notice'
@@ -34,12 +35,14 @@ export function TopOverlay({
   connectionStatus,
   savedMessages = false,
   loadingSavedMessages = false,
-  onReconnect
+  onReconnect,
+  markdownOpenFailed = false
 }: {
   connectionStatus?: ConnectionStatus
   savedMessages?: boolean
   loadingSavedMessages?: boolean
   onReconnect?: () => void
+  markdownOpenFailed?: boolean
   sessionError?: string
   resolution: ModalResolution['kind'] | null
   onDismissResolution: () => void
@@ -53,7 +56,7 @@ export function TopOverlay({
   const usage = reading === null || isUsageReadingDismissed(reading, dismissed) ? null : reading
   const connection = connectionStatus === undefined ? null : connectionNotice(connectionStatus)
   // No pills, no element: the overlay takes no space and leaves nothing in the tree.
-  if (usage === null && resolution === null && sessionError === undefined && !repair && connection === null && !loadingSavedMessages) return null
+  if (usage === null && resolution === null && sessionError === undefined && !repair && connection === null && !loadingSavedMessages && !markdownOpenFailed) return null
   const notice = usage === null ? null : usageLimitNotice(usage, nowSeconds)
   return (
     <div className="conversation__top-overlay">
@@ -113,6 +116,11 @@ export function TopOverlay({
                 ? 'Claude keeps failing to start. Your message is waiting.'
                 : 'Claude stopped responding.'}
           </span>
+        </div>
+      )}
+      {markdownOpenFailed && (
+        <div className="top-overlay-pill top-overlay-pill--error" role="status">
+          <span className="top-overlay-pill__text">{MARKDOWN_OPEN_FAILED_NOTICE}</span>
         </div>
       )}
       {(connection !== null || loadingSavedMessages) && (

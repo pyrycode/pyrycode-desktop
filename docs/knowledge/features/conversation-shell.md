@@ -72,6 +72,14 @@ and precedes Re-pair, using the existing Error treatment with no dismiss control
 its authoritative live store. `TopOverlay` compares its code to client literals; daemon codes
 and message text never enter displayed text, attributes or classes.
 
+The [Markdown reader's failed-open notice](conversation-shell-markdown-reader.md#how-it-works)
+follows session errors and precedes Re-pair. It uses one existing Error pill with
+the fixed copy “Could not open the file.” and no dismiss control. Its `role="status"`
+provides a polite announcement; the overlay container itself is not a live region.
+It coexists with usage and Re-pair pills without a full-width band or moving the
+message list or composer. The reader owns its lifetime: the next open attempt or
+a conversation switch clears it, and returning to the chat does not restore it.
+
 Re-pair and pills with a dismiss X show an 8% On Surface hover layer over their
 existing fill, within 6px corners. Inert notices keep their resting paint; geometry
 and native keyboard outlines stay unchanged. See
@@ -263,7 +271,7 @@ and protected-storage cleanup keep their independent host-qualified lifecycle an
 
 `TopOverlay.tsx` is the pure view; `TopOverlayControl` in `ConversationScreen.tsx` selects the open
 chat's resolution from the [modal store](modal-store-bridge.md#permission-resolution-feedback).
-The pill sits below usage and above session errors and Re-pair, using the existing Default treatment and exact 8px X.
+The pill sits below usage and above session errors, Markdown failures and Re-pair, using the existing Default treatment and exact 8px X.
 Its only copies are “Resolved on another device” (`remote`) and “Request timed out” (`timeout`);
 the X is named “Dismiss permission resolution notice”. Outcome, raw source and daemon-authored text
 never enter this notice's DOM. An unknown/already-removed prompt, local answer/cancel or reconnect

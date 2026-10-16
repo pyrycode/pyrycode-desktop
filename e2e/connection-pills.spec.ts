@@ -23,15 +23,16 @@ const geometry = (page: Page) => page.evaluate(() =>
     return [box.x, box.y, box.width, box.height].map(Math.round)
   }))
 
-for (const saved of [false, true]) test(`connection pills clear and float over ${saved ? 'saved rows' : 'an empty thread'}`, async ({ launchPairedApp }) => {
+for (const mode of ['empty', 'hidden', 'saved']) test(`connection pills clear and float over ${mode} rows`, async ({ launchPairedApp }) => {
+  const saved = mode === 'saved'
   const { page, app, daemon, servers } = await launchPairedApp({ threadMode: 'native',
     helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
     const request = decodeEnvelope(bytes)
     if (request.type === 'list_conversations') return [seedConversationsFrame(SEEDED_ROW)]
     if (request.type !== 'thread_catch_up') return []
     return [frame('thread_items', { conversation_id: SEEDED_ROW.id, epoch: 'pills', version: 40,
-      items: saved ? Array.from({ length: 35 }, (_, index) => ({ id: index + 1, rev: 1, order: index + 1,
-        kind: 'assistant_message', status: 'finished', active: false, shown: true, session: 'session',
+      items: mode !== 'empty' ? Array.from({ length: 35 }, (_, index) => ({ id: index + 1, rev: 1, order: index + 1,
+        kind: 'assistant_message', status: 'finished', active: false, shown: saved, session: 'session',
         summary: `Saved message ${index}`, content: { text: `Saved message ${index}` } })) : [], final: false }, request.id),
       frame('thread_items', { conversation_id: SEEDED_ROW.id, epoch: 'pills', version: 40, items: [], final: true,
         ...(Number(request.payload.version) > 0 ? { from_version: request.payload.version }
@@ -77,7 +78,7 @@ for (const saved of [false, true]) test(`connection pills clear and float over $
     expect(fits.fits).toBe(true)
     if (width === 800) expect(fits.wraps).toBe(true)
     expect(await geometry(page)).toEqual(baseline)
-    await page.screenshot({ path: `/tmp/builder-2076/connection-${saved ? 'saved' : 'empty'}-${width}.png` })
+    await page.screenshot({ path: `/tmp/builder-2076/connection-${mode}-${width}.png` })
     if (saved) {
       const gap = await page.locator('.conversation__top-overlay').evaluate(el => {
         const a = el.children[0].getBoundingClientRect(), b = el.children[1].getBoundingClientRect()

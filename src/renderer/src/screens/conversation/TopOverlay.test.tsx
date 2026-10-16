@@ -6,6 +6,7 @@ import { USAGE_LIMIT_EXHAUSTED_COPY, USAGE_LIMIT_WARNING_COPY } from './usageLim
 import { COMPOSER_REPAIR_BUTTON_COPY } from './composerSend'
 import { CONNECTION_BANNER_COPY, DAEMON_UPDATE_REQUIRED_COPY, COMPOSER_RECONNECT_BUTTON_COPY } from './composerSend'
 import type { ConnectionStatus } from '../../store/sessionStore'
+import { MARKDOWN_OPEN_FAILED_NOTICE } from './MarkdownReader'
 
 // #1604 — the Top overlay's pure view. The markup is a pure function of the reading, the instant, the
 // dismissed triple and the repair flag, so every arm is a static render here; the clicks live in e2e.
@@ -22,6 +23,7 @@ const render = (props: {
   reading?: UsageLimitReading | null
   dismissed?: UsageLimitReading | null
   repair?: boolean
+  markdownOpenFailed?: boolean
   sessionError?: string
   resolution?: 'remote' | 'timeout' | null
   connectionStatus?: ConnectionStatus
@@ -33,6 +35,7 @@ const render = (props: {
     savedMessages={props.savedMessages}
     loadingSavedMessages={props.loadingSavedMessages}
     onReconnect={() => {}}
+    markdownOpenFailed={props.markdownOpenFailed}
     sessionError={props.sessionError}
     reading={props.reading ?? null}
     nowSeconds={NOW}
@@ -105,6 +108,30 @@ describe('connection feedback pills', () => {
   it.each(['unpair', 'not-paired', 'pairing-rejected'])('does not reconnect %s', code => {
     expect(render({ connectionStatus: { type: 'error', error: { code, message: 'SECRET', retryable: false } } }))
       .not.toContain(COMPOSER_RECONNECT_BUTTON_COPY)
+  })
+})
+
+describe('Markdown open failure pill', () => {
+  const failurePill = '<div class="top-overlay-pill top-overlay-pill--error" role="status">' +
+    `<span class="top-overlay-pill__text">${MARKDOWN_OPEN_FAILED_NOTICE}</span></div>`
+
+  it('shows only the client-owned error copy as a polite status without a dismiss button', () => {
+    expect(render({ markdownOpenFailed: true }))
+      .toBe(`<div class="conversation__top-overlay">${failurePill}</div>`)
+    expect(render({ markdownOpenFailed: false })).toBe('')
+  })
+
+  it.each([
+    { reading: reading() },
+    { repair: true },
+    { reading: reading(), repair: true }
+  ])('keeps one failure pill alongside other notices: %j', (other) => {
+    const markup = render({ ...other, markdownOpenFailed: true })
+    expect(markup.match(/conversation__top-overlay/g)).toHaveLength(1)
+    expect(markup.split(failurePill)).toHaveLength(2)
+    if (other.reading) expect(markup).toContain(USAGE_LIMIT_WARNING_COPY)
+    if (other.repair) expect(markup).toContain(REPAIR_PILL)
+    expect(markup).not.toContain('conversation__banner')
   })
 })
 

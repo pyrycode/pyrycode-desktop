@@ -61,3 +61,7 @@ Existing status discriminants select only client-owned explanations. Pairing rej
 ## Open Questions
 
 None. The existing absolute overlay already supplies the required wrapping and pointer-transparent gaps.
+
+## Revisions
+
+2026-10-16: Integrated main's #2077 Markdown failure prop, pill and tests alongside the connection feedback, preserving its existing lifecycle and announcement. Retired the now-unused header-band CSS after both callers moved. Saved feedback requires at least one `shown` item in the rendered snapshot; hidden-only snapshots are silent, like completed empty reads. Mounted coverage includes both. No new state or policy was introduced.

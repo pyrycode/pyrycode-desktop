@@ -10,7 +10,8 @@ hosts remain separate.
 The app records received lists and owned authoritative daemon-item changes automatically.
 Subset and metadata-only saves preserve unloaded items and evidence.
 Saved lists restore into the sidebar on launch, including unavailable and
-pairing-rejected hosts. Opening a saved chat reads only `daemon-items` on demand.
+pairing-rejected hosts. Opening a saved chat requests the newest 200 shown
+`daemon-items` plus active and recorded dependencies through a bounded partial projection on demand.
 It never draws a saved legacy timeline. Offline display grants no network capability.
 Once that host accepts `thread`, opening and reconnect resume from the saved epoch
 and complete checkpoint. Older demand and Retry use the thread query coordinator.
@@ -408,10 +409,11 @@ Other hosts' arrays retain their identity. Restoration never selects a chat or
 creates connection, working or recovery state.
 
 [`readSavedTimeline`](../../../src/renderer/src/store/savedTimelineRestorer.ts)
-keeps its runtime name but requires `threads` and always requests `readThread`.
-It accepts stored results only of kind `daemon-items` with the exact requested
-host and conversation. Wrong kinds/coordinates, unexpected results, classified
-errors and rejected IPC fail the current handle without importing data; missing
+keeps its runtime name but requires `threads` and requests `openThreadPage` with
+limit 200. It accepts validated partial daemon-item pages with the exact requested
+host and conversation, retaining sparse arrival positions and saved availability
+boundary separately from selected coverage. Wrong kinds/coordinates, unexpected
+results, classified errors and rejected IPC fail the current handle without importing data; missing
 records complete it with null. There is no `readTimeline` fallback.
 
 `threadRuntime.restore` invokes this reader, which opens the store-owned
@@ -420,7 +422,7 @@ Held scopes prevent duplicate reads.
 Process-local tokens fence delayed completion and failure after cancellation,
 replacement reads, explicit reset, epoch replacement or conversation/host/global
 clear, even if coordinate or epoch strings are reused. Initial epoch admission and
-same-owner live publication preserve the read. Full validated restoration merges
+same-owner live publication preserve the read. Explicit partial restoration merges
 saved-only items with admitted revisions and arrival ties while retaining saved
 repair/unfinished obligations; only exact completed coverage can release their
 checkpoint fences. See [store hydration](thread-item-store.md#snapshots-and-completed-batches).
@@ -542,10 +544,12 @@ The adapter is pinned to `better-sqlite3` 12.4.1. Host Node and Electron require
 separate native rebuilds; packaging rebuilds for the target ABI and unpacks the
 adapter from asar. See [runtime preparation and counted native proof](chat-history-testing-native.md#native-runtime-and-packaged-proof).
 Windows NSIS x64/arm64 targets remain configured; these smokes add no Linux/macOS
-release channel. Bounded legacy and authoritative pages remain callable main-only.
-Ordinary owned writes preserve unloaded history. Partial restoration/navigation
-remain #2041/#2042 under #1931; no renderer page IPC is added. Production reads
-and retained replacements still use complete snapshots. See
+release channel. Bounded legacy pages remain callable main-only; authoritative
+opening and held-page variants use the fixed authorized bridge. Ordinary owned
+writes preserve unloaded history. Production opening uses partial selection with
+no full-read fallback; retained full operations remain callable. User-driven older
+saved traversal and anchor rebasing remain #2042. One-time conversion after import
+or retained replacement is separate from ordinary fresh-owner opening work. See
 [the mutable-storage decision](../decisions/0014-authenticated-owned-thread-mutations.md).
 
 ## Testing

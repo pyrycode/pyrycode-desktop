@@ -36,7 +36,11 @@ content structurally. An owned item revision is committed and compared exactly
 after another fresh reopen. A 500-receipt by 200-id fixture exercises 100,000 memberships,
 full replacement and exact fresh reopen. It checks all history-directory files for
 fixture plaintext and reports versions, packaged/asar/native-unpacked flags,
-static stage and nonzero test counts.
+static stage and nonzero test counts. An 801-item authoritative fixture opens the
+last 200 shown items despite 500 hidden items, retaining one hidden active item
+and two evidence ranges. It records first conversion separately, closes the database,
+then checks exact partial content, checkpoint and opaque continuation through a
+fresh owner while measuring cold opening.
 Failure or missing/all-skipped evidence is nonzero. It adds no release channel.
 
 [`history-native.spec.ts`](../../../e2e/history-native.spec.ts) includes
@@ -50,6 +54,79 @@ direct smoke invocation rejects them before packaging imports or scratch creatio
 pins Windows rejection. Run the native proof on the operating system running the
 ticket; opposite-OS scheduling is outside scope. Existing NSIS x64/arm64 targets
 remain unchanged.
+
+### Counted bounded-opening validation
+
+The [bounded-opening verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/2062#issuecomment-6215044001)
+reviews Linux x64 head `b64334baa9d5ef1885296d93bfa5f7992c756b2a` on 2026-10-16.
+The inspected builder reports cover implementation
+`17901342573d182351400caca03babb767af0fbf`, after main
+`c369bb4728c07111d0fde6c33b02166780458e87`; only the plan's validation record changed
+before the reviewed head. The dispatcher separately records all verifier gates
+passed on that head, with counted fake gate 8:
+
+| Run or included case | Executed | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| Builder approved full units, 392 files | 9,138 | 9,138 | 0 | 3 |
+| Builder complete configured fake suite, both projects/two workers | 436 | 436 | 0 | 3 |
+| Mounted restore/live/held-reply case, included in builder suite | 1 | 1 | 0 | 0 |
+| Packaged production-encryption case, included in builder suite | 1 | 1 | 0 | 0 |
+| Dispatcher verifier fake gate 8 | 436 | 436 | 0 | 3 |
+
+The verdict confirms that `restore overlapping live content retains complete progress
+across an interrupted catch-up and epoch replacement` and `packaged protected history
+commits and reopens with production encryption` are present and passed in the
+inspected builder report. Each executed/passed once with zero failed/skipped, within
+the 436-executed, zero-failed, three-skipped suite. The dispatcher report supplies
+aggregate counts without named-test results; it is not the source of those named
+passes. The builder suite had no flaky results or global errors. The plan records
+zero retries and no fake-daemon-setup attachment.
+
+The mounted capture `bounded-opening-held-reply.png` at 1100×773 shows saved-only
+rows, newer live facts and pending loading together. The fixture proves local
+visibility before server release, coordinator resume from the admitted epoch and
+checkpoint, and exclusion of unrelated older shown rows while retaining the hidden
+active item. See [restoration traps](chat-history-testing-restoration.md#restoration).
+
+Instrumented protected fresh-owner measurements, inspected by the verifier, separate
+selected work from structural traversal and one-time conversion:
+
+| Fixture items | Base / active / dependency / evidence | Protected record reads / payload reads / decrypts | Structural reads | Cold opening ms | Conversion ms |
+| ---: | --- | --- | ---: | ---: | ---: |
+| 262 | 200 / 1 / 1 / 3 | 206 / 202 / 408 | 1,583 | 1,015.5 | 7,576.1 |
+| 1,242 | 200 / 1 / 1 / 3 | 206 / 202 / 408 | 1,992 | 796.6 | 31,035.8 |
+
+These runs shared the machine with other checks and establish bounded selected
+work, not a latency threshold. The earlier focused capture recorded cold
+454.9/439.0 ms and conversion 2,552.9/12,544.4 ms for the same small/large fixtures.
+Replacement and one-time collection import/retirement precede the cold measurements;
+fresh owners do not repeat them. Structural growth is separate from constant
+selected placement/payload decoding.
+
+The inspected `/tmp/pyry-history-native-ZdFgoe/runtime.stdout` and `runtime.stderr`
+record Electron 33.4.11 / Node 20.18.3 / better-sqlite3 12.4.1, production
+`gnome_libsecret`, packaged/ASAR/native-unpacked true and `stage: complete`.
+The 801-item packaged fixture selects 200 shown, one hidden active item, zero
+dependencies and two evidence ranges: conversion 3,873 ms, cold reopen 118 ms.
+The retained 100,000-membership full replacement also passed, taking 5,931 ms.
+Raw stderr retains system-bus/GPU/network-service diagnostics alongside successful
+counted completion; an empty stderr is not the success criterion.
+
+Build and docs guard passed. The dispatcher also records successful install,
+pre-verify `--no-suite`, Node/Electron rebuilds, units and build; its unit exit code
+supplies no new per-test count. The counted unit evidence above comes from the
+verifier-inspected `/tmp/builder-2059/pre-verify-approved.log`; the builder fake report
+is `/tmp/builder-2059/fake-suite.json`. The
+[plan validation record](../../specs/architecture/2059-bounded-saved-opening.md#validation-evidence)
+retains artifact paths and the separate focused ancestor assertion pass.
+
+Earlier sandbox captures remain failed: initial setup lacked the SQLite binding,
+and initial sandbox pre-verify failed 68 socket cases with `listen EPERM` and could
+not read security labels. The approved passes above are separate runs. Unit skips
+are existing opt-in relay/interoperability checks; fake skips are two macOS badge
+cases and macOS window reopen. macOS is outside this Linux ticket's verification
+scope; no live-Claude acceptance was introduced or claimed. These results are
+recorded evidence, not documentation-stage test reruns.
 
 ### Counted stable-binding validation
 

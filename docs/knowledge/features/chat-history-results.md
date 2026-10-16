@@ -8,7 +8,7 @@ Result states, local failure presentation and preservation rules for
 Saved-thread reading shows “Loading saved messages…” while pending in either connection
 state. Nonempty restored content shows “Offline. Showing saved messages.” only while
 the selected host is unavailable; connected opening and reconnect show no offline
-notice. Both `missing` and a stored empty daemon thread succeed and draw no notice at
+notice. Both `missing` and a saved-empty partial thread page succeed and draw no notice at
 all — a loaded, empty local read reads as the ordinary state of a chat opened for
 the first time on this machine, not a fault (\#1447). Errors, rejected
 IPC, invalid snapshots, unexpected result statuses and wrong host/conversation/kind
@@ -123,7 +123,7 @@ pages and canonical whole-scope checks for full reads. Reads do not rewrite them
 Authoritative headers bind the stable owner and every header index; their protected
 value contains scalar metadata, item/range counts, arrival presence and continuation
 generation. Retained placements/ranges bind the current generation. Schema-7 mutable
-headers additionally protect authenticated roots, AVL sequence counts, aggregate
+headers additionally protect authenticated roots, AVL held/shown/active counts, aggregate
 JSON-node count, reset identity and availability boundary. Mutable placements/ranges
 bind the stable owner; current-root proofs reject old-record/branch replay without
 rewriting untouched ciphertext. Rank verifies hinted parent routes from that root.
@@ -160,10 +160,10 @@ unencrypted columns are:
 | `thread_records` ownership/order | `scope`: stable owner UUID; `kind`: `header`, `item` or `range`; `ordinal`: nonnegative held/range position in retained scopes, stable record ordinal in mutable scopes (zero for header). |
 | `thread_payloads` lookup | `scope`: stable owner UUID; `item_id`, `revision`: admitted nonnegative safe integers. Primary key `(scope, item_id)`; payload is protected and deletion cascades from the owner. |
 | Authoritative selection indexes | `arrival`: original nonnegative first-arrival position or null; `item_order`: nonnegative safe integer or null; `range_ordinal`: containing saved range position or null; `range_start`, `range_end`: nonnegative safe-integer range bounds or null. Unused indexes are null. |
-| `thread_auth` | `scope`: stable owner UUID; `tree`, `path` and TEXT `payload`: structural index names/addresses, child hashes/counts/heights, placement/range digests and numeric identities, plus untrusted parent hints. No daemon content. Authenticated by protected header roots. |
+| `thread_auth` | `scope`: stable owner UUID; `tree`, `path` and TEXT `payload`: structural index names/addresses, child hashes/counts/heights, shown/active flags, attribution digests, placement/range digests and numeric identities, plus untrusted parent hints. No raw daemon text. Authenticated by protected header roots. |
 | `history_lists` | `server`: exact UTF-16LE host BLOB; `payload` is an encrypted complete list snapshot, validated against that owner. |
 | `history_import` | `singleton`: fixed integer 1, whose presence means import completed; `retired`: 0 for pending cleanup or 1 for recorded retirement. |
-| Schema/index metadata | `user_version`: 7 after first owned transaction, 6 after retained protected conversion; additive legacy/list admission can stop at 5 (base creation uses 2). Indexes, including `legacy_receipt_start` and `thread_ranges`, duplicate only reviewed ownership and structural columns. |
+| Schema/index metadata | `user_version`: 7 after first owned transaction or opening-index conversion, 6 after retained protected conversion; additive legacy/list admission can stop at 5 (base creation uses 2). Indexes, including `legacy_receipt_start` and `thread_ranges`, duplicate only reviewed ownership and structural columns. |
 
 Content-record `payload` is a ciphertext BLOB; `thread_auth.payload` is the
 content-free structural TEXT exception above. Timestamps, join strings, opaque cursors, attachment
@@ -198,16 +198,30 @@ removal retry, but another confirmed receipt can retry it.
 
 ## Bounded page results
 
-The [authoritative page operations](chat-history-api.md#main-only-bounded-authoritative-pages)
+The [authoritative page operations](chat-history-api.md#bounded-authoritative-opening-and-pages)
 return `{ status: 'page', page: { partial: true, metadata, items, ranges,
-arrivalPositions?, continuation } }`. Both newest and before use this result;
-neither is a `stored` full snapshot. `arrivalPositions`, when present, align only
+arrivalPositions?, availabilityStart?, continuation } }`. Authorized opening,
+newest and before requests all use this result; limits are integers 1–200, with
+opening fixed at 200 in production. Opening selects shown items plus active and
+recorded dependencies; newest/before count held items. None is a `stored` full
+snapshot. The partial codec validates exact ownership, items/ranges, sparse unique
+aligned arrival positions, optional boundary and opaque continuation before
+hydration. `arrivalPositions`, when present, align only
 with selected items. Ranges retain intact saved bounds and include the newest
 boundary anchor, but are only a selected subset. Unordered items add no coverage.
 `metadata` retains the saved ownership, epoch, applied version, complete checkpoint,
-unfinished version, repair and optional older availability. A null local
-continuation means only that no earlier held items remain; short/empty pages and
-local exhaustion change none of these daemon facts.
+unfinished version, repair and optional older availability. `availabilityStart`
+retains that reading's original boundary even when the oldest saved range is
+omitted. Selected ranges do not imply missing coverage. A null local continuation
+means only that no earlier local held boundary remains before the base window;
+opening closure can overlap a preceding held page. Short/empty pages and local
+exhaustion change none of these daemon facts and grant no read acknowledgement.
+
+Absent opening/newest scopes return `missing`; saved-empty scopes return a partial
+page with empty items, retained metadata and null continuation. Failed reads return
+classified errors and never masquerade as either. No opening error falls back to
+`readThread`. The fixed handler validates requests and authorizes saved hosts before
+storage, including disconnected hosts; keys/database/token contents remain in main.
 
 Authoritative malformed/over-limit/wrong-format tokens, cross-owner tokens, stale
 UUIDs and invalid boundaries use `invalid-request`, including after deletion or

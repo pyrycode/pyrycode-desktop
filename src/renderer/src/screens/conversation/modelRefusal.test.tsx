@@ -3,7 +3,6 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { ComposerErrorSlot, ConversationScreen, ModelRefusalRow } from './ConversationScreen'
 import type { ModelRefusalEvent } from '@shared/ipc/events'
 import { activeConversationStore } from '../../store/activeConversationStore'
-import { conversationTimelineStore, createConversationTimelineStore } from '../../store/conversationTimelineStore'
 import { sessionIdStore } from '../../store/sessionIdStore'
 import { sessionStore } from '../../store/sessionStore'
 import { conversationListStore } from '../../store/conversationListStore'
@@ -13,43 +12,6 @@ afterEach(() => vi.restoreAllMocks())
 
 const refusal: ModelRefusalEvent = { type: 'modelRefusalFallback', originalModel: 'opus', fallbackModel: 'sonnet',
   scope: 'session', refusalCategory: 'inert', banner: '<script>not markup</script>', truncatedFields: null, droppedFields: null }
-
-it.each([{ changeId: 'held' }, { rejected: true }])('renders retained recovery state %j with an empty settings store', write => {
-  const timelines = createConversationTimelineStore()
-  timelines.getState().dispatchFor('a', { type: 'modelRefusal', refusal, live: true })
-  const slice = timelines.getState().timelines.get('a')!
-  vi.spyOn(conversationTimelineStore, 'getInitialState').mockReturnValue({
-    ...timelines.getState(), timelines: new Map([['a', {
-      ...slice, timeline: { ...slice.timeline, refusalOffer: { report: refusal, ...write } }
-    }]])
-  })
-  vi.spyOn(activeConversationStore, 'getInitialState').mockReturnValue({
-    ...activeConversationStore.getInitialState(), activeConversation: {
-      id: 'a', cwd: '', name: 'A', is_promoted: false, last_used_at: '', workspace_label: null
-    }
-  })
-  vi.spyOn(sessionStore, 'getInitialState').mockReturnValue({
-    ...sessionStore.getInitialState(), statuses: new Map([['s', {
-      type: 'connected', ack: { protocol_version: '1', server_id: 's', conn_id: 'c', capabilities: [] }
-    }]])
-  })
-  vi.spyOn(conversationListStore, 'getInitialState').mockReturnValue({
-    ...conversationListStore.getInitialState(), conversations: [{
-      id: 'a', serverId: 's', cwd: '', name: 'A', is_promoted: false, is_archived: false,
-      last_message_ts: '', last_used_at: '', workspace_label: null
-    }]
-  })
-  vi.spyOn(sessionIdStore, 'getInitialState').mockReturnValue({
-    ...sessionIdStore.getInitialState(), sessionId: 'addressable'
-  })
-  expect(runSettingsWriteStore.getInitialState().pending.size).toBe(0)
-  expect(runSettingsWriteStore.getInitialState().error).toBeNull()
-  const html = renderToStaticMarkup(<ConversationScreen />)
-  const button = html.match(/<button[^>]*>Switch back<\/button>/)?.[0]
-  expect(button).toBeDefined()
-  expect(button?.includes('disabled=""')).toBe('changeId' in write)
-  expect(html.includes('Could not change the model — try again.')).toBe('rejected' in write)
-})
 
 it('renders the collapsed label and an accessible disclosure only for a nonempty banner', () => {
   const html = renderToStaticMarkup(<ModelRefusalRow refusal={refusal} />)

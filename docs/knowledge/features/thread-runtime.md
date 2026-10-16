@@ -20,7 +20,8 @@ handshake with `thread` connects normally and clears the failed treatment. Anoth
 host's capability or connection cannot select this host's content route. Saved
 format provenance permits offline display only and never establishes network
 capability. The legacy event/history path is unhooked from paired-host production
-content. Its reducer remains retained for cleanup, with no one-release fallback.
+content. The renderer reconstruction producers were deleted in #2030, with no
+fallback when authoritative inputs are absent.
 
 Conversation commands capture the selected or retained host. Main resolves that
 explicit host through the paired registry. A last claimant of an equal conversation
@@ -30,8 +31,9 @@ ID cannot redirect the request. Device identity is a separate authenticated fact
 
 Opening first starts an owned protected `readThread` through `readSavedTimeline`.
 Only `daemon-items` can hydrate the runtime. A legacy saved timeline is never drawn
-or converted. The existing protected collection remains the application backend;
-indexed partial storage and local paging are separate work.
+or converted. Protected indexed storage is the application backend; the renderer
+still restores complete authoritative snapshots. Bounded local paging remains
+separate work. See [storage activation](chat-history-testing.md#native-runtime-and-packaged-proof).
 
 While a saved read is pending, query demand waits. A connected opening or reconnect
 then supplies the saved epoch and complete checkpoint to the coordinator. Applied
@@ -60,20 +62,29 @@ subscriptions and retires owned query and live state.
 
 ## Navigation boundaries
 
-\#2028 removes dormant legacy bookkeeping from activation, exit, confirmed deletion and pairing/
-server cleanup, including creation-time `initializeCreatedTimeline`. These paths neither reset the
-flat timeline nor create, mark viewed or clear keyed slices. Retained standalone legacy producers
-and tests remain until #2030. #2029 independently retires renderer legacy saved IO; neither change
-alters authoritative item/pending-send cleanup or protected removal ordering.
+Navigation no longer resets, creates, views or clears legacy timelines (#2028).
+Renderer legacy saved IO retired separately (#2029). #2030 deletes the flat/keyed
+holders, `reduceTimeline`, content subscriptions, delta joining/open-bubble lookback,
+result filling, history reconciliation/demand/retry, type/timestamp joins,
+gap/receipt tracking, legacy echo settlement, inferred rosters and reconstructed
+row keys, along with their exclusive bridges, mounts and tests. The exclusive
+queue store/actions and local-count last-read store/cleanup are also gone.
+
+Shared declarations stay at `threadTimeline.ts` and `backgroundTaskRosterStore.ts`;
+shared translation remains at `timelineBridge.ts`. Those paths no longer imply a
+content producer. Main/IPC request and recovery retirement remains #2025;
+saved-format admission and indexed legacy storage retirement remains #2026.
+Their surviving contracts are not removed by renderer deletion.
 
 Active ID/session/configuration/prompt cleanup remains synchronous before exit navigation. Same-ID
 reopening preserves held configuration and requests a refresh every time. Server removal samples
-exclusive departed IDs before dropping the list slot, then exits a matching active chat and persists
-local mark removal last. A storage exception cannot interrupt earlier in-memory cleanup. See
+exclusive departed IDs before dropping the list slot, then exits a matching active chat.
+Protected removal retains its owning lifecycle; local-count mark persistence no longer participates. See
 [the shell's retained boundaries](paired-shell-conversation-exits.md).
 
 `conversationLastReadBridge` keeps its paired-shell `useReadPublication` mount while dropping the
-legacy count helper and timeline subscription. Navigation alone creates no read evidence; the
+legacy count helper and timeline subscription. Its wrapper remains after #2030 removes the
+underlying count store. Navigation alone creates no read evidence; the
 committed-visible-content fences below and daemon acknowledgements remain authoritative.
 
 ## Sending and authenticated identity
@@ -110,7 +121,19 @@ Replies retain the original host and prompt object. Session replacement and
 reconnect invalidate stale handles. Rejection feedback survives reconnect.
 Current prompts remain usable during pending or failed initial history recovery.
 Composer hook stops, refusal offers and foreground-tool reports derive from current
-canonical items. Session errors come from admitted live readings.
+canonical items. Session errors come from admitted live readings. Without a snapshot
+there are no content-derived reports or item previews; without a session binding
+there are no current-session reports or admitted live activity. Available daemon
+items and local unaccepted sends retain their own presentation authority. Neither
+absence selects a reconstructed source. Badge/sidebar status combines admitted
+live inputs (idle when unavailable) with received host-qualified shown/read marks.
+`notificationPreviewFromItems` remains shared; `notificationPreviewIn` is deleted.
+
+`subscribeRefusalRecovery` still forwards newly selected model writes into
+`threadRuntime.refusals`; it no longer dispatches into timelines or settles legacy
+events. The overlay consumes the exact displayed authoritative session-error
+reading on departure through its microtask fence, preserving StrictMode replay
+and preventing a stale cleanup from consuming a replacement reading.
 
 The screen shares one scroll pin with the actual authoritative scroller. The
 Background tasks menu, count pill and close action share drawer state. Immutable
@@ -123,6 +146,10 @@ content, reader coverage and repair/unfinished fences remain required. Sending a
 read command is distinct from received daemon acknowledgement. Every host-stamped
 sidebar row uses `last_shown_version` for unread state before its first opening;
 legacy local read stamps cannot replace a missing authoritative mark.
+`readTargetFor(inputs)` and `useReadObservation` have no legacy receipt/row-key
+branch. The publisher requires the authoritative epoch and shown watermark;
+`latest_entry_id` and local counts cannot supply missing eligibility. Observation
+cleanup, acknowledgement and reconnect retry retain their existing ownership fences.
 
 ## Validation boundaries
 
@@ -141,8 +168,9 @@ restore/live overlap, interrupted catch-up, epoch replacement, queue recovery,
 deletion/unpair, older paging and capability recovery.
 
 The [activation plan](../../specs/architecture/1908-thread-activation.md#manual-completion-shared-fake-migration-and-client-regressions)
-retains exact counts, hashes and the 19 legacy-only skipped cases. The remaining
-skip is the pre-existing desktop-isolation case. Cleanup is tracked in
+retains that historical run's exact counts and hashes and the now-completed
+19-case retirement inventory. Its twentieth skip was the pre-existing
+desktop-isolation case. Cleanup allocation is tracked in
 [#2020](https://github.com/pyrycode/pyrycode-desktop/issues/2020#issuecomment-6200547647).
 The [fake publisher](e2e-harness.md#scripted-and-native-thread-fixtures) supplies test
 protocol data only. These checks establish no credentialed real-daemon pass.
@@ -162,8 +190,9 @@ All 15 `thread-activation.spec.ts`, all 12 `thread-items.spec.ts` and the single
 `settings-per-server-unpair.spec.ts` case are explicitly present and passed in that counted Linux
 run. They include deletion/owning-pairing cleanup, host isolation and both committed-visible-
 authoritative-read variants. No top-level errors or fake-daemon-setup attachments were reported.
-The existing navigation factories retain seeded legacy-store preservation assertions; tests
-exclusive to stamping and its removed subscription were deleted.
+At that revision the navigation factories retained seeded legacy-store preservation assertions;
+\#2030 removes those setups with the deleted producers. Tests exclusive to stamping and its
+removed subscription had already been deleted.
 
 Historical macOS task `db47ef552e357d3da36abf43f54891dbcfc0aee1588e9a697235800c8860e37e`
 ran candidate `4d695203d5035b69ba02d77f1368e2809ead676d`: 434 executed/passed, 0 failed,
@@ -177,3 +206,42 @@ recorded historical candidate; current-head macOS checks are outside this Linux 
 No real-Claude or visual result is claimed for this navigation-only change. The
 [plan](../../specs/architecture/2028-retire-navigation-bookkeeping.md#returned-native-evidence--2026-10-16)
 retains the full candidate/configuration and skip breakdown.
+
+### Renderer producer retirement validation
+
+The [#2030 verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2039#issuecomment-6208863531)
+records Linux gates on 2026-10-16 at
+`c42a778299612f1b9ac0f2d786cc02dc132fe2ae`: units **9,152 executed/passed,
+0 failed, 30 skipped** across 392 passing files; complete configured fake Playwright
+**435 executed/passed, 0 failed, 3 skipped, 0 flaky**, four workers, clipboard/parallel
+projects, no selection/shard filters and zero retries. The skips are two macOS badge
+cases and the macOS window-reopen case. Install, docs guard, build and both native
+addon rebuilds passed. Pre-verify ran three checks and intentionally skipped two
+with `--no-suite`; units and typecheck ran in the subsequent unit/build gates.
+
+All 15 `thread-activation.spec.ts` and all 12 `thread-items.spec.ts` cases are
+explicitly present and passed, including both committed-visible-authoritative-read
+widths, missing-`thread` recovery, paging/checkpoint recovery and owning-scope cleanup.
+The retained activation cases assert zero legacy content requests on opening,
+reconnect, paging and retry. Both indexed-history lifecycle cases also passed.
+No broader suite or shared fake publisher was disabled; active cases in mixed
+files, cache/removal/restart and conversation-feature coverage remain.
+
+The last seven retired renderer-only cases were removed with their producers:
+
+| File | Removed cases |
+| --- | ---: |
+| `history-gaps.spec.ts` (file deleted) | 2 |
+| `reconnect-event-replay.spec.ts` | 1 |
+| `queued-own-settlement.spec.ts` | 2 |
+| `history-on-open.spec.ts` | 1 |
+| `visible-tail-read.spec.ts` | 1 |
+
+Together with three presentation cases removed in #2023 and nine recording cases
+removed in #2029, this completes the [19-case inventory](../../specs/architecture/1908-thread-activation.md#manual-completion-shared-fake-migration-and-client-regressions).
+Producer-exclusive unit regressions retired only with their implementations;
+shared translator/presentation tests remain. The verdict references dispatcher
+`verifier-gate_#2030.pass.json`, unit `_5.log` and Playwright JSON `_8.log` in its
+logs directory. These are recorded gate results, not documentation-stage reruns.
+macOS is outside this Linux ticket's verification scope. No real-Claude result or
+visual capture is claimed; existing live obligations remain in the runbook.

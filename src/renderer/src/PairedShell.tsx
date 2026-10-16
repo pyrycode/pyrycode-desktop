@@ -39,12 +39,8 @@ import { activeConversationStore } from './store/activeConversationStore'
 import { sessionFactsStore } from './store/sessionFactsStore'
 import { mcpStatusStore } from './store/mcpStatusStore'
 import { announcedModelStore } from './store/announcedModelStore'
-import { conversationLastReadStore } from './store/conversationLastReadStore'
-import { conversationTimelineStore } from './store/conversationTimelineStore'
 import { modelListStore } from './store/modelListStore'
 import { conversationListStore } from './store/conversationListStore'
-import { queueStore } from './store/queueStore'
-import { backgroundTaskRosterStore } from './store/backgroundTaskRosterStore'
 import { modalStore } from './store/modalStore'
 import { conversationActivityStore } from './store/conversationActivityStore'
 import { runConfigStore } from './store/runConfigStore'
@@ -164,9 +160,7 @@ const clearPairingDeps: ClearPairingScopedStateDeps = {
   clearAnnouncedModel: () => announcedModelStore.getState().clearAnnouncedModel(),
   clearSessionFacts: () => sessionFactsStore.getState().clearSessionFacts(),
   clearMcpStatus: () => mcpStatusStore.getState().clearMcpStatus(),
-  // #955: every conversation's published slash-command menu, dropped as one. It reaches its store
-  // DIRECTLY, the `clearAllLastRead` shape below, and for the same reason — there is no sampling or
-  // gating branch to keep in one tested place, because the store method takes nothing at all.
+  // Drop every published slash-command menu at the pairing boundary.
   clearAllSlashCommandLists: () => slashCommandListStore.getState().clearAllSlashCommandLists(),
   // #977: every conversation's published MODEL menu, dropped as one, the same shape and for the same
   // reason as its twin above — the store method takes nothing at all, so there is no sampling or
@@ -178,23 +172,6 @@ const clearPairingDeps: ClearPairingScopedStateDeps = {
   // method takes nothing at all. Adding it to THIS object is what makes the unpair path below drop
   // it; the call site needed no edit.
   clearAllConversations: () => conversationListStore.getState().clearAllConversations(),
-  // #1138: every conversation's queued backlog, dropped as one. The same direct, nullary shape as the
-  // four clears above. It is the only member of this object whose store the `connected` edge ALSO
-  // clears — scoping that edge's reset to the reconnecting server (which is what #1138 does) is exactly
-  // what stopped a re-pairing's first `connected` from blanking the map on its way past, so the two
-  // mechanisms now split the work rather than one covering for the other.
-  clearAllBacklogs: () => queueStore.getState().clearAllBacklogs(),
-  // #1139: every conversation's background-task roster, dropped as one — the same direct, nullary
-  // shape as the five clears above, and the SECOND member whose store the `connected` edge also
-  // clears. Scoping that edge to the reconnecting server (which is what #1139 does) is what stopped a
-  // re-pairing's first `connected` from blanking the map on its way past, and the daemon's reconcile
-  // re-sends only the NEW server's rosters — this family joined that set upstream (pyrycode#2077-#2080)
-  // and #569 proved the ordering through the transport — so without this entry a departed pairing's
-  // command lines would latch for the life of the process. That used to read "this family re-asserts
-  // nothing at all"; the premise changed and the entry is exactly as required as it was, the same shape
-  // the `dispatchModal` entry below already carries. Adding it to THIS object is what makes the unpair
-  // path below drop it; the call site needed no edit.
-  clearAllRosters: () => backgroundTaskRosterStore.getState().clearAllRosters(),
   // #1140: every outstanding permission prompt, its suppression bookkeeping and its rejection banners,
   // dropped as one — and the THIRD member whose store the `connected` edge also clears. It reaches its
   // store through `dispatch` rather than a `clearAll*` setter because that is `modalStore`'s only write
@@ -238,8 +215,6 @@ const clearPairingDeps: ClearPairingScopedStateDeps = {
   // makes the unpair path below drop it; the call site needed no edit.
   clearAllReportedContext: () => reportedContextStore.getState().clearAllReportedContext(),
   dispatchSession: (action) => sessionStore.getState().dispatch(action),
-  // Retain local read-mark cleanup until its remaining consumers retire.
-  clearAllLastRead: () => conversationLastReadStore.getState().clearAllLastRead()
 }
 
 const PAIRING_REJECTION_NOTICE = 'Your pairing has expired or is no longer valid. Enter a new pairing code to reconnect.'
@@ -529,8 +504,6 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
       { ...exitConversationDeps,
         getTimelineServerId: id => {
           if (savedTimelineTarget?.conversationId === id) return savedTimelineTarget.serverId
-          conversationTimelineStore.flushTimeline()
-          return conversationTimelineStore.getState().timelines.get(id)?.serverId
         },
         log: event => window.pyry.sendDiagnostic(event),
         navigateToList: () => { leaveRecovery(); dispatch({ type: 'back' }) } },

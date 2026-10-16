@@ -1,8 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { DaemonEvent } from '@shared/ipc/events'
-import { subscribeTimeline } from '../../store/timelineBridge'
-import { createTimelineStore, selectItems } from '../../store/timelineStore'
 import { subscribeModal } from '../../store/modalBridge'
 import { createModalStore, selectOutstanding } from '../../store/modalStore'
 import { PermissionModalView } from './PermissionModal'

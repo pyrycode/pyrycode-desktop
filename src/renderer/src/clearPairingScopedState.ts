@@ -10,17 +10,14 @@ export interface ClearPairingScopedStateDeps {
   clearAllSlashCommandLists: () => void
   clearAllModelLists: () => void
   clearAllConversations: () => void
-  clearAllBacklogs: () => void
-  clearAllRosters: () => void
   dispatchModal: (event: ModalEvent) => void
   clearAllActivity: () => void
   clearAllUsageLimits: () => void
   clearAllReportedContext: () => void
   dispatchSession: (action: SessionAction) => void
-  clearAllLastRead: () => void
 }
 
-/** Clear pairing-scoped state. Persist local read-mark removal last so it cannot interrupt other clears. */
+/** Clear pairing-scoped live and configuration state. */
 export function clearPairingScopedState(deps: ClearPairingScopedStateDeps): void {
   deps.clearActiveConversation()
   deps.clearSessionId()
@@ -30,12 +27,9 @@ export function clearPairingScopedState(deps: ClearPairingScopedStateDeps): void
   deps.clearAllSlashCommandLists()
   deps.clearAllModelLists()
   deps.clearAllConversations()
-  deps.clearAllBacklogs()
-  deps.clearAllRosters()
   deps.dispatchModal({ type: 'reset' })
   deps.clearAllActivity()
   deps.clearAllUsageLimits()
   deps.clearAllReportedContext()
   deps.dispatchSession({ type: 'reset' })
-  deps.clearAllLastRead()
 }

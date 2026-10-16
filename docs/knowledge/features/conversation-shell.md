@@ -20,8 +20,20 @@ After acceptance, text and valid supplied attachment facts come exclusively from
 daemon `user_message`; local content is retired rather than matched by text or kept
 as accepted truth. No resend repairs display, and legacy echoes and `queueStore`
 add no rows to this view. #2023 removed `Timeline`, `foldQueuedRows`, provisional
-Agent placement and the roster-connected drawer. Shared row/types remain; reducer,
-roster/bridge producers stay until #2030; #2029 separately retired renderer legacy saved IO.
+Agent placement and the roster-connected drawer. #2030 deletes the remaining
+renderer reconstruction reducer/holders, history demand/retry and joins,
+gap/receipt ledgers, inferred rosters, legacy echo settlement, exclusive queue
+actions and local-count read bookkeeping. Shared row/types/translators remain at
+their existing paths. #2029 separately retired renderer legacy saved IO; main/IPC
+and saved-format/storage retirement remain #2025 and #2026 respectively.
+
+Composer reports read canonical items for the bound session; status and session
+errors read admitted host/conversation/session live state. Without a snapshot,
+content reports and item previews are empty; without a binding, current-session
+reports and live activity are empty. Existing items, unaccepted local sends and independently admitted
+prompts keep their own lifetimes. None of these missing inputs activates a legacy
+fallback. Sidebar/badge unread compares only received owning-host shown/read marks.
+Refusal recovery still forwards new model-selection writes to `threadRuntime.refusals`.
 
 Accepted user items without a positive order sit at the tail in snapshot first-arrival
 order. Delivery revises that same scoped item into its supplied positive position,
@@ -56,8 +68,8 @@ A **Top overlay of pills** landed in [#1604](https://github.com/pyrycode/pyrycod
 The [permission resolution notice](#permission-resolution-notices) follows usage,
 with client-owned copy and a dismiss X. A session-error notice follows resolution
 and precedes Re-pair, using the existing Error treatment with no dismiss control.
-`TopOverlayControl` selects only the open conversation's latest `sessionError` from
-the keyed timeline. `TopOverlay` compares its code to client literals; daemon codes
+`TopOverlayControl` selects only the open conversation's admitted `sessionError` from
+its authoritative live store. `TopOverlay` compares its code to client literals; daemon codes
 and message text never enter displayed text, attributes or classes.
 
 Re-pair and pills with a dismiss X show an 8% On Surface hover layer over their
@@ -83,7 +95,7 @@ its notice, so returning does not replay it. Unopened notices stay held, includi
 through same-host saved-history reads; host reconnect clears them even off-screen
 without touching other hosts. Cleanup defers consumption through a microtask to
 distinguish actual departure from StrictMode replay. See
-[timeline lifetime](conversation-timeline-store.md#what-it-does) and
+[live-state ownership](thread-runtime.md#live-controls-and-read-publication) and
 [verification boundaries](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves).
 
 The thread overflow menu's bottom-end anchor uses level 2 above the Top overlay's
@@ -182,7 +194,7 @@ received summaries and certified newest/catch-up completion. Thread content does
 not pass through `reduceTimeline` or legacy row-key/history evidence.
 Credentialed live acceptance remains distinct from this integration.
 
-`readTargetFor(undefined, inputs)` takes the received `last_shown_version`, never maximum
+`readTargetFor(inputs)` takes the received `last_shown_version`, never maximum
 item IDs, revisions or held `version`. Admission requires matching snapshot/summary scope,
 present shown/read metadata, a non-negative safe target, and a newest ordered shown source
 row. The target must be at most both `snapshot.checkpoint` and supplied `completeThrough`,
@@ -218,21 +230,23 @@ Each reconnect may retry that evidenced target once, even while blurred, without
 newer summary. A higher target needs a new committed visible observation. Epoch replacement,
 deletion, owner loss or unavailable metadata discards pending authority; a scope change alone
 creates none. Late receipts cannot confirm another host's pending claim. Thread publisher
-ownership is host-qualified; legacy publication still requires unambiguous ID ownership, and
-main retains its independent ambiguous-connected-owner refusal. Thus a recorded renderer
+ownership requires the authoritative epoch and shown watermark; the legacy latest-entry,
+row-key and receipt branches are deleted. Main retains its independent
+ambiguous-connected-owner refusal. Thus a recorded renderer
 attempt is not proof of wire delivery. See [mounted evidence](development-verification.md#authoritative-thread-read-evidence)
-and [legacy publication](conversation-last-read-store.md#how-it-works).
+and [publisher lifecycle](conversation-last-read-store.md#how-it-works).
 
 ### Navigation and cleanup
 
 Creation, opening/reopening, switching, archive/delete and unpair retain active/session,
-configuration/prompt and pairing cleanup while leaving flat/keyed legacy timelines alone (#2028).
+configuration/prompt and pairing cleanup; flat/keyed legacy timelines no longer exist (#2030).
 Same-ID activation preserves held configuration but always requests a refresh; an ID change clears
 session and configuration before requesting the new chat's readings. Creation opens the
 host-qualified thread runtime without creating a legacy slice or marking it viewed.
 
 Navigation publishes no read evidence. `PairedShell` retains `useConversationLastRead`, now only a
-wrapper around authoritative `useReadPublication`; its local count writer/subscription is removed.
+wrapper around authoritative `useReadPublication`; its local count store, writer,
+subscription and cleanup are removed.
 Deletion still requires owning-host admission before active exit. Authoritative item, pending-send
 and protected-storage cleanup keep their independent host-qualified lifecycle and ordering. See
 [activation/exits](paired-shell-conversation-exits.md),
@@ -339,9 +353,8 @@ See [verification boundaries](development-verification-what-each-test-tier-prove
 
 ## Edge cases and limitations
 
-The legacy timeline, roster and receipt producers remain until #2024. Their
-presentation adapters were deleted in #2023; they are unhooked from paired-host
-production content.
+The legacy timeline, roster and receipt producers and their exclusive tests are
+deleted (#2030), following presentation retirement (#2023).
 The [thread runtime](thread-runtime.md) defines current rendering and live controls.
 The authoritative view shares the screen's actual scroll pin. Its ordinary
 Background tasks menu and task-count pill control the same drawer.
@@ -354,7 +367,7 @@ supplied test inputs must still be reprojected.
 
 - An empty supplied timeline keeps a focusable history scroller with `EmptyThread` inside. Without a snapshot, chrome, Top overlay and pending inline prompts still mount and measure.
 - Since [#179](../codebase/179.md), the timeline is the **only** thread surface — no split-brain, no empty second region. `MessageThread`/`selectMessages` are retained but unread residue.
-- The send button is **wired** ([#66](../codebase/66.md)): a click (or Enter) sends the composed message and appends an optimistic echo, now into the timeline ([#179](../codebase/179.md)). A whitespace-only input does nothing; a send-bridge failure is swallowed (no crash). See [Composer send](composer-send.md).
+- A click or Enter submits through the host-qualified pending-send store, capturing authenticated device/message identity. Whitespace does nothing; identity or bridge failure preserves recoverable input. Accepted daemon items settle only the exact host/device/message pair. See [Composer send](composer-send.md).
 - **Dark scheme only**; the desktop sidebar stays fixed while the chat pane reflows down to the 800px minimum window width.
 - **Connection banner** ([#279](../codebase/279.md)) — reads the open conversation's own host through `useOpenConnectionStatus` and renders while it is not connected. Pairing rejection selects the fixed recovery notice; other non-connected states use `CONNECTION_BANNER_COPY`, never `ConnectionError.message`. See [per-host decisions](session-store.md#one-slot-per-server-since-1133). Through [#968](../codebase/968.md) it coexisted with the composer's own terse caption (#31), both visible while disconnected by design; #968 dropped that caption, and the banner is now the only announcement of a non-connected state outside the `error` arm's status-row occupant (#797/#963).
 - Renderer unit tests use `renderToStaticMarkup`: store-bound containers read Zustand's initial server snapshot, and effects, geometry and clicks do not run. Fake-transport Electron coverage establishes interaction; see [test boundaries](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves).

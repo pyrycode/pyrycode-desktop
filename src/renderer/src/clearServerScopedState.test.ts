@@ -29,7 +29,6 @@ function deps(
     clearActiveConversation: vi.fn(),
     clearSessionId: vi.fn(),
     clearRunConfig: vi.fn(),
-    clearLastReadFor: vi.fn(),
     navigateToList: vi.fn()
   } as never
 }
@@ -90,25 +89,6 @@ describe('clearServerScopedState', () => {
     expect(d.clearConversationsFor).toHaveBeenCalledWith('srv-never-listed')
     expect(d.clearActiveConversation).not.toHaveBeenCalled()
     expect(d.navigateToList).not.toHaveBeenCalled()
-    expect(d.clearLastReadFor).toHaveBeenCalledTimes(1)
-    expect(d.clearLastReadFor).toHaveBeenCalledWith(new Set())
-  })
-
-  it('drops the last-read marks of the departed conversations, and only those (#1197 AC1)', () => {
-    const d = deps({ departed: ['c1', 'c2'], open: conversation('survivor') })
-    clearServerScopedState(d, 'srv-a')
-    expect(d.clearLastReadFor).toHaveBeenCalledTimes(1)
-    expect(d.clearLastReadFor).toHaveBeenCalledWith(d.getDepartedConversationIds.mock.results[0].value)
-    expect(d.clearLastReadFor).toHaveBeenCalledWith(new Set(['c1', 'c2']))
-  })
-
-  it('read persistence runs after every in-memory cleanup and navigation', () => {
-    const d = deps({ departed: ['c1', 'c2', 'c3'], open: conversation('c1') })
-    clearServerScopedState(d, 'srv-a')
-    for (const effect of [d.clearConversationsFor, d.clearActiveConversation,
-      d.clearSessionId, d.clearRunConfig, d.navigateToList]) {
-      expect(effect.mock.invocationCallOrder[0]).toBeLessThan(d.clearLastReadFor.mock.invocationCallOrder[0])
-    }
   })
 
   it('returns nothing and reports nothing — total, like both clear helpers beside it', () => {

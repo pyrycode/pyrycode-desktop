@@ -1,18 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
 import { activateConversation, type ActivateConversationDeps } from './activateConversation'
-import { createTimelineStore } from './store/timelineStore'
 import { createSessionIdStore } from './store/sessionIdStore'
 import { createActiveConversationStore } from './store/activeConversationStore'
-import {
-  createConversationTimelineStore,
-  selectTimelineFor
-} from './store/conversationTimelineStore'
-import {
-  createConversationLastReadStore
-} from './store/conversationLastReadStore'
 import { createRunConfigStore } from './store/runConfigStore'
 import { createRunSettingsWriteStore } from './store/runSettingsWriteStore'
-import { initialTimelineState, type ThreadItem } from './store/threadTimeline'
 import type { ConversationCreatedPayload, ConversationSummary } from '@shared/wire/types'
 
 const conversation = (id: string): ConversationCreatedPayload => ({
@@ -23,8 +14,6 @@ const conversation = (id: string): ConversationCreatedPayload => ({
   last_used_at: '2026-07-30T09:00:00Z',
   workspace_label: null
 })
-
-const seededItems: readonly ThreadItem[] = [{ kind: 'userText', text: 'a message from A' }]
 
 function spyDeps(previous: ConversationCreatedPayload | null): {
   deps: ActivateConversationDeps
@@ -145,7 +134,6 @@ describe('activateConversation', () => {
   })
 
   it('real stores: a switch drops the previous chat’s snapshot AND its confirmed overrides (#1167 AC1)', () => {
-    const timeline = createTimelineStore(initialTimelineState)
     const sessionId = createSessionIdStore({ sessionId: 's1' })
     const active = createActiveConversationStore({ activeConversation: conversation('a') })
     const runConfig = createRunConfigStore({
@@ -210,26 +198,21 @@ describe('activateConversation', () => {
     expect(write.getState()).toBe(before)
   })
 
-  it('real stores: a switch preserves the legacy timeline and drops the daemon session id', () => {
-    const timeline = createTimelineStore({ ...initialTimelineState, items: seededItems })
+  it('real stores: a switch drops the daemon session id', () => {
     const sessionId = createSessionIdStore({ sessionId: 's1' })
     const active = createActiveConversationStore({ activeConversation: conversation('a') })
     const next = conversation('b')
 
     activateConversation(realDeps(sessionId, active), next)
-
-    expect(timeline.getState().items).toBe(seededItems)
     expect(sessionId.getState().sessionId).toBeNull()
     expect(active.getState().activeConversation).toEqual(next)
   })
 
-  it('real stores: re-opening the active conversation keeps its rows and its session id (AC3, AC4)', () => {
-    const timeline = createTimelineStore({ ...initialTimelineState, items: seededItems })
+  it('real stores: re-opening the active conversation keeps its session id (AC3, AC4)', () => {
     const sessionId = createSessionIdStore({ sessionId: 's1' })
     const active = createActiveConversationStore({ activeConversation: conversation('a') })
 
     activateConversation(realDeps(sessionId, active), conversation('a'))
-    expect(timeline.getState().items).toBe(seededItems)
     expect(sessionId.getState().sessionId).toBe('s1')
   })
 
@@ -245,31 +228,11 @@ describe('activateConversation', () => {
       workspace_label: null
     }
     const active = createActiveConversationStore({ activeConversation: conversation('a') })
-    const timeline = createTimelineStore()
     const sessionId = createSessionIdStore()
 
     activateConversation(realDeps(sessionId, active), summary)
 
     expect(active.getState().activeConversation).toEqual(summary)
-  })
-
-  it.each([null, 'a', 'b'])('activation from %s neither creates legacy slices nor stamps local read marks', previous => {
-    const timelines = createConversationTimelineStore()
-    timelines.getState().dispatchFor('a', { type: 'userText', text: 'retained' })
-    const write = vi.fn()
-    const lastRead = createConversationLastReadStore({ read: () => new Map([['a', 7]]), write })
-    const before = timelines.getState()
-    const marks = lastRead.getState()
-    const deps = realDeps(createSessionIdStore(),
-      createActiveConversationStore({ activeConversation: previous === null ? null : conversation(previous) }))
-
-    activateConversation(deps, conversation('b'))
-    activateConversation(deps, conversation('b'))
-
-    expect(timelines.getState()).toBe(before)
-    expect(selectTimelineFor('b')(timelines.getState())).toBeNull()
-    expect(lastRead.getState()).toBe(marks)
-    expect(write).not.toHaveBeenCalled()
   })
 })
 

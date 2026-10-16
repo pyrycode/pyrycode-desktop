@@ -7,16 +7,17 @@ import { readFile } from 'node:fs/promises'
 import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/clientScenario'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 import { NOT_YET_AVAILABLE, readMainProcess } from './fixtures/mainProcessRead'
+import { readReplayMainProcess } from './fixtures/replayNativeStorage'
 
 import { installHistoryQueryEvidence } from './fixtures/historyQueryEvidence'
 import { watchPhaseReconnect, readPhaseReconnect } from './fixtures/phaseReconnectEvidence'
 
-// Retry only an inspection read when Electron loses its CDP promise. Never retry
-// the handler installation, input, daemon post, or any other mutation.
+// Synchronous inspection bypasses Electron's collected inspector-promise path.
+// Poll only unavailable reads, never installation, input, posts or other mutations.
 async function mainRead<T>(app: ElectronApplication, read: (electron: typeof import('electron')) => T): Promise<T> {
   let observed: T | typeof NOT_YET_AVAILABLE = NOT_YET_AVAILABLE
   await expect.poll(async () => {
-    observed = await readMainProcess<T>(app, read)
+    observed = await readReplayMainProcess<T>(app, read)
     return observed !== NOT_YET_AVAILABLE
   }, { timeout: 5_000 }).toBe(true)
   return observed as T

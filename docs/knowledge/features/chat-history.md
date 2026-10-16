@@ -7,7 +7,8 @@ fresh service instance can read saved content without a connection or Noise hand
 saved pairing record's `server` field, so equal conversation ids on different
 hosts remain separate.
 
-The app records received lists and authoritative daemon-item snapshots automatically.
+The app records received lists and owned authoritative daemon-item changes automatically.
+Subset and metadata-only saves preserve unloaded items and evidence.
 Saved lists restore into the sidebar on launch, including unavailable and
 pairing-rejected hosts. Opening a saved chat reads only `daemon-items` on demand.
 It never draws a saved legacy timeline. Offline display grants no network capability.
@@ -368,12 +369,11 @@ and [bounded-work fixtures](chat-history-testing.md#bounded-legacy-page-regressi
 mounts once from [`App`](app-shell.md#where-the-daemon-bridge-lives) across routes.
 `createChatHistoryWriter` requires `threads` and `lists`; production supplies
 `threadRuntime.items` and `conversationListStore`. It observes only received lists
-and authoritative item snapshots, submitting `replaceList` and `replaceThread`.
+and authoritative owned changes, submitting `replaceList` and `mutateThread`.
 It has no legacy timeline subscription, receipt/row-key/echo observation,
-`replaceTimeline` path or timeline-frame flush hook. Legacy renderer producers and
-their direct store/bridge tests remain; main, preload, shared format admission,
-indexed reconstruction and legacy storage APIs remain valid for other consumers.
-Producer retirement belongs to #2030 and saved-format retirement to #2026.
+`replaceTimeline` path or timeline-frame flush hook. Legacy renderer producers were
+retired in #2030; main, preload, shared format admission, indexed reconstruction
+and legacy storage APIs remain valid for retained callers and cleanup.
 
 List admission still requires preload's synchronous `conversationsReceived` receipt
 with a string `serverId`, and a changed `byServer` array for that exact host.
@@ -383,12 +383,15 @@ Read pushes update attention immediately but do not themselves save a list; a la
 received list captures the reconciled read marks. Startup state, local list
 restoration and clears schedule no list write.
 
-Item ownership comes from the authoritative store's host/conversation scope.
-The writer compares immutable snapshot references and skips the private `restored`
-identity so hydration schedules no save. Later authoritative changes remain
-saveable, preserving complete checkpoints, certified ranges, repair and unfinished
-batch fences exactly as held. Projection through `parseChatHistorySnapshot`
-detaches coordinates and content synchronously before scheduling.
+Item ownership comes from each received transition's `owned` change at the exact
+host/conversation/epoch. The writer skips unchanged ownership references and local
+restoration, so hydration schedules no save. `parseChatHistoryRequest` detaches
+changed items, explicit removals, metadata and new evidence before scheduling;
+it does not project a shortened holder as a complete snapshot. Ordered completion
+intervals and availability boundaries preserve saved repair/unfinished fences
+that the holder may not contain. Holder loss retains pending work; intentional
+same-epoch resets carry a unique retry identity. See
+[owned mutation admission](chat-history-api.md#owned-authoritative-mutations).
 Local unaccepted sends, permissions and session state never enter this cache.
 See [buffering and removal ordering](chat-history-storage.md#buffered-replacements).
 
@@ -470,7 +473,8 @@ for saved-read notices, result/error classifications and preservation after fail
 ## Storage and concurrency
 
 Production `createChatHistoryStore` composes the indexed legacy and authoritative
-backends with protected list cells and schema-6 authoritative payloads. One
+backends with protected list cells, stable authoritative payloads and schema-7
+authenticated mutable indexes. One
 main-process database owner lazily opens a reusable synchronous connection at
 `history/history.sqlite` beneath
 trusted `userDataPath`. The composition root retains it across window reopening;
@@ -508,15 +512,20 @@ canonical parser output.
 Authoritative scopes separately protect header metadata, item placements, stable
 item payloads and ranges, including first-arrival and containing-range associations.
 Payload lookup uses stable owner/item id; protected placements bind the exact
-ciphertext digest and current generation. Binding placements only to the stable
-owner would allow older placement/evidence replay. Schema-5 conversion validates
-all authoritative scopes atomically and preserves old continuations; ordinary
-schema-6 pages perform no conversion scan. See
+ciphertext digest. Retained full-replacement scopes bind placements/evidence to
+the current generation. Mutable scopes instead authenticate them through roots
+in the protected header, with an AVL sequence for held order/rank and fixed-width
+radix lookup/order/evidence paths. Parent hints require root-to-node verification;
+owner binding alone would allow old-record replay. A protected aggregate JSON-node
+count keeps incremental admission within full/page reader limits. Schema-5 conversion
+validates all authoritative scopes; schema-6-to-mutable conversion validates only
+the addressed scope in its first owned transaction. Subsequent mutations/pages
+avoid conversion scans and retain untouched ciphertext. See
 [storage bindings and migration](chat-history-api.md#api).
 Lists remain complete protected cells. Both full readers preserve exact supplied
 ownership and content; neither family converts into the other.
 
-Every replacement, including identical or empty content, rotates its continuation
+Every replacement and owned mutation, including metadata-only work, rotates its continuation
 identity. Legacy scopes use a fresh snapshot UUID; authoritative scopes retain
 their owner and rotate a protected generation, reusing unchanged same-epoch item
 ciphertext. Delete/recreate receives fresh ownership; deletion cascades to all
@@ -529,9 +538,10 @@ separate native rebuilds; packaging rebuilds for the target ABI and unpacks the
 adapter from asar. See [runtime preparation and counted native proof](chat-history-testing.md#native-runtime-and-packaged-proof).
 Windows NSIS x64/arm64 targets remain configured; these smokes add no Linux/macOS
 release channel. Bounded legacy and authoritative pages remain callable main-only.
-Owned incremental writes remain #2044; partial restoration/navigation remain
-\#2041/#2042 under #1931, with no renderer page IPC added by the binding migration.
-Production reads and replacements still use complete snapshots.
+Ordinary owned writes preserve unloaded history. Partial restoration/navigation
+remain #2041/#2042 under #1931; no renderer page IPC is added. Production reads
+and retained replacements still use complete snapshots. See
+[the mutable-storage decision](../decisions/0014-authenticated-owned-thread-mutations.md).
 
 ## Testing
 

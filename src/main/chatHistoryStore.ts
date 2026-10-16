@@ -130,7 +130,7 @@ export function createChatHistoryStore(deps: {
           reading = operation === 'readTimeline'
           return result
         }
-        if (operation === 'readThread' || operation === 'replaceThread') {
+        if (operation === 'readThread' || operation === 'replaceThread' || operation === 'mutateThread') {
           const result = threads.executeSync(request)
           if (result.status === 'page') throw INVALID_CHAT_HISTORY
           requireSuccess(result)

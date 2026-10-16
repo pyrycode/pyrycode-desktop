@@ -2,11 +2,12 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { createHash } from 'node:crypto'
 import Database from 'better-sqlite3'
 import { createHistoryDatabase } from './historyDatabase'
 import { createIndexedThreadHistory } from './indexedThreadHistory'
 import { createIndexedLegacyHistory } from './indexedLegacyHistory'
-import { parseChatHistorySnapshot } from '../shared/chatHistory'
+import { parseChatHistorySnapshot, type ThreadSnapshot } from '../shared/chatHistory'
 import type { SecretEncryption } from './secureStore'
 
 const roots: string[] = [], owners: ReturnType<typeof createHistoryDatabase>[] = []
@@ -51,6 +52,318 @@ async function page(store: ReturnType<typeof createIndexedThreadHistory>, reques
 }
 const error = (code: string) => ({ status: 'error', code })
 const stored = (s: unknown) => ({ status: 'stored', snapshot: parseChatHistorySnapshot(s) })
+function owned(s: { serverId: string; conversationId: string; thread: ThreadSnapshot } = snapshot(), extra: object = {}) {
+  const { items: ignoredItems, ranges: ignoredRanges, arrivalOrder: ignoredArrival, ...metadata } = s.thread
+  void ignoredItems; void ignoredRanges; void ignoredArrival
+  return ask('mutateThread', { change: { metadata, acceptEpoch: true, items: [], removeIds: [], ranges: [], ...extra } }, s.serverId, s.conversationId)
+}
+
+it('successive owned additions keep ordering paths and record work bounded without rewriting placements', async () => {
+  const h = setup(), s = snapshot(0)
+  let reads = 0, writes = 0
+  h.database.transaction(db => {
+    const prepare = db.prepare.bind(db)
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      const statement = prepare(sql)
+      if (sql.startsWith('SELECT')) {
+        const get = statement.get.bind(statement), all = statement.all.bind(statement)
+        vi.spyOn(statement, 'get').mockImplementation((...args) => { const r = get(...args); reads += r ? 1 : 0; return r })
+        vi.spyOn(statement, 'all').mockImplementation((...args) => { const r = all(...args); reads += r.length; return r })
+      } else {
+        const run = statement.run.bind(statement)
+        vi.spyOn(statement, 'run').mockImplementation((...args) => { writes++; return run(...args) })
+      }
+      return statement
+    })
+  })
+  let first: unknown
+  for (let id = 0; id < 513; id++) {
+    reads = 0; writes = 0
+    expect(await h.store.execute(owned(s, { items: [{ id, rev: 1, kind: 'future', order: id }] }))).toEqual({ status: 'ok' })
+    if ([16, 128, 512].includes(id)) { expect(reads).toBeLessThan(500); expect(writes).toBeLessThan(300) }
+    const row = h.database.transaction(db => db.prepare("SELECT payload FROM thread_records WHERE kind = 'item' AND ordinal = 0").get())
+    if (id === 0) first = row
+    else expect(row).toEqual(first)
+  }
+  vi.restoreAllMocks()
+  h.database.close()
+  const fresh = h.fresh()
+  expect((await page(fresh.store, newest(2))).items.map(i => i.id)).toEqual([511, 512])
+  expect(await fresh.store.execute(ask('readThread'))).toMatchObject({ status: 'stored', snapshot: { thread: { items: expect.any(Array) } } })
+})
+
+it('separately flushed JSON aggregates reject overflow atomically and stay readable after reopen', async () => {
+  const h = setup(), s = snapshot(0)
+  const entry = (id: number) => ({ id, rev: 1, kind: 'future', data: Array(60000).fill(null) })
+  expect(await h.store.execute(owned(s, { items: [entry(1)] }))).toEqual({ status: 'ok' })
+  expect(await h.store.execute(owned(s, { items: [entry(2)] }))).toEqual(error('write-failed'))
+  h.database.close()
+  const fresh = h.fresh()
+  expect((await page(fresh.store, newest(2))).items).toEqual([entry(1)])
+  expect(await fresh.store.execute(ask('readThread'))).toMatchObject({ status: 'stored', snapshot: { thread: { items: [entry(1)] } } })
+  expect(await fresh.store.execute(owned(s, { removeIds: [1], items: [entry(2)] }))).toEqual({ status: 'ok' })
+})
+
+it('retains the shared reset identity length boundary across a fresh owner', async () => {
+  const h = setup(), s = snapshot(0)
+  expect(await h.store.execute(owned(s, { resetId: 'r'.repeat(8192) }))).toEqual({ status: 'ok' })
+  h.database.close()
+  expect(await h.fresh().store.execute(ask('readThread'))).toMatchObject({ status: 'stored' })
+})
+
+it('balanced owned ordering preserves ties, movements, internal removals and authenticated parent routes', async () => {
+  const h = setup(), s = snapshot(0)
+  const ids = Array.from({ length: 40 }, (_, i) => i).sort((a, b) => (a * 17) % 41 - (b * 17) % 41)
+  const items = ids.map(id => ({ id, kind: 'future', rev: 1, order: id % 20 }))
+  for (const item of items) expect(await h.store.execute(owned(s, { items: [item] }))).toEqual({ status: 'ok' })
+  const revised = { ...items[10], rev: 2, order: -1 }, removed = ids.filter((_, i) => i % 3 === 0 && i !== 10)
+  expect(await h.store.execute(owned(s, { items: [revised], removeIds: removed }))).toEqual({ status: 'ok' })
+  h.database.close()
+  const fresh = h.fresh(), expected = items.filter(i => !removed.includes(i.id)).map(i => i.id === revised.id ? revised : i).sort((a, b) => a.order - b.order)
+  expect(await fresh.store.execute(ask('readThread'))).toMatchObject({ status: 'stored', snapshot: { thread: { items: expected } } })
+  expect((await page(fresh.store, newest(3))).items).toEqual(expected.slice(-3))
+  fresh.database.transaction(db => db.prepare("UPDATE thread_auth SET payload = path WHERE tree = 'parent'").run())
+  expect(await fresh.store.execute(owned(s, { items: [{ ...revised, rev: 3 }] }))).toEqual(error('write-failed'))
+})
+
+it('converts an admitted fractional ordering root transactionally while retaining exact placements', async () => {
+  const h = setup(), s = snapshot(0), item = { id: 1, rev: 1, kind: 'future', order: 1 }
+  await h.store.execute(owned(s, { items: [item] }))
+  // Independent old-format singleton radix root, bound to the existing protected placement.
+  h.database.transaction(db => {
+    const row = db.prepare("SELECT scope, payload FROM thread_records WHERE kind = 'header'").get() as { scope: string; payload: Buffer }
+    const envelope = JSON.parse(Buffer.from(h.encryption.decrypt(row.payload)).toString()), value = envelope.value
+    const node = db.prepare("SELECT payload FROM thread_auth WHERE tree = 'sequence'").get() as { payload: string }
+    const leaf = JSON.parse(node.payload).value, target = '0'.repeat(56)
+    let ref = { hash: '', count: 0 }
+    for (let length = target.length; length >= 0; length--) {
+      const path = target.slice(0, length), payload = JSON.stringify({ left: ref, right: { hash: '', count: 0 }, value: length === target.length ? leaf : null })
+      db.prepare('INSERT OR REPLACE INTO thread_auth VALUES (?, ?, ?, ?)').run(row.scope, 'order', path, payload)
+      ref = { hash: createHash('sha256').update(path + payload).digest('hex'), count: 1 }
+    }
+    const { sequence: _sequence, nodes: _nodes, ...old } = value.mutable
+    value.mutable = { ...old, roots: { ...old.roots, order: ref } }
+    db.prepare("UPDATE thread_records SET payload = ? WHERE kind = 'header'").run(h.encryption.encrypt(Buffer.from(JSON.stringify(envelope))))
+  })
+  const placements = () => h.database.transaction(db => db.prepare("SELECT * FROM thread_records WHERE kind = 'item'").all())
+  const before = placements()
+  h.database.transaction(db => db.exec("CREATE TRIGGER fail_conversion BEFORE INSERT ON thread_records WHEN new.kind = 'header' BEGIN SELECT RAISE(ABORT, 'injected'); END"))
+  expect(await h.store.execute(owned(s))).toEqual(error('write-failed'))
+  expect(placements()).toEqual(before)
+  h.database.transaction(db => db.exec('DROP TRIGGER fail_conversion'))
+  expect(await h.store.execute(owned(s))).toEqual({ status: 'ok' })
+  expect(placements()).toEqual(before)
+  h.database.close()
+  expect(await h.fresh().store.execute(ask('readThread'))).toMatchObject({ status: 'stored', snapshot: { thread: { items: [item] } } })
+})
+
+it('owned revisions preserve unloaded items and evidence across a fresh owner', async () => {
+  const h = setup(), s = snapshot()
+  expect(await h.store.execute(put(s))).toEqual({ status: 'ok' })
+  const changed = { ...s.thread.items[4], rev: 900, content: null }
+  const { items: _items, ranges: _ranges, arrivalOrder: _arrivals, ...metadata } = s.thread
+  expect(await h.store.execute(ask('mutateThread', { change: {
+    metadata, acceptEpoch: false, items: [changed], removeIds: [], ranges: []
+  } }))).toEqual({ status: 'ok' })
+  h.database.close()
+  const result = await h.fresh().store.execute(ask('readThread'))
+  expect(result.status).toBe('stored')
+  if (result.status !== 'stored' || result.snapshot.kind !== 'daemon-items') throw Error('expected thread')
+  expect(result.snapshot.thread.items).toEqual(s.thread.items.map(i => i.id === changed.id ? changed : i))
+  expect(result.snapshot.thread.ranges).toEqual(s.thread.ranges)
+  expect(result.snapshot.thread.arrivalOrder).toEqual(s.thread.arrivalOrder)
+})
+
+it('metadata-only ownership and same-epoch recreation preserve unloaded facts and progress fences', async () => {
+  const h = setup(), s = snapshot()
+  await h.store.execute(put(s))
+  expect(await h.store.execute(owned(s))).toEqual({ status: 'ok' })
+  const recreated = { ...s, thread: { ...s.thread, items: [], ranges: [], arrivalOrder: [], version: 0,
+    checkpoint: 0, uncommittedVersion: 0, repair: null } }
+  expect(await h.store.execute(owned(recreated))).toEqual({ status: 'ok' })
+  h.database.close()
+  expect(await h.fresh().store.execute(ask('readThread'))).toEqual(stored(s))
+})
+
+it('metadata-only live progress cannot certify saved unfinished work or clear a saved repair', async () => {
+  const h = setup(), s = snapshot()
+  s.thread.uncommittedVersion = 250
+  await h.store.execute(put(s)); await h.store.execute(owned(s))
+  const partial = { ...s, thread: { ...s.thread, version: 400, checkpoint: 400, uncommittedVersion: 0, repair: null } }
+  expect(await h.store.execute(owned(partial))).toEqual({ status: 'ok' })
+  expect(await h.store.execute(ask('readThread'))).toEqual(stored({ ...s, thread: { ...s.thread, version: 400 } }))
+})
+
+it('owned revision overlap, explicit removal and admitted epoch transition remain distinct', async () => {
+  const h = setup(), s = snapshot()
+  await h.store.execute(put(s)); await h.store.execute(owned(s))
+  const token = (await page(h.store)).continuation
+  const revised = { ...s.thread.items[4], rev: 1000, content: null }
+  expect(await h.store.execute(owned(s, { items: [revised], removeIds: [2] }))).toEqual({ status: 'ok' })
+  expect(await h.store.execute(ask('beforeThreadPage', { limit: 2, continuation: token }))).toEqual(error('invalid-request'))
+  expect(await h.store.execute(owned(s, { items: [s.thread.items[4]] }))).toEqual({ status: 'ok' })
+  const read = await h.store.execute(ask('readThread'))
+  expect(read).toEqual(stored({ ...s, thread: { ...s.thread, items: s.thread.items.filter(i => i.id !== 2).map(i => i.id === 4 ? revised : i),
+    arrivalOrder: s.thread.arrivalOrder.filter(id => id !== 2) } }))
+  const epoch = { ...s, thread: { ...s.thread, epoch: 'next', version: 0, checkpoint: 0, uncommittedVersion: 0, repair: null } }
+  expect(await h.store.execute(owned(epoch, { acceptEpoch: false }))).toEqual(error('write-failed'))
+  expect(await h.store.execute(owned(epoch))).toEqual({ status: 'ok' })
+  h.database.close()
+  expect(await h.fresh().store.execute(ask('readThread'))).toEqual(stored({ ...epoch, thread: {
+    ...epoch.thread, items: [], arrivalOrder: [], ranges: [] } }))
+})
+
+it('completion cannot bridge a missing version interval or certify a newer checkpoint', async () => {
+  const h = setup(), s = snapshot()
+  s.thread.uncommittedVersion = 250
+  await h.store.execute(put(s))
+  const later = { ...s, thread: { ...s.thread, version: 400, checkpoint: 400, uncommittedVersion: 0, repair: null } }
+  expect(await h.store.execute(owned(later, { completion: { fromVersion: 150, version: 300 } }))).toEqual({ status: 'ok' })
+  expect(await h.store.execute(ask('readThread'))).toEqual(stored({ ...s, thread: { ...s.thread,
+    version: 400, repair: { fromVersion: 100, throughVersion: 300 } } }))
+  expect(await h.store.execute(owned(later))).toEqual({ status: 'ok' })
+  expect(await h.store.execute(owned(later, { completion: { fromVersion: 100, version: 300 } }))).toEqual({ status: 'ok' })
+  h.database.close()
+  expect(await h.fresh().store.execute(ask('readThread'))).toEqual(stored({ ...later, thread: { ...later.thread, checkpoint: 300 } }))
+})
+
+it('owned evidence merges without rewriting untouched placements and pages prove containing ranges', async () => {
+  const h = setup(), s = snapshot()
+  await h.store.execute(put(s)); await h.store.execute(owned(s))
+  const bytes = () => h.database.transaction(db => db.prepare("SELECT * FROM thread_records WHERE kind = 'item' ORDER BY ordinal").all())
+  const before = bytes()
+  expect(await h.store.execute(owned(s, { ranges: [{ start: 3, end: 100 }] }))).toEqual({ status: 'ok' })
+  expect(bytes()).toEqual(before)
+  const p = await page(h.store, newest(9))
+  expect(p.ranges).toEqual([{ start: 0, end: 101 }, { start: 900, end: 950 }])
+  h.database.close()
+  expect(await h.fresh().store.execute(ask('readThread'))).toEqual(stored({ ...s, thread: {
+    ...s.thread, ranges: [{ start: 0, end: 101 }, { start: 900, end: 950 }] } }))
+})
+
+it.each(['placement', 'range', 'branch'])('owned protected %s replay fails after a fresh owner', async kind => {
+  const h = setup(), s = snapshot()
+  await h.store.execute(put(s)); await h.store.execute(owned(s))
+  const old = h.database.transaction(db => ({
+    placement: db.prepare("SELECT * FROM thread_records WHERE kind = 'item' AND ordinal = 4").get() as Record<string, unknown>,
+    range: db.prepare("SELECT * FROM thread_records WHERE kind = 'range' AND ordinal = 0").get() as Record<string, unknown>,
+    branch: db.prepare("SELECT * FROM thread_auth WHERE tree = 'ids' AND path = ''").get() as Record<string, unknown>
+  }))
+  await h.store.execute(owned(s, { items: [{ ...s.thread.items[4], rev: 1000 }], ranges: [{ start: 3, end: 100 }] }))
+  h.database.transaction(db => {
+    if (kind === 'branch') db.prepare("UPDATE thread_auth SET payload = ? WHERE tree = 'ids' AND path = ''").run(old.branch.payload)
+    else if (kind === 'placement') {
+      const r = old.placement
+      db.prepare("UPDATE thread_records SET arrival = ?, item_order = ?, range_ordinal = ?, range_start = ?, range_end = ?, payload = ? WHERE kind = 'item' AND ordinal = 4")
+        .run(r.arrival, r.item_order, r.range_ordinal, r.range_start, r.range_end, r.payload)
+    } else {
+      const r = old.range
+      db.prepare("UPDATE thread_records SET payload = ? WHERE kind = 'range' AND range_start = 0").run(r.payload)
+    }
+  })
+  h.database.close(); const fresh = h.fresh()
+  expect(await fresh.store.execute(ask('readThread'))).toEqual(error('unreadable'))
+  const attempt = await fresh.store.execute(owned(s, { items: [{ ...s.thread.items[4], rev: 2000 }],
+    ...(kind === 'range' ? { ranges: [{ start: 0, end: 200 }] } : {}) }))
+  expect(attempt).toEqual(error('write-failed'))
+})
+
+it('owned writes roll back payloads and authenticated paths together and permit retry', async () => {
+  const h = setup(), s = snapshot()
+  await h.store.execute(put(s)); await h.store.execute(owned(s))
+  const state = () => h.database.transaction(db => ['thread_records', 'thread_payloads', 'thread_auth'].map(table => db.prepare(`SELECT * FROM ${table}`).all()))
+  const before = state(), request = owned(s, { items: [{ ...s.thread.items[4], rev: 1000 }] })
+  h.database.transaction(db => db.exec("CREATE TRIGGER fail_owned BEFORE INSERT ON thread_records WHEN new.kind = 'header' BEGIN SELECT RAISE(ABORT, 'injected'); END"))
+  expect(await h.store.execute(request)).toEqual(error('write-failed'))
+  expect(state()).toEqual(before)
+  h.database.transaction(db => db.exec('DROP TRIGGER fail_owned'))
+  expect(await h.store.execute(request)).toEqual({ status: 'ok' })
+  h.database.close()
+  expect(await h.fresh().store.execute(ask('readThread'))).toMatchObject({ status: 'stored', snapshot: { thread: { items: expect.arrayContaining([{ ...s.thread.items[4], rev: 1000 }]) } } })
+})
+
+it('failed protected mutable conversion preserves schema 6 and retries on a fresh owner', async () => {
+  const h = setup(), s = snapshot()
+  await h.store.execute(put(s)); h.database.close()
+  const before = readFileSync(join(h.root, 'history/history.sqlite'))
+  vi.spyOn(h.encryption, 'encrypt').mockImplementationOnce(() => { throw Error('injected') })
+  expect(await h.fresh().store.execute(owned(s))).toEqual(error('write-failed'))
+  h.database.close()
+  expect(readFileSync(join(h.root, 'history/history.sqlite'))).toEqual(before)
+  const fresh = h.fresh()
+  expect(fresh.database.transaction(db => db.pragma('user_version', { simple: true }))).toBe(6)
+  expect(await fresh.store.execute(owned(s))).toEqual({ status: 'ok' })
+  expect(await fresh.store.execute(ask('readThread'))).toEqual(stored(s))
+})
+
+it('rejects malformed owned changes before touching storage', async () => {
+  const h = setup(), s = snapshot(), transaction = vi.spyOn(h.database, 'transaction')
+  const item = s.thread.items[4]
+  for (const extra of [{ items: [item, item] }, { items: [item], removeIds: [item.id] },
+    { removeIds: [-1] }, { metadata: { ...s.thread, hostId: 'wrong' } }, { sql: 'ignored' }]) {
+    expect(await h.store.execute(owned(s, extra))).toEqual(error('invalid-request'))
+  }
+  expect(transaction).not.toHaveBeenCalled()
+})
+
+it('coalesces shared protected paths into one write per path in an owned batch', async () => {
+  const h = setup(), s = snapshot(400)
+  let writes = 0
+  h.database.transaction(db => {
+    const prepare = db.prepare.bind(db)
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      const statement = prepare(sql)
+      if (sql.startsWith('INSERT OR REPLACE INTO thread_auth')) {
+        const run = statement.run.bind(statement)
+        vi.spyOn(statement, 'run').mockImplementation((...args) => { writes++; return run(...args) })
+      }
+      return statement
+    })
+  })
+  expect(await h.store.execute(owned(s, { items: s.thread.items }))).toEqual({ status: 'ok' })
+  const rows = h.database.transaction(db => db.prepare('SELECT count(*) AS n FROM thread_auth').get() as { n: number })
+  expect(writes).toBe(rows.n)
+  expect(writes).toBeGreaterThan(400)
+})
+
+it('ordinary owned validation, serialization and protected record work stay bounded as unrelated history grows', async () => {
+  const h = setup()
+  async function measure(count: number) {
+    const s = snapshot(count)
+    await h.store.execute(put(s)); await h.store.execute(owned(s))
+    const entry = { ...s.thread.items[4], rev: 10000 }
+    let rows = 0, writes = 0
+    h.database.transaction(db => {
+      const prepare = db.prepare.bind(db)
+      vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+        const statement = prepare(sql)
+        if (sql.startsWith('SELECT')) {
+          const all = statement.all.bind(statement), get = statement.get.bind(statement)
+          vi.spyOn(statement, 'all').mockImplementation((...args) => { const result = all(...args); rows += result.length; return result })
+          vi.spyOn(statement, 'get').mockImplementation((...args) => { const result = get(...args); rows += result ? 1 : 0; return result })
+        } else {
+          const run = statement.run.bind(statement)
+          vi.spyOn(statement, 'run').mockImplementation((...args) => { writes++; return run(...args) })
+        }
+        return statement
+      })
+    })
+    const decrypt = vi.spyOn(h.encryption, 'decrypt'), encrypt = vi.spyOn(h.encryption, 'encrypt')
+    const serialize = vi.spyOn(JSON, 'stringify')
+    expect(await h.store.execute(owned(s, { items: [entry] }))).toEqual({ status: 'ok' })
+    // Each admitted item is serialized only at the narrow boundary and its payload.
+    const itemSerializations = serialize.mock.calls.filter(([value]) => typeof value === 'object' && value !== null &&
+      ('value' in value && (value as { value?: { id?: number } }).value?.id === 4 || 'id' in value && value.id === 4)).length
+    const work = [rows, writes, decrypt.mock.calls.length, encrypt.mock.calls.length, itemSerializations]
+    expect(decrypt).toHaveBeenCalledTimes(3); expect(encrypt).toHaveBeenCalledTimes(3)
+    vi.restoreAllMocks(); return work
+  }
+  const large = await measure(1000), small = await measure(10)
+  // Fixed-width lookup plus logarithmic sequence paths; payload work is constant.
+  expect(large.slice(2)).toEqual(small.slice(2))
+  expect(large[0] - small[0]).toBeLessThan(40)
+  expect(large[1] - small[1]).toBeLessThan(40)
+})
 
 // Genuine committed pre-upgrade envelopes, independent of the new writer.
 function seedSchema5(h: ReturnType<typeof setup>, s = snapshot(), corrupt = false) {

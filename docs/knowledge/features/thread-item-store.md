@@ -182,6 +182,22 @@ boundaries. Older availability follows the oldest supplied certified boundary;
 later-boundary replies cannot replace it, and a delayed reply cannot reopen an
 exhausted (`false`) reading at the same boundary.
 
+Received publications carry a separate `owned` change containing changed complete
+items, scalar metadata and only newly certified ranges. Hydration carries none;
+missing items/holders imply no removals. Successful `beginBatch.commit` alone adds
+`completion: { fromVersion, version }` and optional
+`availability: { start, available }` for the oldest supplied certified boundary.
+Repair, live updates and same-epoch holder recreation cannot supply that certificate.
+
+The [writer](chat-history-storage.md#buffered-replacements) coalesces item revisions
+and ranges while retaining progress/boundary observations in order. Main folds them
+against saved evidence, including unloaded obligations. An earlier completion cannot
+certify a later live checkpoint, discharge newer pending repair/unfinished progress,
+or reopen exhaustion at an older saved boundary. A plain boolean certification
+would lose those distinctions during coalescing and failed-write merging. New epochs
+start progress empty; retrying a completed repair observation cannot revive it, but
+a newly raised repair at the current checkpoint remains an obligation.
+
 ## Repair and unfinished-batch checkpoint fences
 
 Live successes may advance checkpoint only without a repair and with unfinished
@@ -228,10 +244,15 @@ certification can establish that progress.
 
 ## Epochs and cleanup ownership
 
-`acceptEpoch(hostId, conversationId, epoch)` explicitly establishes ownership;
-updates cannot choose a new epoch. Reaccepting the same epoch is idempotent. A new
-epoch resets only that conversation's items, version/checkpoint, ranges, older
-availability, repair and private pending progress, and creates a new generation.
+`acceptEpoch(hostId, conversationId, epoch, reset = false)` explicitly establishes
+ownership; updates cannot choose a new epoch. Reaccepting a held same epoch is
+idempotent unless `reset` is true. A new epoch resets only that conversation's
+items, version/checkpoint, ranges, older availability, repair and pending progress,
+and creates a new generation. The coordinator passes `true` for explicit daemon
+`thread_reset`, including a same-epoch reset. Its unique `resetId` supersedes older
+pending facts/progress and is persisted for idempotent acknowledgement retry.
+Recreating an absent holder in a saved epoch carries admission without reset and
+must preserve unloaded disk facts. Memory cleanup never supplies reset/removal intent.
 
 Batch handles capture a process-local generation symbol rather than trusting epoch
 text alone. Replacement invalidates earlier handles even if the old epoch string
@@ -247,7 +268,7 @@ keep their held references. Old batch application/commit cannot recreate a clear
 scope, including after the same host/conversation/epoch is accepted again.
 
 The [thread query coordinator](#thread-query-coordinator) owns requests, recovery and reply certification;
-[protected disk persistence](chat-history-api.md#api) consumes these snapshots.
+[protected disk persistence](chat-history-api.md#owned-authoritative-mutations) consumes received owned changes.
 The [thread runtime](thread-runtime.md#restore-recovery-and-cleanup) supplies production
 lifecycle subscriptions. Deletion and successful unpair retire queries, pending
 reads, local sends, live bindings and read authority as well as these retained items.

@@ -25,6 +25,21 @@ const timeline = { version: 1, kind: 'timeline', serverId: 'host', conversationI
 const summary = { id: 'chat', name: null, is_promoted: false, is_archived: true, cwd: '/display', last_message_ts: '', last_used_at: 'date', workspace_label: null }
 
 describe('chat history records and requests', () => {
+  it('detaches reset identities and boundary observations and rejects malformed ownership', () => {
+    const metadata = { hostId: 'h', conversationId: 'c', epoch: 'e', version: 2, checkpoint: 2, uncommittedVersion: 0, repair: null }
+    const observation = { metadata, completion: { fromVersion: 0, version: 2 }, availability: { start: 100, available: false } }
+    const request = { operation: 'mutateThread', serverId: 'h', conversationId: 'c', change: {
+      ...observation, resetId: 'reset', acceptEpoch: true, priorProgress: [observation], items: [], removeIds: [], ranges: []
+    } }
+    const parsed = parseChatHistoryRequest(request)
+    observation.availability.start = 0
+    expect(parsed).toMatchObject({ change: { availability: { start: 100 }, priorProgress: [{ availability: { start: 100 } }] } })
+    for (const patch of [{ resetId: 2 }, { resetId: 'x'.repeat(8193) },
+      { availability: { start: -1, available: true } }, { availability: { start: 1, available: 'yes' } },
+      { completion: undefined, availability: { start: 1, available: true } },
+      { priorProgress: [{ ...observation, availability: { start: 1, available: true, extra: 1 } }] }
+    ]) expect(() => parseChatHistoryRequest({ ...request, change: { ...request.change, ...patch } })).toThrow()
+  })
   it('matches every current ThreadItem field and preserves ordered rows and coverage', () => {
     expect(parseChatHistorySnapshot(JSON.parse(JSON.stringify(timeline)))).toEqual(timeline)
     for (const coverage of [{ status: 'unknown' }, { status: 'received', cursor: '', atStart: true }]) {
@@ -174,5 +189,40 @@ describe('served provenance and row identity validation', () => {
       receipts: Array.from({ length: 501 }, () => receipt) } })).toThrow()
     expect(() => parseChatHistorySnapshot({ ...value, served: { ids: [],
       receipts: Array.from({ length: 100_001 }, () => ({ ...receipt, ids: [] })) } })).toThrow()
+  })
+})
+
+
+describe('owned progress admission', () => {
+  const metadata = { hostId: 'host', conversationId: 'chat', epoch: 'e', version: 12,
+    checkpoint: 12, uncommittedVersion: 0, repair: null }
+  const completion = { fromVersion: 0, version: 5 }
+  const change = { metadata, acceptEpoch: true, items: [], removeIds: [], ranges: [],
+    priorProgress: [{ metadata: { ...metadata, version: 5, checkpoint: 5 }, completion }] }
+  const request = (c: object) => ({ operation: 'mutateThread', serverId: 'host', conversationId: 'chat', change: c })
+  it('detaches exact completion evidence instead of assigning the latest live checkpoint', () => {
+    const parsed = parseChatHistoryRequest(request(change))
+    expect(parsed).toEqual(request(change))
+    expect(parsed).not.toBe(change)
+    if (parsed.operation !== 'mutateThread') throw Error('expected mutation')
+    expect(parsed.change.priorProgress?.[0].metadata).not.toBe(change.priorProgress[0].metadata)
+    expect(parsed.change.priorProgress?.[0].completion).not.toBe(completion)
+    expect(parsed.change).not.toHaveProperty('completion')
+  })
+  it.each([
+    { completion: { fromVersion: 6, version: 5 } },
+    { completion: { fromVersion: 0, version: 13 } },
+    { completion: { fromVersion: -1, version: 5 } },
+    { completion: { fromVersion: 0, version: 0.5 } },
+    { completion: { ...completion, certified: true } },
+    { completion: true }, { certified: true },
+    { priorProgress: [{ metadata: { ...metadata, epoch: 'other' } }] },
+    { priorProgress: [{ metadata: { ...metadata, hostId: 'other' } }] },
+    { priorProgress: [{ metadata: { ...metadata, conversationId: 'other' } }] },
+    { priorProgress: [{ metadata, completion: { fromVersion: 0, version: 13 } }] },
+    { priorProgress: [{ metadata, other: true }] },
+    { priorProgress: Array(100_001).fill({ metadata }) }
+  ])('rejects malformed or cross-owner progress %#', extra => {
+    expect(() => parseChatHistoryRequest(request({ ...change, ...extra }))).toThrow()
   })
 })

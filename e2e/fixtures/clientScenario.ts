@@ -4,7 +4,7 @@ import { basename, join, resolve } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { test as live, withIsolatedElectronApp, type RealDaemonOptions, type RealDaemonFixtures } from './realDaemon'
-import { startFakeRoutingRelay } from '../../src/main/transport/fakeRoutingRelay'
+import { startFakeRelayForwarder } from '../../src/main/transport/fakeRelayForwarder'
 import { startFakeDaemonForTest } from './fakeDaemonSetup'
 import { RecordedExchange, parseRecording, type Recording, type RecordedEntry } from './recordedExchange'
 import type { ExchangeCapture } from './exchangeCapture'
@@ -111,8 +111,8 @@ const replay = base.extend<ReplayFixtures>({
     }
   },
   relay: async ({}, use) => {
-    const relay = await startFakeRoutingRelay()
-    try { await use(relay) } finally { await relay.close() }
+    const relay = await startFakeRelayForwarder()
+    try { await use(relay as RealDaemonFixtures['relay']) } finally { await relay.close() }
   },
   daemon: async ({ relay, recording, exchange }, use) => {
     const daemon = await startFakeDaemonForTest({ url: relay.url, helloAck: { capabilities: recording.capabilities },

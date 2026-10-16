@@ -33,6 +33,30 @@ const ask = (operation: string, extra: object = {}, serverId = 'Host', conversat
   ({ operation, serverId, ...(operation === 'removeServer' ? {} : { conversationId }), ...extra })
 const put = (s: { serverId: string; conversationId: string } = snapshot()) => ask('replaceThread', { snapshot: s }, s.serverId, s.conversationId)
 const newest = (limit = 2) => ask('newestThreadPage', { limit })
+it('bounded opening selects shown, active and recorded dependencies after fresh reopen', async () => {
+  const h = setup(), s = snapshot(0)
+  const items: ThreadSnapshot['items'] = [
+    { id: 0, kind: 'agent', rev: 1, shown: false, active: false, order: 0 },
+    { id: 1, kind: 'agent', rev: 1, shown: true, active: false, order: 1, parent: 0, ended_order: 77, status: 'finished',
+      content: { name: 'Agent', tool_use_id: 'call', task_id: 'task', task_link: { task_id: 'task', tool_call_id: 'call' } } },
+    { id: 2, kind: 'turn_end', rev: 1, shown: false, session: 's', agent: 'a', turn: 't', parent: 1, content: { output_tokens: 12 } },
+    { id: 3, kind: 'future', rev: 1, shown: false, parent: 1 },
+    ...Array.from({ length: 240 }, (_, n) => ({ id: n + 10, kind: 'assistant_message', rev: 1,
+      shown: true, order: n + 10, session: 's', agent: 'a', turn: 't', parent: 1,
+      content: { text: String(n), ts: String(999 - n) } })),
+    ...Array.from({ length: 1000 }, (_, n) => ({ id: n + 1000, kind: 'future', rev: 1, shown: false, active: n === 0 }))
+  ]
+  const fixture = { ...s, thread: { ...s.thread, items, arrivalOrder: items.map(i => i.id).reverse() } }
+  expect(await h.store.execute(put(fixture))).toEqual({ status: 'ok' })
+  h.database.close()
+  const fresh = h.fresh(), p = await page(fresh.store, ask('openThreadPage', { limit: 200 }))
+  expect(p.items.map(i => i.id)).toEqual([0, 1, 2, ...Array.from({ length: 200 }, (_, n) => n + 50), 1000])
+  expect(p.items.find(i => i.id === 1)).toEqual(items[1])
+  expect(p.arrivalPositions).toEqual(p.items.map(i => items.length - 1 - items.findIndex(v => v.id === i.id)))
+  expect(p.metadata.checkpoint).toBe(100)
+  expect(p.items.find(i => i.id === 2)?.shown).toBe(false)
+  expect(p.continuation).not.toBeNull()
+})
 function setup() {
   const root = mkdtempSync(join(tmpdir(), 'thread-history-')); roots.push(root)
   const encryption: SecretEncryption = { isAvailable: () => true,
@@ -44,6 +68,65 @@ function setup() {
   }
   return { root, encryption, lines, fresh, ...fresh() }
 }
+it('opening indexes follow owned revisions and removal without reviving old dependencies', async () => {
+  const h = setup(), s = snapshot(0)
+  const items = [1, 2, 3].map(id => ({ id, rev: 1, kind: 'turn_end', shown: true, order: id,
+    session: 's', agent: 'a', turn: 't' }))
+  expect(await h.store.execute(owned(s, { items }))).toEqual({ status: 'ok' })
+  expect((await page(h.store, ask('openThreadPage', { limit: 2 }))).items.map(i => i.id)).toEqual([2, 3])
+  expect(await h.store.execute(owned(s, { items: [{ ...items[2], rev: 2, shown: false, active: true }], removeIds: [2] }))).toEqual({ status: 'ok' })
+  h.database.close()
+  expect((await page(h.fresh().store, ask('openThreadPage', { limit: 2 }))).items.map(i => i.id)).toEqual([1, 3])
+  expect(await h.store.execute(owned(s, { items: [{ ...items[2], rev: 3, shown: false, active: false }] }))).toEqual({ status: 'ok' })
+  expect((await page(h.store, ask('openThreadPage', { limit: 2 }))).items.map(i => i.id)).toEqual([1])
+})
+
+it('cold opening payload work stays bounded as unrelated older, hidden and range history grows', async () => {
+  const h = setup()
+  async function measure(unrelated: number) {
+    const s = snapshot(0), items = [
+      ...Array.from({ length: unrelated }, (_, n) => ({ id: n + 100, rev: 1, kind: 'future', shown: false })),
+      { id: 1, rev: 1, kind: 'future', active: true, order: 1 },
+      { id: 2, rev: 1, kind: 'agent', shown: false, order: 2 },
+      ...Array.from({ length: 240 }, (_, n) => ({ id: n + 10000, rev: 1, kind: 'assistant_message', shown: true, parent: 2, order: n + 10000 })),
+      ...Array.from({ length: unrelated }, (_, n) => ({ id: n + 20000, rev: 1, kind: 'future', shown: false }))
+    ]
+    const fixture = { ...s, thread: { ...s.thread, items, arrivalOrder: items.map(i => i.id), ranges: [
+      { start: 0, end: 5 }, ...Array.from({ length: unrelated }, (_, n) => ({ start: 10 + n * 2, end: 11 + n * 2 })),
+      { start: 10000, end: 10240 }, { start: 999999, end: 1000000 }] } }
+    await h.store.execute(put(fixture))
+    const converting = performance.now(); await page(h.store, ask('openThreadPage', { limit: 200 }))
+    const conversionMs = performance.now() - converting
+    h.database.close(); const fresh = h.fresh()
+    let structural = 0, records = 0, payloads = 0
+    fresh.database.transaction(db => {
+      const prepare = db.prepare.bind(db)
+      vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+        const statement = prepare(sql)
+        if (sql.startsWith('SELECT')) for (const method of ['all', 'get'] as const) {
+          const read = statement[method].bind(statement)
+          vi.spyOn(statement, method).mockImplementation((...args) => {
+            const result = read(...args), count = Array.isArray(result) ? result.length : Number(result !== undefined)
+            if (sql.includes('thread_auth')) structural += count
+            else if (sql.includes('thread_records')) records += count
+            else if (sql.includes('thread_payloads')) payloads += count
+            return result
+          })
+        }
+        return statement
+      })
+    })
+    const decrypt = vi.spyOn(h.encryption, 'decrypt'), started = performance.now()
+    const p = await page(fresh.store, ask('openThreadPage', { limit: 200 })), coldMs = performance.now() - started
+    expect(p.items).toHaveLength(202); expect(p.ranges).toHaveLength(3)
+    const result = { records, payloads, decrypts: decrypt.mock.calls.length }
+    expect(result).toEqual({ records: 206, payloads: 202, decrypts: 408 })
+    console.info('opening-work', JSON.stringify({ unrelated, fixtureItems: items.length, selected: 200, active: 1,
+      dependencies: 1, evidence: 3, structural, ...result, coldMs, conversionMs }))
+    vi.restoreAllMocks(); return result
+  }
+  expect(await measure(500)).toEqual(await measure(10))
+})
 async function page(store: ReturnType<typeof createIndexedThreadHistory>, request = newest()) {
   const result = await store.execute(request)
   expect(result.status).toBe('page')

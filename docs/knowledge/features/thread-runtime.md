@@ -29,11 +29,14 @@ ID cannot redirect the request. Device identity is a separate authenticated fact
 
 ## Restore, recovery and cleanup
 
-Opening first starts an owned protected `readThread` through `readSavedTimeline`.
-Only `daemon-items` can hydrate the runtime. A legacy saved timeline is never drawn
-or converted. Protected indexed storage is the application backend; the renderer
-still restores complete authoritative snapshots. Bounded local paging remains
-separate work. See [storage activation](chat-history-testing-native.md#native-runtime-and-packaged-proof).
+Opening first starts an owned protected `openThreadPage` with limit 200 through
+`readSavedTimeline`. The partial projection selects newest shown identities plus
+active/recorded dependencies, preserving saved progress and sparse arrival order.
+A legacy saved timeline is never drawn or converted. Protected indexed storage is
+the application backend; ordinary fresh-owner reads decode only selected facts and
+evidence after one-time conversion/import. Retried invalidated opening uses the
+same bounded selection with no full-read fallback. User-driven older saved traversal
+and anchor rebasing remain #2042. See [storage activation](chat-history-testing-native.md#native-runtime-and-packaged-proof).
 
 While a saved read is pending, query demand waits but same-owner live additions
 can already render. Local settlement merges saved-only rows and winning revisions

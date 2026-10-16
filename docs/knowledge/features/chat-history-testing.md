@@ -48,8 +48,11 @@ Paging calls no full reader and performs no whole-history scan after migration.
 Selected containing-range evidence plus the newest anchor remains intact.
 
 Those schema-6 fixtures retain full/page compatibility proof. Owned writes use the
-[schema-7 regressions](chat-history-testing-storage.md#owned-mutation-regressions-and-counted-validation); partial restoration/navigation remain #2041/#2042.
-Renderer page IPC is not introduced. Multi-family import, outer-commit rollback and
+[schema-7 regressions](chat-history-testing-storage.md#owned-mutation-regressions-and-counted-validation).
+Production shown-opening uses authorized partial page IPC; user-driven older
+saved-page traversal remains #2042. See the
+[bounded-opening regressions](chat-history-testing-storage.md#bounded-opening-selection-and-work).
+Multi-family import, outer-commit rollback and
 [fresh-owner fixtures](chat-history-testing-contracts.md#demand-and-snapshot-contracts) still apply.
 
 ## Recording and removal
@@ -61,7 +64,8 @@ failed unpair preserves admitted facts and pending read ownership.
 
 ## Restoration
 
-Full `readThread` restoration merges saved-only rows and compatible revisions with
+Bounded `openThreadPage` restoration selects 200 shown identities plus active and
+recorded dependencies, then merges saved-only rows and compatible revisions with
 same-owner live facts. Initial admission preserves the read; cancellation,
 reset/replacement and cleanup fence it even after identical strings are reused.
 Hydration emits no owned save; subsequent received changes still persist.
@@ -70,8 +74,8 @@ The [restoration regressions](chat-history-testing-restoration.md#restoration)
 cover revision/arrival ties, saved repair/unfinished fences, surviving batches,
 protected fresh-owner overlap and mounted visibility while the server reply is held.
 Keep the covered-unfinished-progress and arrival-order restart tests. See
-[counted Linux validation](chat-history-testing-restoration.md#counted-savedlive-restoration-validation)
-for the verified revision, execution counts and mounted cases.
+[counted bounded-opening validation](chat-history-testing-native.md#counted-bounded-opening-validation)
+for the verified revision, execution counts, selected-work measurements and mounted case.
 
 ## Browser persistence and lifecycle
 

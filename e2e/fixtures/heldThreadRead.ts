@@ -22,7 +22,7 @@ export async function installHeldThreadRead(app: Pick<ElectronApplication, 'eval
         if (original === undefined) throw new Error('Missing chat history handler')
         const marker = { original, handler: undefined as Function | undefined, phase: 'armed' }
         const handler = async (event: unknown, request: { operation: string }) => {
-          const hold = request.operation === 'readThread' && marker.phase === 'armed'
+          const hold = request.operation === 'openThreadPage' && marker.phase === 'armed'
           if (hold) marker.phase = 'held' // Claim before awaiting the original; concurrent reads delegate.
           const result = await original(event, request)
           if (hold) {

@@ -196,9 +196,8 @@ describe('production thread composition', () => {
   })
   it('keeps offline authoritative display separate from current capability and resumes complete progress', async () => {
     const { runtime: r, read, send } = fixture()
-    read.mockResolvedValue({ status: 'stored', snapshot: { version: 1, kind: 'daemon-items', serverId: 'one', conversationId: 'chat',
-      thread: { hostId: 'one', conversationId: 'chat', epoch: 'saved', version: 12, checkpoint: 7,
-        uncommittedVersion: 12, items: [], ranges: [], repair: null } } })
+    read.mockResolvedValue({ status: 'page', page: { partial: true, metadata: { hostId: 'one', conversationId: 'chat', epoch: 'saved', version: 12, checkpoint: 7,
+      uncommittedVersion: 12, repair: null }, items: [], ranges: [], continuation: null } })
     await r.open('one', 'chat').done
     expect(r.isThread('one', 'chat')).toBe(true)
     expect(send).not.toHaveBeenCalled()

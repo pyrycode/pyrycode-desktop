@@ -136,16 +136,21 @@ Versions can skip integers. Newer held facts may accompany an earlier complete
 checkpoint; caching them does not certify the intervening progress. Envelope replay
 cursors and fragment progress are [separate transport facts](inbound-message-decode-interface.md#complete-live-thread-updates).
 
-The independently callable [authoritative SQLite backend](chat-history-api.md#main-only-bounded-authoritative-pages)
-preserves full snapshots and exposes explicitly partial held-order pages. Its
+The independently callable [authoritative SQLite backend](chat-history-api.md#bounded-authoritative-opening-and-pages)
+preserves full snapshots and exposes explicitly partial shown-opening and held-order
+pages through the authorized bridge. Its
 `arrivalPositions`, when present, are original first-arrival positions aligned with
 selected items, not a shortened `arrivalOrder` permutation. Selected `ranges` are
 intact saved ranges containing indexable selected orders plus the newest saved
 boundary anchor, deduplicated in saved order. Hidden/unordered items remain held;
 their presence adds no coverage. The header returns saved scalar ownership,
 progress, repair and optional availability separately and unchanged. Such a page
-cannot be passed to the full-snapshot hydration seam as if it were complete;
-reader activation and partial application remain #1931.
+uses `threadHistoryCodec.page` admission before constructing the resident snapshot;
+complete snapshot membership is not inferred from it. Production opening requests
+200 shown identities plus active/dependency closure. Optional `availabilityStart`
+retains availability ownership outside selected ranges; continuation and the sparse
+id-to-arrival-position map stay in separate slice `residency`. They confer no
+progress or write authority. User-driven older saved-page traversal remains #2042.
 
 `beginLocalRead(hostId, conversationId)` provides the narrowly scoped disk hydration
 seam. A held scope returns null; an absent one receives a one-shot `complete`,
@@ -157,9 +162,12 @@ string), replacement of a held epoch and conversation/host/global cleanup retire
 the token. Delayed stored, missing or failed results then have no authority, including
 after identical coordinate/epoch strings are reused.
 
-Completion retains full `parseChatHistorySnapshot` validation and exact coordinates
-before detaching/freezing saved facts. Without overlap it preserves supplied held
-order. With same-epoch admitted state, saved-only ids survive; compatible overlaps
+Completion accepts full snapshots or explicit partial pages. Partial admission
+first validates page ownership, facts, sparse aligned arrival positions and opaque
+token; `parseChatHistorySnapshot` then validates the resident snapshot before
+saved facts are detached/frozen. Sparse positions establish selected first-arrival
+order without requiring a dense whole-history permutation. Without overlap it
+preserves supplied held order. With same-epoch admitted state, saved-only ids survive; compatible overlaps
 keep the higher full revision, with admitted facts winning equal revisions. Each
 winner retains its supplied placement and optional-field clears. Saved arrival order
 (supplied item order for older snapshots) precedes live-only admission order, so
@@ -173,8 +181,10 @@ saved metadata using the [owned-mutation rules](../decisions/0014-authenticated-
 Saved checkpoint, applied/unfinished progress, repair and intact ranges survive
 unless admitted completion actually covers the obligation. A higher live scalar
 checkpoint cannot bypass a saved fence. Older-boundary availability wins, with
-exhaustion retained at an equal boundary. Hydration itself certifies no interval,
-missing coverage, daemon completeness or read acknowledgement.
+exhaustion retained at an equal boundary. The slice keeps the saved availability
+boundary separately when selected evidence omits it, so later completed pages cannot
+reopen older exhaustion by comparing only resident ranges. Hydration itself
+certifies no interval, missing coverage, daemon completeness or read acknowledgement.
 
 The merged slice retains the admitted generation, keeping surviving same-lifecycle
 batch handles valid; only an otherwise absent scope needs a fresh generation.

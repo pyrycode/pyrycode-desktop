@@ -268,7 +268,7 @@ it.each([false, true])('protected writer-to-offline-store restart retains comple
     for (const host of ['a', 'b']) {
       api.acceptEpoch(host, 'c', 'e')
       const batch = api.beginBatch(host, 'c', 'e')!
-      batch.applyItems([{ id: 1, rev: 10, kind: 'assistant_message', order: 1, active: false, shown: false,
+      batch.applyItems([{ id: 1, rev: 10, kind: 'assistant_message', order: 1, active: true, shown: false,
         status: 'future', summary: '', content: JSON.parse('{"text":"hello","__proto__":null}'), agent: 'codex' }], 10)
       if (complete) batch.commit({ fromVersion: 0, version: 10, ranges: [{ start: 1, end: 10 }], olderAvailable: false })
       else batch.abandon()

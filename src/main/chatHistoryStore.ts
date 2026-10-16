@@ -125,6 +125,8 @@ export function createChatHistoryStore(deps: {
     let reading = true
     try {
       const result = database.transaction((db): ChatHistoryResult => {
+        if (operation === 'openThreadPage' || operation === 'newestThreadPage' || operation === 'beforeThreadPage')
+          return requireSuccess(threads.executeSync(request))
         if (operation === 'readTimeline' || operation === 'replaceTimeline') {
           const result = requireSuccess(legacy.executeSync(request))
           reading = operation === 'readTimeline'

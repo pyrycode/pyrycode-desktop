@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test'
-import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
+import { test, expect, encodePairingPayload } from './fixtures/clientScenario'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
 // The credential-light real-daemon tier (#439) driving the MARQUEE case — SAVE-AS-CHANNEL promote

@@ -16,7 +16,7 @@ work without validating/serializing the held item array. Production supplies
 Local unaccepted sends and session prompts are not durable cache content.
 
 The renderer coalesces bursts on a 200 ms timer per host/conversation/epoch. It
-retains highest item revisions, explicit removals and unioned ranges, while preserving
+retains highest item revisions (including strict text-only prefix growth at an equal revision when all other fields match), explicit removals and unioned ranges, while preserving
 metadata/completion/boundary observations in order. An admitted new epoch or explicit
 reset supersedes prior pending ownership. A reset has a unique `resetId`, retained
 through coalescing and recorded in the protected header for idempotent retry after

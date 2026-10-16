@@ -1328,11 +1328,12 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         // Decode the decrypted app-envelope at the transport boundary, then map its narrowed result
         // onto the IPC layer — the consumer's only job (transport/ stays IPC-free).
         let inbound: InboundDaemonMessage | null
-        let liveStateMetadata: { envelopeSessionId?: string | null; inReplyTo?: number } = {}
+        let liveStateMetadata: { envelopeConversationId?: string; envelopeSessionId?: string | null; inReplyTo?: number } = {}
         try {
           inbound = parseInboundMessage(event.plaintext, deps.diagnosticLog, (envelope) => {
             if (sessionStateFamily(envelope.type) !== null) {
               liveStateMetadata = {
+                ...('conversation_id' in envelope ? { envelopeConversationId: envelope.conversation_id } : {}),
                 ...('session_id' in envelope ? { envelopeSessionId: envelope.session_id } : {}),
                 ...('in_reply_to' in envelope ? { inReplyTo: envelope.in_reply_to } : {})
               }

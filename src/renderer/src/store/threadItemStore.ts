@@ -1,3 +1,4 @@
+import { isSameRevisionTextExtension } from '../../../shared/threadTextExtension'
 import { createStore } from 'zustand/vanilla'
 import type { ThreadItem, ThreadUpdate } from '../../../shared/wire/thread'
 import { parseChatHistorySnapshot, threadHistoryCodec, type ThreadHistoryPage, type ThreadSnapshot, type OwnedThreadChanges } from '../../../shared/chatHistory'
@@ -17,7 +18,7 @@ export type ThreadApplyResult =
   | { type: 'applied' | 'ignored' | 'stale' }
   | { type: 'repair'; hostId: string; conversationId: string; epoch: string; throughVersion: number;
       reason: 'missing' | 'base' | 'incompatible' | 'kind' | 'coverage' }
-type Slice = { snapshot: ThreadSnapshot; restored?: ThreadSnapshot; owned?: OwnedThreadChanges; generation: symbol; uncommittedVersion: number; byId: ReadonlyMap<number, HeldItem>;
+type Slice = { appendCompanion?: { id: number; rev: number; version: number }; snapshot: ThreadSnapshot; restored?: ThreadSnapshot; owned?: OwnedThreadChanges; generation: symbol; uncommittedVersion: number; byId: ReadonlyMap<number, HeldItem>;
   availabilityStart?: number; residency?: { continuation: string | null; traversal?: string | null; arrivalPositions: ReadonlyMap<number, number> } }
 type Batch = {
   applyItems: (items: readonly ThreadItem[], version: number) => readonly ThreadApplyResult[]
@@ -130,7 +131,7 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
       const s = slice.snapshot
       const fence = { fromVersion: s.repair?.fromVersion ?? s.checkpoint,
         throughVersion: Math.max(s.repair?.throughVersion ?? s.checkpoint, version) }
-      publish(host, conversation, { ...slice, snapshot: Object.freeze({ ...s, repair: Object.freeze(fence) }) })
+      publish(host, conversation, { ...slice, appendCompanion: undefined, snapshot: Object.freeze({ ...s, repair: Object.freeze(fence) }) })
       log?.event({ event: 'thread-items-repair', code: reason })
       return { type: 'repair', hostId: host, conversationId: conversation, epoch: s.epoch,
         throughVersion: fence.throughVersion, reason }
@@ -138,20 +139,20 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
     function applyFull(host: string, conversation: string, slice: Slice, item: ThreadItem, version: number, live: boolean): ThreadApplyResult {
       const held = slice.byId.get(item.id)
       if (held && held.kind !== item.kind) return repair(host, conversation, slice, version, 'kind')
-      const newer = !held || item.rev > held.rev
+      const newer = !held || item.rev > held.rev || isSameRevisionTextExtension(held, item)
       const byId = new Map(slice.byId)
       if (newer) byId.set(item.id, detach(item))
       success(host, conversation, slice, byId, version, live, newer, newer ? byId.get(item.id) : undefined)
       return { type: newer ? 'applied' : 'ignored' }
     }
     function success(host: string, conversation: string, slice: Slice, byId: ReadonlyMap<number, HeldItem>,
-      version: number, live: boolean, changed: boolean, item?: HeldItem): void {
+      version: number, live: boolean, changed: boolean, item?: HeldItem, appendCompanion?: Slice['appendCompanion']): void {
       const s = slice.snapshot
       const nextVersion = Math.max(s.version, version)
       const checkpoint = live && !s.repair && slice.uncommittedVersion <= s.checkpoint ? Math.max(s.checkpoint, version) : s.checkpoint
       const uncommittedVersion = live ? slice.uncommittedVersion : Math.max(slice.uncommittedVersion, version)
-      if (!changed && nextVersion === s.version && checkpoint === s.checkpoint && uncommittedVersion === slice.uncommittedVersion) return
-      publish(host, conversation, { ...slice, byId,
+      if (!slice.appendCompanion && !appendCompanion && !changed && nextVersion === s.version && checkpoint === s.checkpoint && uncommittedVersion === slice.uncommittedVersion) return
+      publish(host, conversation, { ...slice, byId, appendCompanion,
         uncommittedVersion, snapshot: Object.freeze({ ...s,
         items: changed ? ordered(byId) : s.items,
         arrivalOrder: changed ? Object.freeze([...byId.keys()]) : s.arrivalOrder,
@@ -214,7 +215,11 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
                   throughVersion: Math.max(snapshot.version, snapshot.repair?.throughVersion ?? 0) } } : {}) })
               if (incompatible) log?.event({ event: 'thread-items-repair', code: 'kind' })
             }
-            publish(host, conversation, { snapshot, restored: snapshot, generation: admitted?.generation ?? Symbol(),
+            // Saved restoration does not consume a live pair. Retain it only
+            // when that exact admitted item wins the same-owner merge.
+            const companion = admitted?.appendCompanion
+            const appendCompanion = companion && byId.get(companion.id) === admitted.byId.get(companion.id) ? companion : undefined
+            publish(host, conversation, { snapshot, restored: snapshot, appendCompanion, generation: admitted?.generation ?? Symbol(),
               uncommittedVersion: snapshot.uncommittedVersion ?? 0, byId, availabilityStart,
               ...(page ? { residency: { continuation: page.continuation,
                 ...(heldPage ? { traversal: page.continuation } : {}),
@@ -250,7 +255,10 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
         if (!held) return repair(host, conversation, slice, u.version, 'missing')
         if (held.rev !== u.base_rev) return repair(host, conversation, slice, u.version, 'base')
         let next: HeldItem
-        if (u.rev <= u.base_rev || (update.type === 'thread_item_changed' &&
+        const companion = update.type === 'thread_text_append' && u.rev === u.base_rev &&
+          slice.appendCompanion?.id === u.item_id && slice.appendCompanion.rev === u.rev &&
+          slice.appendCompanion.version === u.version
+        if (u.rev < u.base_rev || (u.rev === u.base_rev && !companion) || (update.type === 'thread_item_changed' &&
           (own(update.payload.changes, 'id') || own(update.payload.changes, 'kind')))) {
           return repair(host, conversation, slice, u.version, 'incompatible')
         }
@@ -267,7 +275,8 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
         }
         const byId = new Map(slice.byId)
         byId.set(held.id, next)
-        success(host, conversation, slice, byId, u.version, true, true, next)
+        success(host, conversation, slice, byId, u.version, true, true, next,
+          update.type === 'thread_item_changed' ? { id: u.item_id, rev: u.rev, version: u.version } : undefined)
         return { type: 'applied' }
       },
       beginBatch(host, conversation, epoch) {
@@ -310,7 +319,7 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
             const olderAvailable = c.olderAvailable !== undefined &&
               (suppliedOldest < oldest || (suppliedOldest === oldest && s.olderAvailable !== false))
               ? c.olderAvailable : s.olderAvailable
-            publish(host, conversation, { ...slice,
+            publish(host, conversation, { ...slice, appendCompanion: undefined,
               availabilityStart: c.olderAvailable !== undefined && suppliedOldest <= oldest && Number.isFinite(suppliedOldest)
                 ? suppliedOldest : slice.availabilityStart,
               uncommittedVersion: c.version >= slice.uncommittedVersion ? 0 : slice.uncommittedVersion,

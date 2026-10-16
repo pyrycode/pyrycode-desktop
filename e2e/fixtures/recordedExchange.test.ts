@@ -99,6 +99,8 @@ describe('recorded daemon exchange', () => {
   it('requires a supported successful capture with correlated replies and no handshake or fragments', () => {
     for (const change of [
       (r: any) => { r.version = 2 },
+      (r: any) => { r.version = '1' },
+      (r: any) => { r.version = '2' },
       (r: any) => { r.source.daemonRevision = '' },
       (r: any) => { r.wire[0].direction = 'other' },
       (r: any) => { r.wire[1].message.in_reply_to = 999 },
@@ -112,4 +114,47 @@ describe('recorded daemon exchange', () => {
     }
     expect(parseRecording(JSON.stringify(fixture()))).toEqual(fixture())
   })
+})
+
+it('checks complete outgoing envelope metadata in addition to the full payload', () => {
+  const replay = new RecordedExchange(fixture())
+  expect(() => replay.reply(encodeEnvelope({ ...message(90, 'list_conversations', {}), session_id: 'unexpected' })))
+    .toThrow('Recorded exchange request mismatch at step 1')
+})
+it('binds an upload identity once across all chunks', () => {
+  const recording = fixture()
+  recording.wire = [0, 1].map(index => ({ direction: 'client', message: message(index + 1, 'attachment_chunk', {
+    attachment_id: 'recorded-upload', index, data: 'same-test-bytes'
+  }) }))
+  const replay = new RecordedExchange(recording)
+  send(replay, 90, 'attachment_chunk', { attachment_id: 'fresh-upload', index: 0, data: 'same-test-bytes' })
+  expect(() => send(replay, 91, 'attachment_chunk', { attachment_id: 'different-upload', index: 1, data: 'same-test-bytes' })).toThrow('step 2')
+})
+it.each(['question_answer', 'question_refused'])('binds a fresh %s token once while checking the complete payload', type => {
+  const recording = fixture()
+  const answers = [{ question_index: 0, values: ['TTL'] }]
+  const answerFields = type === 'question_answer' ? { answers } : {}
+  recording.wire = [
+    { direction: 'client', message: message(1, type, {
+      question_batch_id: 'batch', answer_token: 'recorded-answer', ...answerFields
+    }) },
+    { direction: 'client', message: message(2, type, {
+      question_batch_id: 'batch', answer_token: 'recorded-answer', ...answerFields
+    }) }
+  ]
+  const replay = new RecordedExchange(recording)
+  send(replay, 90, type, { question_batch_id: 'batch', answer_token: 'fresh-answer', ...answerFields })
+  expect(() => send(replay, 91, type, {
+    question_batch_id: 'batch', answer_token: 'different-answer', ...answerFields
+  })).toThrow('step 2')
+  const changed = new RecordedExchange(recording)
+  expect(() => send(changed, 90, type, {
+    question_batch_id: 'batch', answer_token: 'fresh-answer',
+    answers: [{ question_index: 0, values: ['LRU'] }]
+  })).toThrow('step 1')
+})
+it('validates retained optional envelope fields instead of dropping them', () => {
+  const recording = fixture()
+  Object.assign(recording.wire[1].message, { conversation_id: null })
+  expect(() => parseRecording(JSON.stringify(recording))).toThrow('Invalid daemon recording')
 })

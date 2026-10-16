@@ -219,3 +219,31 @@ describe('production thread composition', () => {
     r.dispose()
   })
 })
+
+it('revalidates withdrawn configuration once per bound session and opening', async () => {
+  const { runtime: r, send } = fixture()
+  r.event(connected('one', true)); r.event(connected('two', true))
+  r.summary('one', { id: 'chat', current_session_id: 'A' })
+  await r.open('one', 'chat').done
+  const vocabulary: StampedDaemonEvent = { type: 'modelList', serverId: 'one', conversationId: 'chat',
+    envelopeConversationId: 'chat', envelopeSessionId: 'bootstrap', models: [], droppedModels: 0 }
+  const settings: StampedDaemonEvent = { type: 'runConfigReceived', serverId: 'one', conversationId: 'chat',
+    envelopeConversationId: 'chat', envelopeSessionId: 'A', sessionId: 'A', model: '', effort: '', yolo: false,
+    permissionMode: '', used_tokens: 0, window_tokens: 0 }
+  const clear: StampedDaemonEvent = { type: 'sessionStateCleared', family: 'session_settings', correlation: { id: 8, ts: '' },
+    serverId: 'one', envelopeConversationId: 'chat', envelopeSessionId: 'A' }
+  const requests = () => send.mock.calls.filter(([command]) => command.type === 'requestModelList' || command.type === 'requestSessionSettings')
+  r.event(vocabulary); r.event(settings)
+  r.event({ ...clear, serverId: 'two' })
+  r.event({ ...clear, envelopeConversationId: 'other' })
+  expect(requests()).toHaveLength(0)
+  r.event(clear)
+  expect(requests()).toEqual(['requestSessionSettings', 'requestModelList'].map(type => [{ type, serverId: 'one', payload: { conversation_id: 'chat' } }]))
+  r.event(settings); r.event(clear)
+  expect(requests()).toHaveLength(2)
+  r.event(settings)
+  await r.open('one', 'chat').done
+  r.event(clear)
+  expect(requests()).toHaveLength(4)
+  r.dispose()
+})

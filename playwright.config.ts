@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test'
+process.env.PYRY_CLIENT_MODE = 'replay'
 import { availableParallelism } from 'node:os'
 
 // E2E harness config. Playwright only scans `e2e/` — never `src/` — which is one
@@ -49,10 +50,10 @@ export default defineConfig({
   // invariant — `.spec.ts` is Playwright's, `.test.ts` is vitest's — whose other half is the
   // `include` glob in vitest.config.ts.
   testMatch: /(^|\/)[^/]*\.spec\.ts$/,
-  // Every `real-*` spec (starting with real-claude, #252) needs a real pyry daemon + real claude +
-  // credentials the agent pipeline lacks; they run only under playwright.real-claude.config.ts
-  // (`npm run e2e:real-claude`). A filename testIgnore is structural — it can't be forgotten the way a
-  // per-test grep tag can.
+  // The real-* entry points run explicitly against the live stack. Their shared bodies
+  // also run here through recorded-clients.spec.ts against captured daemon exchanges.
+  // Ignoring the live entry points prevents duplicate collection and keeps credentials
+  // and child processes out of the normal test path.
   //
   // ANCHORED TO THE FILENAME, and that is load-bearing (#928). Playwright matches a RegExp testIgnore /
   // testMatch against the ABSOLUTE file path, so the older unanchored `/real-.*\.spec\.ts$/` matched every

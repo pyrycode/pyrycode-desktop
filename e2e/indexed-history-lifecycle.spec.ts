@@ -1,5 +1,6 @@
 import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
+import { readMainProcess } from './fixtures/mainProcessRead'
 
 for (const closing of ['quit', 'window'] as const) {
   test(`indexed history drains a buffered thread replacement on ${closing} and restores it offline`, async ({ launchPairedApp }) => {
@@ -37,7 +38,7 @@ for (const closing of ['quit', 'window'] as const) {
     let reopened: typeof first.page
     if (closing === 'window' && process.platform === 'darwin') {
       await first.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close())
-      await expect.poll(() => first.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(0)
+      await expect.poll(() => readMainProcess(first.app, ({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(0)
       await first.forwarder.close()
       ;[reopened] = await Promise.all([first.app.waitForEvent('window'), first.app.evaluate(({ app }) => app.emit('activate'))])
     } else {

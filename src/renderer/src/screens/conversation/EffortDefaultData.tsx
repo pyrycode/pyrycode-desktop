@@ -64,6 +64,8 @@ export interface EffortDefaultInput {
   appliedFor: string | null
   sessionId: string | null
   effort: string
+  /** A missing snapshot is unknown, rather than a confirmed unset override. */
+  configurationReady?: boolean
   model: string
   models: ModelListEntry | null | undefined
   remembered: string | null
@@ -136,6 +138,7 @@ export interface EffortDefaultInput {
  */
 export function effortDefaultToApply(input: EffortDefaultInput): string | null {
   const { conversationId, appliedFor, sessionId, effort, model, models, remembered, agent = 'claude' } = input
+  if (input.configurationReady === false) return null
   if (conversationId === null) return null
   if (remembered === null) return null
   if (appliedFor === conversationId) return null
@@ -217,8 +220,9 @@ export function EffortDefaultData({
   useEffect(() => {
     // Do not consume the attempt while unavailable; reconnect must re-evaluate eligibility.
     if (!sessionSettingsConnected(conversationId)) return
+    const reading = selectSnapshot(runConfigStore.getState())
     const effective = selectEffectiveSettings(
-      selectSnapshot(runConfigStore.getState()),
+      reading,
       runSettingsWriteStore.getState()
     )
     // Read ONCE and reused by the send below. Nothing between the two reads could change it — the effect
@@ -230,6 +234,7 @@ export function EffortDefaultData({
       conversationId,
       appliedFor: appliedFor.current,
       sessionId: addressedSessionId,
+      configurationReady: reading !== null,
       effort: effective.effort,
       model: effective.model,
       models,

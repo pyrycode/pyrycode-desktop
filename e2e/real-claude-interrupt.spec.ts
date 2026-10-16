@@ -1,5 +1,6 @@
+import { scenarioNonce } from './fixtures/clientScenario'
 import { type Page } from '@playwright/test'
-import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
+import { test, expect, encodePairingPayload } from './fixtures/clientScenario'
 import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
@@ -138,8 +139,8 @@ test('real claude quiesces a genuinely running turn when interrupted', async ({
   // (claude may set run_in_background:true and the turn returns at once) and a silent multi-second command
   // trips the ptyrunner's 30s PTY-quiet watchdog. Per-second output keeps the PTY active and the
   // run_in_background ban keeps the turn blocking in `responding` — a real, interruptible turn. Per-run
-  // nonce defeats reply caching; content is NEVER asserted on (Date.now() is fine in a Playwright spec).
-  const runNonce = Date.now()
+  // nonce defeats reply caching; content is NEVER asserted on (scenarioNonce() is fine in a Playwright spec).
+  const runNonce = scenarioNonce()
   const message =
     `Use the Bash tool to run this exact command in the foreground; do NOT run it in the background. ` +
     `Command: for i in $(seq 20); do echo $i; sleep 1; done. Do nothing else. run=${runNonce}`

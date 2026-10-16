@@ -283,7 +283,7 @@ declare global { interface Window { pendingReadFrame: { received: () => number; 
 
 test('committed folded tails require focus, uncovered viewport and a closed reader', async ({ launchPairedApp }) => {
   const commands: Envelope[] = []
-  const { app, page, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
+  const { app, page, daemon, servers } = await launchPairedApp({ buildReplyFrames: bytes => {
     const e = decodeEnvelope(bytes); commands.push(e)
     if (e.type === 'list_conversations') return [list()]
     if (e.type === 'request_history') return [pageReply(e.id, Array.from({ length: 30 }, (_, i) => ({
@@ -357,8 +357,25 @@ test('committed folded tails require focus, uncovered viewport and a closed read
   // explicitly after restoring it, just as in the covered measurement above.
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
   await expect.poll(() => targets(commands).at(-1)).toBe(36)
+  // The synchronous focus observation can publish before the previously queued
+  // scroll event rearms bottom following. Drain that input before the next push.
+  await settle(page)
   daemon.pushFrame(end(37))
-  await expect.poll(() => targets(commands).at(-1)).toBe(37)
+  try {
+    await expect.poll(() => targets(commands).at(-1)).toBe(37)
+  } catch (error) {
+    const saved = await page.evaluate(async coordinates => {
+      const result = await window.pyry.chatHistory({ operation: 'readThread', ...coordinates })
+      if (result.status !== 'stored' || result.snapshot.kind !== 'daemon-items') return { status: result.status }
+      const { items, ...metadata } = result.snapshot.thread
+      return { metadata, tailItems: items.slice(-5).map(({ content: _content, summary: _summary, ...item }) => item) }
+    }, { serverId: servers[0].serverId, conversationId: row.id })
+    await test.info().attach('end-tail-state', { contentType: 'application/json', body: JSON.stringify({
+      ...await readState(page, commands), saved,
+      requests: commands.map(e => ({ type: e.type, version: (e.payload as any).version }))
+    }) })
+    throw error
+  }
   await page.getByRole('button', { name: 'the note', exact: true }).click()
   await expect(page.locator('.markdown-reader')).toBeVisible()
   await test.info().attach('reader-open', { body: JSON.stringify(await readState(page, commands)), contentType: 'application/json' })

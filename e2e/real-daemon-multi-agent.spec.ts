@@ -1,4 +1,4 @@
-import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
+import { test, expect, encodePairingPayload } from './fixtures/clientScenario'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
 // #1657 — the APP's own hello advertises `interactive` and `multi_agent`, and a daemon at v0.27.0 or

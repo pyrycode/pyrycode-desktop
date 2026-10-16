@@ -1,9 +1,10 @@
 import { defineConfig } from '@playwright/test'
+process.env.PYRY_CLIENT_MODE = 'live'
 
 // The real-claude e2e config (#252) — run ONLY via `npm run e2e:real-claude`, part of the operator's
 // pre-ship gate. It matches every `real-*` spec, which the default playwright.config.ts (the
-// agent-pipeline `npm run e2e`) deliberately ignores: those specs need a real `pyry` daemon, real claude,
-// and real credentials the pipeline lacks.
+// agent-pipeline `npm run e2e`) ignores as direct entry points. The normal suite imports their shared
+// bodies through recorded-clients.spec.ts; only this explicit live config needs the daemon and credentials.
 //
 // The shape mirrors the default config (serialized, list reporter) but with a generous per-test `timeout`
 // for a cold PTY claude across two turns, and NO retries (a real-stack failure is a genuine liveness

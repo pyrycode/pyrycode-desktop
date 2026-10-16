@@ -106,6 +106,17 @@ describe('daemon item presentation', () => {
     expect(html.indexOf('summary 6')).toBeLessThan(html.indexOf('info supplied'))
   })
 
+  it('renders raw daemon reset causes as exactly one session delimiter and preserves unknown summaries', () => {
+    const html = render([item(1, 'session_divider', { cause: 'operator_reset', occurred_at: '2026-10-16T00:00:00Z' },
+      { summary: 'Session changed: operator_reset' })])
+    expect(html.match(/class="session-delimiter"/g)).toHaveLength(1)
+    expect(html).toContain('Session reset')
+    expect(render([item(1, 'session_divider', { cause: 'future' }, { summary: 'supplied summary' })]))
+      .not.toContain('class="session-delimiter"')
+    expect(render([item(1, 'session_divider', { cause: 'future' }, { summary: 'supplied summary' })]))
+      .toContain('supplied summary')
+  })
+
   it('keeps hidden items held and uses escaped inert summaries for unsupported facts', () => {
     const html = render([
       item(1, 'assistant_message', { text: 'hidden text' }, { shown: false }),
@@ -350,4 +361,14 @@ it('keeps main reply usage independent of child traffic sharing a turn', () => {
   ]))
   expect(rows.find(r => r.source.id === 20)?.stats).toBe('42 out')
   expect(rows.find(r => r.source.id === 30)?.stats).toBeUndefined()
+})
+
+it('shows written input once as a user row without offering queue actions', () => {
+  const html = render([item(7, 'user_message', { text: 'written before consumption', queued_msg_id: 2 },
+    { status: 'written', active: true, order: 0 })])
+  expect(html).toContain('data-thread-role="user"')
+  expect(html).toContain('written before consumption')
+  expect(html).not.toContain('data-thread-role="queued"')
+  expect(html).not.toContain('Drop queued message')
+  expect(html).not.toContain('Send queued message now')
 })

@@ -146,7 +146,10 @@ On October 16, all 29 active cases passed fresh live capture on Desktop
 `5f5b3b9ce42eda74024637f4929dd720d36c1226ce6e370eb62fbe9e6b22f7c0`).
 All original live-only assertions ran. The complete integrated unit suite passed
 9,205 tests in 399 files, with six existing platform/opt-in skips. The live runbook records
-final full-suite, cross-platform replay counts and equivalent-scope timings.
+final full-suite, cross-platform replay counts and equivalent-scope timings. The
+complete normal application gate passed 466 cases, failed zero and retained two
+existing skips with no test retries; the last changed transport fixture also
+passed its 46 forwarding/responder/setup checks.
 
 Every committed recording is byte-identical to a successful actual capture;
 source identities remain per recording rather than being rewritten to the merge

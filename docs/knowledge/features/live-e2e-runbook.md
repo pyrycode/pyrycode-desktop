@@ -151,7 +151,11 @@ drift-free provider transcript or silent baseline regeneration.
 
 The complete integrated unit suite passed 9,205 tests in 399 files, skipped six
 existing platform/opt-in cases and failed zero, in 47.63 seconds with four workers. The
-full default application rerun is pending. Linux source `32aadb0b` passed three
+complete normal application suite at `fdee12cc` passed 466 cases, failed zero,
+skipped two existing cases and had no flaky passes in 288.543 seconds,
+with four workers and retries disabled. The skips are the existing independent
+input-cover case and reset-prompt fixme. After the final explicit loopback-bind
+change, all 46 forwarding/responder/setup tests also passed. Linux source `32aadb0b` passed three
 independent fresh live history cases (3 passed, zero failed/skipped, 149.873
 seconds) and all 29 guarded replays (29 passed, zero failed, one existing fixme,
 133.816 seconds), with no retries or forbidden executable launches. The Linux

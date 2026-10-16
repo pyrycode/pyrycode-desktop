@@ -74,91 +74,32 @@ No new subscription: this is the one existing `conversation_created` listener Pa
 mounted, doing one more thing on the event it already receives. See [Workspace
 chip](conversation-shell-workspace-chip-and-picker.md#workspace-chip-278) for the store and the render it feeds.
 
-**[#530](../codebase/530.md) replaced the direct `setActiveConversation(created)` call** — and the
-matching one in `onOpen` above — with `activateConversation(activateDeps, …)`. Both nav sites used to
-write `activeConversationStore` unconditionally and nothing else, so opening conversation B rendered
-A's rows with B's stream appended, and a Run configuration write made while looking at B could still
-address A's daemon session. `activateConversation` reads the previous active conversation through
-`activateDeps.getActiveConversation` — a **getter**, not a value closed over at render time, because
-`useConversationCreatedNav`'s callback ref only refreshes in a bare effect *after* commit, and two
-`conversationCreated` events landing before that effect runs would otherwise both compare against the
-same stale previous. Only when the id actually changes does it dispatch the timeline's `reset`
-([#528](../codebase/528.md)) and `clearSessionId()` ([#529](../codebase/529.md)) before recording the
-new conversation; a re-open of the already-active conversation (a re-click, or `onOpen` firing again for
-a row that's already open) clears nothing. The notification-activated `open` (#393, below) still calls
-neither `setActiveConversation` nor `activateConversation` — it carries no conversation, so there is no
-call site to route through the helper. `activateDeps` is a module-scope object reaching each store via
-`getState()` inside its arrow bodies (the `timelineBridge.ts`/`sessionIdBridge.ts` idiom), which is what
-lets `PairedShell` drop `useActiveConversationStore` entirely — it now holds **zero** store
-subscriptions and re-renders only on its own `useReducer` nav dispatch. See [#530 codebase
-notes](../codebase/530.md) for the full design rationale (the getter, the id-not-event gate, why
-`clearActiveConversation` stays out of this path).
+## Activation and pairing cleanup
 
-**[#531](../codebase/531.md) wrapped the two nav sites that *end* a pairing**, `onUnpaired` and
-`onPairServerPaired`, in `clearPairingScopedState(clearPairingDeps)` — a fourth clear
-([`sessionStore`'s `reset`](session-store.md), #166) alongside the timeline `reset` and the two #529
-clears `activateConversation` already uses. Unlike `activateConversation`'s id-gated clear-on-switch,
-this one is **unconditional**: the pairing itself is ending, so there is no state in which the thread
-rows, the active conversation, or the daemon session id legitimately survive into the new pairing.
-**[#593](../codebase/593.md) added a fifth**, [`announcedModelStore`'s `clearAnnouncedModel`](announced-model-store.md)
-— claude's model announcement is pairing-scoped the same way (nothing on a fresh pairing re-asserts
-it until the new daemon's first turn), so it belongs in this same shared set rather than at either
-call site, and stays out of the transport's `connected` edge for the opposite reason
-`backgroundTaskRosterStore` is on it: a reconnect to the *same* daemon leaves the held announcement
-accurate.
-[#757](../codebase/757.md) added a sixth, [conversation timeline holder](conversation-timeline-holder.md)'s
-`clearAllTimelines` — every retained per-conversation thread, not just the flat store's.
-**[#779](conversation-last-read-store.md) added a seventh**,
-[`conversationLastReadStore`'s `clearAllLastRead`](conversation-last-read-store.md#how-it-works) — how far
-the operator had read into each conversation, persisted to `localStorage` since #776 and therefore the one
-member of this set that reaches disk. Its position is not interchangeable with the rest: it must run
-**after** `clearAllTimelines`, because that clear synchronously notifies [#777's open-conversation
-listener](paired-shell-conversation-exits.md#the-last-read-stamp-conversationlastreadbridgets-777), which at that instant still sees the ended
-pairing's conversation as open, finds its timeline slice already gone, and re-mints a persisted `0` mark for
-it — running the marks clear afterwards wipes that re-mint in memory and on disk before this function
-returns. It must also run **last** of all, because it is the only one with an external side effect
-(`localStorage.setItem`) and therefore the only one that can throw; placed earlier, a throw would abort
-`clearSessionId` and leave server A's session id live and addressable while the operator is on server B.
-[#955](https://github.com/pyrycode/pyrycode-desktop/issues/955) later added an eighth,
-[`slashCommandListStore`'s `clearAllSlashCommandLists`](slash-command-list-store.md) — every
-conversation's published slash-command menu, nullary and whole-map like `clearAllTimelines`. Despite
-arriving after `clearAllLastRead`, it is sequenced strictly *before* it: `clearAllLastRead`'s "last of
-all" position is an execution constraint tied to its throw risk, not an arrival order, so every store
-added after it — this one included — still has to land ahead of it in the call sequence. Skipping that
-would let a `localStorage` throw from `clearAllLastRead` abort `clearAllSlashCommandLists`, leaving
-server A's workspace-authored verb menu live for #681 to grey entries against.
-Until [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141), both nav sites wrapped their own
-call to the clear, on the argument that the two paths' asymmetry — unpair flips the app-level route to
-`pairing`, unmounting `PairedShell` entirely, while pair-another-server transitions `pairServer` → `list`
-*inside* this shell (`pairedRoute.ts:62-65`), so the shell never unmounts — meant nothing a remount would
-have cleared got cleared any other way. That argument was the wrong lesson: pairing another server leaves
-nothing behind because it ends no pairing, not because a remount would otherwise have caught it. Since
-\#1117 and #1084 the background process holds one live connection per paired server, so adding one leaves
-every server already paired connected, with everything above still theirs. #1141 lifted all three
-callbacks — `onUnpaired`, `onPairServerPaired`, `onPairServerCancelled` — into `applyPairingChange`
-(`src/renderer/src/applyPairingChange.ts`), a pure helper in the same framework-free, injected-effects
-shape as this file's other pairing helpers, and deleted the `clearPairingScopedState` call from the
-`pairedAnotherServer` arm. Only `unpaired` clears now. `onPairServerCancelled` was never wrapped —
-cancelling ends no pairing, so it clears nothing (AC4) — and routing it through the same helper turned
-that absence from an unobservable fact into a positive, spy-tested assertion for the first time
-(`applyPairingChange.test.ts`), the same test file that gives the unpair arm's clear-then-navigate
-ordering its first executable assertion since [#531](../codebase/531.md) removed the one
-`unpairAction.test.ts` case that pinned it. Wrapping at this shared prop-handoff point, rather than
-threading a dependency through the old composer unpair call sites, kept the clear conditional on
-successful removal. Settings now owns explicit removal; composer recovery does not call `runUnpair` — see [#531 codebase notes](../codebase/531.md)
-for that rationale and the divergence trap it closed (`sessionStore`'s reset used to live in
-`unpairAction.ts` alone; see [Session store](session-store.md) and [Unpair channel](unpair-channel.md)).
+`activateConversation` reads the current active record through a getter at invocation time, so
+back-to-back created events cannot compare against stale render state. On an ID change it clears
+the session and all four configuration/prompt stores, then records the payload. Every activation,
+including same-ID reopening, requests fresh configuration; reopening preserves the held readings
+and write state until replies arrive. See [activation and configuration](paired-shell-conversation-exits.md).
+Creation opens the host-qualified thread runtime without `initializeCreatedTimeline`, `markViewed`,
+flat timeline reset or local row-count stamping.
 
-**#777 widened `ActivateConversationDeps` with a fifth required member**,
-`stampLastRead: (conversationId: string) => void`, called unconditionally at the end of
-`activateConversation` (`activateConversation.ts:103`), **after** `setActiveConversation` and
-**outside** the id-change gate. Outside the gate is deliberate: a re-click of the already-open row still
-owes a fresh mark, the same reason `setActiveConversation` itself already runs unconditionally there. See
-[The last-read stamp](paired-shell-conversation-exits.md#the-last-read-stamp-conversationlastreadbridgets-777) below for the write path
-this calls into.
+`applyPairingChange` invokes `clearPairingScopedState` only for `unpaired`. Pairing another host and
+cancelling end no pairing, so they preserve existing hosts' state. The clear precedes navigation to
+onboarding. Its module-scoped dependencies retain active conversation/session, announced model,
+session facts, MCP status, command/model lists, conversation lists, queue backlogs, task rosters,
+modal prompts and suppression/rejection state, activity, usage/context readings and session reset.
+Legacy flat/keyed timeline reset/clear members were removed in #2028; the retained stores and
+standalone producers are separately scoped for #2030.
 
-**[#786](https://github.com/pyrycode/pyrycode-desktop/issues/786) widened `ActivateConversationDeps` with
-a sixth required member**, `markViewed: (conversationId: string) => void`, called **last** — after
-`stampLastRead` — also unconditionally and also **outside** the id-change gate. See
-[The view stamp](paired-shell-conversation-exits.md#the-view-stamp-activateconversationts-786) below for the write path this calls into and
-why the ordering relative to `stampLastRead` and `setActiveConversation` is the way it is.
+`clearAllLastRead()` remains last. Although the removed count subscription can no longer re-mint
+`0` during teardown, persisting local read-mark removal can still throw. Putting it earlier would
+allow a storage failure to interrupt in-memory cleanup, leaving the ended pairing's state live.
+Every newly added in-memory clear belongs before it. The analogous per-server helper samples
+exclusive departed IDs before removing their list slot, exits a matching active chat and persists
+only those IDs' local mark removal last. See [unpair cleanup](unpair-channel.md#the-three-renderer-callers).
+Authoritative runtime and protected-storage removal keep their own host-qualified lifecycle/order.
+
+Pure-helper tests retain real-store cleanup, idempotence and persistence-last assertions. Static
+`PairedShell` renders do not execute its effects; mounted deletion/unpair and read-publication
+coverage is recorded with [the #2028 suite counts](thread-runtime.md#navigation-retirement-validation).

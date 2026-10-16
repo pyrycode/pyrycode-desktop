@@ -396,7 +396,7 @@ screen-local state written on the assumption that a remount always separates two
 five in-file comments say so in as many words (the run-config sheet, Channel Info, the workspace picker,
 the background-task panel, the scroll pin) — carried into the new conversation. The sharpest case: the
 composer's draft text would follow the operator into the conversation they switched to and be **sent
-there**. `activateConversation`'s store-side clear (timeline, session id) does not cover this — it
+there**. `activateConversation`'s store-side clear (session and configuration) does not cover this — it
 clears store state, not a component's own `useState`/`useRef`.
 
 Code review caught this in round 1 (MUST FIX, not identified by the spec or the PR body); the fix,
@@ -429,13 +429,11 @@ text-draft retention. Including the host in `paneKey` also resets controls when 
 same conversation ID. Retained coordinates in `savedTimelineTarget` come from the clicked row or
 `useConversationCreatedNav`'s creating-host stamp, never from a later list refresh.
 
-Retaining the creating host also enables the screen's timeline ownership check. `markViewed`
-alone can create an empty slice with no host, which leaves a new chat showing “Loading saved
-messages…” indefinitely when no history read is pending. After activation, the creation callback
-therefore calls `initializeCreatedTimeline(serverId, conversationId)` to establish an empty
-host-owned live timeline immediately. It replaces any same-ID content from another host without
-starting a saved-history read or claiming restoration provenance. See
-[timeline admission](conversation-timeline-holder.md#local-timeline-admission).
+Creation and sidebar opening retain the host for `threadRuntime.open` and pane identity.
+\#2028 removed `initializeCreatedTimeline` and activation's `markViewed`; neither empty legacy
+slices nor local view stamps establish production content or loading authority. The new-chat
+configuration controller still waits for its creating host's first admitted list update when needed;
+see [created-chat initialization](conversation-shell.md#created-chat-initialization).
 
 `e2e/conversation-switch-remount.spec.ts` now proves remounts through Channel Info closing on
 create/sidebar switches, independently of restored text. A surviving draft no longer proves a

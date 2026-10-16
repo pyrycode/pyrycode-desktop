@@ -10,7 +10,6 @@ import { createRunConfigStore } from './store/runConfigStore'
 import { createRunSettingsWriteStore } from './store/runSettingsWriteStore'
 import { createSystemPromptStore } from './store/systemPromptStore'
 import { createSystemPromptWriteStore } from './store/systemPromptWriteStore'
-import { subscribeTimeline } from './store/timelineBridge'
 
 function harness(open: string | null = 'b') {
   const keyed = createConversationTimelineStore(undefined, () => 'h')
@@ -33,8 +32,6 @@ function harness(open: string | null = 'b') {
     getTimelineServerId: id => { keyed.flushTimeline(); return keyed.getState().timelines.get(id)?.serverId },
     log,
     getActiveConversation: () => active.getState().activeConversation,
-    dispatchTimeline: event => flat.getState().dispatch(event),
-    clearTimelineFor: id => keyed.getState().clearTimelineFor(id),
     clearActiveConversation: () => active.getState().clearActiveConversation(),
     clearSessionId: () => session.getState().clearSessionId(),
     clearRunConfig: () => {
@@ -56,21 +53,21 @@ function harness(open: string | null = 'b') {
 }
 
 describe('confirmed conversation deletion', () => {
-  it('removes only the owned inactive slice and preserves B state and order', () => {
+  it('owned inactive deletion preserves legacy slices and active state', () => {
     const h = harness()
     const before = h.keyed.getState().timelines
     h.emit({ type: 'conversationDeleted', id: 'a', serverId: 'h' })
-    expect(selectTimelineFor('a')(h.keyed.getState())).toBeNull()
-    expect([...h.keyed.getState().timelines.keys()]).toEqual([...before.keys()].filter(id => id !== 'a'))
+    expect(h.keyed.getState().timelines).toBe(before)
     for (const id of ['b', 'c']) expect(h.keyed.getState().timelines.get(id)).toBe(before.get(id))
     h.unchanged()
     expect(h.nav).not.toHaveBeenCalled()
+    expect(h.log).not.toHaveBeenCalled()
   })
 
-  it('removes an owned slice with no active conversation', () => {
+  it('preserves legacy slices with no active conversation', () => {
     const h = harness(null)
     h.emit({ type: 'conversationDeleted', id: 'a', serverId: 'h' })
-    expect(selectTimelineFor('a')(h.keyed.getState())).toBeNull()
+    expect(selectTimelineFor('a')(h.keyed.getState())).not.toBeNull()
     h.unchanged()
     expect(h.nav).not.toHaveBeenCalled()
   })
@@ -96,9 +93,9 @@ describe('confirmed conversation deletion', () => {
   it('clears active state before navigating', () => {
     const h = harness('a')
     h.nav.mockImplementation(() => {
-      expect(selectTimelineFor('a')(h.keyed.getState())).toBeNull()
+      expect(selectTimelineFor('a')(h.keyed.getState())).not.toBeNull()
       expect(h.active.getState().activeConversation).toBeNull()
-      expect(h.flat.getState().items).toEqual([])
+      expect(h.flat.getState().items).toEqual([{ kind: 'userText', text: 'open thread' }])
       expect(h.session.getState().sessionId).toBeNull()
       expect(h.config.getState().snapshot).toBeNull()
       expect(h.settings.getState().pending.size).toBe(0)
@@ -118,7 +115,7 @@ describe('confirmed conversation deletion', () => {
     if (id !== 'absent') h.keyed.getState().dispatchFor(id, { type: 'userText', text: 'owned' })
     const before = h.keyed.getState().timelines
     h.emit({ type: 'conversationDeleted', id, serverId: 'h' })
-    expect(selectTimelineFor(id)(h.keyed.getState())).toBeNull()
+    expect(h.keyed.getState().timelines).toBe(before)
     for (const [key, slice] of before) {
       if (key !== id) expect(h.keyed.getState().timelines.get(key)).toBe(slice)
     }
@@ -149,46 +146,4 @@ describe('confirmed conversation deletion', () => {
     expect(h.log).not.toHaveBeenCalled()
   })
 
-  it.each(['success', 'failure', 'cancel'] as const)('late saved read cannot resurrect a deleted slice: %s', outcome => {
-    const h = harness()
-    h.keyed.getState().clearTimelineFor('a')
-    const read = h.keyed.getState().beginLocalTimelineRead('h', 'a')!
-    const b = h.keyed.getState().timelines.get('b')
-    h.emit({ type: 'conversationDeleted', id: 'a', serverId: 'h' })
-    if (outcome === 'success') read.complete({ version: 1, kind: 'timeline', serverId: 'h',
-      conversationId: 'a', prependedRows: 0, coverage: { status: 'unknown' },
-      items: [{ kind: 'userText', text: 'old saved row' }] })
-    else if (outcome === 'failure') read.fail()
-    else read.cancel()
-    expect(selectTimelineFor('a')(h.keyed.getState())).toBeNull()
-    expect(h.keyed.getState().timelines.get('b')).toBe(b)
-    h.unchanged()
-  })
-
-  it.each(['h', 'other'])('queued frame cannot resurrect the deleted slice, queued owner=%s', owner => {
-    const h = harness()
-    let listener: (event: DaemonEvent) => void = () => {}
-    let pending: (() => void) | undefined
-    const cancel = vi.fn()
-    const stop = subscribeTimeline(cb => { listener = cb; return () => {} },
-      (event, id, join, entry, origin) => {
-        if (id !== null) h.keyed.getState().dispatchFor(id, event, join, entry, origin)
-      }, undefined, undefined, {
-        scheduler: { request: cb => { pending = cb; return 1 }, cancel },
-        receiptHost: () => owner,
-        batch: h.keyed.batchTimeline,
-        beforeMutation: h.keyed.onBeforeTimelineMutation
-      })
-    listener({ type: 'assistantDelta', conversationId: 'a', turnId: 'turn', seq: 0, text: 'pending' })
-    expect(pending).toBeDefined()
-    h.emit({ type: 'conversationDeleted', id: 'a', serverId: 'h' })
-    const after = h.keyed.getState()
-    if (owner === 'h') expect(selectTimelineFor('a')(after)).toBeNull()
-    else expect(after.timelines.get('a')?.serverId).toBe('other')
-    pending!()
-    expect(h.keyed.getState()).toBe(after)
-    expect(cancel).toHaveBeenCalledWith(1)
-    h.unchanged()
-    stop()
-  })
 })

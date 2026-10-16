@@ -16,16 +16,14 @@ it does not establish host ownership or correlate a locally issued request.
 Past the gate, the synchronous ordering is:
 
 ```text
-dispatchTimeline({ type: 'reset' })
-clearTimelineFor(conversationId)
 clearActiveConversation()
 clearSessionId()
 clearRunConfig()
 navigateToList()
 ```
 
-The keyed clear deletes the slice rather than replacing it with an empty timeline. The last effect
-is navigation so the list cannot appear against the departed thread's state. `clearRunConfig` clears
+The last effect is navigation so the list cannot appear against the departed active state.
+Neither flat nor keyed legacy timelines are reset or cleared. `clearRunConfig` clears
 the run snapshot, pending/confirmed/rejected settings writes, system-prompt reading and system-prompt
 writes together; see [run-configuration clear](paired-shell-conversation-exits.md#the-run-configuration-clear-activateconversationts-exitactiveconversationts-both-stores-1167).
 Clearing the session also makes run-configuration writes inert rather than addressing the destroyed
@@ -43,33 +41,28 @@ An inactive archive flag or a missing list row cannot authorize permanent-deleti
 
 ## Confirmed deletion and host authority
 
-`confirmConversationDeleted` (`src/renderer/src/confirmConversationDeleted.ts`) separates retained
-cleanup from active navigation. Its injected dependencies extend `ExitActiveConversationDeps` with
-`getTimelineServerId(id)` and a diagnostic sender. The stamped origin must be a string exactly equal
-to the retained slice's explicit `ConversationSlice.serverId` before either path runs:
+`confirmConversationDeleted` (`src/renderer/src/confirmConversationDeleted.ts`) retains the
+owning-host admission check before active navigation. Its dependencies extend
+`ExitActiveConversationDeps` with `getTimelineServerId(id)` and a diagnostic sender. The stamped
+origin must be a string exactly equal to `getTimelineServerId(id)`. In current shell wiring,
+matching `savedTimelineTarget` coordinates supply the captured selected host first; otherwise the
+getter flushes accepted legacy folds and reads the slice's explicit `ConversationSlice.serverId`.
+Missing/null origin, unknown ownership and foreign ownership grant no active-exit authority.
+Do not replace this check with an active-host guess,
+list membership or a remembered Delete request.
 
-- If the deleted id is active, call the unchanged `exitActiveConversation` sequence above.
-- If another conversation or no conversation is active, call only `clearTimelineFor(deletedId)`.
-  Survivor slice references and Map order remain unchanged. The route, active selection, flat
-  timeline, session, run configuration and pending settings/system-prompt state stay intact.
+An admitted active deletion runs the sequence above. With another chat or no chat active, the
+helper does nothing: #2028 removed `clearTimelineFor` and the `inactive-cleared` diagnostic.
+Legacy slices survive both paths. Remaining diagnostics are the static `unattributed`, `unowned`
+and `active-cleared` codes, without conversation/server ids or content. Repeated confirmations
+cannot exit again after the active record becomes null. Exact Map keys, including empty and
+hostile-looking strings, remain supported.
 
-Missing/null origin, absent slices, unknown ownership and foreign ownership authorize neither removal
-nor active exit. A confirmation from H therefore cannot exit a same-id chat whose retained slice is
-owned by another host. Ownership comes from the retained slice and the main-stamped event, never an
-active-host guess, list membership or a local pending-request tracker. An owned daemon confirmation
-is authoritative even without a remembered Delete request.
-
-Duplicate confirmations and absent ids are harmless. Ids remain exact Map keys, including `''`,
-`__proto__` and `constructor`; no object-key conversion or truthiness filter is allowed. Diagnostics
-contain only `event: 'conversation-deletion'` and one static code: `unattributed`, `unowned`,
-`active-cleared` or `inactive-cleared`. They carry no conversation/server ids or thread content.
-
-The ownership getter flushes accepted timeline frame folds before reading the owner. The decision
-then checks and removes synchronously, without an await. The existing publication mutation boundary
-and saved-read ownership checks prevent work accepted before confirmation from recreating the
-removed slice; see [holder deletion lifecycle](conversation-timeline-holder.md#confirmed-deletion-lifecycle).
-A pending foreign-host fold can establish a different owner during that flush, in which case H's
-confirmation is refused. Fresh traffic arriving after deletion remains outside this guarantee.
+The legacy-holder fallback still flushes accepted timeline frame folds before reading the owner. A
+queued foreign-host fold may change that fallback owner and cause refusal. This is a retained read-side
+dependency, not permission to restore legacy navigation writes. Authoritative items, pending sends,
+query/read authority and protected storage are removed at their existing independent lifecycle
+boundaries; see [thread runtime cleanup](thread-runtime.md#restore-recovery-and-cleanup).
 
 ## Subscription and mounted wiring
 
@@ -91,6 +84,7 @@ useConversationDeletedExit((conversationId, serverId) =>
     {
       ...exitConversationDeps,
       getTimelineServerId: id => {
+        if (savedTimelineTarget?.conversationId === id) return savedTimelineTarget.serverId
         conversationTimelineStore.flushTimeline()
         return conversationTimelineStore.getState().timelines.get(id)?.serverId
       },
@@ -114,28 +108,26 @@ does not establish retained-thread removal: those subscriptions mutate different
 Delete click, a sent request, rejection nor an unrelated event enters the new invalidation path.
 The existing [chat-history writer](chat-history.md) remains responsible for confirmed removal of saved
 history and daemon items; this decision adds no persistence deletion path or wire change. Cross-client
-deletion fan-out and migration to authoritative thread items are separate work.
+deletion fan-out is separate work; production content already uses authoritative thread items.
 
 ## Regression coverage
 
-`confirmConversationDeleted.test.ts` injects real keyed, flat, active, session, run-configuration,
-settings-write and system-prompt stores through the deletion subscription. It proves A-only removal,
-B's identity/state preservation, exact owner refusal, active clear-before-navigation, hostile-looking
-keys, duplicate/absent ids, unsubscribe and ignored events. Controlled frame scheduling and saved-read
-success/failure/cancellation exercise the real lifecycle seams after confirmation. The existing
-`exitActiveConversation` mismatch regression must continue passing; its no-op is correct for that
-helper even though a confirmed deletion now has an independent cleanup path.
+`confirmConversationDeleted.test.ts` adapts its existing real-store dependency factory. It proves
+legacy slices remain identical on active/inactive confirmation, other active state survives inactive
+confirmation, and owned active cleanup finishes before navigation. It retains missing/foreign-owner
+refusals, duplicate/absent and hostile-looking IDs, ignored events and unsubscribe coverage.
+Activation, exit and pairing tests also seed legacy state and assert preservation, so removing a
+retired dependency cannot silently leave an old mutation behind.
 
-The mounted fake-transport spec `e2e/conversation-delete-inactive.spec.ts` initiates Delete in A's
-sheet, holds its correlated reply, opens B and then releases A's confirmation. It captures A's actual
-mounted `useSyncExternalStore` getter through test-only React fiber inspection before switching away,
-and reads null after confirmation. It adds no production test accessor. The missing sidebar row is
-only a receipt/re-list barrier; the selector proves removal while B's thread, selection and displayed
-configuration remain intact. Checking only the list row would pass with the original retained-state bug.
+Current mounted coverage uses `thread-activation.spec.ts` for deletion/owning-pairing cleanup and
+`thread-items.spec.ts` for authoritative committed-visible-read publication. The
+[counted #2028 evidence](thread-runtime.md#navigation-retirement-validation) names their passing
+cases and preserves the historical native revision boundary.
 
-[Verifier evidence for #782](https://github.com/pyrycode/pyrycode-desktop/pull/1945#issuecomment-6137862925)
-records the original callback's fails-before run: 1 executed, 1 failed, 15 unselected/skipped. The
-dispatcher unit run executed 10,011 tests, 0 failed and 3 skipped; all 16 current decision cases were
+Historical [verifier evidence for #782](https://github.com/pyrycode/pyrycode-desktop/pull/1945#issuecomment-6137862925)
+records the retired legacy-slice removal behavior, not the current preservation contract.
+Its original callback's fails-before run was: 1 executed, 1 failed, 15 unselected/skipped. The
+dispatcher unit run executed 10,011 tests, 0 failed and 3 skipped; all 16 then-current decision cases were
 present and passed, including queued publication and late saved-read settlement. The fake-transport
 gate executed 388 tests, 0 failed and 3 skipped. The held-confirmation spec and the existing
 `conversation-archive-lifecycle`, `conversation-switch-keeps-both-threads` and `timeline-frame-deltas`

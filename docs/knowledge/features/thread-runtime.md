@@ -58,6 +58,24 @@ append schedules that frame. Other event types flush earlier appends before
 application. A bounded flush also handles a paused window. Teardown removes
 subscriptions and retires owned query and live state.
 
+## Navigation boundaries
+
+\#2028 removes dormant legacy bookkeeping from activation, exit, confirmed deletion and pairing/
+server cleanup, including creation-time `initializeCreatedTimeline`. These paths neither reset the
+flat timeline nor create, mark viewed or clear keyed slices. Retained standalone legacy producers
+and tests remain until #2030. #2029 independently retires renderer legacy saved IO; neither change
+alters authoritative item/pending-send cleanup or protected removal ordering.
+
+Active ID/session/configuration/prompt cleanup remains synchronous before exit navigation. Same-ID
+reopening preserves held configuration and requests a refresh every time. Server removal samples
+exclusive departed IDs before dropping the list slot, then exits a matching active chat and persists
+local mark removal last. A storage exception cannot interrupt earlier in-memory cleanup. See
+[the shell's retained boundaries](paired-shell-conversation-exits.md).
+
+`conversationLastReadBridge` keeps its paired-shell `useReadPublication` mount while dropping the
+legacy count helper and timeline subscription. Navigation alone creates no read evidence; the
+committed-visible-content fences below and daemon acknowledgements remain authoritative.
+
 ## Sending and authenticated identity
 
 The no-argument `window.pyry.deviceIdentity()` invoke returns the lowercase
@@ -130,3 +148,32 @@ The [fake publisher](e2e-harness.md#scripted-and-native-thread-fixtures) supplie
 protocol data only. These checks establish no credentialed real-daemon pass.
 The [live runbook](live-e2e-runbook.md#current-real-claude-gate-state) records the
 remaining required scenarios and executable provenance.
+
+### Navigation retirement validation
+
+The [#2028 verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2031#issuecomment-6205882433)
+records Linux gates at `d3df5ec300026501d3a8d52488dfdba696609aeb` on 2026-10-16:
+10,196 unit tests executed/passed, 0 failed, 30 skipped across 415 files; build and docs guard passed.
+The complete configured fake-transport suite executed and passed 432 tests, with 0 failed,
+10 skipped, 0 flaky and 0 retries. Both configured projects and four workers ran without selection
+or shard filters; seven skips concern retired legacy scenarios and three are macOS-only cases.
+
+All 15 `thread-activation.spec.ts`, all 12 `thread-items.spec.ts` and the single
+`settings-per-server-unpair.spec.ts` case are explicitly present and passed in that counted Linux
+run. They include deletion/owning-pairing cleanup, host isolation and both committed-visible-
+authoritative-read variants. No top-level errors or fake-daemon-setup attachments were reported.
+The existing navigation factories retain seeded legacy-store preservation assertions; tests
+exclusive to stamping and its removed subscription were deleted.
+
+Historical macOS task `db47ef552e357d3da36abf43f54891dbcfc0aee1588e9a697235800c8860e37e`
+ran candidate `4d695203d5035b69ba02d77f1368e2809ead676d`: 434 executed/passed, 0 failed,
+17 skipped, 0 flaky and 0 retries out of 451 configured cases. All 15 thread-activation, 12
+thread-items and one settings-per-server-unpair case were present and passed there too. The
+verifier inspected all six artifacts; capture, JSON and list/execution logs agreed and the
+configuration hash matched that candidate. All seven #2028 production modules are unchanged
+between that candidate and the Linux gate head. Later main changes to #2029 saved IO and #2033
+scroll-test readiness are covered by the Linux gates. These native counts establish only the
+recorded historical candidate; current-head macOS checks are outside this Linux ticket's scope.
+No real-Claude or visual result is claimed for this navigation-only change. The
+[plan](../../specs/architecture/2028-retire-navigation-bookkeeping.md#returned-native-evidence--2026-10-16)
+retains the full candidate/configuration and skip breakdown.

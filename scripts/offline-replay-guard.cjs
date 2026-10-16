@@ -17,4 +17,10 @@ for (const name of ['spawn', 'spawnSync', 'execFile', 'execFileSync']) {
   cp[name] = function(command, ...args) { if (args.some(value => value && typeof value === 'object' && !Array.isArray(value) && value.shell)) check('shell'); check(command); return actual.call(this, command, ...args) }
 }
 for (const name of ['exec', 'execSync']) cp[name] = () => { check('shell') }
+const fork = cp.fork
+cp.fork = function(modulePath, ...args) {
+  const options = args.find(value => value && typeof value === 'object' && !Array.isArray(value))
+  check(options?.execPath ?? process.execPath)
+  return fork.call(this, modulePath, ...args)
+}
 syncBuiltinESMExports()

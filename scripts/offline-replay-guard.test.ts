@@ -9,7 +9,7 @@ it('blocks PATH commands, absolute daemon commands and shell indirection before 
   const log = join(directory, 'attempts')
   try {
     const program = `const cp=require('node:child_process');
-      for(const [name,args] of [['spawnSync',['claude',['--version']]],['execFileSync',['/tmp/pyry',[]]],['execSync',['pyry version']],['spawnSync',[process.execPath,[],{shell:true}]]]) {
+      for(const [name,args] of [['spawnSync',['claude',['--version']]],['execFileSync',['/tmp/pyry',[]]],['execSync',['pyry version']],['spawnSync',[process.execPath,[],{shell:true}]],['fork',['/tmp/no-script',[],{execPath:'/tmp/pyry'}]]]) {
         try { cp[name](...args); throw Error('guard did not reject') } catch(e) {
           if(e.message!=='Offline replay rejected an external process launch') throw e;
         }
@@ -18,6 +18,6 @@ it('blocks PATH commands, absolute daemon commands and shell indirection before 
       { env: { ...process.env, PYRY_OFFLINE_LAUNCH_LOG: log }, encoding: 'utf8' })
     expect(result.status).toBe(0)
     expect(readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line).executable))
-      .toEqual(['claude', 'pyry', 'shell', 'shell'])
+      .toEqual(['claude', 'pyry', 'shell', 'shell', 'pyry'])
   } finally { rmSync(directory, { recursive: true, force: true }) }
 })

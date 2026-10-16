@@ -36,7 +36,7 @@ import {
   selectConversationAgentFor,
   type ConversationListState
 } from '../../store/conversationListStore'
-import { connectedConversationHostNow, useConversationActionAvailability, useConversationHost } from './conversationActionAvailability'
+import { connectedConversationHostNow, conversationHostNow, useConversationActionAvailability, useConversationHost } from './conversationActionAvailability'
 import { serverIdForOpenConversation } from './unpairAction'
 
 /** Subscribe to the conversation's owner, never the last host whose status changed. */
@@ -85,8 +85,7 @@ export function changeConnectedSetting(conversationId: string | null, change: Se
 
 /** Pending presentation is scoped to this conversation and its current owning host. */
 export function usePendingAgentSwitchRow(conversationId: string | null): WireModelOption | null {
-  const rows = useConversationListStore(selectConversations)
-  const serverId = serverIdForOpenConversation(rows, conversationId)
+  const serverId = useConversationHost(conversationId)
   return useStore(agentSwitchStore, s => {
     const status = conversationId === null ? undefined : s.statuses.get(conversationId)
     return status?.type === 'pending' && status.serverId === serverId ? status.row : null
@@ -97,7 +96,7 @@ export function usePendingAgentSwitchRow(conversationId: string | null): WireMod
 export function selectConnectedModel(conversationId: string | null, row: WireModelOption): void {
   if (conversationId === null || !sessionSettingsConnected(conversationId) ||
     !isAddressableSessionId(selectSessionId(sessionIdStore.getState()))) return
-  const agent = selectAgentForConversation(conversationId)(conversationListStore.getState())
+  const agent = selectAgentForConversation(conversationId, conversationHostNow(conversationId))(conversationListStore.getState())
   if ((row.agent ?? 'claude') === agent) {
     changeConnectedSetting(conversationId, { field: 'model', value: row.value })
   } else {

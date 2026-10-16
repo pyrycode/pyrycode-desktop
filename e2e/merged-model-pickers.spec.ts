@@ -1,5 +1,5 @@
 import { mkdir } from 'node:fs/promises'
-import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
+import { test, expect, SEEDED_ROW, SECOND_SEEDED_ROW } from './fixtures/launchPairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { Envelope, EnvelopeType, WireAgent, WireModelOption } from '../src/shared/wire/types'
 
@@ -11,6 +11,94 @@ const rows = [claude, { ...claude, value: 'default' }, codex]
 const frame = (type: EnvelopeType, payload: unknown, in_reply_to?: number) => encodeEnvelope({
   id: 90, type, ts: '2026-10-07T12:00:00.000Z', payload, ...(in_reply_to === undefined ? {} : { in_reply_to })
 })
+
+for (const entry of ['footer', 'sheet'] as const) {
+  for (const outgoing of ['claude', 'codex'] as const) {
+    test(`${entry} scopes routing and pending to the selected ${outgoing} host with colliding conversation IDs`, async ({ launchPairedApp }) => {
+      const sent: Envelope[][] = [[], []]
+      const source = outgoing === 'claude' ? claude : codex
+      const target = outgoing === 'claude' ? codex : claude
+      const targetAgent = target.agent ?? 'claude'
+      const sourceLabel = outgoing === 'claude' ? 'Sonnet' : codex.display_name
+      const targetLabel = outgoing === 'claude' ? codex.display_name : 'Sonnet'
+      const foreign = { ...SEEDED_ROW, agent: targetAgent, current_session_id: 'foreign-session' }
+      const selected = { ...SECOND_SEEDED_ROW, id: SEEDED_ROW.id, agent: outgoing, current_session_id: 'selected-session' }
+      const replies = (host: number) => (bytes: Uint8Array) => {
+        const e = decodeEnvelope(bytes); sent[host].push(e)
+        if (e.type === 'list_conversations') return [frame('conversations', { conversations: [host ? selected : foreign] })]
+        if (e.type === 'request_model_list') return [frame('model_list', {
+          conversation_id: SEEDED_ROW.id, models: rows, dropped_models: 0
+        }, e.id)]
+        if (e.type === 'request_session_settings') return [frame('session_settings', {
+          session_id: host ? 'selected-session' : 'foreign-session', model: host ? source.value : 'foreign-model', effort: 'low', effective_effort: 'low',
+          permission_mode: 'default', yolo: false, used_tokens: 0, window_tokens: 200_000
+        }, e.id)]
+        if (e.type === 'set_session_settings') return [frame('session_settings_updated', { session_id: 'selected-session' }, e.id)]
+        return []
+      }
+      const { page, servers } = await launchPairedApp({ buildReplyFrames: replies(0) }, {
+        secondServer: { buildReplyFrames: replies(1) }
+      })
+      const trigger = page.locator('.composer__model')
+      const sheet = page.locator('.status-sheet')
+      const openSheet = async () => {
+        if (await sheet.count()) return
+        await page.locator('.conversation__overflow-trigger').click()
+        await page.getByRole('menuitem', { name: 'Run configuration', exact: true }).click()
+      }
+      const closeSheet = async () => { if (await sheet.count()) await sheet.getByRole('button', { name: 'Close', exact: true }).click() }
+      const pick = async (row: WireModelOption) => {
+        if (entry === 'footer') {
+          await closeSheet(); await trigger.click()
+          await page.getByRole('menu', { name: 'Model', exact: true }).getByRole('menuitem', {
+            name: row.agent === 'codex' ? row.display_name : 'Sonnet', exact: true
+          }).click()
+        } else {
+          await openSheet()
+          await sheet.locator('.run-config__model-row').filter({ hasText: row.display_name }).click()
+        }
+      }
+      const switches = () => sent[1].filter(e => e.type === 'switch_agent')
+      const writes = () => sent[1].filter(e => e.type === 'set_session_settings')
+      const dialog = page.getByRole('dialog', { name: `Switch to ${targetAgent === 'claude' ? 'Claude' : 'Codex'}?`, exact: true })
+      await page.getByRole('button', { name: selected.name!, exact: true }).click()
+      await expect(trigger).toHaveText(sourceLabel)
+      await pick(target)
+      await expect(dialog).toBeVisible()
+      expect(switches()).toHaveLength(0)
+      expect(writes()).toHaveLength(0)
+      await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+      await expect(trigger).toHaveText(sourceLabel)
+      await pick(target)
+      await dialog.getByRole('button', { name: 'Switch', exact: true }).click()
+      await expect.poll(() => switches().length).toBe(1)
+      expect(switches()[0].payload).toEqual({ conversation_id: SEEDED_ROW.id, agent: targetAgent, model: target.value, effort: 'low' })
+      await expect(trigger).toHaveText(targetLabel)
+      await openSheet()
+      await expect(sheet.locator('.run-config__model-row').filter({ hasText: target.display_name }).getByRole('img', { name: 'Current model' })).toBeVisible()
+      await pick(target)
+      await expect(dialog).toHaveCount(0)
+      await closeSheet()
+      // The same ID on the other host must not borrow this pending presentation.
+      await page.getByRole('button', { name: foreign.name!, exact: true }).click()
+      await expect(trigger).toHaveText(targetAgent === 'codex' ? 'foreign-model' : 'Foreign')
+      await openSheet()
+      await expect(sheet.getByRole('img', { name: 'Current model' })).toHaveCount(0)
+      await closeSheet()
+      await page.getByRole('button', { name: selected.name!, exact: true }).click()
+      await expect(trigger).toHaveText(targetLabel)
+      servers[1].daemon.pushFrame(frame('error', { code: 'switch_agent.refused', message: 'refused', retryable: true }, switches()[0].id))
+      await expect(trigger).toHaveText(sourceLabel)
+      await pick(source)
+      await expect.poll(() => writes().length).toBe(1)
+      expect(writes()[0].payload).toEqual({ session_id: 'selected-session', model: source.value })
+      await expect(page.locator('.agent-switch-overlay')).toHaveCount(0)
+      expect(switches()).toHaveLength(1)
+      expect(writes()).toHaveLength(1)
+      expect(sent[0].filter(e => ['switch_agent', 'set_session_settings'].includes(e.type))).toHaveLength(0)
+    })
+  }
+}
 
 for (const key of ['Enter', 'Space'] as const) {
   for (const outgoing of ['claude', 'codex'] as const) {

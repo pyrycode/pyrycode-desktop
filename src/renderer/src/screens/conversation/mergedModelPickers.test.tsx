@@ -65,7 +65,9 @@ describe('merged model picker rows', () => {
 
 // These test the action boundary; real click handlers are exercised in Playwright.
 
-it.each(['claude', 'codex'] as const)('routes the exact row from %s and scopes pending to its owner', agent => {
+it.each([
+  ['claude', false], ['codex', false], ['claude', true], ['codex', true]
+] as const)('routes the exact row from %s (colliding IDs: %s) and scopes pending to its owner', (agent, colliding) => {
   const stores = [conversationListStore, sessionStore, sessionIdStore, activeConversationStore, agentSwitchStore, runSettingsWriteStore] as const
   const restore = stores.map(store => {
     const old = store.getState()
@@ -76,11 +78,17 @@ it.each(['claude', 'codex'] as const)('routes the exact row from %s and scopes p
   vi.stubGlobal('window', { pyry: { sendCommand: send, sendDiagnostic: vi.fn() } })
   const summary = { id: 'chat', name: 'Chat', cwd: '/fake', workspace_label: null,
     is_promoted: false, is_archived: false, last_message_ts: '', last_used_at: '', agent }
+  const selectHost = (serverId: string) => {
+    const selected = { ...summary, serverId }
+    activeConversationStore.getState().setActiveConversation(selected)
+  }
   const pendingMarkup = () => renderToStaticMarkup(<Pending />)
   function Pending(): JSX.Element { return <span>{usePendingAgentSwitchRow('chat')?.display_name ?? 'underlying'}</span> }
   try {
+    if (colliding) conversationListStore.getState().setConversations([{ ...summary, agent: agent === 'claude' ? 'codex' : 'claude' }], 'foreign')
     conversationListStore.getState().setConversations([summary], 'owner')
-    activeConversationStore.getState().setActiveConversation(summary)
+    if (colliding) selectHost('owner')
+    else activeConversationStore.getState().setActiveConversation(summary)
     sessionStore.getState().dispatch({ type: 'connected', serverId: 'owner',
       ack: { protocol_version: 'v2', server_id: 'owner', conn_id: 'conn', capabilities: [] } })
     sessionIdStore.getState().setSessionId('session')
@@ -89,7 +97,7 @@ it.each(['claude', 'codex'] as const)('routes the exact row from %s and scopes p
     const other = agent === 'claude' ? codex : claude
     selectConnectedModel('chat', own)
     expect(send).toHaveBeenCalledTimes(1)
-    expect(send).toHaveBeenCalledWith({ type: 'setSessionSettings',
+    expect(send).toHaveBeenCalledWith({ type: 'setSessionSettings', ...(colliding ? { serverId: 'owner' } : {}),
       payload: { session_id: 'session', model: 'shared' }, changeId: expect.any(String) })
     expect(agentSwitchStore.getState().dialog).toBeNull()
     send.mockClear()
@@ -104,6 +112,10 @@ it.each(['claude', 'codex'] as const)('routes the exact row from %s and scopes p
     expect(send).toHaveBeenCalledTimes(1)
     expect(send.mock.calls[0][0]).toMatchObject({ type: 'switchAgent', payload: {
       conversation_id: 'chat', agent: agent === 'claude' ? 'codex' : 'claude', model: 'shared' } })
+    expect(pendingMarkup()).toContain(other.display_name)
+    selectHost('foreign')
+    expect(pendingMarkup()).toContain('underlying')
+    selectHost('owner')
     expect(pendingMarkup()).toContain(other.display_name)
     selectConnectedModel('chat', other)
     expect(agentSwitchStore.getState().dialog).toBeNull()

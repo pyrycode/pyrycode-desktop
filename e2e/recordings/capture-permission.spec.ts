@@ -51,6 +51,9 @@ test('capture and verify a controlled real Claude permission exchange', async ({
       const observed = await page.evaluate(() => (window as ObservedWindow).exchangeObservation)
       expect(observed.capabilities).toEqual(expect.arrayContaining(['interactive', 'thread']))
       const wire: RecordedEntry[] = await app.evaluate(() => (globalThis as CaptureGlobal).__desktopExchangeCapture!.take())
+      await info.attach('capture-request-types', { contentType: 'text/plain', body: Buffer.from(JSON.stringify({
+        types: wire.filter(entry => entry.direction === 'client').map(entry => entry.message.type)
+      })) })
       const answers = wire.filter(entry => entry.direction === 'client' && entry.message.type === 'modal_answer')
       expect(answers).toHaveLength(1)
       expect((answers[0].message.payload as Record<string, unknown>).option_id).toBe('allow_once')

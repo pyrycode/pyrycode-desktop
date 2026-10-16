@@ -1,5 +1,6 @@
 import { resolve } from 'node:path'
-import { defineConfig, type UserConfig } from 'electron-vite'
+import { defineConfig } from 'electron-vite'
+import type { UserConfig } from 'vite'
 import normal from '../../electron.vite.config'
 
 // A separate build entry point prevents a runtime flag from enabling plaintext

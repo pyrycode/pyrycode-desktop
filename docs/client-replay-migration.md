@@ -99,3 +99,16 @@ exploratory recordings must be replaced by new captures after these fixes.
 The independently merged core PR #3505 (`4871e083`) superseded the parallel
 prerequisite PR #3507; live two-turn and history acceptance pass on the merged
 implementation. Final captures use its isolated, clean, source-stamped binary.
+
+A live agent turn returned the complete marker, but Desktop rejected the
+protocol's combined field-change/suffix pair because the suffix keeps the final
+revision. The item store now accepts one ordered companion at the same version
+and revision, invalidates that opportunity across intervening full data, and
+refuses duplicate suffix application. Owned encrypted persistence accepts only
+strict text growth at an equal revision with every other field unchanged.
+Replacement, rollback, duplicate and restart checks remain explicit.
+
+Configuration revalidation is bounded to one request pair per selected bound
+session and opening after an admitted withdrawal of a previously held settings
+reading. It does not retry missing initial replies. Effort recall waits for a
+real configuration reading before interpreting an empty effort as unset.

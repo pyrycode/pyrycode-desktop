@@ -775,3 +775,20 @@ it('unavailable encryption never opens storage and unsupported schemas are prese
   expect(await h.fresh().store.execute(put(snapshot()))).toEqual(error('unsupported-version'))
   expect(readFileSync(path).equals(bytes)).toBe(true)
 })
+
+it('persists a same-revision text companion without admitting same-revision replacements', async () => {
+  const h = setup(), s = snapshot(1)
+  const before = { ...s.thread.items[0], kind: 'assistant_message', content: { text: 'TH', preserved: true } }
+  s.thread.items[0] = before
+  await h.store.execute(put(s)); await h.store.execute(owned(s))
+  const complete = { ...before, content: { ...before.content, text: 'THREAD_COMPLETE' } }
+  expect(await h.store.execute(owned(s, { items: [complete] }))).toEqual({ status: 'ok' })
+  for (const stale of [before, complete, { ...complete, content: { ...complete.content, text: 'different' } },
+    { ...complete, hidden: !complete.hidden, content: { ...complete.content, text: 'THREAD_COMPLETE extra' } }]) {
+    expect(await h.store.execute(owned(s, { items: [stale] }))).toEqual({ status: 'ok' })
+  }
+  const expected = { ...s, thread: { ...s.thread, items: [complete] } }
+  expect(await h.store.execute(ask('readThread'))).toEqual(stored(expected))
+  h.database.close()
+  expect(await h.fresh().store.execute(ask('readThread'))).toEqual(stored(expected))
+})

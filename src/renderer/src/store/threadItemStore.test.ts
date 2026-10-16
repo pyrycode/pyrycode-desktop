@@ -333,3 +333,22 @@ describe('scope cleanup and epoch identity', () => {
     expect(log.event.mock.calls.length).toBeGreaterThanOrEqual(4)
   })
 })
+
+it('applies the same-revision suffix after its ordered field change exactly once', () => {
+  const { api, snapshot } = setup()
+  api.applyUpdate('h', added())
+  expect(api.applyUpdate('h', changed({ active: false, summary: 'hello world' }, 10, 20))).toMatchObject({ type: 'applied' })
+  const suffix = append(20, 20, ' world', 20)
+  expect(api.applyUpdate('h', suffix)).toMatchObject({ type: 'applied' })
+  expect(snapshot().items[0].content).toEqual({ text: 'hello world', preserved: true })
+  expect(api.applyUpdate('h', suffix)).toMatchObject({ type: 'repair' })
+  expect(snapshot().items[0].content).toEqual({ text: 'hello world', preserved: true })
+})
+it('does not apply a companion suffix across an intervening full item', () => {
+  const { api, snapshot } = setup()
+  api.applyUpdate('h', added())
+  api.applyUpdate('h', changed({ active: false }, 10, 20))
+  api.applyUpdate('h', added(item(1, 20)))
+  expect(api.applyUpdate('h', append(20, 20, ' duplicate', 20))).toMatchObject({ type: 'repair' })
+  expect(snapshot().items[0].content).toEqual({ text: 'hello', preserved: true })
+})

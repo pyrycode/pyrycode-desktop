@@ -357,4 +357,26 @@ recovery semantics, not reproduction of the upstream trigger. Counted browser
 [repetition and full-suite evidence](development-verification-layout-and-input.md#composer-native-setup-verification)
 preserve the menu proof separately.
 
+The single-consumer [`focusVisibleTailWindow`](../../../e2e/fixtures/visibleTailFocus.ts)
+serves `visible-tail-read.spec.ts`. Each synchronous control callback finds the live
+window and independently checks `isVisible()` before `show()` and `isFocused()` before
+`focus()`. Partial or late execution cannot repeat completed fields. Every control
+evaluation is followed by up to three read-only inspections through `readMainProcess`,
+without sleeps. Both visible and focused must be confirmed; only transient control
+loss plus a **final conclusive mismatch** permits the second and last guarded attempt.
+An earlier mismatch followed by unavailable inspection cannot authorize resend.
+Unavailable final confirmation, acknowledged mismatch, exhaustion and missing windows
+fail setup; unrelated errors and non-`Error` throws propagate unchanged.
+
+Native confirmation does not establish document readiness. The consuming `focus`
+still deletes its deliberate `document.hasFocus` override, polls genuine
+`document.hasFocus()` and only then dispatches the existing focus notification.
+Clicks, daemon frames, scenario actions and observer installation are never replayed.
+[`visibleTailFocus.test.ts`](../../../e2e/fixtures/visibleTailFocus.test.ts) executes
+the actual control/inspection callbacks against native-state fields, covering loss
+before/after effects, partial/late execution, repeated setup, unavailable reads,
+final-inconclusive rejection, exhaustion, missing windows and fatal/non-`Error` throws.
+See [distinct historical failures and counted Linux proof](development-verification-layout-and-input.md#visible-tail-native-acknowledgement-verification)
+for the original/repaired fault results and repetition/spec/full-gate evidence.
+
 `readAuthentication` keeps its own private copy of the same tolerance.

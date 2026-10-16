@@ -48,3 +48,12 @@ Recognize only `isTransientContextLoss`; all other errors propagate. Recovery ex
 
 ## Open Questions
 None. The upstream cause of context loss remains unconfirmed; this repair proves bounded acknowledgement recovery rather than reproducing that cause.
+
+## Revisions
+2026-10-16: Playwright's `serializeError` reports an Error's message and filtered stack, without `AggregateError.errors`. A controlled assertion failed when the helper only retained the two original objects. The combined error now includes both original stacks in its message as well as retaining both objects, so browser failure output exposes both failures. No delivery behavior changes.
+
+## Validation evidence
+- Linux, 2026-10-16, after merging main at `008f468f95acc70a568b4ea41f5ade9e5cc80927`: pre-verify passed all five checks, including 9,070 passed unit tests and three existing skips; final build and a separate strict helper/test typecheck passed.
+- Controlled baseline: 20 executed, 6 passed, 14 failed against extracted original behavior (`/tmp/builder-2054/fault-before.log`). The reporting assertion separately failed with an unformatted aggregate (`reporting-before.log`). Final controlled coverage: 20 executed/passed, 0 failed/skipped (`fault-final.log`); the full unit report also includes all 20 passing.
+- Final focused run: `npx playwright test e2e/disconnected-message-delivery.spec.ts --repeat-each=10 --retries=0 --reporter=json`, unchanged projects and configured two workers on this host. Automatic, explicit and terminal each executed/passed 10, failed/skipped 0; total 30 executed/passed, 0 failed/skipped/flaky, every retry index 0. All 30 launch-fate attachments report running at outcome, exit 0, no signal and no teardown failures; no report-level errors. JSON and empty stderr retained at `/tmp/builder-2054/focused-final.json` and `/tmp/builder-2054/focused-final.stderr`. The earlier focused run independently recorded the same 30/30 result in `focused.json`.
+- Gate and build evidence: `/tmp/builder-2054/pre-verify.log`, `units-final.json`, `build-final.log`, `helper-typecheck.log`. The dispatcher-owned complete configured fake suite remains pending; its three mode outcomes must be reported separately from unrelated failures. macOS is outside this ticket's verification scope. These passes do not identify the upstream inspection-context-loss trigger.

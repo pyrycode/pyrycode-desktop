@@ -221,9 +221,11 @@ remain failed in the [plan](../../specs/architecture/2044-owned-thread-changes.m
 fractional ordering missed bounded append work, and an exploratory packaged run
 rejected `basic_text` until the existing admitted secret service was supplied.
 The earlier full fake run with 434 passed, 1 failed, 3 skipped hit teardown context
-loss tracked by [#2054](https://github.com/pyrycode/pyrycode-desktop/issues/2054)
-(Backlog, priority:low). Final counted passes supersede those candidates; no
-assertion, timeout, retry, skip or suite configuration was weakened.
+loss repaired by [#2054](e2e-harness-context-recovery.md#disconnected-delivery-observations-and-cleanup),
+with separate controlled recovery proof and counted Linux verification; the upstream
+trigger and original cleanup execution remain unconfirmed. Final counted passes
+supersede those candidates; no assertion, timeout, retry, skip or suite configuration
+was weakened.
 
 ### Bounded legacy page regressions
 

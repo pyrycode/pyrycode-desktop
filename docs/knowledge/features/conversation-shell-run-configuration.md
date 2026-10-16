@@ -311,6 +311,13 @@ pending-over-confirmed `picked`, `snapshot?.model ?? null` for `stored`, and the
 announcement. The optional pure-view prop defaults to no pick, its `model` prop as stored, and its
 announcement prop; production supplies all layers explicitly.
 
+These layers share a host-and-conversation lifetime (#2068). Same-host/same-ID reopening retains
+confirmed choices while refreshing settings. A host change, even with the same conversation ID,
+clears the outgoing snapshot and pending/confirmed/error overlays before publishing the incoming
+context, so that host's saved model governs both footer and sheet. Late discarded write replies
+cannot restore the outgoing choice. See [host navigation and its acknowledged-write regression](run-settings-write-store.md#settings-lifetime-on-host-navigation)
+for both-agent/entry-point coverage and exact per-host request counts.
+
 A pick, otherwise an explicit saved model other than `''` or `'default'`, marks the first own-agent
 row with that exact raw `value`. Both explicit and inherited matching remain agent-scoped.
 

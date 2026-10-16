@@ -65,3 +65,20 @@ it('waits for the actual recorded prefix before releasing a successful live-proo
   expect((await ready).map(decodeEnvelope)).toHaveLength(1)
   expect(finished).toBe(true)
 })
+
+it('requires the actual captured transport close after all preceding daemon frames', () => {
+  const recording = fixture()
+  recording.closures = [{ before: 2, connection: 1, code: 4413 }]
+  const closes: unknown[] = []
+  const replay = new RecordedExchange(recording)
+  replay.setTransportCloseObserver(close => closes.push(close))
+  replay.setDeviceId('actual')
+  expect(closes).toEqual([])
+  expect(replay.reply(encodeEnvelope(message(2, 'list_conversations'))).map(decodeEnvelope)).toHaveLength(1)
+  expect(closes).toEqual([{ code: 4413, afterServerFrames: 2 }])
+  replay.reconnect()
+  replay.reply(encodeEnvelope(message(2, 'list_conversations')))
+  expect(() => replay.assertComplete()).not.toThrow()
+  const missing = new RecordedExchange(recording)
+  expect(() => missing.reply(encodeEnvelope(message(2, 'list_conversations')))).toThrow('transport boundary mismatch')
+})

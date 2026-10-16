@@ -4,7 +4,7 @@ import { basename, join, resolve, relative } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { test as live, withIsolatedElectronApp, type RealDaemonOptions, type RealDaemonFixtures } from './realDaemon'
-import { startFakeRelayForwarder } from '../../src/main/transport/fakeRelayForwarder'
+import { startFakeRelayForwarder, type FakeRelayForwarder } from '../../src/main/transport/fakeRelayForwarder'
 import { startFakeDaemonForTest } from './fakeDaemonSetup'
 import { RecordedExchange, parseRecording, type Recording, type RecordedEntry } from './recordedExchange'
 import { clientAppLifecycle } from './clientAppLifecycle'
@@ -65,12 +65,12 @@ const capture = live.extend<{ _clientCapture: void }>({
     if (!output || !binary) throw new Error('Client capture requires explicit output directory and test daemon')
     const build = execFileSync('go', ['version', '-m', binary], { encoding: 'utf8' })
     const daemonRevision = /vcs.revision=([a-f0-9]{40})/.exec(build)?.[1]
-    if (!daemonRevision) throw new Error('Capture daemon must identify its source revision')
+    if (!daemonRevision || !build.includes('vcs.modified=false')) throw new Error('Capture daemon must identify its source revision')
     const source: Recording['source'] = { capturedAt: new Date().toISOString(),
       desktopRevision: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), daemonRevision,
       daemonBinarySha256: createHash('sha256').update(readFileSync(binary)).digest('hex'),
       claudeVersion: spawnClaude ? execFileSync('claude', ['--version'], { encoding: 'utf8' }).trim() : 'not-spawned' }
-    const wire: RecordedEntry[] = [], barriers: NonNullable<Recording['barriers']> = [], devices: string[] = []
+    const wire: RecordedEntry[] = [], barriers: NonNullable<Recording['barriers']> = [], devices: string[] = [], closures: NonNullable<Recording['closures']> = []
     let capabilities: string[] = [], connections = 0, active: ElectronApplication | undefined, failure: unknown
     const harvested = new Set<ElectronApplication>()
     const oldFlag = process.env.PYRY_CAPTURE_ON_LAUNCH
@@ -95,6 +95,7 @@ const capture = live.extend<{ _clientCapture: void }>({
         })
         if (!result.connections) throw new Error('Capture observed no authenticated connection')
         const offset = wire.length
+        closures.push(...result.closures.map(c => ({ ...c, before: c.before + offset, connection: c.connection + connections })))
         barriers.push(...result.barriers.map(b => ({ ...b, before: b.before + offset })))
         wire.push(...result.wire.map(e => ({ ...e, connection: (e.connection ?? 1) + connections })))
         for (const names of result.capabilities) {
@@ -125,7 +126,7 @@ const capture = live.extend<{ _clientCapture: void }>({
       const id = scenarioId(basename(info.file, '.spec.ts').replace(/^real-/, ''), info.title)
       const recording: Recording = { format: 'pyrycode.daemon-exchange', version: 2, source,
         scenario: { id, inputs: state!.inputs, workspace: '/recorded/workspace' }, capabilities,
-        deviceId: devices[0], devices, barriers, wire: normalize(wire) as RecordedEntry[] }
+        deviceId: devices[0], devices, barriers, closures, wire: normalize(wire) as RecordedEntry[] }
       const encoded = JSON.stringify(recording, null, 2) + '\n'
       for (const key of ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'PYRY_LIVE_CLAUDE_TOKEN'])
         if (process.env[key] && encoded.includes(process.env[key]!)) throw new Error('Invalid recording: credential present')
@@ -152,7 +153,8 @@ const capture = live.extend<{ _clientCapture: void }>({
   }, { auto: true }]
 })
 
-type ReplayFixtures = RealDaemonOptions & RealDaemonFixtures & {
+type ReplayFixtures = RealDaemonOptions & Omit<RealDaemonFixtures, 'relay'> & {
+  relay: FakeRelayForwarder
   recordingName: string; recording: Recording; exchange: RecordedExchange; _clientReplay: void
 }
 const replay = base.extend<ReplayFixtures>({
@@ -180,12 +182,13 @@ const replay = base.extend<ReplayFixtures>({
   },
   relay: async ({}, use) => {
     const relay = await startFakeRelayForwarder()
-    try { await use(relay as RealDaemonFixtures['relay']) } finally { await relay.close() }
+    try { await use(relay) } finally { await relay.close() }
   },
   daemon: async ({ relay, recording, exchange }, use) => {
+    exchange.setTransportCloseObserver(({ code, afterServerFrames }) => relay.closeClientAfterServerFrames(afterServerFrames, code))
     const daemon = await startFakeDaemonForTest({ url: relay.url, helloAck: { capabilities: recording.capabilities },
       buildInitialFrames: () => exchange.start(), buildReconnectFrames: () => exchange.reconnect(),
-      buildReplyFrames: bytes => { try { return exchange.reply(bytes) } catch { return [] } } })
+      buildReplyFrames: bytes => exchange.reply(bytes) })
     state = { inputs: recording.scenario.inputs!, source: recording.source, checkpoint: async name => {
       for (const frame of await exchange.checkpointWhenReady(name)) daemon.pushFrame(frame)
     } }

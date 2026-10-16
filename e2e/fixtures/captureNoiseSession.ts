@@ -6,7 +6,7 @@ import { decodeEnvelope } from '../../src/main/transport/codec'
 export * from '../../src/main/transport/noiseSession'
 
 declare global { var __desktopExchangeCapture: ExchangeCapture }
-const capture = createExchangeCapture()
+export const capture = createExchangeCapture()
 globalThis.__desktopExchangeCapture = capture
 if (process.env.PYRY_CAPTURE_ON_LAUNCH === '1') capture.begin()
 

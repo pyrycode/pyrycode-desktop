@@ -11,9 +11,13 @@ export function createExchangeCapture(limits = { maxBytes: 2_000_000 }) {
   let connection = 0
   let barriers: { before: number; name: string }[] = []
   let capabilities: string[][] = []
+  let closures: { before: number; connection: number; code: number }[] = []
   return {
-    begin(): void { active = true; size = 0; entries = []; failure = undefined; started = Date.now(); connection = 0; barriers = []; capabilities = [] },
+    begin(): void { active = true; size = 0; entries = []; failure = undefined; started = Date.now(); connection = 0; barriers = []; capabilities = []; closures = [] },
     openConnection(): number { return active ? ++connection : 0 },
+    closeConnection(code: number): void {
+      if (active && connection > 0) closures.push({ before: entries.length, connection, code })
+    },
     setCapabilities(id: number, names: string[]): void {
       if (active) capabilities[id - 1] = [...names]
     },
@@ -38,13 +42,13 @@ export function createExchangeCapture(limits = { maxBytes: 2_000_000 }) {
     take(): RecordedEntry[] {
       if (!active) throw new Error('Exchange capture not active')
       if (failure) throw new Error(failure)
-      if (connection > 1 || barriers.length) throw new Error('Capture requires connection-aware export')
+      if (connection > 1 || barriers.length || closures.length) throw new Error('Capture requires connection-aware export')
       return structuredClone(entries.map(({ connection: _connection, ...entry }) => entry))
     },
-    takeConnections(): { wire: RecordedEntry[]; barriers: { before: number; name: string }[]; capabilities: string[][]; connections: number } {
+    takeConnections(): { wire: RecordedEntry[]; barriers: { before: number; name: string }[]; capabilities: string[][]; connections: number; closures: { before: number; connection: number; code: number }[] } {
       if (!active) throw new Error('Exchange capture not active')
       if (failure) throw new Error(failure)
-      return structuredClone({ wire: entries, barriers, capabilities, connections: connection })
+      return structuredClone({ wire: entries, barriers, capabilities, connections: connection, closures })
     },
     stop(): void { active = false; entries = []; size = 0; failure = undefined }
   }

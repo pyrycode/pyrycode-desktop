@@ -48,6 +48,8 @@ export interface FakeRelayForwarder {
    * frame, so the module's content-blind import discipline holds.
    */
   closeClientLeg(code: number): void
+  /** Replay an observed close only after this many server frames have been forwarded, in order. */
+  closeClientAfterServerFrames(count: number, code: number): void
   /**
    * Terminates both legs and closes the server. Idempotent: a second call returns the same
    * promise and never re-closes. Mirrors the existing startRelay close contract.
@@ -118,6 +120,20 @@ export function startFakeRelayForwarder(): Promise<FakeRelayForwarder> {
   let readyTimer: ReturnType<typeof setTimeout> | null = null
   let closePromise: Promise<void> | null = null
 
+  let serverFrames = 0
+  let pendingClose: { count: number; code: number } | undefined
+  const flushClose = (): void => {
+    if (!pendingClose || serverFrames < pendingClose.count) return
+    const { code } = pendingClose; pendingClose = undefined
+    if (code === 1005 || code === 1006 || code === 1015) dropClientLeg()
+    else closeClientLeg(code)
+  }
+  function closeClientAfterServerFrames(count: number, code: number): void {
+    if (!Number.isSafeInteger(count) || count < 1 || !Number.isSafeInteger(code) || code < 1000 || code > 4999 || pendingClose)
+      throw new Error('Invalid recorded transport close')
+    pendingClose = { count, code }; flushClose()
+  }
+
   const ready = deferred<void>()
   // Internal handler so a rejection with no external awaiter (e.g. close() before whenReady())
   // never surfaces as an unhandledRejection. External await/then still observe the rejection.
@@ -167,7 +183,9 @@ export function startFakeRelayForwarder(): Promise<FakeRelayForwarder> {
       // Byte-for-byte, opcode-preserving: forward the normalised bytes and the isBinary flag
       // verbatim so a binary frame stays binary and a text frame stays text. The relay never
       // reads, parses, or branches on frame content.
-      dest.send(toBytes(data), { binary: isBinary })
+      dest.send(toBytes(data), { binary: isBinary }, () => {
+        if (leg === 'server') { serverFrames++; flushClose() }
+      })
     })
 
     // Free the leg slot on this socket's close so a re-dial can re-splice (#416). The identity guard
@@ -243,6 +261,7 @@ export function startFakeRelayForwarder(): Promise<FakeRelayForwarder> {
         whenReady,
         dropClientLeg,
         closeClientLeg,
+        closeClientAfterServerFrames,
         close
       })
     })

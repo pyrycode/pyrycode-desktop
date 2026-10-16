@@ -13,6 +13,7 @@ export type Recording = {
   deviceId: string
   devices?: string[]
   barriers?: { before: number; name: string }[]
+  closures?: { before: number; connection: number; code: number }[]
   wire: RecordedEntry[]
 }
 const object = (value: unknown): value is Record<string, unknown> =>
@@ -65,6 +66,15 @@ export function parseRecording(text: string): Recording {
         barrier.before < boundary || !nonempty(barrier.name) || !/^[a-z][a-z0-9-]*$/.test(barrier.name)) return invalid()
     boundary = barrier.before
   }
+  let closeBoundary = -1
+  if (value.closures !== undefined && (value.version !== 2 || !Array.isArray(value.closures))) return invalid()
+  for (const close of value.closures as NonNullable<Recording['closures']> ?? []) {
+    if (!object(close) || !Number.isSafeInteger(close.before) || close.before < 0 || close.before > wire.length ||
+        close.before < closeBoundary || !Number.isSafeInteger(close.connection) || close.connection < 1 ||
+        !Number.isSafeInteger(close.code) || close.code < 1000 || close.code > 4999 ||
+        (wire[close.before - 1] as RecordedEntry | undefined)?.connection !== close.connection) return invalid()
+    closeBoundary = close.before
+  }
   let connection = 1
   const clientIds = new Set<number>()
   const daemonIds = new Set<number>()
@@ -111,6 +121,8 @@ export class RecordedExchange {
   private emitted = 0
   private connection = 1
   private barrier = 0
+  private closure = 0
+  private onClose?: (close: { code: number; afterServerFrames: number }) => void
   private failure: Error | undefined
   private progress = new Set<() => void>()
   constructor(recording: Recording) {
@@ -130,6 +142,10 @@ export class RecordedExchange {
       collect(entry.message.payload, '', conversationTypes.has(entry.message.type))
       collect({ conversation_id: entry.message.conversation_id, session_id: entry.message.session_id })
     }
+  }
+  setTransportCloseObserver(observer: (close: { code: number; afterServerFrames: number }) => void): void {
+    if (this.index !== 0) throw new Error('Bind transport observer before replay')
+    this.onClose = observer
   }
   setDeviceId(value: string): void {
     if (this.index !== 0 || !nonempty(value)) throw new Error('Recorded exchange identity must be bound before replay')
@@ -185,7 +201,14 @@ export class RecordedExchange {
   private notifyProgress(): void { for (const finish of [...this.progress]) finish() }
   private drain(): Uint8Array[] {
     const frames: Uint8Array[] = []
-    while (this.index < this.recording.wire.length) {
+    while (this.index <= this.recording.wire.length) {
+      const close = this.recording.closures?.[this.closure]
+      if (close?.before === this.index) {
+        if (!this.onClose || close.connection !== this.connection) return this.fail('Recorded exchange transport boundary mismatch')
+        this.closure++
+        this.onClose({ code: close.code, afterServerFrames: this.connection + this.emitted + frames.length })
+      }
+      if (this.index === this.recording.wire.length) break;
       if (this.recording.barriers?.[this.barrier]?.before === this.index) break
       const entry = this.recording.wire[this.index]
       if ((entry.connection ?? 1) !== this.connection) break
@@ -270,7 +293,7 @@ export class RecordedExchange {
   assertComplete(): void {
     if (this.failure) throw this.failure
     const remaining = this.stats().remainingRequests
-    if (this.barrier !== (this.recording.barriers?.length ?? 0) || this.index !== this.recording.wire.length)
+    if (this.closure !== (this.recording.closures?.length ?? 0) || this.barrier !== (this.recording.barriers?.length ?? 0) || this.index !== this.recording.wire.length)
       throw new Error(`Recorded exchange incomplete: ${remaining} requests remain`)
     if (remaining) throw new Error(`Recorded exchange incomplete: ${remaining} requests remain`)
   }

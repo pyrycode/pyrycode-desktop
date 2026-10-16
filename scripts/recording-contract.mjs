@@ -23,10 +23,13 @@ export function requestContract(recording) {
   const steps = []
   let queries = []
   const flush = () => { if (queries.length) steps.push(queries.sort()); queries = [] }
-  let barrier = 0, connection = 1
+  let barrier = 0, closure = 0, connection = 1
   for (let index = 0; index <= recording.wire.length; index++) {
     while (recording.barriers?.[barrier]?.before === index) {
       flush(); steps.push({ checkpoint: recording.barriers[barrier++].name })
+    }
+    while (recording.closures?.[closure]?.before === index) {
+      flush(); steps.push({ transportClose: recording.closures[closure++].code })
     }
     const entry = recording.wire[index]
     if (!entry) break

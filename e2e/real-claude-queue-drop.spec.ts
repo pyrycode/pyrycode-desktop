@@ -1,3 +1,4 @@
+import { createQueueTurnEvidence } from './fixtures/queueTurnEvidence'
 import { scenarioNonce, scenarioEffect } from './fixtures/clientScenario'
 import { type Page } from '@playwright/test'
 import { writeFile } from 'node:fs/promises'
@@ -141,6 +142,10 @@ test('real claude enqueues a mid-turn send, drops it before drain, and runs no t
   page
 }) => {
   test.setTimeout(SPEC_TIMEOUT_MS)
+  await page.evaluate(createQueueTurnEvidence, { conversationId: '', markers: [], subscribe: true })
+  const completedTurns = () => page.evaluate(() => (window as typeof window & {
+    queueTurnEvidence: Pick<ReturnType<typeof createQueueTurnEvidence>, 'snapshot'>
+  }).queueTurnEvidence.snapshot([]).turns.filter(turn => turn.normal && turn.completions === 1).length)
 
   // A per-run nonce so reruns differ (defeats any accidental reply caching); content is NEVER asserted on
   // (Date.now() is fine in a Playwright spec). The gate file lives in the daemon workdir (#487, exposed by
@@ -156,7 +161,7 @@ test('real claude enqueues a mid-turn send, drops it before drain, and runs no t
   const gatePath = join(daemon.workdir, `queue-drop-gate-${runNonce}`)
   const msg1 =
     `Use the Bash tool to run this exact command in the foreground; do NOT run it in the background. ` +
-    `Command: until [ -f "${gatePath}" ]; do sleep 0.2; done. Do nothing else. run=${runNonce}`
+    `Command: until [ -f "${gatePath}" ]; do sleep 0.2; done. After the command finishes, reply with the single word done. Do nothing else. run=${runNonce}`
   const msg2 = `A queued task to drop. run=${runNonce}`
 
   // --- Precondition (AC1): pair against the real daemon, dial the test relay's /v1/client leg. ---
@@ -297,6 +302,11 @@ test('real claude enqueues a mid-turn send, drops it before drain, and runs no t
   // release that replaces the old timing-dependent long prompt.
   await scenarioEffect('release-tool', () => writeFile(gatePath, ''))
 
+  // Idle may precede publication of the final items. Establish positive native
+  // completion and rendered text before applying the original absence checks.
+  await expect.poll(completedTurns, { timeout: TURN_TIMEOUT_MS }).toBe(1)
+  await expect.poll(() => nonEmptyAssistantCount(page), { timeout: TURN_TIMEOUT_MS }).toBeGreaterThanOrEqual(1)
+
   // --- Wait for quiesce (AC4). ---
   // Two independent DOM reflections of the turn ending, different fabric: the button retracts from the real
   // daemon's turn_state{idle}; the cursor drops from turn_end (claude's own post-tool acknowledgment streams
@@ -318,6 +328,7 @@ test('real claude enqueues a mid-turn send, drops it before drain, and runs no t
   // ran; the dropped msg2 never became an assistant reply.
   await page.waitForTimeout(SETTLE_MS)
   expect(await nonEmptyAssistantCount(page)).toBe(settled)
+  expect(await completedTurns()).toBe(1)
   await expect(interruptButton).toHaveCount(0)
   await expect(page.locator(CURSOR_SELECTOR)).toHaveCount(0)
 })

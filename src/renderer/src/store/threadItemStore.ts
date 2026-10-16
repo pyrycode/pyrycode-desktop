@@ -197,7 +197,11 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
                   throughVersion: Math.max(snapshot.version, snapshot.repair?.throughVersion ?? 0) } } : {}) })
               if (incompatible) log?.event({ event: 'thread-items-repair', code: 'kind' })
             }
-            publish(host, conversation, { snapshot, restored: snapshot, generation: admitted?.generation ?? Symbol(),
+            // Saved restoration does not consume a live pair. Retain it only
+            // when that exact admitted item wins the same-owner merge.
+            const companion = admitted?.appendCompanion
+            const appendCompanion = companion && byId.get(companion.id) === admitted.byId.get(companion.id) ? companion : undefined
+            publish(host, conversation, { snapshot, restored: snapshot, appendCompanion, generation: admitted?.generation ?? Symbol(),
               uncommittedVersion: snapshot.uncommittedVersion ?? 0, byId })
             log?.event({ event: 'thread-items-restored', code: 'stored' })
           },

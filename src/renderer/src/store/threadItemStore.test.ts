@@ -352,3 +352,14 @@ it('does not apply a companion suffix across an intervening full item', () => {
   expect(api.applyUpdate('h', append(20, 20, ' duplicate', 20))).toMatchObject({ type: 'repair' })
   expect(snapshot().items[0].content).toEqual({ text: 'hello', preserved: true })
 })
+
+it('retains a pending field/suffix pair when same-owner saved restoration settles between the frames', () => {
+  const saved = setup(); saved.api.applyUpdate('h', added())
+  const store = createThreadItemStore(), api = store.getState(), read = api.beginLocalRead('h', 'c')!
+  api.applyUpdate('h', added())
+  api.applyUpdate('h', changed({ summary: 'hello world' }, 10, 20))
+  read.complete(saved.snapshot())
+  expect(api.applyUpdate('h', append(20, 20, ' world', 20))).toEqual({ type: 'applied' })
+  expect(api.snapshot('h', 'c')!.items[0].content).toEqual({ text: 'hello world', preserved: true })
+  expect(api.applyUpdate('h', append(20, 20, ' world', 20))).toMatchObject({ type: 'repair' })
+})

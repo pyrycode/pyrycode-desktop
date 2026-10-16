@@ -91,7 +91,9 @@ try {
       durationMs: live.durationMs + permission.durationMs }, committedReplay: committed, freshReplay: fresh, drift,
       fixtureSetSha256: createHash('sha256').update(Buffer.concat(baseline.map(name => readFileSync(join(output, name))))).digest('hex') }) + '\n')
     if (drift.length) throw new Error('Fresh capture changed a recorded request contract; review a replacement')
-  } else process.stdout.write(JSON.stringify({ captured: live.executed + permission.executed, output }) + '\n')
+  } else process.stdout.write(JSON.stringify({ captured: live.executed + permission.executed, output,
+    live: { executed: live.executed + permission.executed, skipped: live.skipped + permission.skipped,
+      durationMs: live.durationMs + permission.durationMs } }) + '\n')
 } catch (error) {
   keepEvidence = true
   // Fresh evidence remains private and reviewable when drift or a check fails.

@@ -19,7 +19,7 @@ export function createQueueTurnEvidence(options: {
   let appendCompanion: { id: number; rev: number; version: number } | undefined
   const record = (value: unknown): value is Record<string, unknown> =>
     typeof value === 'object' && value !== null && !Array.isArray(value)
-  const suffixLimit = Math.max(...options.markers.map(marker => marker.length)) - 1
+  const suffixLimit = Math.max(1, ...options.markers.map(marker => marker.length)) - 1
 
   function observe(event: DaemonEvent): void {
     if (event.type === 'threadUpdate' || event.type === 'threadReply') thread = true

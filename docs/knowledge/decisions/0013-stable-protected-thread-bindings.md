@@ -63,8 +63,12 @@ and ranges, so ciphertext retention is not an incremental-save performance promi
 
 Protection fails closed and stays in main; no renderer SQL/filesystem/key/ciphertext
 capability or page IPC is added. Complete rollback of all protected disk state
-remains outside the storage guarantees. Owned writes remain #2044 and partial
-restoration/navigation remain #2041/#2042.
+remains outside the storage guarantees. Owned writes now use the schema-7
+authenticated mutable layout in
+[ADR 0014](0014-authenticated-owned-thread-mutations.md); its current-root proofs
+supersede generation binding for mutable placements/evidence. The retained
+full-replacement representation above remains supported. Partial restoration/navigation
+remain #2041/#2042.
 
 See [API and migration](../features/chat-history-api.md#api),
 [regression fixtures](../features/chat-history-testing.md#stable-protected-authoritative-storage-and-pages)

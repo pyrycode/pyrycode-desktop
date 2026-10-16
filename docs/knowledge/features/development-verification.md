@@ -29,6 +29,29 @@ On the client, trace the actual inbound parser rather than trusting an old symbo
 A shared model-row lookup can govern behaviour as well as display text.
 Read all callers before broadening what an empty identifier means.
 
+## Owned history mutation evidence
+
+A one-item edit after full replacement can conceal an unbounded production append
+path. Start empty and measure successive additions at growing saved sizes, keeping
+untouched placement bytes as an independent assertion. Measure changed-item
+serialization/protection separately from logarithmic sequence-index reads/writes;
+ciphertext equality alone does not prove that no full scan occurred. Batch fixtures
+must also check each shared authenticated path flushes once, because correct final
+bytes can hide repeated work that stalls mounted browser setup.
+
+Compare separately flushed, coalesced and held-failure progress after fresh protected
+reopen. A completion flag combined with later metadata can erase saved/pending fences;
+carry exact version intervals and certified availability boundaries instead. Include
+same-epoch explicit resets, memory-only holder recreation and lost acknowledgements.
+Individually admitted JSON additions must still fit full-reader aggregate bounds.
+See [owned regression assertions and counted Linux/package validation](chat-history-testing.md#owned-mutation-regressions-and-counted-validation)
+for the final #2044 verifier evidence: 9,103 units executed/passed, 0 failed, 3 skipped;
+435 configured fake cases executed/passed, 0 failed, 3 skipped; packaged owned-update
+reopen present/passed, 1 executed, 0 failed/skipped. These are recorded results on
+`5005bf69`, Linux x64, not checks rerun by documentation. The skips provide no live
+acceptance; macOS and live-Claude are outside that ticket's scope. Historical failures
+and teardown follow-up #2054 remain linked from the testing reference.
+
 ## Authoritative thread read evidence
 
 Renderer units are static `renderToStaticMarkup` in Node: they prove markup and pure decisions,

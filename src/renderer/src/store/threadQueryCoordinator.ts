@@ -110,8 +110,7 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
     if (reply.type === 'thread_reset') {
       deps.log?.event({ event: 'thread-query-reset', code: 'reset' })
       release(h, p)
-      store().deleteConversation(host, s.id)
-      store().acceptEpoch(host, s.id, value.epoch)
+      store().acceptEpoch(host, s.id, value.epoch, true)
       s.catchUp = true; s.ready = false; s.exhausted = false
       if (p.resetRecovery) {
         present(host, s, { type: 'failed', purpose: 'catch-up', reason: 'recovery', retryable: true })

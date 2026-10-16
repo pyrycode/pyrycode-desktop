@@ -175,3 +175,79 @@ Result directories are `stale-pointer-normalized-results/`, `controlled-repair-r
 `repeat.config.ts` remain there too. The retained bundle is
 `/tmp/builder-1970-evidence.tar.gz`. These are scratch evidence locations, not committed
 assets or new test executions by the documentation stage.
+
+## Reader resize scroll preservation
+
+The [scroll-preservation plan](../../specs/architecture/2047-reader-scroll-preservation.md#revisions)
+and [verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/2052#issuecomment-6210602272)
+record a separate production repair reviewed on Linux on 2026-10-16 at
+`69d1286aced7a3049d570dddda77558cf06642b8`. The historical 800px 1300→1020
+event sequence was never captured. Unchanged green reruns establish intermittency,
+not that occurrence's cause; the prior [focus/hover repair](#reader-reopen-input-verification)
+remains necessary.
+
+Controlled native upward wheel input before ordinary opening reproduced loss of
+settled covered state on the pre-repair renderer `1700f67f` (spec-only HEAD
+`a57008c1`, with local diagnostic/input changes). `held-control.json` executed 2,
+passed 1 (1280px), failed 1 (800px), skipped 0, flaky 0, retries 0, with no
+setup/top-level errors. The 800px immutable baseline was 1460px; Back returned
+1020px with the original 340×533 thread viewport and 1993px content height.
+Adding settlement after every later size/zoom phase still failed: this was a
+persistent clamp, not merely a late resize commit. Initial unmodified-input and
+same-task resize/zoom controls each passed 6/6 (0 failed/skipped); neither diagnoses
+the unavailable historical schedule.
+
+| Phase | Native outer size / zoom | Thread viewport / content height | Failing top | Repaired top |
+| --- | --- | --- | --- | --- |
+| Settled baseline | 800×600 / 1 | 340×533 / 1993 | 1460 | 1448 |
+| Other size | 1280×800 / 1 | 820×733 / 1513 | 780 | 780 |
+| Other size zoom | 1280×800 / 1.25 | 564×578 / 1753 | 780 | 780 |
+| Original size restored | 800×600 / 1 | 340×533 / 1993 | 1020 | 1448 |
+| Original size zoom | 800×600 / 1.25 | 180×418 / 6513 | 1020 | 1448 |
+| Zoom restored and Back | 800×600 / 1 | 340×533 / 1993 | 1020 | 1448 |
+
+Each trace retains its own baseline; differing input schedules produced different
+initial offsets. Native content sizes were 800×573 and 1280×773; zoom changes CSS
+dimensions. Hidden rows cannot provide native anchors, and a released thread does
+not bottom-pin when its original dimensions return. The
+[covered-position record](conversation-shell-scroll-pin.md#covered-reader-resize-preservation)
+restores the processed offset while retaining following semantics. Repaired reopen
+at 1280×800 preserved its new 780px baseline through a second round trip and keyboard
+Back; the sibling reopened at 800×600 and preserved 1460px, proving per-open lifetime.
+
+The retained spec proves upward movement, settles Back focus and keeps exact original
+position/draft equality before reopen preparation. Existing layout, dynamic notices,
+menu bounds, pointer/keyboard input and fresh-read/unique-request assertions remain.
+The test-wide `thread-scroll-phases` attachment retains timestamped scroll/resize
+samples, link bounds, focus tuples, thread geometry and native size/zoom phases even
+on failures before reopen, with local listeners disposed in `finally`. Full failing/repaired
+traces are `held-800.json`, `repaired-800.json` and `repaired-once.json` under
+`/tmp/builder-2047/`; these scratch paths and the plan preserve the evidence provenance.
+
+Counted Linux validation (Electron 33.4.11), confirmed by the verifier:
+
+| Run / revision | Executed | Passed | Failed | Skipped | Flaky | Actual workers |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Focused `focused-10.json`, `ac53be8802030534a2cfbbd598e8ccf6904ce038` | 20 | 20 | 0 | 0 | 0 | 1 |
+| Complete `full-suite.json`, same source | 435 | 435 | 0 | 3 | 0 | 2 |
+| Dispatcher verifier gate 8, `69d1286aced7a3049d570dddda77558cf06642b8` | 435 | 435 | 0 | 3 | 0 | 2 |
+
+Both exact `reader scrolls under sharp chrome with dynamic clearance and input at 800`
+and `reader scrolls under sharp chrome with dynamic clearance and input at 1280`
+were present and passed ten times each in the focused run and once each in both
+complete runs. Every final run had zero retries and setup/top-level errors. The
+focused command selected this spec's `reader scrolls` cases with `--repeat-each=10`;
+its single worker retained the clipboard project cap. Both complete commands used
+the original clipboard/parallel projects, no selection overrides and zero configured
+retries; the builder run inherited `PW_WORKERS=2`. Each selected 438 tests; skips were the
+two macOS app-badge cases and macOS window-reopen case. No unrelated tracked failure
+was encountered. The reviewed head differs from the builder source only in plan evidence.
+
+Earlier incomplete Electron installation and missing SQLite binding caused setup
+failures, recorded separately in the plan; they are not the controlled assertion
+failure or final green runs. Pre-verify, build and the dispatcher unit gate passed
+(391 files, 9050 tests passed, 3 skipped). The verifier compared native
+`/tmp/builder-2047/resting-800.png` and `resting-1280.png` with Figma `756:10358`:
+reader/sidebar/header presentation was retained with no unresolved deviation.
+macOS is outside this Linux ticket's verification scope. No real-Claude acceptance
+was required or claimed; the documentation stage records existing evidence only.

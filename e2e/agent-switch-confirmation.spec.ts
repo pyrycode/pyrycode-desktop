@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { build, loadConfigFromFile, preview } from 'vite'
 import { capturePairedApp } from './fixtures/capturePairedApp'
-import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
+import { test, expect, SEEDED_ROW, SECOND_SEEDED_ROW } from './fixtures/launchPairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { Envelope, EnvelopeType, WireModelOption } from '../src/shared/wire/types'
 
@@ -28,6 +28,86 @@ async function openingFixture() {
   const server = await preview({ configFile: false, root: resolve('src/renderer'), build: { outDir },
     preview: { host: '127.0.0.1', port: 0 }, logLevel: 'silent' })
   return server
+}
+
+for (const entry of ['footer', 'sheet'] as const) {
+  for (const outgoing of ['claude', 'codex'] as const) {
+    test(`host settings lifetime: ${entry} acknowledged ${outgoing} pick cannot cross colliding conversation IDs`, async ({ launchPairedApp }) => {
+      test.setTimeout(120_000)
+      const server = await openingFixture()
+      try {
+        const sent: Envelope[][] = [[], []]
+        const source = { ...picked, agent: outgoing, value: outgoing === 'claude' ? 'sonnet' : 'gpt-luna',
+          display_name: outgoing === 'claude' ? 'Sonnet' : 'GPT-6 Luna', effort_levels: ['low'] }
+        const target = { ...picked, agent: outgoing === 'claude' ? 'codex' as const : 'claude' as const,
+          value: outgoing === 'claude' ? 'gpt-luna' : 'sonnet',
+          display_name: outgoing === 'claude' ? 'GPT-6 Luna' : 'Sonnet', effort_levels: ['low'] }
+        const foreign = { ...SEEDED_ROW, agent: target.agent, current_session_id: 'foreign-session' }
+        const selected = { ...SECOND_SEEDED_ROW, id: foreign.id, agent: outgoing, current_session_id: 'selected-session' }
+        const replies = (host: number) => (bytes: Uint8Array) => {
+          const e = decodeEnvelope(bytes); sent[host].push(e)
+          if (e.type === 'list_conversations') return [frame('conversations', { conversations: [host ? selected : foreign] })]
+          if (e.type === 'request_model_list') return [frame('model_list', {
+            conversation_id: foreign.id, models: [source, target], dropped_models: 0
+          }, e.id)]
+          if (e.type === 'request_session_settings') return [frame('session_settings', {
+            session_id: host ? 'selected-session' : 'foreign-session', model: host ? source.value : 'foreign-model',
+            effort: 'low', effective_effort: 'low', permission_mode: 'default', yolo: false,
+            used_tokens: 0, window_tokens: 200_000
+          }, e.id)]
+          if (e.type === 'set_session_settings') return [frame('session_settings_updated', { session_id: 'selected-session' }, e.id)]
+          return []
+        }
+        const { app, page } = await launchPairedApp({ buildReplyFrames: replies(0) }, {
+          rendererUrl: server.resolvedUrls!.local[0], secondServer: { buildReplyFrames: replies(1) }
+        })
+        const trigger = page.locator('.composer__model')
+        const sheet = page.getByRole('dialog', { name: 'Run configuration', exact: true })
+        const openSheet = async () => {
+          await page.locator('.conversation__overflow-trigger').click()
+          await page.getByRole('menuitem', { name: 'Run configuration', exact: true }).click()
+          await expect(sheet).toBeVisible()
+        }
+        await page.getByRole('button', { name: selected.name!, exact: true }).click()
+        await expect(trigger).toHaveText(source.display_name)
+        if (entry === 'footer') {
+          await trigger.click()
+          await page.getByRole('menu', { name: 'Model', exact: true }).getByRole('menuitem', { name: source.display_name, exact: true }).click()
+        } else {
+          await openSheet()
+          await sheet.locator('.run-config__model-row').filter({ hasText: source.display_name }).click()
+        }
+        // Busy becoming false proves the own-agent write was acknowledged, not merely sent.
+        await expect.poll(() => sent[1].filter(e => e.type === 'set_session_settings').length).toBe(1)
+        expect(sent[1].find(e => e.type === 'set_session_settings')?.payload).toEqual({ session_id: 'selected-session', model: source.value })
+        if (await sheet.count() === 0) await openSheet()
+        await expect(sheet.locator('.run-config__model-list')).not.toHaveAttribute('aria-busy', 'true')
+        await page.evaluate(({ id, row }) => {
+          (window as unknown as { openAgentSwitch: (id: string, row: WireModelOption) => void }).openAgentSwitch(id, row)
+        }, { id: selected.id, row: target })
+        await page.getByRole('dialog', { name: `Switch to ${target.agent === 'codex' ? 'Codex' : 'Claude'}?`, exact: true })
+          .getByRole('button', { name: 'Switch', exact: true }).click()
+        await expect.poll(() => sent[1].filter(e => e.type === 'switch_agent').length).toBe(1)
+        expect(sent[1].find(e => e.type === 'switch_agent')?.payload).toEqual({ conversation_id: selected.id,
+          agent: target.agent, model: target.value, effort: 'low' })
+        await sheet.getByRole('button', { name: 'Close', exact: true }).click()
+        await page.getByRole('button', { name: foreign.name!, exact: true }).click()
+        await expect(trigger).toHaveText(target.agent === 'codex' ? 'foreign-model' : 'Foreign')
+        await openSheet()
+        await expect(sheet.getByRole('img', { name: 'Current model', exact: true })).toHaveCount(0)
+        // First host: connect + initial open + return + sheet; selected host: open + sheet.
+        await expect.poll(() => sent.map(events => events.filter(e => e.type === 'request_session_settings').length)).toEqual([4, 2])
+        expect(sent.map(events => events.filter(e => e.type === 'set_session_settings').length)).toEqual([0, 1])
+        expect(sent.map(events => events.filter(e => e.type === 'switch_agent').length)).toEqual([0, 1])
+        await mkdir('/tmp/builder-2068', { recursive: true })
+        await page.setViewportSize({ width: 1280, height: 800 })
+        await capturePairedApp(app, page, `/tmp/builder-2068/${entry}-${outgoing}-incoming.png`)
+        await sheet.getByRole('button', { name: 'Close', exact: true }).click()
+        await expect(trigger).toHaveText(target.agent === 'codex' ? 'foreign-model' : 'Foreign')
+        await capturePairedApp(app, page, `/tmp/builder-2068/${entry}-${outgoing}-footer.png`)
+      } finally { await server.close() }
+    })
+  }
 }
 
 test('mounted agent switch dismissals, single dispatch, progress, refusal and authoritative success', async ({ launchPairedApp }) => {
@@ -180,7 +260,8 @@ test('confirmed own-agent settings yield to incoming footer and open sheet on au
     await expect(footer.getByRole('button', { name: 'GPT-6 Luna', exact: true })).toBeEnabled()
     await expect.poll(() => sent.filter(e => e.type === 'request_session_settings').length).toBe(reads + 1)
     await expect(sheet.locator('.run-config__model-row').filter({ hasText: 'GPT-6 Luna' }).getByRole('img', { name: 'Current model', exact: true })).toBeVisible()
-    await expect(sheet.locator('.run-config__model-row').filter({ hasText: 'Sonnet' })).toHaveCount(0)
+    await expect(sheet.locator('.run-config__model-row').filter({ hasText: 'Sonnet' })).toHaveCount(1)
+    await expect(sheet.locator('.run-config__model-row').filter({ hasText: 'Sonnet' }).getByRole('img', { name: 'Current model', exact: true })).toHaveCount(0)
     await expect(sheet.getByRole('button', { name: 'low', exact: true })).toBeVisible()
     await expect(sheet.getByRole('button', { name: 'high', exact: true })).toHaveCount(0)
     await page.setViewportSize({ width: 1280, height: 800 })

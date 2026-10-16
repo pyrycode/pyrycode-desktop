@@ -196,9 +196,8 @@ describe('production thread composition', () => {
   })
   it('keeps offline authoritative display separate from current capability and resumes complete progress', async () => {
     const { runtime: r, read, send } = fixture()
-    read.mockResolvedValue({ status: 'stored', snapshot: { version: 1, kind: 'daemon-items', serverId: 'one', conversationId: 'chat',
-      thread: { hostId: 'one', conversationId: 'chat', epoch: 'saved', version: 12, checkpoint: 7,
-        uncommittedVersion: 12, items: [], ranges: [], repair: null } } })
+    read.mockResolvedValue({ status: 'page', page: { partial: true, metadata: { hostId: 'one', conversationId: 'chat', epoch: 'saved', version: 12, checkpoint: 7,
+      uncommittedVersion: 12, repair: null }, items: [], ranges: [], continuation: null } })
     await r.open('one', 'chat').done
     expect(r.isThread('one', 'chat')).toBe(true)
     expect(send).not.toHaveBeenCalled()
@@ -219,4 +218,32 @@ describe('production thread composition', () => {
     expect(live.getState().readings.size).toBe(0)
     r.dispose()
   })
+})
+
+it('revalidates withdrawn configuration once per bound session and opening', async () => {
+  const { runtime: r, send } = fixture()
+  r.event(connected('one', true)); r.event(connected('two', true))
+  r.summary('one', { id: 'chat', current_session_id: 'A' })
+  await r.open('one', 'chat').done
+  const vocabulary: StampedDaemonEvent = { type: 'modelList', serverId: 'one', conversationId: 'chat',
+    envelopeConversationId: 'chat', envelopeSessionId: 'bootstrap', models: [], droppedModels: 0 }
+  const settings: StampedDaemonEvent = { type: 'runConfigReceived', serverId: 'one', conversationId: 'chat',
+    envelopeConversationId: 'chat', envelopeSessionId: 'A', sessionId: 'A', model: '', effort: '', yolo: false,
+    permissionMode: '', used_tokens: 0, window_tokens: 0 }
+  const clear: StampedDaemonEvent = { type: 'sessionStateCleared', family: 'session_settings', correlation: { id: 8, ts: '' },
+    serverId: 'one', envelopeConversationId: 'chat', envelopeSessionId: 'A' }
+  const requests = () => send.mock.calls.filter(([command]) => command.type === 'requestModelList' || command.type === 'requestSessionSettings')
+  r.event(vocabulary); r.event(settings)
+  r.event({ ...clear, serverId: 'two' })
+  r.event({ ...clear, envelopeConversationId: 'other' })
+  expect(requests()).toHaveLength(0)
+  r.event(clear)
+  expect(requests()).toEqual(['requestSessionSettings', 'requestModelList'].map(type => [{ type, serverId: 'one', payload: { conversation_id: 'chat' } }]))
+  r.event(settings); r.event(clear)
+  expect(requests()).toHaveLength(2)
+  r.event(settings)
+  await r.open('one', 'chat').done
+  r.event(clear)
+  expect(requests()).toHaveLength(4)
+  r.dispose()
 })

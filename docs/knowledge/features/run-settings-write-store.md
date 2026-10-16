@@ -384,6 +384,35 @@ clearing only `runConfigStore` would leave a confirmed override standing over th
 snapshot, and clearing only this store would leave the previous chat's raw snapshot displayed until a
 reply arrived.
 
+### Settings lifetime on host navigation
+
+Activation compares the renderer-owned `serverId` as well as conversation ID (#2068). Changing
+either clears the session, snapshot, pending writes, confirmed overrides and error before publishing
+the incoming context; the shared configuration clear also retires prompt reading/write state.
+Host metadata appearing or disappearing counts as a change. Same-host/same-ID reopening refreshes
+without clearing confirmed choices; two absent host stamps retain legacy same-ID behavior.
+
+Discarded model, effort, permission-mode and YOLO correlations cannot restore an override or error,
+or settle a new write. Fresh correlations confirm/reject normally, including after returning to the
+original host. The store does not infer ownership from model text or session-ID equality.
+See [the activation boundary](paired-shell-conversation-exits.md#the-run-configuration-clear-activateconversationts-exitactiveconversationts-both-stores-1167).
+
+The mounted `host settings lifetime` cases in `e2e/agent-switch-confirmation.spec.ts` must acknowledge
+an own-agent model pick before leaving a cross-agent switch unanswered and opening another host's
+same-ID row with a distinct session. Pending-only coverage misses the durable confirmed override,
+which otherwise beats the incoming snapshot indefinitely. Wait for the write's busy state to clear;
+observing a sent request alone does not prove acknowledgement. Preserve all four footer/sheet ×
+Claude/Codex variants when changing the picker harness. Each checks incoming footer and sheet
+readings and exact per-host counts: settings reads `[4, 2]`, writes `[0, 1]`, switches `[0, 1]`
+(incoming host first, departing host second).
+
+The [Linux verifier evidence for #2068](https://github.com/pyrycode/pyrycode-desktop/pull/2070#issuecomment-6219856835)
+records `activateConversation.test.ts`: 16 executed, 16 passed, 0 failed, 0 skipped, including ownership
+changes, stale replies, fresh settlement, return navigation and same-host preservation.
+Mounted `agent-switch-confirmation.spec.ts`: 6 executed, 6 passed, 0 failed, 0 skipped, including
+all four named `host settings lifetime` variants above. These are recorded real-store and fake-transport
+results; macOS is outside this Linux ticket's verification scope.
+
 ### Settings lifetime on agent switch
 
 The [agent-switch success callback](switch-agent-request.md#renderer-outcomes-and-lifetime)

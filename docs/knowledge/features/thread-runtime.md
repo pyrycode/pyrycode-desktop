@@ -29,15 +29,22 @@ ID cannot redirect the request. Device identity is a separate authenticated fact
 
 ## Restore, recovery and cleanup
 
-Opening first starts an owned protected `readThread` through `readSavedTimeline`.
-Only `daemon-items` can hydrate the runtime. A legacy saved timeline is never drawn
-or converted. Protected indexed storage is the application backend; the renderer
-still restores complete authoritative snapshots. Bounded local paging remains
-separate work. See [storage activation](chat-history-testing.md#native-runtime-and-packaged-proof).
+Opening first starts an owned protected `openThreadPage` with limit 200 through
+`readSavedTimeline`. The partial projection selects newest shown identities plus
+active/recorded dependencies, preserving saved progress and sparse arrival order.
+A legacy saved timeline is never drawn or converted. Protected indexed storage is
+the application backend; ordinary fresh-owner reads decode only selected facts and
+evidence after one-time conversion/import. Retried invalidated opening uses the
+same bounded selection with no full-read fallback. User-driven traversal uses the
+[independent saved-demand path](#independent-saved-traversal) below. See
+[storage activation](chat-history-testing-native.md#native-runtime-and-packaged-proof).
 
-While a saved read is pending, query demand waits. A connected opening or reconnect
-then supplies the saved epoch and complete checkpoint to the coordinator. Applied
-version, unfinished batches and item presence cannot certify resumable progress.
+While opening's saved read is pending, network query demand waits but same-owner
+live additions can already render. Local settlement merges saved-only rows and winning revisions
+with those live rows, keeping both visible while the server reply remains held.
+A connected opening or reconnect then supplies the admitted snapshot's epoch and
+complete checkpoint to the coordinator. Applied version, unfinished batches and
+item presence cannot certify resumable progress.
 Live/reply overlap follows item revisions. Interrupted or abandoned batches retain
 received facts without certifying completion. Repair resumes the complete
 checkpoint. A correlated reset retires the old scope and starts the new epoch's
@@ -47,6 +54,11 @@ Navigation cancels the selected local read and abandons application of its query
 The coordinator retains sent-query ownership until terminal delivery or expiry.
 Local read tokens, request IDs and store generations reject stale callbacks even
 when host, conversation or epoch strings are later reused.
+Initial epoch admission and same-owner publications preserve the read; explicit
+reset or epoch replacement retires it. Runtime selection/generation checks also
+prevent late settlement from recreating a removed restoring indicator or read route.
+Restoration creates no owned save, read acknowledgement or current-session/prompt
+authority; pending local sends keep their separate ownership.
 
 Confirmed deletion clears the owning conversation's retained items, pending sends,
 live binding, completion and read authority. Successful unpair retires those
@@ -60,6 +72,58 @@ append schedules that frame. Other event types flush earlier appends before
 application. A bounded flush also handles a paused window. Teardown removes
 subscriptions and retires owned query and live state.
 
+### Independent saved traversal
+
+`query('older', host)` first consumes bounded saved pages for the exact selected
+host/conversation lifecycle. The first demand requests `newestThreadPage` even when
+opening returned null or included an old active dependency. Later demands follow
+only `residency.traversal`: undefined is unstarted, a string continues the held pass,
+and null is local exhaustion. Opening's shown-window continuation cannot enumerate
+all omitted hidden/newer held facts. Repeated demand coalesces into one local read;
+opening must settle before traversal starts. No new older network demand is sent
+on the input that exhausts local traversal; a later input delegates to the coordinator.
+Without saved residency, demand delegates directly.
+
+`localQueries` retains local idle/loading/failed state independently of network
+`queries`. A disconnected host or held/failed server reply cannot block saved demand.
+Local loading/failure takes precedence in the existing presentation without replacing
+network state. Upward input cannot retry a local failure: explicit Retry repeats
+that demand, otherwise Retry delegates to the coordinator. Errors retain displayed
+content and content-free classifications. Each demand makes one IPC call and one
+selection attempt for at most 200 identities plus relevant saved evidence, with no
+automatic retry loop. Explicit Retry prioritizes failed local demand and starts
+another bounded attempt.
+
+Only held traversal stores and echoes `residency.recovery` alongside its continuation;
+opening's capability cannot seed the traversal. Main authenticates the pair against
+the exact scope owner, epoch and decoded continuation. On generation invalidation
+from owned writes or same-epoch replacement, it selects a bounded circular identity
+pass around the retained boundary, then returns each window in current held order.
+That pass covers items moved across the old boundary and removed boundaries without
+reopening newest or replaying loaded depth. Another invalidation can rebase a later
+demand; selection failure retains content and requires explicit Retry. There is no
+recovery based on a generic error or weakened ordinary-token validation. Same-epoch
+replacement rebuilds existing indexes during its write transaction, keeping later
+recovery reads bounded. See [the protected contract](chat-history-api.md#bounded-authoritative-opening-and-pages)
+and [ADR 0015](../decisions/0015-protected-saved-traversal-recovery.md).
+
+The selected local job captures the item-store generation. Navigation cancels it;
+reset/epoch replacement, deletion, successful unpair and teardown retire it. Both
+page admission and failure presentation require current ownership, even after the
+same strings are reused. Same-lifecycle live/network/newest facts merge by compatible
+revision, with admitted facts winning ties and saved sparse arrival positions retained.
+Held-page hydration preserves resident progress and older-availability ownership,
+unioning only supplied saved ranges. It emits no owned save, new certificate or read
+acknowledgement. A disjoint saved range cannot advance network paging across a hole;
+local exhaustion offline still needs a connection when daemon completeness is unknown.
+
+The scroll callback returns whether local demand started or network demand is eligible.
+At zero with no accepted demand, the pin restores prior following intent so a short
+offline thread still follows intrinsic row growth. Accepted saved demand preserves
+the existing visible-row anchor and offset. See
+[scroll demand](conversation-shell-scroll-pin.md#user-demand-and-prepend-position) and
+[counted recovery proof](chat-history-testing-restoration.md#counted-saved-traversal-recovery-validation).
+
 ## Navigation boundaries
 
 Navigation no longer resets, creates, views or clears legacy timelines (#2028).
@@ -72,9 +136,12 @@ queue store/actions and local-count last-read store/cleanup are also gone.
 
 Shared declarations stay at `threadTimeline.ts` and `backgroundTaskRosterStore.ts`;
 shared translation remains at `timelineBridge.ts`. Those paths no longer imply a
-content producer. Main/IPC request and recovery retirement remains #2025;
-saved-format admission and indexed legacy storage retirement remains #2026.
-Their surviving contracts are not removed by renderer deletion.
+content producer. #2025 removes the main/IPC raw-history command, correlation,
+page/failure events, exclusive decoder and replay/resync recovery. Initial and
+reconnect hellos omit both replay fields. Live-envelope metadata/admission,
+thread queries/checkpoints, host/fragment isolation and held-send `sendPairing`
+fencing remain; see [retired network surface](request-history-send.md).
+Saved-format admission and indexed legacy storage retirement remains #2026.
 
 Active ID/session/configuration/prompt cleanup remains synchronous before exit navigation. Same-ID
 reopening preserves held configuration and requests a refresh every time. Server removal samples
@@ -100,7 +167,9 @@ The pending-send store supplies local rows before acceptance. An authoritative
 `user_message` settles a row only when both `content.device_id` and
 `content.message_id` match the captured pair in the exact host/conversation.
 Equal text, a peer device's equal message ID and another host cannot settle it.
-After acceptance, only daemon content supplies the row. Terminal or hidden items
+After acceptance, only daemon content supplies the row. Explicit native `written`
+status displays one user row without queue actions while awaiting the eventual
+echo or placement; it does not assert final delivery. Terminal or hidden items
 can settle a send even when they are the first observed revision.
 
 Queued actions use genuine `content.queued_msg_id` handles with owning coordinates.
@@ -111,10 +180,18 @@ roster. Stop retains the recorded agent and owning-host capability checks.
 ## Live controls and read publication
 
 Only the owning summary's `current_session_id` binds live state. Admitted readings
-also require host, conversation and envelope-session provenance. Durable items,
+also require the owning host and conversation. A validated top-level
+`conversation_id` routes newer supplied live state independently of the producing
+`session_id` (which may identify a daemon-wide source). Without that route the
+existing bound-session provenance check remains. Payload route conflicts fail
+admission. Durable items,
 saved restoration and session-transition markers cannot choose the current live
 session. The selected host's projection supplies existing model, effort, context,
 MCP and other configuration readers. Off-screen hosts keep separate live state.
+An admitted withdrawal of held settings permits one settings/model refresh per
+selected bound session and opening; missing initial replies are not retried.
+Effort recall waits for a non-null configuration reading before treating an empty
+effort as unset. Native reset causes map to the existing divider presentation.
 
 The prompt slot reuses existing permission, consent and questionnaire components.
 Replies retain the original host and prompt object. Session replacement and
@@ -245,3 +322,36 @@ shared translator/presentation tests remain. The verdict references dispatcher
 logs directory. These are recorded gate results, not documentation-stage reruns.
 macOS is outside this Linux ticket's verification scope. No real-Claude result or
 visual capture is claimed; existing live obligations remain in the runbook.
+
+### Main request and recovery retirement validation
+
+The [#2025 verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/2049#issuecomment-6209638001)
+records Linux gates on 2026-10-16 at
+`aed31cfc8fae69954696af09909f53643541ce6d`. Full units: **9,037 executed/passed,
+0 failed, 3 skipped**, 391 passing files. Complete configured
+`npx playwright test --reporter=json`: **435 executed/passed, 0 failed,
+3 skipped, 0 flaky, 0 retries**, four workers, clipboard/parallel projects and no
+selection/shard filters. All 15 thread-activation, 12 thread-items and 3
+markdown-reader-menu cases were present and passed. The activation cases include
+missing-`thread` isolation/recovery and zero legacy requests on open, reconnect,
+paging and retry; the dispatcher's named `paging and retry` result also passed.
+No top-level errors or fake-daemon setup error attachments were reported.
+
+Install, docs guard, build and Node/Electron addon rebuilds passed. Pre-verify
+used `--no-suite` (three checks passed, two intentionally skipped); subsequent
+unit/build gates covered units/typecheck. The three fake skips were two macOS
+badge cases and the macOS window-reopen case. macOS is outside this Linux ticket's
+verification scope. Credentialed real-Claude tests were not run or claimed.
+
+The [builder's recorded runs](../../specs/architecture/2025-retire-history-recovery.md#validation-evidence)
+retain the initial complete Linux fake run at
+`072e01596f5c2a57e93aedca33ffc86e5b0fe8ae`: **435 executed, 434 passed,
+1 failed, 3 skipped**. The 800px reader return-scroll assertion expected 1300 and
+received 1020. A one-test isolated-main comparison passed (1 executed/passed,
+0 failed, 0 skipped); that diagnostic does not establish attribution. Cause
+remains under investigation in [#2047](https://github.com/pyrycode/pyrycode-desktop/issues/2047).
+The builder's final complete rerun at
+`afe635930ce58ffba12c02bc6537cd424ba1c4e7` passed **435 executed/passed,
+0 failed, 3 skipped**, followed by the complete verifier pass above. Neither
+complete pass skipped or weakened the reader assertion; the earlier failure
+remains recorded as failed.

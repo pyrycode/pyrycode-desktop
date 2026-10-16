@@ -108,3 +108,16 @@ describe('queued-turn evidence', () => {
     expect(JSON.stringify(proof.snapshot([0]))).not.toContain('private body')
   })
 })
+
+it('retains the captured field-change/text-suffix pair at one revision without counting a duplicate suffix', () => {
+  const proof = createQueueTurnEvidence(options)
+  const update = (type: string, payload: Record<string, unknown>) => proof.observe({ type: 'threadUpdate', serverId: 'host',
+    conversationId: 'origin', update: { type, payload: { conversation_id: 'origin', epoch: 'epoch', ...payload } } } as DaemonEvent)
+  update('thread_item_added', { version: 19, item: { id: 19, rev: 19, kind: 'assistant_message', turn: 'one', content: { text: 'FIRST_' } } })
+  update('thread_item_changed', { version: 20, item_id: 19, base_rev: 19, rev: 20, changes: { summary: 'FIRST_DONE' } })
+  update('thread_text_append', { version: 20, item_id: 19, base_rev: 20, rev: 20, text: 'DONE' })
+  update('thread_text_append', { version: 20, item_id: 19, base_rev: 20, rev: 20, text: 'SECOND_DONE' })
+  update('thread_item_added', { version: 22, item: { id: 21, rev: 21, kind: 'turn_end', turn: 'one', content: { stop_reason: 'end_turn' } } })
+  expect(proof.snapshot([0]).complete).toBe(true)
+  expect(proof.snapshot([0]).turns[0].markers).toEqual([0])
+})

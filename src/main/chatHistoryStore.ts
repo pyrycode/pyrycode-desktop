@@ -132,7 +132,9 @@ export function createChatHistoryStore(deps: {
     let reading = true
     try {
       const result = database.transaction((db): ChatHistoryResult => {
-        if (operation === 'readThread' || operation === 'replaceThread') {
+        if (operation === 'openThreadPage' || operation === 'newestThreadPage' || operation === 'beforeThreadPage')
+          return requireSuccess(threads.executeSync(request))
+        if (operation === 'readThread' || operation === 'replaceThread' || operation === 'mutateThread') {
           const result = threads.executeSync(request)
           if (result.status === 'page') throw INVALID_CHAT_HISTORY
           requireSuccess(result)

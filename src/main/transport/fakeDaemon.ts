@@ -318,6 +318,8 @@ export interface FakeDaemonOptions {
   reconnectResendFrames?: Uint8Array[]
   /** Test-only replay negotiation probe. Receives authenticated hello; overrides unconditional resends. */
   buildReconnectFrames?: (hello: Envelope) => Uint8Array[]
+  /** Captured application frames sent after the initial authenticated handshake. */
+  buildInitialFrames?: (hello: Envelope) => Uint8Array[]
 }
 
 /** Closed set of static reasons — NEVER carries key/token/frame/plaintext bytes. */
@@ -446,7 +448,8 @@ export async function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeD
       const hello = hs.ReadMessage(raw, true) ?? EMPTY_AD
       // Faithfulness (AC3): the recovered `hello` early-data must be a well-formed envelope, exactly
       // as the real daemon parses it. A malformed hello fail-closes to handshake-read-failed.
-      decodeEnvelope(hello)
+      const initialHello = decodeEnvelope(hello)
+      const initialFrames = options.buildInitialFrames?.(initialHello) ?? []
       const msg2 = hs.WriteMessage(
         encodeEnvelope({ id: HELLO_ACK_ID, type: 'hello_ack', ts: HELLO_ACK_TS, payload: helloAck })
       )
@@ -457,6 +460,7 @@ export async function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeD
       recvCipher = split[1]
       sendNoise(msg2, 'noise_resp')
       state = 'transport'
+      for (const frame of initialFrames) sendNoise(sendCipher.EncryptWithAd(EMPTY_AD, frame))
     } catch {
       hs = null // the library auto-freed the handshake state on the throw
       settle({ ok: false, reason: 'handshake-read-failed' })

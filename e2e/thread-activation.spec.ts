@@ -21,6 +21,113 @@ const windowFrames = (request: Envelope, chat: string, text: string, epoch = 'ep
       : { lower_order: 0, upper_order: 30, continuation: 0, older_exists: false }) }, request.id)
 ]
 
+for (const invalidation of [false, true]) for (const offline of [false, true]) test(`${invalidation ? 'invalidated' : 'unchanged'} saved traversal scrolls independently ${offline ? 'offline' : 'while server reply is held'}`, async ({ launchPairedApp }, testInfo) => {
+  const requests: Envelope[] = []
+  let hold = false
+  const first = await launchPairedApp({ threadMode: 'native', buildReplyFrames: bytes => {
+    const request = decodeEnvelope(bytes); requests.push(request)
+    if (request.type === 'list_conversations') return [seedConversationsFrame(SEEDED_ROW)]
+    return request.type === 'thread_catch_up' && !hold ? windowFrames(request, SEEDED_ROW.id, 'Traversal seed') : []
+  } })
+  await expect(first.page.getByText('Traversal seed', { exact: true })).toBeVisible()
+  await expect.poll(() => first.page.evaluate(async id => {
+    const r = await window.pyry.chatHistory({ operation: 'readThread', serverId: 'fake-daemon', conversationId: id })
+    return r.status
+  }, SEEDED_ROW.id)).toBe('stored')
+  await first.page.evaluate(async id => {
+    const items = Array.from({ length: 650 }, (_, n) => ({ id: n, rev: 1, kind: 'assistant_message',
+      order: n < 100 ? n + 100 : n < 200 ? n + 800 : null, shown: n < 250, active: n === 0,
+      status: 'finished', session: 'session', summary: '', content: { text: `Traversal saved ${n}` } }))
+    const r = await window.pyry.chatHistory({ operation: 'replaceThread', serverId: 'fake-daemon', conversationId: id,
+      snapshot: { version: 1, kind: 'daemon-items', serverId: 'fake-daemon', conversationId: id, thread: {
+        hostId: 'fake-daemon', conversationId: id, epoch: 'epoch', items, arrivalOrder: items.map(i => i.id),
+        version: 20, checkpoint: 20, repair: null, olderAvailable: true,
+        ranges: [{ start: 100, end: 200 }, { start: 900, end: 1000 }] } } })
+    if (r.status !== 'ok') throw Error('seed failed')
+    await window.pyry.chatHistory({ operation: 'openThreadPage', serverId: 'fake-daemon', conversationId: id, limit: 200 })
+  }, SEEDED_ROW.id)
+  await first.app.close(); hold = true
+  const acknowledgements = requests.filter(r => r.type === 'mark_conversation_read').length
+  if (offline) await first.forwarder.close()
+  const resumed = await launchPairedApp({ threadMode: 'native' }, { reuseUserDataDir: first.userDataDir,
+    onLaunched: async app => {
+      await installHeldThreadRead(app, 'beforeThreadPage', 2)
+      await app.evaluate(({ ipcMain }) => {
+        ;(globalThis as any).savedReads = 0
+        ipcMain.on('pyry:diagnostic', (_event, record) => {
+          if (record.event === 'history-timeline-restore' && record.code === 'stored') (globalThis as any).savedReads++
+        })
+      })
+    } })
+  const { page } = resumed
+  await page.getByText(SEEDED_ROW.name!, { exact: true }).first().click()
+  if (!offline) await expect.poll(() => requests.filter(r => r.type === 'thread_catch_up').length).toBe(2)
+  await expect(page.locator('[data-read-row="249"]')).toBeVisible()
+  const scroller = page.locator('.conversation__thread')
+  await scroller.press('Home')
+  await expect.poll(() => scroller.evaluate(el => el.scrollTop)).toBeLessThan(10)
+  for (let n = 0; n < 3; n++) {
+    await scroller.press('ArrowUp')
+    await expect.poll(() => resumed.app.evaluate(() => (globalThis as any).savedReads)).toBe(n + 2)
+  }
+  if (invalidation) await page.evaluate(async id => {
+    const saved = await window.pyry.chatHistory({ operation: 'readThread', serverId: 'fake-daemon', conversationId: id })
+    if (saved.status !== 'stored' || saved.snapshot.kind !== 'daemon-items') throw Error('missing saved thread')
+    const { items, ranges, arrivalOrder, ...metadata } = saved.snapshot.thread
+    void items; void ranges; void arrivalOrder
+    const changed = await window.pyry.chatHistory({ operation: 'mutateThread', serverId: 'fake-daemon', conversationId: id,
+      change: { metadata, acceptEpoch: false, items: [], removeIds: [50], ranges: [] } })
+    if (changed.status !== 'ok') throw Error('invalidation failed')
+  }, SEEDED_ROW.id)
+  const anchor = page.locator(`[data-read-row="${invalidation ? 51 : 50}"]`)
+  await anchor.evaluate(el => el.scrollIntoView({ block: 'start' }))
+  await scroller.hover(); await page.mouse.wheel(0, -1)
+  await expect.poll(() => resumed.app.evaluate(() => (globalThis as any).heldThreadReads)).toBe(1)
+  const offset = () => anchor.evaluate(el => el.getBoundingClientRect().top)
+  for (let n = 0; n < 5; n++) await page.mouse.wheel(0, -1)
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  const before = await offset()
+  expect(await resumed.app.evaluate(() => (globalThis as any).heldThreadReads)).toBe(1)
+  await resumed.app.evaluate(({ ipcMain }) => ipcMain.emit('test:release-thread-read'))
+  await expect(page.locator('[data-read-row="1"]')).toHaveCount(1)
+  await expect.poll(offset).toBeCloseTo(before, 0)
+  await expect(page.locator('[data-read-row]')).toHaveCount(250)
+  expect(requests.filter(r => r.type === 'thread_page')).toHaveLength(0)
+  expect(requests.filter(r => r.type === 'mark_conversation_read')).toHaveLength(acknowledgements)
+  await page.screenshot({ path: testInfo.outputPath('saved-traversal-held.png') })
+  await first.forwarder.close()
+  await expect(page.getByText('Offline. Showing saved messages.', { exact: true })).toBeVisible()
+  await scroller.press('Home')
+  await expect(page.locator('[data-read-row="1"]')).toHaveCount(1)
+})
+
+test('initial thread loading and Retry stay below the header and recover on click', async ({ launchPairedApp }) => {
+  const requests: Envelope[] = []
+  const { page, daemon } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
+    const request = decodeEnvelope(bytes); requests.push(request)
+    if (request.type === 'list_conversations') return [seedConversationsFrame(SEEDED_ROW)]
+    return request.type === 'thread_catch_up' && requests.filter(r => r.type === 'thread_catch_up').length > 1
+      ? windowFrames(request, SEEDED_ROW.id, 'Recovered idle history') : []
+  } })
+  const loading = page.getByText('Loading messages…', { exact: true })
+  await expect(loading).toBeVisible()
+  const header = await page.locator('.conversation__top-chrome').boundingBox()
+  expect(header).not.toBeNull()
+  expect((await loading.boundingBox())!.y).toBeGreaterThanOrEqual(header!.y + header!.height)
+  const pending = requests.find(r => r.type === 'thread_catch_up')!
+  daemon.pushFrame(frame('error', { code: 'thread.query_failed', message: 'Thread unavailable' }, pending.id))
+  const retry = page.getByRole('button', { name: 'Retry', exact: true })
+  await expect(retry).toBeVisible()
+  expect((await retry.boundingBox())!.y).toBeGreaterThanOrEqual(header!.y + header!.height)
+  expect(await retry.evaluate(button => {
+    const bounds = button.getBoundingClientRect()
+    return button.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2))
+  })).toBe(true)
+  await retry.click()
+  await expect(page.getByText('Recovered idle history', { exact: true })).toBeVisible()
+  await expect(retry).toHaveCount(0)
+})
+
 test('creating a fresh thread opens catch-up and sends without a sidebar reopen', async ({ launchPairedApp }) => {
   const requests: Envelope[] = []
   const created = { ...SEEDED_ROW, id: 'new-thread', name: null, current_session_id: 'session' }
@@ -384,11 +491,12 @@ test('current thread prompts remain answerable during pending and failed initial
 
 test('restore overlapping live content retains complete progress across an interrupted catch-up and epoch replacement', async ({ launchPairedApp }, testInfo) => {
   const requests: Envelope[] = []
-  let interrupt = false, reset = false, overlapped = false
+  let interrupt = false, reset = false, overlapped = false, holdReply = false
   let { page, app, daemon, forwarder, userDataDir } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
     const request = decodeEnvelope(bytes); requests.push(request)
     if (request.type === 'list_conversations') return [seedConversationsFrame({ ...SEEDED_ROW, current_session_id: 'session' })]
     if (request.type !== 'thread_catch_up') return []
+    if (holdReply) return []
     if (reset && request.payload.epoch !== 'replacement') return [frame('thread_reset', { conversation_id: SEEDED_ROW.id,
       epoch: 'replacement', version: 2 }, request.id)]
     if (reset) return windowFrames(request, SEEDED_ROW.id, 'Replacement epoch committed', 'replacement', 2)
@@ -404,7 +512,25 @@ test('restore overlapping live content retains complete progress across an inter
     const result = await window.pyry.chatHistory({ operation: 'readThread', serverId: 'fake-daemon', conversationId: id })
     return result.status === 'stored' && result.snapshot.kind === 'daemon-items' ? result.snapshot.thread.checkpoint : null
   }, SEEDED_ROW.id)).toBe(20)
+  // A saved-only row and unfinished progress must survive without a server refetch.
+  await page.evaluate(async ({ id, extra }) => {
+    const result = await window.pyry.chatHistory({ operation: 'readThread', serverId: 'fake-daemon', conversationId: id })
+    if (result.status !== 'stored' || result.snapshot.kind !== 'daemon-items') throw Error('expected saved thread')
+    const thread = result.snapshot.thread
+    const older = Array.from({ length: 220 }, (_, n) => ({ id: n + 1000, rev: 1, kind: 'future', shown: true, order: -1, content: {} }))
+    const hidden = Array.from({ length: 500 }, (_, n) => ({ id: n + 2000, rev: 1, kind: 'future', shown: false, content: {} }))
+    const active = { id: 3000, rev: 1, kind: 'future', shown: false, active: true, content: {} }
+    const items = [...older, extra, ...thread.items, ...hidden, active]
+    const saved = await window.pyry.chatHistory({ operation: 'replaceThread', serverId: 'fake-daemon', conversationId: id,
+      snapshot: { ...result.snapshot, thread: { ...thread, version: 25, uncommittedVersion: 25,
+        items, arrivalOrder: items.map(i => i.id) } } })
+    if (saved.status !== 'ok') throw Error('expected saved fixture')
+    // Pay retained replacement conversion during setup; the held fresh-owner open must be bounded.
+    const converted = await window.pyry.chatHistory({ operation: 'openThreadPage', serverId: 'fake-daemon', conversationId: id, limit: 200 })
+    if (converted.status !== 'page' || converted.page.items.length !== 201) throw Error('expected converted opening fixture')
+  }, { id: SEEDED_ROW.id, extra: item(9, 'Saved-only row during held catch-up') })
   await app.close()
+  holdReply = true
   const resumed = await launchPairedApp({ threadMode: 'native' }, { reuseUserDataDir: userDataDir, onLaunched: async app => {
     const evidence = await installHeldThreadRead(app)
     await testInfo.attach('held-thread-read-setup', { body: JSON.stringify(evidence), contentType: 'application/json' })
@@ -419,27 +545,50 @@ test('restore overlapping live content retains complete progress across an inter
   }) })
   overlapped = true
   daemon.pushFrame(frame('thread_item_added', { conversation_id: SEEDED_ROW.id, epoch: 'epoch', version: 21,
+    item: { ...item(10, 'New live revision during restore'), rev: 2 } }))
+  daemon.pushFrame(frame('thread_item_added', { conversation_id: SEEDED_ROW.id, epoch: 'epoch', version: 21,
     item: item(11, 'Live content during protected restore') }))
   await expect.poll(() => page.evaluate(() => (globalThis as any).overlapReceived)).toBe(true)
+  await expect(page.getByText('New live revision during restore', { exact: true })).toBeVisible()
+  await expect(page.getByText('Live content during protected restore', { exact: true })).toBeVisible()
   await app.evaluate(({ ipcMain }) => ipcMain.emit('test:release-thread-read'))
   await expect(page.getByText('Live content during protected restore', { exact: true })).toBeVisible()
+  await expect(page.getByText('Saved-only row during held catch-up', { exact: true })).toBeVisible()
+  await expect(page.getByText('New live revision during restore', { exact: true })).toBeVisible()
+  await expect.poll(() => requests.filter(r => r.type === 'thread_catch_up').length).toBe(2)
+  const opening = await page.evaluate(id => window.pyry.chatHistory({ operation: 'openThreadPage', serverId: 'fake-daemon', conversationId: id, limit: 200 }), SEEDED_ROW.id)
+  expect(opening.status).toBe('page')
+  if (opening.status !== 'page') throw Error('expected bounded opening')
+  expect(opening.page.items.filter(i => i.shown === true)).toHaveLength(200)
+  expect(opening.page.items.find(i => i.id === 3000)).toMatchObject({ shown: false, active: true })
+  expect(opening.page.items.some(i => i.id === 1000)).toBe(false)
+  await page.screenshot({ path: testInfo.outputPath('bounded-opening-held-reply.png') })
   expect(requests.filter(r => r.type === 'thread_catch_up').at(-1)?.payload).toMatchObject({ epoch: 'epoch', version: 20 })
+  const heldReply = requests.filter(r => r.type === 'thread_catch_up').at(-1)!
+  daemon.pushFrame(frame('thread_items', { conversation_id: SEEDED_ROW.id, epoch: 'epoch', version: 25,
+    items: [], final: true, from_version: 20 }, heldReply.id))
+  // Reconnect is ordered after the completion is persisted, not merely dispatched.
+  await expect.poll(() => page.evaluate(async id => {
+    const result = await window.pyry.chatHistory({ operation: 'readThread', serverId: 'fake-daemon', conversationId: id })
+    return result.status === 'stored' && result.snapshot.kind === 'daemon-items' ? result.snapshot.thread.checkpoint : null
+  }, SEEDED_ROW.id)).toBe(25)
+  holdReply = false
   interrupt = true; forwarder.dropClientLeg()
   await expect(page.getByText('Unfinished catch-up content', { exact: true })).toBeVisible()
   const unfinished = requests.filter(r => r.type === 'thread_catch_up').at(-1)!
-  expect(unfinished.payload).toMatchObject({ epoch: 'epoch', version: 21 })
+  expect(unfinished.payload).toMatchObject({ epoch: 'epoch', version: 25 })
   await expect(page.getByText('Live content during protected restore', { exact: true })).toHaveCount(1)
   const count = requests.filter(r => r.type === 'thread_catch_up').length
   forwarder.dropClientLeg()
   await expect.poll(() => requests.filter(r => r.type === 'thread_catch_up').length).toBeGreaterThan(count)
   await expect.poll(() => page.evaluate(() => (globalThis as any).unfinishedReceipts)).toBe(2)
-  expect(requests.filter(r => r.type === 'thread_catch_up').at(-1)?.payload).toMatchObject({ epoch: 'epoch', version: 21 })
+  expect(requests.filter(r => r.type === 'thread_catch_up').at(-1)?.payload).toMatchObject({ epoch: 'epoch', version: 25 })
   reset = true
   forwarder.dropClientLeg()
   await expect(page.getByText('Replacement epoch committed', { exact: true })).toBeVisible({ timeout: 15_000 })
   // A late terminal reply and old-epoch text cannot restore retired content.
   daemon.pushFrame(frame('thread_items', { conversation_id: SEEDED_ROW.id, epoch: 'epoch', version: 30,
-    items: [], final: true, from_version: 21 }, unfinished.id))
+    items: [], final: true, from_version: 25 }, unfinished.id))
   daemon.pushFrame(frame('assistant_delta', { conversation_id: SEEDED_ROW.id, turn_id: 'old', seq: 0, text: 'Legacy recovery duplicate' }))
   daemon.pushFrame(frame('thread_item_added', { conversation_id: SEEDED_ROW.id, epoch: 'replacement', version: 3,
     item: item(13, 'Replacement receipt barrier') }))

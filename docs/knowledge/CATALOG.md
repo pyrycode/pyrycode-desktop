@@ -16,14 +16,21 @@ Search this catalog for a topic. Start with INDEX.md. The documentation stage ma
 - [0010](decisions/0010-markdown-renderer-capability-absent-html.md) — Assistant markdown rendering: `react-markdown@10` with no `rehypePlugins`/`remarkPlugins`, default `skipHtml`, and a non-spreading `img` override that suppresses image elements entirely — chosen over the far-smaller `markdown-to-jsx` because its raw-HTML support is capability-**absent** (would need a new dependency to enable) rather than merely disabled by a boolean default that could regress. `code`'s `language-*` class is deliberately kept (Figma's fenced-code label carrier). Realized dormant in [#608](codebase/608.md); consumer is #609 (container) and [#623](codebase/623.md) (fenced-code language label). The `a` override shipped deny-first alongside `img` but was narrowed to an `http:`/`https:` allowlist by [#610](codebase/610.md) — see [Assistant markdown renderer](features/assistant-markdown-renderer.md) below.
 - [0011](decisions/0011-notification-preview-boundary.md) — Notification body previews allow bounded daemon text on OS display surfaces; renderer selects ending-turn replies or matching unresolved tool headlines, while main independently validates, cleans, caps and falls back to fixed copy.
 - [0012](decisions/0012-hosted-app-native-isolation.md) — Disposable hosted-app sessions/origins, native authority, document-start lockdown, private navigation stamps and permanent retirement.
+- [0013](decisions/0013-stable-protected-thread-bindings.md) — Stable authoritative payload ownership, generation-bound placement/evidence, ciphertext digests and transactional schema-5 conversion preserving continuations.
+- [0014](decisions/0014-authenticated-owned-thread-mutations.md) — Owned mutation admission, ordered completion/boundary observations, schema-7 authenticated AVL/radix roots, aggregate node accounting and transactional lazy conversion.
+- [0015](decisions/0015-protected-saved-traversal-recovery.md) — Separate authenticated recovery capabilities, generation-bound circular identity traversal, fixed demand bounds and replacement/lifecycle ownership.
 
 ## Features
 
-- [Protected local chat history](features/chat-history.md) — Versioned saved-host snapshots, guarded protected storage, received-list/daemon-item recording, host ownership, coalescing, ordered removal and generation fences, close/quit draining and readThread-only offline restoration; retained legacy format contracts.
-- [Protected local chat history — storage and lifecycle](features/chat-history-storage.md) — Buffered replacements, protected collection ordering and graceful window/app shutdown; links to the indexed legacy foundation.
-- [Protected chat history — API and operations](features/chat-history-api.md) — Fixed IPC, saved-host authorization, callable indexed legacy/authoritative operations, partial held-order pages, protected continuations, atomic schema-4 migration and family-scoped removal contracts.
+- [Protected local chat history](features/chat-history.md) — Versioned saved-host snapshots, guarded protected storage, received-list/daemon-item recording, host ownership, coalescing, ordered removal and generation fences, close/quit draining and bounded partial offline opening; retained legacy format contracts.
+- [Protected local chat history — storage and lifecycle](features/chat-history-storage.md) — Buffered owned changes/list replacements, retry and reset ownership, protected collection ordering and graceful window/app shutdown; links to the indexed legacy foundation.
+- [Protected chat history — API and operations](features/chat-history-api.md) — Fixed IPC, saved-host authorization, callable indexed operations, shown/active/dependency opening, held-order pages and bounded capability recovery, stable protected payload bindings, independent continuation generations, schema-7 owned admission/authenticated indexes, transactional lazy conversion and family-scoped removal.
 - [Protected local chat history — results](features/chat-history-results.md) — Saved-read notices, static failures, rollback, reviewed SQLite plaintext columns and protected payload boundaries.
-- [Protected local chat history — testing](features/chat-history-testing.md) — Admission, restoration, disk/isolation/failure regressions, native ABI rebuilds and counted packaged Linux/macOS proof.
+- [Protected local chat history — testing](features/chat-history-testing.md) — Testing map, stable payload regressions, browser persistence, continuity and type/native packaging contracts.
+- [Protected history testing — demand and admission](features/chat-history-testing-contracts.md) — Snapshot/parser contracts, owned demand barriers, migration/fresh-owner fixtures and legacy indexed admission.
+- [Protected history testing — indexed storage](features/chat-history-testing-storage.md) — Successive owned additions, protected replay/rollback, progress/reset observations, bounded shown-opening selection/work, legacy pages and counted Linux evidence.
+- [Protected history testing — native runtime and evidence](features/chat-history-testing-native.md) — Node/Electron ABI preparation, packaged production protection, bounded-opening work/timings and counted current/historical native validation.
+- [Protected history testing — restoration and removal](features/chat-history-testing-restoration.md) — Saved/live revision and arrival merging, bounded traversal recovery/retry, exact-completion fences, lifecycle cleanup, no hydration write, protected restart traps and counted Linux validation.
 - [Development verification](features/development-verification.md): source checks, test boundaries, layout evidence and live-test diagnosis.
 - [Development verification — what each test tier proves](features/development-verification-what-each-test-tier-proves.md) — Static, mounted and live proof boundaries, with counted regression evidence.
 - [Development verification — evidence that cannot pass too early](features/development-verification-evidence-that-cannot-pass-too-early.md) — Positive processing barriers and nonvacuous absence assertions.
@@ -103,7 +110,7 @@ Search this catalog for a topic. Start with INDEX.md. The documentation stage ma
     - [Daemon event channel — the sealed union: per-member history (early members)](features/daemon-event-channel-sealed-union-history-early.md) — Per-ticket rationale for the original six session-lifecycle arms through `modelAnnounced` (#587).
     - [Daemon event channel — the sealed union: per-member history (recent members)](features/daemon-event-channel-sealed-union-history-recent.md) — Per-ticket rationale for `slashCommandList` (#937) onward, including `thinkingProgress` (#1313), plus the union's two cross-member rules.
     - [Daemon connection — request correlation and diagnostics](features/daemon-connection-correlation.md) — How a reply is matched back to the request that asked for it, one section per correlated round trip, plus the diagnostic logging around them. Split 2026-09-23 once #1579's edit pushed it over the size cap — the larger correlation sections now live in their own documents, listed below; this entry keeps diagnostic logging plus the four smallest correlation sections and stays the map to the rest.
-    - [Daemon connection — request/history/attachment correlation](features/daemon-connection-correlation-requests.md) — Diagnostic logging (#128), then the request-response correlation stores for conversation creation (#1307), attachment upload (#861) and retrieval (#996), run-configuration read attribution (#1176), and conversation history (#1222).
+    - [Daemon connection — request and attachment correlation](features/daemon-connection-correlation-requests.md) — Diagnostic logging (#128), then the request-response correlation stores for conversation creation (#1307), attachment upload (#861) and retrieval (#996), run-configuration read attribution (#1176), and the legacy history correlation retired in #2025.
     - [Daemon connection — system-prompt and MCP-status correlation](features/daemon-connection-correlation-system-prompt-and-mcp.md) — System-prompt read (#1230) and write (#1249) correlation, the workspace-renaming correlation that shipped alongside the write, MCP-status request correlation (#1578) — including how [#1579](https://github.com/pyrycode/pyrycode-desktop/issues/1579) put the MCP-status verb to use — MCP reconnect (#1582), MCP toggle (#1586), and background-task stop (#1770) capability/refusal correlation, and conversation-mute write correlation (#1595).
     - [Daemon connection — lifecycle](features/daemon-connection-lifecycle.md) — When the connection is dialled, torn down and redialled, how it works internally, and the state and concurrency model that holds it together. Split 2026-09-05 — per-server routing (registry + conversation-id + correlation-id + server-scoped) now lives in its own document, listed below; this entry stays the map.
     - [Daemon connection — hosted resource views](features/daemon-connection-hosted-resource-views.md) — Authoritative discovery, native viewer API/state, browser isolation and HTTP policy, cancellation fences and counted fake-transport proof.
@@ -188,7 +195,7 @@ Search this catalog for a topic. Start with INDEX.md. The documentation stage ma
 - [Run configuration store — related](features/run-config-store-related.md) — split out of [Run configuration store](features/run-config-store.md) on size (documentation stage, #1655): the store's cross-references to other stores/decisions and its ticket-by-ticket changelog, unedited by the move.
 - [Thread timeline (conversation model)](features/thread-timeline.md) — Shared row/event/live-feedback declarations retained in place; reducer and reconstruction removed, with links to current presentation and historical internals.
 - [Thread timeline — history](features/thread-timeline-history.md) — the ticket-by-ticket changelog of every arm, scalar and field this model has grown, split from the parent page 2026-09-04 to stay under the size cap.
-- [Retained daemon thread items](features/thread-item-store.md) — Host/conversation/epoch identity and revision retention, supplied task deduplication and recorded attribution, independent activity/outcomes, exact-base changes/appends, inert JSON, sync/cache snapshots, completed-batch certification, repair and unfinished-batch checkpoint fencing, generation-bound cleanup and the supplied thread query coordinator: saved-checkpoint catch-up, marker certification, bounded repair/reset recovery, certified continuous paging, per-host cancellation slots, retry and cache/production ownership.
+- [Retained daemon thread items](features/thread-item-store.md) — Host/conversation/epoch identity and revision retention, supplied task deduplication and recorded attribution, independent activity/outcomes, exact-base changes/appends, inert JSON, sync/cache snapshots, version-bound completion and oldest-boundary ownership, explicit idempotent reset identity, repair and unfinished-batch checkpoint fencing, generation-bound cleanup and the supplied thread query coordinator: saved-checkpoint catch-up, marker certification, bounded repair/reset recovery, certified continuous paging, per-host cancellation slots, retry and cache/production ownership.
 - [Production daemon-built threads](features/thread-runtime.md) — Accepted capability, authoritative restore/sends/live/read ownership, renderer-producer retirement and counted Linux validation.
 - [Conversation timeline store](features/conversation-timeline-store.md) — Renderer reconstruction producers deleted; shared translation/declarations remain, with current item/live/send contracts and links to historical implementation.
 - [Conversation timeline store — Compaction](features/conversation-timeline-store-compaction.md) — live completion dividers, failure classification and delayed metadata association.
@@ -1119,41 +1126,9 @@ non-blocking NIT (#704, see [codebase notes](codebase/704.md)). [#718](codebase/
   dots](features/channel-list-host-row.md) (moved out of `channel-list.md` to stay under the doc-guard's
   byte cap) and this store's own doc. Architect self-review PASS.
 
-- [Request history send](features/request-history-send.md) — conversation scroll-back's **transport-only**
-  leg: an outbound `request_history` ask (`RequestHistoryPayload{conversation_id,cursor,limit}`, all
-  three keys always on the wire) and the decoded `history_page` reply
-  (`HistoryPagePayload{entries,cursor,at_start}`), over the daemon's append-only on-disk log
-  (pyrycode#2112/#2113/#2116) a conversation opened today can otherwise see nothing of. #1225 still owns
-  joining a page to the live stream. #1223 draws a page, but not via any of the four exhaustive renderer
-  bridges here — they still take null arms for `historyPageReceived`/`historyRequestFailed` — a **fifth**,
-  independent channel subscriber (`historyPageBridge.ts`) owns both arms instead (`historyPageReceived`
-  from #1223, `historyRequestFailed` since [#1259](https://github.com/pyrycode/pyrycode-desktop/issues/1259),
-  which is also the first sender of the ask itself, fired once per conversation activation); see
-  [Conversation timeline store](features/conversation-timeline-store.md) for the design. The one fact
-  shaping every piece: a `history_page`
-  names no conversation, so `daemonConnection`'s new `pendingHistoryRequests` map records each
-  request's envelope id against the conversation it named and resolves the reply's `conversationId`
-  from that memory rather than the wire — the `pendingConfigRequests`/`runConfigReceived` pattern
-  reused verbatim. The one non-obvious design call: the five reject codes get a **sibling** narrower,
-  `HistoryRejectReason`, beside `DaemonErrorOutcome` rather than five new members on it, since that type
-  is inherited whole by the attachment-upload failure union and a history code there would demand
-  composer copy no upload path can produce; it diverges from its neighbour by returning `undefined`
-  outside its five-member set (mapped to a sixth IPC-side `'unclassified'` member) rather than
-  classifying everything, because a correlated `message.too_long` — one stored entry too large for any
-  page — is a real, published outcome of this verb too. No client-invented size or count bound: the
-  frame-level `MAX_PLAINTEXT_BYTES` guard and the daemon's own 4096-entry clamp already cover it, and a
-  narrower client bound would silently drop valid pages. (#1222, security-sensitive, builder self-review
-  PASS, no MUST FIX — two SHOULD FIX, both documentation-only: an entry's `payload` is trusted in shape
-  and untrusted in content despite looking settled, and it crosses by reference with an inert
-  `__proto__` own-data-property a *later* `Object.assign`/`target[k]=v` consumer must not create a
-  hazard from.) Split from #1088. **#1227 closed both SHOULD FIX findings**: `entries` no longer crosses
-  IPC as opaque `HistoryEntry[]` — a second decode stage (`decodeHistoryEvent`/`decodeHistoryPage`)
-  narrows each entry's payload against the same eleven live-lane parsers into `HistoryTimelineEntry[]`,
-  a closed union, dropping the payload's daemon-asserted `conversation_id` on every arm. An undrawn or
-  unparseable entry is skipped, never failing the page; `modal_shown`/`question_shown` have no arm at
-  all, so no prompt can reach the window from history. `timelineBridge` stays permanently dormant for
-  `historyPageReceived`/`historyRequestFailed` even past #1223 — that ticket draws a page through a
-  fifth channel subscriber instead, never by claiming these two arms.
+- [Retired raw-history request route](features/request-history-send.md) — Removed Desktop
+  command, encoder, correlation, page/failure IPC, decoder and replay/resync recovery;
+  retained shared wire/storage/fake declarations and authoritative thread validation.
 
 - [System prompt send](features/system-prompt-send.md) — the **transport-only** read half of a
   conversation's system prompt: an outbound `request_system_prompt` ask

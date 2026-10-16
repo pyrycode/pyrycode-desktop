@@ -195,8 +195,6 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
     case 'modalAnswerRejected':
     case 'slashCommandList':
     case 'modelList':
-    case 'historyPageReceived':
-    case 'historyRequestFailed':
     case 'thinkingProgress':
     case 'toolProgress':
     case 'rateLimited':

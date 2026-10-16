@@ -137,7 +137,7 @@ restored walk intact and fresh input uses that cursor. This is a fresh renderer
 over protected storage; full Electron exit is established by the live proof below.
 Both fresh-input sites establish focused, settled geometry and marker
 intersection with the reading area between measured top/input chrome before one ArrowUp, while setup
-adds no requests. See [the local readiness contract](chat-history-testing.md#demand-and-snapshot-contracts).
+adds no requests. See [the local readiness contract](chat-history-testing-contracts.md#demand-and-snapshot-contracts).
 
 The [controlled cause observation](https://github.com/pyrycode/pyrycode-desktop/issues/1932#issuecomment-6102627361)
 records the original failure at `c4420495fe` in `verifier-gate_#1904_6.log`:
@@ -247,7 +247,7 @@ Its local `asks` reader uses the shared `readMainProcess` helper in a five-secon
 availability poll. Only the recognized inspection-context error yields
 `NOT_YET_AVAILABLE`; the sentinel satisfies no assertion and every caller receives
 a successful cursor-array read. Listener installation, posts, keys, geometry and
-renderer recovery are unchanged. See [the observation contract](chat-history-testing.md#demand-and-snapshot-contracts)
+renderer recovery are unchanged. See [the observation contract](chat-history-testing-contracts.md#demand-and-snapshot-contracts)
 and [read-only recovery](e2e-harness-context-recovery.md#tolerating-a-transient-inspection-context-loss-on-reads).
 
 The [fresh diagnosis](https://github.com/pyrycode/pyrycode-desktop/issues/1947#issuecomment-6165420879)

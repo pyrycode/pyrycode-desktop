@@ -5,9 +5,9 @@ How a reply is matched back to the request that asked for it, one section per co
 Part of [Daemon connection](daemon-connection.md); see that document for what the package does, its edge cases and its links.
 
 This map holds the correlation stores small enough to stay in place. The larger ones split out by
-size: [request/history/attachment correlations](daemon-connection-correlation-requests.md) (diagnostic
+size: [request and attachment correlations](daemon-connection-correlation-requests.md) (diagnostic
 logging, create-conversation, attachment upload/retrieval, run-configuration read attribution,
-conversation history) and [system-prompt and MCP-status
+the retired legacy history boundary) and [system-prompt and MCP-status
 correlations](daemon-connection-correlation-system-prompt-and-mcp.md) (system-prompt read/write,
 workspace renaming, MCP-status request).
 

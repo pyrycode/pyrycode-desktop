@@ -8,20 +8,24 @@ export function readSavedTimeline(deps: {
   threads: Pick<StoreApi<ThreadItemStore>, 'getState'>
   read: (request: ChatHistoryRequest) => Promise<ChatHistoryResult>
   log: (event: RendererDiagnosticEvent) => void
-}, serverId: string, conversationId: string): { done: Promise<void>; cancel: () => void } {
-  const handle = deps.threads.getState().beginLocalRead(serverId, conversationId)
+}, serverId: string, conversationId: string,
+  demand?: { operation: 'newestThreadPage' } | { operation: 'beforeThreadPage'; continuation: string; recovery?: string }
+): { done: Promise<string | undefined>; cancel: () => void } {
+  const handle = deps.threads.getState().beginLocalRead(serverId, conversationId, demand !== undefined)
   const report = (code: string): void => deps.log({ event: 'history-timeline-restore', code })
-  async function run(): Promise<void> {
+  async function run(): Promise<string | undefined> {
     if (handle === null) return
     report('started')
     try {
-      const result = await deps.read({ operation: 'readThread', serverId, conversationId })
-      if (result.status === 'missing') { handle.complete(null); report('missing') }
-      else if (result.status === 'stored' && result.snapshot.kind === 'daemon-items' &&
-          result.snapshot.serverId === serverId && result.snapshot.conversationId === conversationId) {
-        handle.complete(result.snapshot.thread); report('stored')
-      } else { handle.fail(); report(result.status === 'error' ? result.code : 'invalid-result') }
-    } catch { handle.fail(); report('ipc-failed') }
+      const result = await deps.read({ ...(demand ?? { operation: 'openThreadPage' }), serverId, conversationId, limit: 200 })
+      if (result.status === 'missing' && !demand) { handle.complete(null); report('missing'); return 'missing' }
+      else if (result.status === 'page' && result.page.metadata.hostId === serverId &&
+          result.page.metadata.conversationId === conversationId) {
+        handle.complete(result.page); report('stored'); return 'stored'
+      } else {
+        handle.fail(); const code = result.status === 'error' ? result.code : 'invalid-result'; report(code); return code
+      }
+    } catch { handle.fail(); report('ipc-failed'); return 'ipc-failed' }
   }
   return { done: run(), cancel: () => { handle?.cancel(); report('stopped') } }
 }

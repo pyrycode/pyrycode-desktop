@@ -106,6 +106,17 @@ describe('daemon item presentation', () => {
     expect(html.indexOf('summary 6')).toBeLessThan(html.indexOf('info supplied'))
   })
 
+  it('renders raw daemon reset causes as exactly one session delimiter and preserves unknown summaries', () => {
+    const html = render([item(1, 'session_divider', { cause: 'operator_reset', occurred_at: '2026-10-16T00:00:00Z' },
+      { summary: 'Session changed: operator_reset' })])
+    expect(html.match(/class="session-delimiter"/g)).toHaveLength(1)
+    expect(html).toContain('Session reset')
+    expect(render([item(1, 'session_divider', { cause: 'future' }, { summary: 'supplied summary' })]))
+      .not.toContain('class="session-delimiter"')
+    expect(render([item(1, 'session_divider', { cause: 'future' }, { summary: 'supplied summary' })]))
+      .toContain('supplied summary')
+  })
+
   it('keeps hidden items held and uses escaped inert summaries for unsupported facts', () => {
     const html = render([
       item(1, 'assistant_message', { text: 'hidden text' }, { shown: false }),
@@ -180,6 +191,21 @@ const rosterLinked = (id: number) => ({ task_id: `task-${id}`, task_link: { task
 ] } })
 
 describe('supplied agents', () => {
+  it('shows the structured task description on launch markers instead of the raw JSON summary', () => {
+    const description = 'Wait 60 minutes then close'
+    const raw = JSON.stringify({ description, model: 'haiku', run_in_background: true })
+    for (const fields of [{ status: 'running', active: true }, { status: 'finished', active: false }]) {
+      const html = render([agent(10, fields, {
+        ...linked(10), input_summary: raw, input: { description, model: 'haiku' }
+      })])
+      expect(html).toContain(`<span class="agent-start-marker__description">${description}</span>`)
+      expect(html).not.toContain('&quot;run_in_background&quot;')
+      expect(html).toContain('Go to agent')
+    }
+    expect(render([agent(10, {}, { ...linked(10), input_summary: description })]))
+      .toContain(`<span class="agent-start-marker__description">${description}</span>`)
+  })
+
   it('supplied ancestry repairs missing parents, caps depth and counts only distinct shown tools', () => {
     const input = [agent(10), agent(20, { parent: 10 }), agent(30, { parent: 20 }),
       item(40, 'tool_call', { name: 'Read', tool_use_id: 'same' }, { parent: 30 }),
@@ -335,4 +361,14 @@ it('keeps main reply usage independent of child traffic sharing a turn', () => {
   ]))
   expect(rows.find(r => r.source.id === 20)?.stats).toBe('42 out')
   expect(rows.find(r => r.source.id === 30)?.stats).toBeUndefined()
+})
+
+it('shows written input once as a user row without offering queue actions', () => {
+  const html = render([item(7, 'user_message', { text: 'written before consumption', queued_msg_id: 2 },
+    { status: 'written', active: true, order: 0 })])
+  expect(html).toContain('data-thread-role="user"')
+  expect(html).toContain('written before consumption')
+  expect(html).not.toContain('data-thread-role="queued"')
+  expect(html).not.toContain('Drop queued message')
+  expect(html).not.toContain('Send queued message now')
 })

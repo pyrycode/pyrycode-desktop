@@ -110,7 +110,7 @@ marker between the actual top/input chrome. Settle that movement, then assert
 focused intersection and unchanged request count before one ArrowUp. Keep these
 helpers local; readiness uses measured animation-frame stability without extra
 trusted keys, sleeps, test retries or larger timeouts. See
-[the gap testing contract](chat-history-testing.md#demand-and-snapshot-contracts)
+[the gap testing contract](chat-history-testing-contracts.md#demand-and-snapshot-contracts)
 and [controlled failure evidence](development-verification-history.md#known-gap-recovery-verification).
 
 Retry focus can also reset the thread to scrollTop 0 after a marker was parked.
@@ -262,6 +262,27 @@ there is no click retry, fixed sleep or timeout increase. The
 [controlled failure and repaired input](development-verification-layout-evidence.md#reader-reopen-input-verification)
 establish the setup race; unchanged green repetitions alone cannot establish its cause.
 
+Covered-thread preservation has a separate boundary: native resize can clamp a
+released thread even after its positive baseline settled. The reader cases retain
+a trusted upward wheel before ordinary opening and prove it moved, then normalize
+Back focus before taking the immutable baseline. Settle measured thread geometry
+at every native size/zoom phase, keeping native size/zoom and renderer reflow as
+separate observations. Compare exact position and draft after pointer Back at the
+original dimensions/zoom, before resizing or focusing the reopen link. Reopening
+at the alternate size and making another resize round trip checks that keyboard
+Back preserves the new open's own record. Keep full-pane, notice clearance,
+final-content/menu bounds and pointer/keyboard/request-correlation assertions.
+
+Local `thread-scroll-phases` diagnostics record thread offset, content/viewport
+dimensions, link bounds, native outer/content size, zoom and focus at baseline,
+resize/zoom and Back, alongside timestamped scroll/resize samples. A test-wide
+`finally` removes the probe listeners and attaches evidence even if an assertion
+fails before reopen. The [controlled failure and Linux validation](development-verification-layout-evidence.md#reader-resize-scroll-preservation)
+show persistent settled-state loss despite later phase settlement; they do not
+recover the historical 1300→1020 schedule. Stable bottom geometry does not prove
+following intent, and a readiness-only change cannot restore an already-clamped
+held offset. See [the production contract](conversation-shell-scroll-pin.md#covered-reader-resize-preservation).
+
 Stacking levels are relative to ancestor contexts. The message area's level 0
 contains rows, pills and drawer; sharp top/input chrome at level 1 keeps controls
 and their menus above them. Existing level-2 sheets and later dialog siblings retain
@@ -393,6 +414,127 @@ A simulated keyboard shortcut does not necessarily execute a trusted paste.
 Use the Electron window's native paste operation for this case.
 Seed the clipboard before the first paste and distinguish rejection branches in
 the fake responses.
+
+### Visible-tail focus reliability
+
+In [`visible-tail-read.spec.ts`](../../../e2e/visible-tail-read.spec.ts), a timeout
+at `document.hasFocus()` does not establish concurrent-window focus theft. The
+[classification and retained evidence](../../specs/architecture/2051-visible-tail-focus-reliability.md)
+record two independent Linux complete-suite failures on `b3291233`, each
+**435 executed, 434 passed, 1 failed, 3 skipped**, four actual workers, both
+projects and zero retries. Each completed `read-work-30`, installed the second
+document probe, then failed the five-second genuine-focus poll before
+`read-work-400`; both apps remained running at outcome and exited cleanly.
+The isolated baseline/candidate/batched comparison was pass/fail/pass, each
+**1 executed, 0 skipped**, zero retries and one actual worker. Concurrent test
+windows were therefore unnecessary to reproduce the failure.
+
+Repeated synchronous protected-path writes are the supported storage-related
+trigger: #2044's batching repair coalesces writes within the transaction, and
+complete compositions subsequently passed with focus/display code unchanged.
+The reports measure neither main-loop latency nor native-window/webContents focus,
+so the exact path from storage work to delayed page focus remains uncertain.
+Keep the [400-item coalescing regression](chat-history-testing-storage.md#owned-mutation-regressions-and-counted-validation)
+and existing read spec; no residual setup defect or duplicate regression is justified.
+The helper shows/focuses the native window, removes any document focus override,
+and positively polls genuine `document.hasFocus()` before its focus notification.
+Preserve that predicate, processing/React-commit barriers, observer lifecycle and
+read-work assertions at both 30 and 400 rows. A synthetic event alone cannot supply
+the positive barrier; longer timeouts, retries, skips or serialization would weaken
+the existing proof.
+
+The [verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/2057#issuecomment-6213507072)
+records final-head acceptance on `a0200f81b4fea6d186b1eceb2bb77edd4450c704`,
+2026-10-16, Linux x64. `npx playwright test --reporter=json` ran **436 executed,
+436 passed, 0 failed, 3 skipped, 0 flaky**, four actual workers, clipboard
+**30 passed** and parallel **406 passed/3 skipped**, zero retries and no filters.
+Shown Linux windows and the shared run-owned Xvfb display remain unchanged.
+The named `read setup is reused across committed same-row deltas on short and long threads`
+case was present and passed: **1 executed/passed, 0 failed/skipped**, retry 0.
+Both `read-work-30` and `read-work-400` report zero constructors/discovery/listeners/
+subscriptions, complete documents and clean two-app launch fate. There were no
+top-level errors or fake-daemon setup-failure attachments; stderr contains only
+the existing Vite CJS warning. Skips are two macOS badge cases and macOS window
+reopen; macOS and live-Claude are outside this ticket's scope.
+
+The plan separates the dependency's 435-case pass, builder's 435-case pass on
+`42b94d17`, documentation-only evidence commit `25fc4fec`, and this later
+436-case gate after main's initial-thread-loading/Retry regression merged.
+Inspect retained reports before requesting another run: a stale refinement
+summary can omit subsequently available complete-suite evidence. A targeted pass
+alone does not prove full-composition reliability or erase the historical failures.
+
+### Visible-tail native acknowledgement verification
+
+The [diagnosis with original/rerun log identities](https://github.com/pyrycode/pyrycode-desktop/issues/2074#issuecomment-6221656181)
+and [verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/2075#issuecomment-6222009186)
+distinguish two historical failures of `committed folded tails require focus,
+uncovered viewport and a closed reader` in `visible-tail-read.spec.ts`:
+
+- The #2072 gate at `20fd3f8bc5` failed after 1464ms at `focus`'s initial native
+  `app.evaluate`, before read assertions, with `Execution context was destroyed`.
+  The unchanged retry-0 rerun passed in 3644ms through target 38. Launch-fate showed
+  a running app, exit 0, no signal and clean teardown. The confirmed defect was
+  unhandled ambiguous setup acknowledgement; whether show/focus executed before
+  loss, renderer navigation/crash and the upstream inspector trigger remain unproven.
+- The earlier #2043 occurrence instead waited 5000ms for target 37 after `end(37)`,
+  observing 36 (6778ms total); its unchanged rerun passed. Preserve `b345232b`'s
+  queued-scroll drain before that completion and the exact target assertion.
+  The later focus-evaluation failure does not establish a common upstream cause
+  or show that the scroll repair failed. No external prerequisite was demonstrated.
+
+The diagnosis links portable bundles `99a483213866ece7b6eedddf2be895c8aeb3f9706ab790e4591ee4012421d7f1`
+(#2072) and `74069c5b59158442f6b2badee74cdbde4b6b0fb0658af234b4d6d7a0d10e5aae`
+(#2043), original SHA-256 records and full original/rerun log paths. Builder copies
+were retained under `/tmp/builder-2074/evidence-{2072,2043}/`. These observations
+are separate from the preceding genuine-document-focus timeout investigation.
+
+The [guarded helper and callback coverage](e2e-harness-context-recovery.md#native-window-setup)
+confirm effects before recovery can resend controls. The controlled
+`npm test -- e2e/fixtures/visibleTailFocus.test.ts` baseline ran **19 executed,
+2 passed, 17 failed, 0 skipped** against the extracted original setup; the repaired
+run recorded **19 executed/passed, 0 failed/skipped**. Failures were at the intended
+acknowledgement/confirmation boundary. Logs are `/tmp/builder-2074/fault-before.log`
+and `fault-after.log`. Injected faults prove recovery semantics, without reproducing
+the unknown upstream trigger.
+
+Linux x64 browser evidence at implementation
+`3c7d9ed72f877ab7687f92584941374962941853` (including main `2eafa533b9d4`)
+used these commands, with the existing configured two workers:
+
+```sh
+npx playwright test e2e/visible-tail-read.spec.ts --grep 'committed folded tails require focus, uncovered viewport and a closed reader' --repeat-each=20 --retries=0 --reporter=json --output=/tmp/builder-2074/focused-results
+npx playwright test e2e/visible-tail-read.spec.ts --retries=0 --reporter=json --output=/tmp/builder-2074/spec-results
+```
+
+| Run | Executed | Passed | Failed | Skipped | Configured / actual workers |
+| --- | --- | --- | --- | --- | --- |
+| Named scenario repetition | 20 | 20 | 0 | 0 | 2 / 2 |
+| Complete visible-tail spec | 7 | 7 | 0 | 0 | 2 / 1 (one serial file) |
+| Complete configured verifier gate | 492 | 492 | 0 | 4 | 2 / 2 |
+
+Both builder reports, `/tmp/builder-2074/focused.json` and `spec.json`, contain the
+exact named scenario present/passed, zero flaky results, only retry index 0 and no
+report errors. Matching `.stderr` files are empty; output directories above retain
+artifacts. All 27 launch-fate attachments across 28 launches show running at outcome,
+exit 0, no signal and no teardown failures, with no fake-daemon setup-failure attachments.
+
+The complete Linux gate at `3f1ec3ac384789dc74c297f6a26bcd1a9ea5874a`,
+2026-10-16, ran `npx playwright test --reporter=json`: the exact named case passed
+in 3038ms, retry 0, and all seven visible-tail cases passed. The table's full-gate
+counts have zero flaky results and report errors, with zero retries. Retained report:
+`/work/Projects/pyrycode-desktop-agents/logs/verifier-gate_#2074_8.log`, alongside
+`verifier-gate_#2074.pass.json`. Only plan evidence changed after the builder's tested
+implementation. The four existing skips are three macOS-only badge/window cases and
+the independent system-prompt-reset fixme. The unit gate includes all 19 focus faults
+present/passed: **9,337 executed/passed, 0 failed, 3 skipped**, 404 passing files.
+
+These recorded passes preserve genuine document focus, every read target and
+committed-content check, blur/visibility/reader/chrome exclusions, processing/commit
+barriers, scroll drains and observer lifecycle assertions. Timeouts, worker configuration
+and skips remain unchanged, without fixed sleeps or assertion weakening. No production
+or visual behavior changed; provider/live-Claude checks are not required. Other operating
+systems are outside this Linux ticket's verification scope.
 
 ### Composer native setup verification
 

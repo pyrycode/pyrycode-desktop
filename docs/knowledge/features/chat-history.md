@@ -7,19 +7,23 @@ fresh service instance can read saved content without a connection or Noise hand
 saved pairing record's `server` field, so equal conversation ids on different
 hosts remain separate.
 
-The app records received lists and authoritative daemon-item snapshots automatically.
+The app records received lists and owned authoritative daemon-item changes automatically.
+Subset and metadata-only saves preserve unloaded items and evidence.
 Saved lists restore into the sidebar on launch, including unavailable and
-pairing-rejected hosts. Opening a saved chat reads only `daemon-items` on demand.
+pairing-rejected hosts. Opening a saved chat requests the newest 200 shown
+`daemon-items` plus active and recorded dependencies through a bounded partial projection on demand.
 It never draws a saved legacy timeline. Offline display grants no network capability.
 Once that host accepts `thread`, opening and reconnect resume from the saved epoch
-and complete checkpoint. Older demand and Retry use the thread query coordinator.
+and complete checkpoint. Older input first traverses bounded saved held pages,
+even offline or while a server reply is pending/failed. Local loading/retry is
+independent; after local exhaustion, later demand uses the thread query coordinator.
 See [production restore and recovery](thread-runtime.md#restore-recovery-and-cleanup).
 Explicit Forget/Unpair removes the host's saved content after credential removal.
 Confirmed conversation deletion removes both saved conversation formats
 and that host/conversation's list entry.
 Observing, saving, flushing and restoration create no lifecycle demand themselves.
-Offline opening and scrolling retain the existing host-scoped request gates. Disk
-retention is independent of the legacy holder's ten-conversation memory limit.
+Offline opening and scrolling use saved-host authorization; connectivity gates
+apply only to network demand. Disk retention is independent of the legacy holder's ten-conversation memory limit.
 
 ## API
 
@@ -360,7 +364,7 @@ selection uses the nearest receipt whose first membership is at or after its
 not collect every cursor from intersecting spans. Anchor ids alone never become
 selected served ids or receipt memberships, and their start flags certify no
 additional completeness. See [selected-record validation and protection](chat-history-results.md#bounded-page-results)
-and [bounded-work fixtures](chat-history-testing.md#bounded-legacy-page-regressions).
+and [bounded-work fixtures](chat-history-testing-storage.md#bounded-legacy-page-regressions).
 
 ### Received-state admission and ownership
 
@@ -368,12 +372,11 @@ and [bounded-work fixtures](chat-history-testing.md#bounded-legacy-page-regressi
 mounts once from [`App`](app-shell.md#where-the-daemon-bridge-lives) across routes.
 `createChatHistoryWriter` requires `threads` and `lists`; production supplies
 `threadRuntime.items` and `conversationListStore`. It observes only received lists
-and authoritative item snapshots, submitting `replaceList` and `replaceThread`.
+and authoritative owned changes, submitting `replaceList` and `mutateThread`.
 It has no legacy timeline subscription, receipt/row-key/echo observation,
-`replaceTimeline` path or timeline-frame flush hook. Legacy renderer producers and
-their direct store/bridge tests remain; main, preload, shared format admission,
-indexed reconstruction and legacy storage APIs remain valid for other consumers.
-Producer retirement belongs to #2030 and saved-format retirement to #2026.
+`replaceTimeline` path or timeline-frame flush hook. Legacy renderer producers were
+retired in #2030; main, preload, shared format admission, indexed reconstruction
+and legacy storage APIs remain valid for retained callers and cleanup.
 
 List admission still requires preload's synchronous `conversationsReceived` receipt
 with a string `serverId`, and a changed `byServer` array for that exact host.
@@ -383,12 +386,15 @@ Read pushes update attention immediately but do not themselves save a list; a la
 received list captures the reconciled read marks. Startup state, local list
 restoration and clears schedule no list write.
 
-Item ownership comes from the authoritative store's host/conversation scope.
-The writer compares immutable snapshot references and skips the private `restored`
-identity so hydration schedules no save. Later authoritative changes remain
-saveable, preserving complete checkpoints, certified ranges, repair and unfinished
-batch fences exactly as held. Projection through `parseChatHistorySnapshot`
-detaches coordinates and content synchronously before scheduling.
+Item ownership comes from each received transition's `owned` change at the exact
+host/conversation/epoch. The writer skips unchanged ownership references and local
+restoration, so hydration schedules no save. `parseChatHistoryRequest` detaches
+changed items, explicit removals, metadata and new evidence before scheduling;
+it does not project a shortened holder as a complete snapshot. Ordered completion
+intervals and availability boundaries preserve saved repair/unfinished fences
+that the holder may not contain. Holder loss retains pending work; intentional
+same-epoch resets carry a unique retry identity. See
+[owned mutation admission](chat-history-api.md#owned-authoritative-mutations).
 Local unaccepted sends, permissions and session state never enter this cache.
 See [buffering and removal ordering](chat-history-storage.md#buffered-replacements).
 
@@ -405,21 +411,30 @@ Other hosts' arrays retain their identity. Restoration never selects a chat or
 creates connection, working or recovery state.
 
 [`readSavedTimeline`](../../../src/renderer/src/store/savedTimelineRestorer.ts)
-keeps its runtime name but requires `threads` and always requests `readThread`.
-It accepts stored results only of kind `daemon-items` with the exact requested
-host and conversation. Wrong kinds/coordinates, unexpected results, classified
-errors and rejected IPC fail the current handle without importing data; missing
-records complete it with null. There is no `readTimeline` fallback.
+keeps its runtime name but requires `threads` and requests `openThreadPage` with
+limit 200 by default. Explicit traversal demand selects newest/before held pages
+at the same limit. It accepts validated partial daemon-item pages with the exact
+requested host and conversation, retaining sparse arrival positions and saved availability
+boundary separately from selected coverage. Wrong kinds/coordinates, unexpected
+results, classified errors and rejected IPC fail the current handle without importing
+data; missing opening records complete it with null. There is no `readTimeline` fallback.
 
 `threadRuntime.restore` invokes this reader, which opens the store-owned
 `beginLocalRead(host, conversation)` handle and returns `{ done, cancel }`.
-Held scopes prevent duplicate reads.
-Process-local tokens fence delayed completion and failure after cancellation,
-replacement reads, live admission, epoch replacement or conversation/host/global
-clear, even if coordinate or epoch strings are reused. Hydration certifies no new
-progress. Restoration creates no transport request or raw event; opening, reconnect,
-older demand and Retry use the [thread coordinator](thread-runtime.md#restore-recovery-and-cleanup)
-and introduce no legacy content request.
+Default opening refuses held scopes; explicit held-page admission requires one
+and permits only one pending read. Process-local tokens fence delayed completion
+and failure after cancellation, replacement reads, explicit reset, epoch replacement or conversation/host/global
+clear, even if coordinate or epoch strings are reused. Initial epoch admission and
+same-owner live publication preserve the read. Explicit partial restoration merges
+saved-only items with admitted revisions and arrival ties while retaining saved
+repair/unfinished obligations; only exact completed coverage can release their
+checkpoint fences. See [store hydration](thread-item-store.md#snapshots-and-completed-batches).
+Hydration emits no owned save and certifies no new progress or read acknowledgement.
+Restoration creates no transport request or raw event. Opening/reconnect network
+catch-up remains coordinator-owned; older demand first consumes saved pages and
+Retry resumes local failure when present, otherwise delegates to that coordinator.
+See [runtime ownership](thread-runtime.md#independent-saved-traversal). No legacy
+content request is introduced.
 
 Confirmed `conversationDeleted` delivery queues `removeConversation` using its
 main-stamped host and confirmed id, even without a held scope or list entry.
@@ -470,8 +485,10 @@ for saved-read notices, result/error classifications and preservation after fail
 ## Storage and concurrency
 
 Production `createChatHistoryStore` composes the indexed legacy and authoritative
-backends with protected list cells in schema 5. One main-process database owner
-lazily opens a reusable synchronous connection at `history/history.sqlite` beneath
+backends with protected list cells, stable authoritative payloads and schema-7
+authenticated mutable indexes. One
+main-process database owner lazily opens a reusable synchronous connection at
+`history/history.sqlite` beneath
 trusted `userDataPath`. The composition root retains it across window reopening;
 graceful app quit flushes renderers, drains handler/store admission and closes it.
 Directory creation uses mode 0700 and the database is set to 0600. Reads and
@@ -504,24 +521,47 @@ bounded page selection without a whole-timeline or all-evidence cell. Full
 reconstruction returns one committed snapshot and checks its records against
 canonical parser output.
 
-Authoritative scopes separately protect header metadata, held items and ranges,
-including first-arrival and containing-range associations. Lists are complete
-protected cells. Both full readers preserve exact supplied ownership and content;
-neither family converts into the other.
+Authoritative scopes separately protect header metadata, item placements, stable
+item payloads and ranges, including first-arrival and containing-range associations.
+Payload lookup uses stable owner/item id; protected placements bind the exact
+ciphertext digest. Retained full-replacement scopes bind placements/evidence to
+the current generation. Mutable scopes instead authenticate them through roots
+in the protected header, with an AVL sequence for held order/rank and fixed-width
+radix lookup/order/evidence paths. Parent hints require root-to-node verification;
+owner binding alone would allow old-record replay. A protected aggregate JSON-node
+count keeps incremental admission within full/page reader limits. Schema-5 conversion
+validates all authoritative scopes; schema-6-to-mutable conversion validates only
+the addressed scope in its first owned transaction. Subsequent mutations/pages
+avoid conversion scans and retain untouched ciphertext. See
+[storage bindings and migration](chat-history-api.md#api).
+Lists remain complete protected cells. Both full readers preserve exact supplied
+ownership and content; neither family converts into the other.
 
-Every replacement, including identical or empty content, receives a new random UUID
-snapshot identity; delete/recreate cannot reuse the previous commit's identity.
-Scope deletion cascades to all its evidence. These identities identify commits,
-not authorization. Payload protection and reviewed structural columns are detailed
-in [failure preservation](chat-history-results.md#results-and-failure-preservation).
+Every replacement and owned mutation, including metadata-only work, rotates its continuation
+identity. Legacy scopes use a fresh snapshot UUID; authoritative scopes retain
+their owner for same-epoch replacement and rotate a protected generation, reusing
+unchanged same-epoch item ciphertext. Epoch-changing replacement receives a new
+owner. Delete/recreate receives fresh ownership; deletion cascades to all evidence
+and payloads. These identities are not authorization. Payload protection
+and reviewed structural columns are detailed in
+[failure preservation](chat-history-results.md#results-and-failure-preservation).
 
 The adapter is pinned to `better-sqlite3` 12.4.1. Host Node and Electron require
 separate native rebuilds; packaging rebuilds for the target ABI and unpacks the
-adapter from asar. See [runtime preparation and counted native proof](chat-history-testing.md#native-runtime-and-packaged-proof).
+adapter from asar. See [runtime preparation and counted native proof](chat-history-testing-native.md#native-runtime-and-packaged-proof).
 Windows NSIS x64/arm64 targets remain configured; these smokes add no Linux/macOS
-release channel. Bounded legacy and authoritative pages remain callable main-only;
-page IPC, renderer consumers and partial writes belong to #1931. Production reads
-and replacements still use complete snapshots.
+release channel. Bounded legacy pages remain callable main-only; authoritative
+opening and held-page variants use the fixed authorized bridge. Ordinary owned
+writes preserve unloaded history. Production opening uses partial selection with
+no full-read fallback; retained full operations remain callable. Complete unchanged
+saved traversal starts newest-first independently of opening's shown-window token
+and preserves the visible-row anchor. A separate authenticated recovery capability
+rebases invalidated traversal in bounded identity windows after owned mutations or
+same-epoch replacement. Ordinary stale tokens still reject, and selection failures
+retain displayed facts for explicit Retry. Indexed replacement rebuilds indexes in
+its write transaction; initial conversion remains separate from cold opening/recovery.
+See [the recovery contract](chat-history-api.md#bounded-authoritative-opening-and-pages)
+and [ADR 0015](../decisions/0015-protected-saved-traversal-recovery.md).
 
 ## Testing
 

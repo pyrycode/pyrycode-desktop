@@ -51,14 +51,16 @@ with `createChatHistoryHandler` in production.
 The authoritative family has its own main-only
 [`createIndexedThreadHistory({ database, encryption, log })`](../../../src/main/indexedThreadHistory.ts).
 Its `execute(unknown): Promise<ThreadHistoryResult>` accepts `readThread`,
-`replaceThread`, `removeConversation`, `removeServer`, `newestThreadPage` and
-`beforeThreadPage`. Full operations use the existing shared request/result shapes;
+`replaceThread`, `mutateThread`, `removeConversation`, `removeServer`,
+`newestThreadPage`, `beforeThreadPage` and `openThreadPage`. Full operations use the
+existing shared request/result shapes;
 replacement retains the normalized `daemon-items` snapshot exactly, including
 hidden/unordered items, inert unknown JSON, explicit nulls and optional arrival
 metadata. Requests are detached and validated before database access. Removal
 affects only authoritative scopes for the exact owner, preserving legacy records,
 lists and other hosts' equal ids. This callable backend shares the supplied database
-owner. Production `createChatHistoryStore` delegates full thread operations to it;
+owner. Production `createChatHistoryStore` delegates full, owned and bounded page
+operations to it;
 direct backend calls perform no saved-host authorization.
 
 Both backends retain detached-callable Promise `execute` methods and expose
@@ -92,6 +94,56 @@ version changes too, allowing retry. Migration preserves strings already stored 
 recover surrogate distinctions lost during earlier TEXT binding. Future schema
 additions require explicit versioned migrations; snapshot `version: 1` is unchanged.
 
+The owner also admits schema 6. The first authoritative backend operation on
+schema 5 validates every saved authoritative scope through the old protected
+decoder and complete snapshot admission, creates `thread_payloads`, rewrites
+headers/placements/ranges and sets version 6 in the same transaction. Earlier
+supported schemas chain through schema 5 first. This one-time conversion retains
+each scope owner as its initial protected generation, preserving old continuations.
+Corrupt input, unavailable protection, conversion or later operation failure leaves
+the last commit intact and permits retry; no version marker commits ahead of
+conversion. Legacy/list-only operations need not initiate this protected upgrade.
+
+In the retained schema-6 representation, `thread_scopes.identity` is the stable
+owner. Item lookup uses
+`thread_payloads(scope, item_id)`; its protected envelope binds owner, epoch, id,
+revision and the exact admitted item, independently of held/range positions or
+continuation generation. A protected item placement in `thread_records` binds all
+selection indexes and `{ id, rev, digest }`, where `digest` is SHA-256 of the exact
+item ciphertext. Reading verifies lookup revision, digest and protected payload
+facts. Headers bind the owner and exact coordinates; placements and ranges bind
+the header's current generation. Binding only the stable owner would permit replay
+of older protected placements/evidence after replacement. See
+[the binding decision](../decisions/0013-stable-protected-thread-bindings.md).
+
+Same-epoch full replacement preserves the owner, rotates generation and rewrites
+placement and evidence records. It reuses exact ciphertext for unchanged items in the same
+epoch; changed items or a changed epoch receive new payloads. This remains a full
+snapshot validation/replacement, not an incremental write. Epoch-changing replacement
+receives a fresh owner, fencing capabilities even after an epoch-string round trip.
+Scope removal cascades to placements, ranges and payloads; recreation receives a new owner and generation.
+
+Schema 7 adds `thread_auth(scope, tree, path, payload)` in the first owned-write
+or opening-conversion transaction. Conversion is lazy per addressed scope: fully
+validate its schema-6 snapshot, retain exact item ciphertext and held/arrival order, then rebind placements
+and ranges to the stable owner and build authenticated indexes. Other scopes keep
+their retained representation. Conversion, schema marker and requested operation
+commit or roll back together. Existing fractional-index scopes also convert once,
+after full validation, to the final AVL representation without rewriting placements.
+See [ADR 0014](../decisions/0014-authenticated-owned-thread-mutations.md).
+
+The mutable protected header authenticates item-id, numeric-order/arrival and range
+radix roots plus an AVL held sequence with subtree counts. Stable placement ordinals
+identify nodes; they are not dense display positions. Rank verifies the complete
+hinted route from the protected root, so plaintext parent hints grant no authority.
+Leaves bind exact placement/range ciphertext digests, and placements still bind the
+item payload digest. Changed paths and the protected header commit with changed
+facts; each path flushes once per transaction. Unchanged payloads and placements
+stay byte-identical. Continuation generation rotates independently on every owned
+commit, including metadata-only work. Old records/branches cannot authenticate
+against the current root; rolling back every protected record remains outside the
+guarantee. Full/page readers support both representations.
+
 Before its first operation, the application store checks completion, then decrypts
 and validates the entire version-1 secure-store collection, including duplicate
 identities, through shared snapshot admission. It validates addressed destination
@@ -117,23 +169,94 @@ host removal validates every scope in the backend's own family for that exact ho
 Other hosts and peer conversations remain independent. See
 [rollback and protection](chat-history-results.md#results-and-failure-preservation).
 
-### Main-only bounded authoritative pages
+### Owned authoritative mutations
 
-Authoritative `execute` page requests have these fields:
+Ordinary received saves use the existing fixed IPC with
+`{ operation: 'mutateThread', serverId, conversationId, change }`:
+
+| `change` field | Contract |
+| --- | --- |
+| `metadata` | Exact host/conversation/epoch and scalar progress, repair and optional availability; excludes items, ranges and arrival arrays. |
+| `items`, `removeIds`, `ranges` | Changed complete item facts, explicit item removals and newly certified ranges. Omitted saved facts/evidence survive. |
+| `acceptEpoch` | Required boolean allowing creation/epoch transition. Reaccepting an already saved epoch preserves it. |
+| `resetId?` | Bounded identity for an explicit reset with epoch admission; a new identity resets even the same epoch, while retrying the recorded identity preserves later facts. |
+| `completion?` | Exact completed `{ fromVersion, version }`, supplied by successful `beginBatch.commit`; never an unbound certification flag. |
+| `availability?` | `{ start, available }` for the certified oldest supplied boundary; requires completion. |
+| `priorProgress?` | Earlier metadata/completion/availability observations retained in admission order during coalescing and retry. |
+
+`parseChatHistoryRequest` detaches only changed JSON and bounded observations.
+Unknown request/change/observation keys, duplicate item/removal ids, overlap between
+those ids, mismatched observation coordinates/epochs and invalid intervals reject
+before storage.
+Completion requires `0 <= fromVersion <= version <= metadata.checkpoint`.
+Hydration and missing/recreated holders supply no completion or removal authority.
+Higher stored revisions win over older/equal revisions; a conflicting item kind
+rejects the mutation. New items receive stable first-arrival positions; revisions
+retain them. Ordering uses saved neighbors, including unloaded items, rather than
+the apparent tail of a partial holder. Removal leaves arrival gaps.
+
+Main folds `priorProgress` then the current observation against saved progress.
+Completion is admitted only when `fromVersion <= saved checkpoint`; it can advance
+fenced progress only through its own `version`. Uncovered saved and pending repair
+or unfinished obligations survive metadata-only saves and later live progress.
+New epochs start from empty progress. Retrying already-covered repair observations
+does not revive old obligations, but a new repair at the current checkpoint persists.
+Availability compares certified boundaries against retained evidence: older wins,
+equal-boundary exhaustion (`false`) wins, and newer/metadata-only observations cannot
+erase older exhaustion. A holder's scalar checkpoint or availability alone cannot
+certify unloaded work.
+
+After one-time conversion, mutation reads/decrypts only changed items and required
+metadata/evidence, with fixed-width lookup and logarithmic sequence work. A protected
+aggregate JSON-node count subtracts removed/revised old items and adds changed items;
+exceeding the shared 100,000-node limit rolls back the transaction so retained
+full/page readers remain coherent. Metadata replay touches the header with work
+proportional to received observations, not saved history. Protection stays in main;
+the renderer receives no SQL, filesystem, keys or ciphertext. Bounded reads return
+only validated projections and opaque local continuations.
+
+### Bounded authoritative opening and pages
+
+The fixed shared/preload/main `chatHistory` bridge admits authoritative page
+requests through `parseChatHistoryRequest`, the saved-host handler and serialized
+application store. Preload forwards the shared variants unchanged. Database access,
+protection and continuation contents stay in main. Requests have these fields:
 
 | Operation | Additional fields beyond `operation`, `serverId`, `conversationId` |
 | --- | --- |
-| `newestThreadPage` | `limit`: integer 1–200. |
-| `beforeThreadPage` | The same `limit`, plus an opaque string `continuation` from a prior page. |
+| `openThreadPage` | `limit`: integer 1–200; production opening uses 200 shown identities plus closure. |
+| `newestThreadPage` | `limit`: integer 1–200 held items. |
+| `beforeThreadPage` | The same `limit`, an opaque `continuation` from a prior page, and optional paired opaque `recovery`. |
 
-Unknown request keys reject. Both return `{ status: 'page', page }`, with
+Unknown request keys reject. All three return `{ status: 'page', page }`, with
 `page.partial: true`, selected `items`, selected intact `ranges`, separate saved
 `metadata` and `continuation: string | null`. `metadata` is
 `Omit<ThreadSnapshot, 'items' | 'ranges' | 'arrivalOrder'>`; it preserves ownership,
 epoch, applied version, checkpoint, unfinished progress, repair and optional older
-availability. When saved `arrivalOrder` exists, aligned `arrivalPositions` hold each
-selected item's original whole-snapshot first-arrival position; otherwise the field
-is absent. They are not a complete arrival permutation.
+availability. Optional aligned `arrivalPositions` hold each selected item's saved
+first-arrival position. Opening conversion assigns supplied held-order positions
+when older snapshots lack arrival metadata; retained held pages may omit the field. Sparse positions remain valid after removals and are not a complete
+arrival permutation. Optional `availabilityStart` preserves the saved oldest
+availability boundary even when that range is outside the selected evidence.
+`threadHistoryCodec.page` validates partial ownership/metadata, unique item ids,
+aligned unique nonnegative safe-integer arrival positions, ranges, optional boundary
+and null or bounded base64url continuation separately from full-snapshot membership.
+Optional `recovery` is admitted as a bounded base64url string too; it is separate
+from the continuation and absent from production opening results.
+
+Opening selects the final `limit` saved identities whose `shown === true`, or all
+if fewer, in retained held order. Hidden items and synthetic presentation markers
+consume no base slots; folding does not affect selection. Authenticated AVL
+shown/active subtree counts select the window and every saved `active === true`
+item without filtering hidden tails. Closure follows recorded numeric parent edges
+through the id index, retaining agent ancestor chains, and joins assistant messages
+to saved `turn_end` facts by session/agent/turn/parent attribution. The authenticated
+ending index stores the attribution digest and placement ordinal. Included agent
+fields retain background marker/ending anchors and recipient joins. No names,
+results or unrelated descendants establish parentage. Each scoped identity is
+included once in held order, retaining `shown`, `active`, nesting and placement;
+required shown parents may render beyond the limit, while hidden dependencies stay
+hidden. Timestamps never order selection or first-arrival ties.
 
 Newest selects the final held-array window; before selects the immediately preceding
 window, exclusive of its continuation boundary. Items keep supplied held order,
@@ -142,36 +265,115 @@ returns `missing`; saved-empty returns a page with empty items and null continua
 Following continuations on an unchanged snapshot traverses held items backwards
 exactly once, with each window internally in held order.
 
-Each page decodes only the protected header, selected items and relevant ranges in
-one synchronous transaction. Ranges are the saved ranges containing selected
+Opening indexes and their protected roots are maintained in the same transaction
+as owned revision/removal changes. An addressed retained scope, including older
+mutable scopes without these indexes, converts once after complete validation;
+conversion preserves held/arrival order and existing mutable placement ciphertext.
+Same-epoch full replacement of an indexed scope rebuilds its authenticated indexes
+inside the replacement transaction. Deferring that rebuild would make the next
+recovery read pay whole-snapshot conversion. Fresh owners reuse committed indexes;
+initial retained-scope conversion and import can scale with saved data and are
+measured separately from ordinary cold opening and recovery. Full reads preserve
+optional arrival metadata exactly; mutable pages expose authenticated placement
+positions, including conversion-synthesized positions. Owned mutations publish
+arrival metadata once they use those positions.
+
+Authenticated AVL/radix nodes are cached by their complete proof within each
+transaction-local index instance, with detached node containers returned to mutation.
+Selected payload and evidence decoding is cached too. Bounded payload work alone
+can conceal thousands of repeated structural SQL/JSON reads; proof caching avoids
+that repetition without trusting plaintext hints or a proof from an earlier root.
+Unrelated older/hidden items or ranges add no selected placement/payload decoding;
+authenticated structural traversal may grow logarithmically. See
+[opening work measurements](chat-history-testing-native.md#counted-bounded-opening-validation).
+
+After conversion, each page decodes only the protected header, selected item
+placements and their directly looked-up payloads, and relevant ranges in one
+synchronous transaction. Ranges are the saved ranges containing selected
 nonnegative safe-integer orders (`start <= order < end`), plus the newest saved
 range as an anchor even for empty/unordered windows, once each in saved range order.
-Protected per-item range membership selects evidence and verifies containment;
-using mutable numeric range indexes alone could silently omit damaged evidence.
+Retained placements use protected per-item range membership to verify containment.
+Mutable scopes instead authenticate range predecessor/exact lookup against the
+protected range root, so merged evidence needs no untouched placement rewrite.
+Trusting mutable numeric range indexes alone could silently omit damaged evidence.
 Nonindexable orders remain inert item content and establish no coverage. Header
 counts determine window contiguity and exhaustion without a continuation probe.
 Neither the full reader nor complete item/range/arrival arrays are loaded. Shared
 `threadHistoryCodec` validators admit selected facts without treating a shortened
 snapshot as complete; full reads retain aggregate and complete-membership validation.
 
-The base64url continuation protects exactly `{ format: 'daemon-items', identity,
-before }` through `SecretEncryption`. `identity` is the durable committed UUID;
-`before` is a positive safe-integer exclusive held ordinal. Exact scoped lookup and
-the validated header bind that UUID to host, conversation and epoch in the same
-transaction. Fresh-instance reopen retains validity; every replacement, including
-identical or empty content, rotates the UUID. Deletion/recreation cannot revive it.
+An ordinary base64url continuation protects exactly `{ format: 'daemon-items', identity,
+before }` through `SecretEncryption`. `identity` is the protected generation UUID;
+`before` is a positive safe-integer exclusive held rank (ordinal in retained scopes).
+Exact scoped lookup and
+the validated header bind that generation to host, conversation and epoch in the
+same transaction. Migration alone and fresh-instance reopen retain validity;
+every replacement and owned mutation, including identical or empty content, rotates
+generation without necessarily re-encrypting item payloads. Deletion/recreation cannot revive it.
 These tokens are local positions, separate from daemon cursors.
 
-Compact token plaintext is at most 101 ASCII bytes, independent of coordinate/epoch
-length or JSON escaping (at most 136 base64 bytes before production OS protection).
+Ordinary held-rank token plaintext is at most 101 ASCII bytes, independent of
+coordinate/epoch length or JSON escaping (at most 136 base64 bytes before production OS protection).
 Generation and admission share a 65,536-character encoded limit; excessive
 protection overhead fails without returning an inadmissible token. Copying owner
 and epoch strings into the token would break traversal for valid long surrogate
 strings after JSON/protection expansion. See [page failures](chat-history-results.md#bounded-page-results).
 
-Full indexed storage and collection import are active. Page IPC, reader activation
-and partial writes remain #1931. Local continuation/exhaustion never certifies daemon
-completeness or changes saved checkpoint, repair or availability.
+Authoritative full operations, collection import and owned mutations share the
+readers above. Production restoration uses `openThreadPage` with explicit partial
+admission. User-driven traversal starts separately at `newestThreadPage`, then
+follows its own `beforeThreadPage` continuations with limit 200. Opening's token
+precedes the base shown window; it cannot enumerate hidden items within/after that
+window, even when null. An old active dependency also cannot define the visited
+boundary. Overlapping opening/dependency facts merge by identity, so an unchanged
+saved generation is traversable completely without duplicate resident identities.
+
+Slice residency keeps `traversal` separately: undefined means unstarted, a string
+is the next opaque token, and null means locally exhausted. Neither short/empty
+pages nor null certify daemon completeness, clear repair, advance checkpoint or
+replace boundary-owned older availability. Only supplied saved ranges are unioned;
+loading `[100,200)` beside `[900,1000)` leaves the unsaved hole and the coordinator's
+network boundary at 900. Saved-but-unloaded content, resident content and acknowledged
+reads remain distinct. Hydration creates no owned save, coverage certificate or read
+acknowledgement. Local exhaustion offline retains connection-needed treatment when
+daemon completeness is unknown.
+
+Mutable held pages with a non-null continuation also mint a separate protected
+`recovery` capability. It binds `format: 'daemon-items-rebase'`, the stable scope
+owner, SHA-256 of the epoch and exact decoded continuation, and a numeric boundary
+identity. Main validates both token shapes and current exact host/conversation scope
+before considering recovery. A stale ordinary continuation still rejects without
+its matching capability; malformed tokens, capability substitution and generic read
+errors cannot authorize a rebase. Both opaque strings share the 65,536-character
+admission/protection limit and remain memory-only in renderer residency, never logs.
+
+Only a generation mismatch with that validated capability starts a newly
+authenticated circular identity pass: descend ids below the retained boundary,
+then wrap through the remaining ids at/above it. Authenticated id-radix lookup
+works even when the boundary was removed. Each selected window is returned in
+current authenticated held order through verified sequence ranks, retaining sparse
+arrival positions and relevant evidence. Identity selection is private traversal
+state, separate from display order and daemon `before_order`. Resuming only at a
+boundary's current held rank could miss unvisited items moved across it; a complete
+identity pass after writes settle visits every remaining saved identity. Resident
+overlap merges by id rather than creating duplicate rows.
+
+The new continuation carries generation-bound ring state; another write can rebase
+it with its own paired capability. Unchanged ordinary and recovery continuations
+survive fresh protected reopen. Epoch replacement/round trips, explicit reset,
+deletion/recreation and unpair retire ownership rather than granting recovery.
+Selection, proof validation and token minting share one synchronous transaction.
+Each demand makes **one IPC call and one selection attempt, at most 200 identities**
+plus relevant range evidence. Authenticated lookup and up to 200 rank proofs have
+logarithmic structural work; selected payload work is independent of loaded depth
+and unrelated history. No replay from newest, resident inventory or full read is
+used for recovery after conversion.
+
+Classified protection, storage/token and IPC failures retain displayed valid facts
+and settle into content-free local failure. Explicit Retry starts one new bounded
+attempt with the retained pair; there is no automatic retry loop or full-read
+fallback. See [runtime ownership](thread-runtime.md#independent-saved-traversal)
+and [ADR 0015](../decisions/0015-protected-saved-traversal-recovery.md).
 
 ### Main-only bounded legacy pages
 
@@ -270,8 +472,12 @@ Every request has `operation` and `serverId`. Additional fields are operation-sp
 | `replaceList` | `snapshot` of kind `list` | Replace that list; omitted conversation records remain saved. |
 | `readTimeline` | `conversationId` | Read only the addressed legacy timeline. |
 | `replaceTimeline` | `conversationId`, `snapshot` of kind `timeline` | Replace only that legacy timeline in full, preserving supplied row order. |
-| `readThread` | `conversationId` | Read only the addressed daemon-item record. |
+| `readThread` | `conversationId` | Read the addressed daemon-item record in full for retained callers. |
+| `openThreadPage` | `conversationId`, integer `limit` 1–200 | Select newest shown items plus active/dependency closure. |
+| `newestThreadPage` | `conversationId`, integer `limit` 1–200 | Select newest held-item window. |
+| `beforeThreadPage` | `conversationId`, integer `limit` 1–200, opaque `continuation` | Select preceding held-item window. |
 | `replaceThread` | `conversationId`, `snapshot` of kind `daemon-items` | Replace only that held thread snapshot in full. |
+| `mutateThread` | `conversationId`, `change` | Atomically apply validated owned facts/progress; preserve unowned items/evidence. |
 | `removeConversation` | `conversationId` | Atomically remove both conversation formats and its entry from the host's saved list. |
 | `removeServer` | None | Remove every snapshot for that host, including conversations absent from its latest list. |
 
@@ -299,25 +505,40 @@ the existing string/array bounds. Invalid requests are classified before storage
 malformed saved metadata uses `unreadable`. Neither path replaces valid saved data,
 and diagnostics remain static event/code values without content or coordinates.
 
-`createChatHistoryWriter` requires `threads` and `lists`; its only replacements
-are `replaceThread` for changed authoritative snapshots and `replaceList` for
-received lists with a matching host receipt. Legacy timeline observations and
+`createChatHistoryWriter` requires `threads` and `lists`; it sends `mutateThread`
+for owned authoritative changes and `replaceList` for received lists with a matching
+host receipt. Full `replaceThread` remains available to retained callers/import.
+Legacy timeline observations and
 `replaceTimeline` submission are removed from the renderer. Hydration
 is excluded from saves, and later received changes remain eligible. Confirmed
 deletion clears that held scope and suppresses both saved formats; successful
 unpair invalidates all that host's held threads and reads. See
 [storage ordering](chat-history.md#storage-and-concurrency).
 
-`readSavedTimeline` requires `threads` and requests only `readThread`. It returns
-`{ done, cancel }` and admits only `daemon-items` with the exact requested host and
-conversation before completing the store-owned local read. The retained legacy
-IPC/storage operations above and shared format admission are unchanged; they are
-not renderer writer/restorer paths.
-`beginLocalRead(host, conversation)` returns null for held scopes; otherwise its
-one-shot complete/fail/cancel handle uses a process-local token. A replacement read,
-admitted state or scoped cleanup invalidates it, even when identity strings are
-reused. Delayed stored, missing or failed reads cannot replace admitted facts.
+`readSavedTimeline` requires `threads`. Without explicit demand it requests
+`openThreadPage`; demand selects `newestThreadPage` or `beforeThreadPage` with its
+opaque continuation and optional paired recovery capability. Every request uses
+limit 200. It returns `{ done, cancel }`;
+`done` resolves to a static outcome used for local loading/retry. It admits only a
+validated partial page at the exact requested host/conversation before completing
+the store-owned read. Missing opening completes with null; saved-empty still
+contributes metadata. Unexpected full stored results fail. A retried invalidated
+opening uses the same bounded request, with no full-read fallback. The retained
+legacy IPC/storage operations above and shared format admission remain outside
+renderer writer/restorer paths.
+`beginLocalRead(host, conversation)` refuses held scopes for opening.
+`beginLocalRead(host, conversation, true)` explicitly admits a held-page read only
+with an existing scope and no read already pending. Its one-shot complete/fail/cancel
+handle uses a process-local token. A replacement read, explicit reset, replacement of a held epoch or scoped cleanup invalidates it, even
+when identity strings are reused. Initial epoch admission and same-owner publication
+preserve it. Validated partial saved results merge by revision and original arrival
+order with same-epoch admitted facts, preserving saved progress obligations through
+exact completion observations. Missing/failure cannot erase admitted facts, and
+a different saved epoch cannot replace the admitted epoch. See
+[store restoration rules](thread-item-store.md#snapshots-and-completed-batches).
 Restoration sends no transport requests or raw events and certifies no progress.
 The [thread runtime](thread-runtime.md#restore-recovery-and-cleanup) uses this
-authoritative restore path in production. Indexed partial reads remain separate
-from the full protected-snapshot integration.
+authoritative restore path in production, then resumes the coordinator with the
+admitted epoch and complete checkpoint while saved rows remain visible. Sparse
+arrival positions, continuation and recovery capability remain residency metadata;
+the separately saved availability boundary cannot become new coverage or a hydration save.

@@ -56,7 +56,7 @@ export function createChatHistoryHandler(deps: {
         return result
       } catch {
         return failure(request.operation.startsWith('remove') ? 'remove-failed'
-          : request.operation.startsWith('replace') ? 'write-failed' : 'unreadable')
+          : request.operation.startsWith('replace') || request.operation === 'mutateThread' ? 'write-failed' : 'unreadable')
       }
     }
     // Membership checks join the queue too: a slow earlier check cannot resurrect removed data.

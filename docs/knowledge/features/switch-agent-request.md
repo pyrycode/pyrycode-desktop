@@ -5,8 +5,10 @@ existing [command channel](command-channel.md). The outbound path shipped in
 [#1659](../../specs/architecture/1659-switch-agent-request.md). It adds no UI trigger.
 The [confirmation API](#renderer-confirmation-and-read-surface) and retained progress
 shipped in [#1661](../../specs/architecture/1661-agent-switch-confirmation.md).
-Both model-menu entry points, optimistic model display/rollback and live hand-over
-acceptance remain [#1662](https://github.com/pyrycode/pyrycode-desktop/issues/1662)'s scope.
+Both model-picker entry points and pending model display/rollback are wired through
+[the merged composer menu](composer-model-menu.md) and
+[the Run configuration sheet](conversation-shell-run-configuration.md#run-configuration-model-section-daemon-published-rows-975).
+The [operator hand-over acceptance](composer-model-menu.md#testing) remains pending.
 The daemon requires `interactive` and `multi_agent`, both advertised by this client.
 The contract reference is the daemon's
 [switch_agent protocol](https://github.com/pyrycode/pyrycode/blob/77818fd23e1c18657663e066318eb1c03870ae77/docs/protocol-mobile.md#switch_agent).
@@ -100,8 +102,9 @@ The four exhaustive renderer translators, `translateDaemonEvent`,
 `translateModalEvent`, `translateQuestionEvent` and `translateTimelineEvent`,
 explicitly return `null` for `switchAgentRejected`. Adding a union member requires
 these no-op arms; `AgentSwitchData` separately consumes the typed outcome for the
-renderer confirmation/status path below. Model-menu opening and optimistic model
-display/rollback remain #1662's scope.
+renderer confirmation/status path below. Both pickers route the clicked row through
+`selectConnectedModel`: own-agent rows write settings; other-agent rows open confirmation.
+An untagged row counts as Claude, regardless of its raw model string.
 
 ## Renderer confirmation and read surface
 
@@ -176,6 +179,13 @@ reset completion, session transition or metadata reconciliation cannot succeed.
 correlated success acknowledgement is added. A published new binding also counts
 as success after a daemon post-commit cleanup error.
 
+`createAgentSwitchStore`'s required `onSucceeded(conversationId)` callback runs for every such
+success, including a closed pane. The singleton calls `clearAnnouncedModelFor` for only the switched
+conversation. Opening, cancellation, refusal, unchanged/foreign lists, session transitions and
+abandonment never clear its announcement. Other announcements retain their identity and new ones
+remain accepted. Settings and announcements have independent lifetimes: clearing the active settings
+alone leaves an outgoing announcement ahead of the incoming saved model in the footer.
+
 `createAgentSwitchStore`'s optional `onActiveSucceeded(conversationId)` callback runs only for that
 authoritative success while the mounted pane's conversation and host and the current open binding
 still match the pending attempt. The singleton dispatches the write store's `agentSwitched` edge,
@@ -191,12 +201,12 @@ refusal, abandonment, progress, standalone session transitions and unchanged/for
 lists do not invoke this callback. Raw model equality is irrelevant. Ordinary same-agent refreshes
 and reconnect keep their existing confirmed-choice semantics.
 
-Integration with [#1662 / PR #1846](https://github.com/pyrycode/pyrycode-desktop/pull/1846)
-must preserve its outgoing model-announcement cleanup beside this settings-success callback.
-That ticket's builder must enable and pass both skipped prior-own-pick cases in
-`e2e/merged-model-pickers.spec.ts`; its separate live hand-over acceptance remains with that ticket
-and the dispatcher/operator. This settings repair supplies neither announcement invalidation nor
-live switching evidence.
+The #1662 integration preserves both callbacks: announcement invalidation belongs to the switched
+conversation, while settings invalidation belongs to the active owning pane. Both prior-own-pick
+regressions in `e2e/merged-model-pickers.spec.ts` are enabled after the merged #1845 repair. After
+success the outgoing row stays visible and unmarked in the merged list; asserting its disappearance
+would reject the intended picker behavior. [Counted picker evidence](composer-model-menu.md#testing)
+confirms the repairs and retains the separate operator hand-over requirement.
 
 A matching, main-stamped `switchAgentRejected` consumes only pending for that
 host/conversation and stores retryability with fixed

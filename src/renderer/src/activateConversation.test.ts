@@ -3,7 +3,7 @@ import { activateConversation, type ActivateConversationDeps } from './activateC
 import { createSessionIdStore } from './store/sessionIdStore'
 import { createActiveConversationStore } from './store/activeConversationStore'
 import { createRunConfigStore } from './store/runConfigStore'
-import { createRunSettingsWriteStore } from './store/runSettingsWriteStore'
+import { createRunSettingsWriteStore, selectEffectiveSettings, type SettingsChange } from './store/runSettingsWriteStore'
 import type { ConversationCreatedPayload, ConversationSummary } from '@shared/wire/types'
 
 const conversation = (id: string): ConversationCreatedPayload => ({
@@ -42,6 +42,78 @@ function spyDeps(previous: ConversationCreatedPayload | null): {
 }
 
 describe('activateConversation', () => {
+  it.each([
+    ['host-a', 'host-b'], ['host-a', undefined], [undefined, 'host-b']
+  ])('host ownership change %s → %s retires the same-ID settings lifetime', (from, to) => {
+    const outgoing = { ...conversation('shared'), serverId: from }
+    const incoming = { ...conversation('shared'), serverId: to }
+    const active = createActiveConversationStore({ activeConversation: outgoing })
+    const session = createSessionIdStore({ sessionId: 'outgoing-session' })
+    const snapshot = { model: 'foreign-model', effort: 'low', yolo: false,
+      permissionMode: 'default', usedTokens: 0, windowTokens: 200000 }
+    const config = createRunConfigStore({ snapshot })
+    const changes: SettingsChange[] = [
+      { field: 'model', value: 'sonnet' }, { field: 'effort', value: 'high' },
+      { field: 'yolo', value: true }, { field: 'permissionMode', value: 'plan' }
+    ]
+    const writes = createRunSettingsWriteStore({
+      pending: new Map(changes.map((change, i) => [`old-${i}`, change])),
+      confirmed: { model: 'opus', effort: 'max', yolo: true, permissionMode: 'acceptEdits' },
+      error: 'permissionMode'
+    })
+    const deps = realDeps(session, active, config, writes)
+
+    activateConversation(deps, incoming)
+
+    expect(session.getState().sessionId).toBeNull()
+    expect(config.getState().snapshot).toBeNull()
+    expect(writes.getState().pending.size).toBe(0)
+    expect(writes.getState().confirmed).toEqual({})
+    expect(writes.getState().error).toBeNull()
+    config.getState().setSnapshot(snapshot)
+    session.getState().setSessionId('incoming-session')
+    for (const type of ['settingsConfirmed', 'settingsRejected'] as const) {
+      for (let i = 0; i < changes.length; i++) writes.getState().dispatch({ type, changeId: `old-${i}` })
+    }
+    expect(selectEffectiveSettings(config.getState().snapshot, writes.getState())).toEqual({
+      model: 'foreign-model', effort: 'low', yolo: false, permissionMode: 'default'
+    })
+    expect(writes.getState().error).toBeNull()
+    for (const [i, change] of changes.entries()) {
+      writes.getState().dispatch({ type: 'changeDispatched', changeId: `new-${i}`, change })
+      writes.getState().dispatch({ type: 'settingsConfirmed', changeId: `old-${i}` })
+      writes.getState().dispatch({ type: 'settingsRejected', changeId: `old-${i}` })
+      expect(writes.getState().pending.get(`new-${i}`)).toEqual(change)
+      writes.getState().dispatch({ type: 'settingsConfirmed', changeId: `new-${i}` })
+    }
+    expect(writes.getState().confirmed).toEqual({ model: 'sonnet', effort: 'high', yolo: true, permissionMode: 'plan' })
+    writes.getState().dispatch({ type: 'changeDispatched', changeId: 'new-reject', change: changes[0] })
+    writes.getState().dispatch({ type: 'settingsRejected', changeId: 'new-reject' })
+    expect(writes.getState().error).toBe('model')
+    activateConversation(deps, outgoing)
+    expect(writes.getState().pending.size).toBe(0)
+    expect(writes.getState().confirmed).toEqual({})
+    expect(writes.getState().error).toBeNull()
+    expect(session.getState().sessionId).toBeNull()
+  })
+
+  it('same host and ID reopen preserves confirmed choices and refreshes the payload', () => {
+    const outgoing = { ...conversation('shared'), serverId: 'host-a' }
+    const active = createActiveConversationStore({ activeConversation: outgoing })
+    const session = createSessionIdStore({ sessionId: 'retained-session' })
+    const writes = createRunSettingsWriteStore({ pending: new Map(),
+      confirmed: { model: 'sonnet', effort: 'high', yolo: true, permissionMode: 'plan' }, error: null })
+    const before = writes.getState()
+    const requestConversationConfig = vi.fn()
+    const refreshed = { ...outgoing, name: 'Refreshed name' }
+    activateConversation({ ...realDeps(session, active, createRunConfigStore(), writes), requestConversationConfig }, refreshed)
+    expect(writes.getState()).toBe(before)
+    expect(session.getState().sessionId).toBe('retained-session')
+    expect(active.getState().activeConversation).toBe(refreshed)
+    expect(requestConversationConfig).toHaveBeenCalledTimes(1)
+    expect(requestConversationConfig).toHaveBeenCalledWith('shared')
+  })
+
   it('a different id clears the session id, then records the new conversation (AC1)', () => {
     const next = conversation('b')
     const { deps, clearSessionId, setActiveConversation } = spyDeps(conversation('a'))

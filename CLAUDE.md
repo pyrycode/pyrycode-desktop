@@ -55,10 +55,14 @@ the decisions tree and the frozen per-ticket archive are deliberately out of sco
 The e2e tiers, on top of the unit tests:
 
 ```bash
-npm run e2e              # fake-transport Playwright suite (the default tier; real-* specs are gated out)
-npm run e2e:real-claude  # real pyry daemon + real claude liveness specs
+npm run e2e              # default fake-transport + captured client scenarios; no live credentials
+npm run e2e:recorded     # all captured client scenarios with executable launch guard
+npm run e2e:recordings:verify # fresh real captures + both replay sets + drift/timings
+npm run e2e:real-claude  # explicit real pyry daemon + real claude verification
 npm run e2e:real:gate    # the same specs, non-zero exit when zero tests executed
 ```
+
+The normal client path replays every eligible shared real spec. See [recorded tests](docs/recorded-tests.md) and the [inventory and exclusions](docs/client-replay-migration.md). Explicit capture/verify commands require an isolated, source-stamped `PYRY_BIN` and the configured dedicated provider login. Original physical-effect assertions still run live.
 
 The real-claude tiers need `pyry` and `claude` on PATH plus a credential: `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` with a readable `~/.claude.json`. The trap: without the credential the real suite silently skips every spec and still exits 0, so read the skip reasons, never the exit code. `e2e:real:gate` exists to turn that all-skip into a non-zero exit.
 
@@ -79,7 +83,7 @@ src/
 └── shared/          # code used by both sides
     ├── ipc/         # typed command, event, and pairing channels
     └── wire/        # ported wire types + the Noise variant constant
-e2e/                 # Playwright suites: fake-transport default tier + real-daemon/real-claude specs
+e2e/                 # Playwright: default fake transport + captured clients, explicit live specs
 ├── fixtures/        # app launch, fake conversation state, real-daemon spawn
 └── reporters/       # the zero-executed gate
 docs/                # PROJECT-MEMORY, knowledge base (features, decisions, codebase notes), specs

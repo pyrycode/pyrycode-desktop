@@ -29,6 +29,130 @@ On the client, trace the actual inbound parser rather than trusting an old symbo
 A shared model-row lookup can govern behaviour as well as display text.
 Read all callers before broadening what an empty identifier means.
 
+## Replay native storage prerequisite
+
+Node and Electron require different `better-sqlite3` native addon ABIs. Rebuild
+for Electron after installation or a Node rebuild before replay; the
+[replay contract](../../recorded-tests.md#replay-contract) describes the command
+and startup diagnostic. A missing Electron addon can look like captured-contract
+drift: unavailable history storage makes a restarted profile send a fresh
+`thread_catch_up` cursor. Diagnose native storage before changing recorded
+requests or query ordering. The replay fixture checks an in-memory database in
+each opened Electron main process, including relaunches, before device binding.
+The probe proves addon load/open/query/close, not protected-profile persistence.
+History IPC cannot substitute for this pre-pair check because it requires paired
+host membership.
+
+The [effort-default verifier evidence](https://github.com/pyrycode/pyrycode-desktop/pull/2071#issuecomment-6220345807)
+records Linux x64 results for #2069. Failed unchanged-main evidence remains failed:
+**1 executed, 0 passed, 1 failed, 0 skipped**, zero forbidden launches. At request
+41 on connection 2, actual `thread_catch_up` used epoch `""` / version 0 instead
+of the recorded saved epoch / version 14, followed by worker exit 7. Rebuilding
+SQLite for Electron made the identical archived app/capture pass: **1 executed,
+1 passed, 0 failed, 0 skipped**, zero forbidden launches. The
+[plan's evidence paths](../../specs/architecture/2069-replay-native-storage.md#validation-evidence)
+retain `baseline-native.log`, `historical-main-recorded.log` and the successful
+`native-ready.log` under `/tmp/builder-2069/`.
+
+The original focused effort-default scenario was present and passed:
+**1 executed, 1 passed, 0 failed, 0 skipped** (`candidate-focused.log`). Complete
+guarded replay recorded **29 executed, 29 passed, 0 failed, 1 existing
+system-prompt-reset fixme**, zero retries and zero forbidden launches
+(`recorded-final.log` / `recorded-final.json` in the same evidence directory).
+Effort-default, model-recall and daemon-session-settings were present and passed;
+all 29 exchanges had zero remaining requests. Effort-default matched all 96
+requests and emitted 396 frames with the capture, original assertions, strict
+matcher and causal barriers unchanged. These are recorded offline Linux results;
+current provider behavior and live physical effects are not established, and
+macOS is outside this ticket's verification scope.
+
+## Replay inspection after profile relaunch
+
+Bounded `app.evaluate` polling cannot recover persistent inspector await-promise
+loss. At unchanged main `5c0793c7`, controlled inspection of `__threadHistoryAsks`
+failed six consecutive times with `Runtime.callFunctionOn: Promise was collected`.
+Even an awaited constant failed while the same-process synchronous history read
+succeeded with `awaitPromise: false`; scheduling a Node turn did not restore it.
+The original #2069 failures at `340f6a961a` retained only Playwright's rewritten
+destroyed-context error: thread lost `assertReplayNativeStorage` after relaunch
+(6 requests remaining), and history exhausted `mainRead` (14 remaining).
+The unchanged rerun passed both with zero remaining; #2068 hit the same history
+boundary. The controlled reproduction establishes the mechanism at that boundary;
+the original reports do not expose their underlying protocol errors.
+
+[`readReplayMainProcess`](../../../e2e/fixtures/replayNativeStorage.ts) bypasses
+the awaited path only for the SQLite prerequisite and history's synchronous
+`mainRead` observations. Public `evaluateHandle` also forces `awaitPromise` and
+is not an alternative. The adapter obtains the current app's local inspector
+session on every call; it never caches a session across relaunch. Playwright's
+internal `_connection.toImpl(app)._nodeSession` access is isolated here and depends
+on the lockfile-pinned implementation. Dependency upgrades must retain the
+synchronous-inspection regressions and both relaunch replay checks. See the
+[inspection contract](e2e-harness-context-recovery.md#persistent-awaited-inspector-loss)
+for valid empty values, bounded unavailability and mutation boundaries.
+
+The [verifier evidence](https://github.com/pyrycode/pyrycode-desktop/pull/2073#issuecomment-6221253088)
+records Linux x64 on 2026-10-16, implementation `db6c6bb9`, reviewed head
+`20fd3f8b`, main `5c0793c7`. These are retained results, not documentation reruns:
+
+- Controlled regression `checks storage when the inspector loses every
+  awaitPromise acknowledgement`: original **6 executed, 5 passed, 1 failed,
+  0 skipped**; repaired targeted run **23 executed/passed, 0 failed/skipped**,
+  including that case and all four observer-registration cases.
+- Five consecutive focused guarded runs each used two actual workers,
+  `--fully-parallel --workers 2 --retries 0`: **2 executed/passed, 0 failed/skipped**
+  per run, **10 executed/passed, 0 failed/skipped** total. Both named scenarios
+  were present and passed in every run:
+  `daemon-built thread streams, places an agent, reconnects, resets and reopens saved items`
+  and `a real daemon lazily fills a served gap after more than 200 entries written while Electron is closed`.
+  Every thread exchange matched 45 requests/emitted 378 frames; history matched
+  32/emitted 63. All ten had zero remaining requests and zero forbidden launches.
+- Subsequent complete guarded `npm run e2e:recorded` used one worker, retries zero:
+  **29 executed/passed, 0 failed, 1 skipped**. Both named cases were present and
+  passed; all 29 exchanges had zero remaining requests, with zero forbidden launches.
+  The explicit skip remains `real claude picks up a saved channel system prompt at Reset session`.
+- Configured application gate used two actual workers, retries zero:
+  **492 executed, 491 passed, 1 failed, 4 skipped**. Both named cases passed on
+  their first attempt with the same complete exchanges above; all 29 replay
+  exchanges had zero remaining requests. The unrelated visible-tail failure is
+  tracked in #2074; its separate rerun was **2 executed/passed, 0 failed/skipped**.
+  This does not turn the original full gate into a failure-free run. Skips were
+  three macOS-only cases and the system-prompt-reset fixme.
+
+Capture bytes, assertions, strict matching and causal barriers are unchanged:
+Desktop source `00ec821f9380b00cf2dfc0dd4817ee15584106a5`, daemon source
+`58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`, binary SHA256
+`5f5b3b9ce42eda74024637f4929dd720d36c1226ce6e370eb62fbe9e6b22f7c0`.
+The [plan's evidence paths](../../specs/architecture/2072-replay-inspection.md#validation-evidence)
+retain diagnostics, red/green regression reports and `focused-1` through
+`focused-5` plus `recorded-full` reports under `/tmp/builder-2072/`.
+Offline replay establishes no fresh provider/daemon or physical-effect evidence;
+macOS is outside this Linux ticket's verification scope. The SQLite ABI
+prerequisite above still applies independently of inspection availability.
+
+## Owned history mutation evidence
+
+A one-item edit after full replacement can conceal an unbounded production append
+path. Start empty and measure successive additions at growing saved sizes, keeping
+untouched placement bytes as an independent assertion. Measure changed-item
+serialization/protection separately from logarithmic sequence-index reads/writes;
+ciphertext equality alone does not prove that no full scan occurred. Batch fixtures
+must also check each shared authenticated path flushes once, because correct final
+bytes can hide repeated work that stalls mounted browser setup.
+
+Compare separately flushed, coalesced and held-failure progress after fresh protected
+reopen. A completion flag combined with later metadata can erase saved/pending fences;
+carry exact version intervals and certified availability boundaries instead. Include
+same-epoch explicit resets, memory-only holder recreation and lost acknowledgements.
+Individually admitted JSON additions must still fit full-reader aggregate bounds.
+See [owned regression assertions and counted Linux/package validation](chat-history-testing-storage.md#owned-mutation-regressions-and-counted-validation)
+for the final #2044 verifier evidence: 9,103 units executed/passed, 0 failed, 3 skipped;
+435 configured fake cases executed/passed, 0 failed, 3 skipped; packaged owned-update
+reopen present/passed, 1 executed, 0 failed/skipped. These are recorded results on
+`5005bf69`, Linux x64, not checks rerun by documentation. The skips provide no live
+acceptance; macOS and live-Claude are outside that ticket's scope. Historical failures
+and teardown follow-up #2054 remain linked from the testing reference.
+
 ## Authoritative thread read evidence
 
 Renderer units are static `renderToStaticMarkup` in Node: they prove markup and pure decisions,

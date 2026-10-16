@@ -21,6 +21,20 @@ describe('chat history injected handler', () => {
     expect(h.execute).toHaveBeenCalledWith({ operation: 'readList', serverId: 'saved' })
     expect(JSON.stringify(h.event.mock.calls)).not.toContain('secret')
   })
+  it('validates bounded pages before membership and authorizes saved-host opening', async () => {
+    const h = setup(), request = { operation: 'openThreadPage', serverId: 'saved', conversationId: 'chat', limit: 200 }
+    for (const limit of [0, -1, 201, 1.5, '200', null, Infinity])
+      expect(await h.handle(null, { ...request, limit })).toEqual({ status: 'error', code: 'invalid-request' })
+    expect(await h.handle(null, { ...request, path: '/private' })).toEqual({ status: 'error', code: 'invalid-request' })
+    expect(h.loadById).not.toHaveBeenCalled()
+    expect(await h.handle(null, { ...request, serverId: 'other' })).toEqual({ status: 'error', code: 'unknown-host' })
+    expect(h.execute).not.toHaveBeenCalled()
+    for (const operation of ['openThreadPage', 'newestThreadPage', 'beforeThreadPage']) {
+      const page = { ...request, operation, ...(operation === 'beforeThreadPage' ? { continuation: 'opaque' } : {}) }
+      expect(await h.handle(null, page)).toEqual({ status: 'missing' })
+      expect(h.execute).toHaveBeenLastCalledWith(page)
+    }
+  })
   it('contains lookup exceptions and orders membership checks before queued removals', async () => {
     const h = setup()
     h.loadById.mockRejectedValueOnce(new Error('/secret'))

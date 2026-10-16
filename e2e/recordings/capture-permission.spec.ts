@@ -19,10 +19,15 @@ test('capture and verify a controlled real Claude permission exchange', async ({
   test.setTimeout(240_000)
   const output = process.env.PYRY_RECORDING_OUTPUT
   if (!output || !process.env.PYRY_BIN) throw new Error('Capture requires an output file and an explicit test daemon binary')
+  const assertCleanSource = () => {
+    if (execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], { encoding: 'utf8' }).trim())
+      throw new Error('Commit the source before capturing client scenarios')
+  }
+  assertCleanSource()
   const binary = resolve(process.env.PYRY_BIN)
   const build = execFileSync('go', ['version', '-m', binary], { encoding: 'utf8' })
   const daemonRevision = /vcs.revision=([a-f0-9]{40})/.exec(build)?.[1]
-  if (!daemonRevision) throw new Error('Capture daemon must identify its source revision')
+  if (!daemonRevision || !build.includes('vcs.modified=false')) throw new Error('Capture daemon must identify its source revision')
   await withIsolatedElectronApp(async ({ app, page }) => {
     await app.evaluate(() => {
       const capture = (globalThis as CaptureGlobal).__desktopExchangeCapture
@@ -50,7 +55,11 @@ test('capture and verify a controlled real Claude permission exchange', async ({
       })
       const observed = await page.evaluate(() => (window as ObservedWindow).exchangeObservation)
       expect(observed.capabilities).toEqual(expect.arrayContaining(['interactive', 'thread']))
-      const wire: RecordedEntry[] = await app.evaluate(() => (globalThis as CaptureGlobal).__desktopExchangeCapture!.take())
+      const captured = await app.evaluate(() => {
+        const capture = (globalThis as CaptureGlobal).__desktopExchangeCapture!
+        const result = capture.takeConnections(); capture.stop(); return result
+      })
+      const wire = captured.wire
       await info.attach('capture-request-types', { contentType: 'text/plain', body: Buffer.from(JSON.stringify({
         types: wire.filter(entry => entry.direction === 'client').map(entry => entry.message.type)
       })) })
@@ -69,18 +78,19 @@ test('capture and verify a controlled real Claude permission exchange', async ({
         if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, normalize(child)]))
         return value
       }
-      const recording: Recording = { format: 'pyrycode.daemon-exchange', version: 1,
+      const recording: Recording = { format: 'pyrycode.daemon-exchange', version: 2,
         source: { capturedAt: new Date().toISOString(), daemonRevision,
           desktopRevision: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
           daemonBinarySha256: createHash('sha256').update(readFileSync(binary)).digest('hex'),
           claudeVersion: execFileSync('claude', ['--version'], { encoding: 'utf8' }).trim() },
         scenario: { id: 'permission-allow', prompt: PERMISSION_PROMPT, expectedReply: PERMISSION_REPLY,
           allowLabel: observed.allowLabel, ...scenario }, capabilities: observed.capabilities,
-        deviceId: identity.deviceId, wire: normalize(wire) as RecordedEntry[] }
+        deviceId: identity.deviceId, devices: Array(captured.connections).fill(identity.deviceId), closures: captured.closures, wire: normalize(wire) as RecordedEntry[] }
       const encoded = JSON.stringify(recording, null, 2) + '\n'
       for (const name of ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'PYRY_LIVE_CLAUDE_TOKEN'])
         if (process.env[name] && encoded.includes(process.env[name]!)) throw new Error('Invalid daemon recording: credential present')
       parseRecording(encoded)
+      assertCleanSource()
       // Publish only after the full real UI flow and side-effect checks pass. Never overwrite a fixture.
       writeFileSync(output, encoded, { mode: 0o600, flag: 'wx' })
       await info.attach('capture-provenance', { contentType: 'application/json',

@@ -26,7 +26,34 @@ export type ChatHistorySnapshot = { version: 1; serverId: string } & (
   | { kind: 'list'; conversations: ConversationSummary[] }
   | { kind: 'daemon-items'; conversationId: string; thread: ThreadSnapshot }
 )
+type ThreadProgress = {
+  metadata: Omit<ThreadSnapshot, 'items' | 'ranges' | 'arrivalOrder'>
+  /** Exact completed version interval, never inferred from a later live checkpoint. */
+  completion?: { fromVersion: number; version: number }
+  availability?: { start: number; available: boolean }
+}
+export type OwnedThreadChanges = ThreadProgress & {
+  acceptEpoch: boolean
+  resetId?: string
+  /** Earlier owned observations, in admission order, retained through coalescing/retry. */
+  priorProgress?: readonly ThreadProgress[]
+  items: ThreadSnapshot['items']
+  removeIds: readonly number[]
+  ranges: ThreadSnapshot['ranges']
+}
+export type ThreadHistoryPage = {
+  partial: true
+  metadata: Omit<ThreadSnapshot, 'items' | 'ranges' | 'arrivalOrder'>
+  items: ThreadSnapshot['items']; ranges: ThreadSnapshot['ranges']
+  arrivalPositions?: readonly number[]
+  availabilityStart?: number
+  continuation: string | null
+  recovery?: string
+}
 export type ChatHistoryRequest = { serverId: string } & (
+  | { operation: 'openThreadPage' | 'newestThreadPage'; conversationId: string; limit: number }
+  | { operation: 'beforeThreadPage'; conversationId: string; limit: number; continuation: string; recovery?: string }
+  | { operation: 'mutateThread'; conversationId: string; change: OwnedThreadChanges }
   | { operation: 'readList' }
   | { operation: 'removeServer' }
   | { operation: 'readThread'; conversationId: string }
@@ -35,6 +62,7 @@ export type ChatHistoryRequest = { serverId: string } & (
   | { operation: 'replaceThread'; conversationId: string; snapshot: Extract<ChatHistorySnapshot, { kind: 'daemon-items' }> }
 )
 export type ChatHistoryResult =
+  | { status: 'page'; page: ThreadHistoryPage }
   | { status: 'missing' }
   | { status: 'stored'; snapshot: ChatHistorySnapshot }
   | { status: 'ok' }
@@ -123,7 +151,24 @@ function retainedMetadata(value: unknown, hostId: string, conversationId: string
     ...(v.olderAvailable === undefined ? {} : { olderAvailable: bool(v.olderAvailable) }) }
 }
 /** Selected facts share admission with full snapshots, without claiming complete membership. */
-export const threadHistoryCodec = { items: retainedItems, ranges: retainedRanges, metadata: retainedMetadata }
+export const threadHistoryCodec = { items: retainedItems, ranges: retainedRanges, metadata: retainedMetadata,
+  page(value: unknown, hostId: string, conversationId: string): ThreadHistoryPage {
+    const v = record(value), items = retainedItems(v.items), ranges = retainedRanges(v.ranges)
+    const arrivalPositions = optional(v.arrivalPositions, value => array(value, readId))
+    const continuation = v.continuation === null ? null : string(v.continuation)
+    const recovery = optional(v.recovery, localToken)
+    if (v.partial !== true || new Set(items.map(i => i.id)).size !== items.length ||
+        arrivalPositions !== undefined && (arrivalPositions.length !== items.length || new Set(arrivalPositions).size !== items.length) ||
+        continuation !== null && (continuation.length === 0 || continuation.length > 65536 || !/^[A-Za-z0-9_-]+$/.test(continuation))) return invalid()
+    return { partial: true, metadata: retainedMetadata(v.metadata, hostId, conversationId), items, ranges,
+      ...(arrivalPositions === undefined ? {} : { arrivalPositions }),
+      ...(v.availabilityStart === undefined ? {} : { availabilityStart: readId(v.availabilityStart) }), continuation,
+      ...(recovery === undefined ? {} : { recovery }) }
+  },
+  nodes(value: unknown): number {
+    if (typeof value !== 'object' || value === null) return 1
+    return 1 + Object.values(value).reduce<number>((n, child) => n + threadHistoryCodec.nodes(child), 0)
+  } }
 
 function retainedThread(value: unknown, hostId: string, conversationId: string): ThreadSnapshot {
   const v = record(value), items = retainedItems(v.items), ranges = retainedRanges(v.ranges)
@@ -166,9 +211,60 @@ export function parseChatHistorySnapshot(value: unknown): ChatHistorySnapshot {
   return invalid()
 }
 
+function localToken(value: unknown): string {
+  const token = string(value)
+  return token.length > 0 && token.length <= 65536 && /^[A-Za-z0-9_-]+$/.test(token) ? token : invalid()
+}
 export function parseChatHistoryRequest(value: unknown): ChatHistoryRequest {
   const v = record(value)
   const serverId = id(v.serverId)
+  if (v.operation === 'openThreadPage' || v.operation === 'newestThreadPage' || v.operation === 'beforeThreadPage') {
+    const limit = readId(v.limit), conversationId = id(v.conversationId), before = v.operation === 'beforeThreadPage'
+    if (limit < 1 || limit > 200 || Object.keys(v).some(k =>
+      !['operation', 'serverId', 'conversationId', 'limit', ...(before ? ['continuation', 'recovery'] : [])].includes(k))) return invalid()
+    if (v.operation !== 'beforeThreadPage') return { operation: v.operation, serverId, conversationId, limit }
+    const continuation = localToken(v.continuation), recovery = optional(v.recovery, localToken)
+    return { operation: 'beforeThreadPage', serverId, conversationId, limit, continuation,
+      ...(recovery === undefined ? {} : { recovery }) }
+  }
+  if (v.operation === 'mutateThread') {
+    if (Object.keys(v).some(k => !['operation', 'serverId', 'conversationId', 'change'].includes(k))) return invalid()
+    const conversationId = id(v.conversationId), c = record(v.change)
+    if (Object.keys(c).some(k => !['metadata', 'acceptEpoch', 'resetId', 'completion', 'availability', 'priorProgress', 'items', 'removeIds', 'ranges'].includes(k))) return invalid()
+    const metadata = retainedMetadata(c.metadata, serverId, conversationId)
+    const progress = (value: unknown): ThreadProgress => {
+      const p = record(value)
+      const held = retainedMetadata(p.metadata, serverId, conversationId)
+      if (held.epoch !== metadata.epoch) return invalid()
+      const completion = optional(p.completion, value => {
+        const c = record(value), fromVersion = readId(c.fromVersion), version = readId(c.version)
+        if (Object.keys(c).some(k => !['fromVersion', 'version'].includes(k)) ||
+          fromVersion > version || version > held.checkpoint) return invalid()
+        return { fromVersion, version }
+      })
+      const availability = optional(p.availability, value => {
+        const a = record(value)
+        if (Object.keys(a).some(k => !['start', 'available'].includes(k)) || completion === undefined) return invalid()
+        return { start: readId(a.start), available: bool(a.available) }
+      })
+      return { metadata: held, ...(completion === undefined ? {} : { completion }),
+        ...(availability === undefined ? {} : { availability }) }
+    }
+    const priorProgress = optional(c.priorProgress, value => array(value, value => {
+      const p = record(value)
+      if (Object.keys(p).some(k => !['metadata', 'completion', 'availability'].includes(k))) return invalid()
+      return progress(p)
+    }))
+    const items = retainedItems(c.items)
+    const removeIds = array(c.removeIds, readId), ids = new Set(items.map(i => i.id))
+    if (ids.size !== items.length || new Set(removeIds).size !== removeIds.length || removeIds.some(id => ids.has(id))) return invalid()
+    return { operation: 'mutateThread', serverId, conversationId, change: {
+      ...progress(c), acceptEpoch: bool(c.acceptEpoch),
+      ...(c.resetId === undefined ? {} : { resetId: id(c.resetId) }),
+      ...(priorProgress === undefined ? {} : { priorProgress }),
+      items, removeIds, ranges: retainedRanges(c.ranges)
+    } }
+  }
   const operation = choice(v.operation, ['readList', 'replaceList', 'readThread', 'replaceThread', 'removeConversation', 'removeServer'])
   const hasConversation = operation === 'readThread' || operation === 'replaceThread' || operation === 'removeConversation'
   const replacing = operation === 'replaceList' || operation === 'replaceThread'

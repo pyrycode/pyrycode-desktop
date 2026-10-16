@@ -11,6 +11,8 @@ export default defineConfig({ ...normal, main: { ...main, plugins: [
   { name: 'test-only-exchange-capture', enforce: 'pre', resolveId(source, importer) {
     if (source === './noiseSession' && importer?.replaceAll('\\', '/').endsWith('/src/main/transport/noiseRelayDriver.ts'))
       return resolve('e2e/fixtures/captureNoiseSession.ts')
+    if (source === './transport/noiseRelayDriver' && importer?.replaceAll('\\', '/').endsWith('/src/main/daemonConnection.ts'))
+      return resolve('e2e/fixtures/captureNoiseRelayDriver.ts')
     return null
   } }
 ] } })

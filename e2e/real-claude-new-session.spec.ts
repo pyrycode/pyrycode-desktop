@@ -1,5 +1,8 @@
+import { chooseConnectedMenuItem } from './fixtures/chooseConnectedMenuItem'
+import { installTurnCompletionEvidence } from './fixtures/turnCompletionEvidence'
+import { scenarioNonce } from './fixtures/clientScenario'
 import { type Page } from '@playwright/test'
-import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
+import { test, expect, encodePairingPayload } from './fixtures/clientScenario'
 import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
@@ -125,10 +128,11 @@ test('real claude restarts on Reset session and the turn stream survives it', as
   page
 }) => {
   test.setTimeout(SPEC_TIMEOUT_MS)
+  await page.evaluate(installTurnCompletionEvidence)
 
   // Per-run nonces defeat reply caching; the replies' CONTENT is never asserted on, only their arrival.
   // Two distinct prompts so a stale row from the first turn cannot be mistaken for the second's.
-  const runNonce = Date.now()
+  const runNonce = scenarioNonce()
   const firstMessage = `Reply with the single word ready. run=${runNonce}-a`
   const secondMessage = `Reply with the single word ready. run=${runNonce}-b`
 
@@ -173,6 +177,9 @@ test('real claude restarts on Reset session and the turn stream survives it', as
     .toBeGreaterThanOrEqual(1)
   // The turn is over, not merely started: the cursor drops on turn_end. Reset only after it quiesces.
   await expect(page.locator(CURSOR_SELECTOR)).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
+  await expect.poll(() => page.evaluate(() => (window as typeof window & {
+    turnCompletionEvidence: { count: () => number }
+  }).turnCompletionEvidence.count()), { timeout: TURN_TIMEOUT_MS }).toBe(1)
 
   // A precondition read, not the proof: an ordinary turn draws no session boundary, so the delimiter
   // counted after the restart is the restart's. The proof is the positive count below.
@@ -202,11 +209,8 @@ test('real claude restarts on Reset session and the turn stream survives it', as
   }, STATUS_LABEL_SELECTOR)
 
   // --- Restart claude (AC5). The operator's own route: open the Actions menu and pick the row. ---
-  await page.getByRole('button', { name: ACTIONS_LABEL, exact: true }).click()
-  await page
-    .getByRole('menu', { name: ACTIONS_LABEL, exact: true })
-    .getByRole('menuitem', { name: NEW_SESSION_ROW })
-    .click()
+  await chooseConnectedMenuItem(page, page.getByRole('button', { name: ACTIONS_LABEL, exact: true }),
+    ACTIONS_LABEL, NEW_SESSION_ROW)
 
   // EXACTLY ONE DELIMITER, drawn by the REAL daemon's own `session_transition`. This is the assertion the
   // fake tier cannot make: there the marker is a push this spec's author wrote. A timeout here means the

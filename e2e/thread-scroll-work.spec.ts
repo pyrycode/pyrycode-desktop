@@ -96,8 +96,17 @@ test('scroll lookup and same-row growth stay bounded on short and long threads',
     await page.locator('.composer__input').fill('seed')
     await page.getByRole('button', { name: 'Send', exact: true }).click({ timeout: 60_000 })
     await expect(page.locator('[data-thread-role="assistant"]').last()).toContainText(`History row ${size - 1}`, { timeout: 15_000 })
+    const growingStarted = Date.now()
     daemon.pushFrame(delta('growing', 0, 'Growing row\n'))
-    await expect(page.locator('[data-thread-role="assistant"]').last()).toContainText('Growing row')
+    // A pushed row can arrive after the default assertion window on the long thread. Establish
+    // committed input before measuring hook work, with the same allowance as the initial feed.
+    const assistants = page.locator('[data-thread-role="assistant"]')
+    await expect(assistants.last()).toContainText('Growing row', { timeout: 15_000 })
+    await expect(assistants).toHaveCount(size + 1)
+    await test.info().attach(`growing-readiness-${size}`, { body: JSON.stringify({
+      elapsedMs: Date.now() - growingStarted, count: await assistants.count(),
+      tail: await assistants.last().textContent()
+    }), contentType: 'application/json' })
     await settle(page)
     await page.locator('.conversation__thread').evaluate(el => { el.scrollTop = el.scrollHeight * 0.65 })
     await settle(page)

@@ -42,9 +42,44 @@ function harness(write = async (_request: ChatHistoryRequest): Promise<ChatHisto
 }
 
 const threadRequests = (h: ReturnType<typeof harness>) => h.save.mock.calls
-  .map(([request]) => request).filter(request => request.operation === 'replaceThread')
+  .map(([request]) => request).filter(request => request.operation === 'mutateThread')
 
 describe('chat history recording', () => {
+  it('submits owned changes and retains failed work for a later explicit retry', async () => {
+    let fail = true
+    const h = harness(async () => fail ? { status: 'error', code: 'write-failed' } : { status: 'ok' })
+    h.delta('owned')
+    await h.writer.flush()
+    expect(h.save).toHaveBeenCalledTimes(1)
+    expect(h.save.mock.calls[0][0]).toMatchObject({ operation: 'mutateThread', change: {
+      acceptEpoch: true, items: [{ id: 1, content: { text: 'owned' } }]
+    } })
+    fail = false
+    await h.writer.flush()
+    expect(h.save).toHaveBeenCalledTimes(2)
+    await h.writer.stop()
+  })
+  it('retains newer owned work through a held failure and memory-only holder loss', async () => {
+    let release: (value: ChatHistoryResult) => void = () => {}
+    let first = true
+    const h = harness(() => {
+      if (!first) return Promise.resolve({ status: 'ok' })
+      first = false
+      return new Promise(resolve => { release = resolve })
+    })
+    h.delta('one')
+    const draining = h.writer.flush()
+    h.delta(' two'); h.delta(' three')
+    h.threads.getState().deleteConversation('a', 'chat')
+    release({ status: 'error', code: 'write-failed' })
+    await draining
+    expect(h.save).toHaveBeenCalledTimes(1)
+    await h.writer.flush()
+    expect(h.save).toHaveBeenCalledTimes(2)
+    expect(threadRequests(h)[1]).toMatchObject({ change: { acceptEpoch: true,
+      items: [{ rev: 3, content: { text: 'one two three' } }] } })
+    await h.writer.stop()
+  })
   it('requires a received list receipt belonging to the changed host', async () => {
     const h = harness()
     for (const [type, serverId] of [['assistantDelta', 'a'], ['conversationsReceived', null],
@@ -132,7 +167,7 @@ describe('chat history recording', () => {
     h.list()
     h.delta('fresh')
     await h.writer.flush()
-    expect(threadRequests(h)).toMatchObject([{ snapshot: { thread: { items: [{ content: { text: 'fresh' } }] } } }])
+    expect(threadRequests(h)).toMatchObject([{ change: { items: [{ content: { text: 'fresh' } }] } }])
     await h.writer.stop()
   })
 
@@ -153,7 +188,7 @@ describe('chat history recording', () => {
     h.list()
     h.delta('fresh')
     await h.writer.stop()
-    expect(threadRequests(h)).toMatchObject([{ snapshot: { thread: { items: [{ content: { text: 'fresh' } }] } } }])
+    expect(threadRequests(h)).toMatchObject([{ change: { items: [{ content: { text: 'fresh' } }] } }])
   })
 
   it('resumes buffered history when credential removal fails', async () => {
@@ -165,7 +200,7 @@ describe('chat history recording', () => {
     expect(h.save).not.toHaveBeenCalled()
     settle(false)
     await h.writer.flush()
-    expect(threadRequests(h)).toMatchObject([{ snapshot: { thread: { items: [{ content: { text: 'kept' } }] } } }])
+    expect(threadRequests(h)).toMatchObject([{ change: { items: [{ content: { text: 'kept' } }] } }])
     await h.writer.stop()
   })
 
@@ -239,7 +274,7 @@ describe('chat history recording', () => {
     const stopped = h.writer.stop()
     release({ status: 'ok' })
     await vi.waitFor(() => expect(h.save).toHaveBeenCalledTimes(2))
-    expect(threadRequests(h)[1].snapshot.thread.items[0].content).toMatchObject({ text: 'one two three' })
+    expect(threadRequests(h)[1].change.items[0].content).toMatchObject({ text: 'one two three' })
     release({ status: 'ok' })
     await stopped
     h.delta(' after stop')

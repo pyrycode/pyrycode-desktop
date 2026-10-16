@@ -6,36 +6,41 @@ protected collection is a one-time migration source.
 
 ## Buffered replacements
 
-The writer requires `threads` and `lists` and queues only `daemon-items` and `list`
-snapshots for `replaceThread` and `replaceList`. Lists require the matching host's
-`conversationsReceived` receipt; item snapshots carry their authoritative scope.
-The private hydration marker is excluded from saves. Removing a held
-thread discards its pending replacement; memory cleanup alone does not erase disk.
-Confirmed deletion discards pending item replacements, suppresses later
-captures and invalidates the thread's reads/held state. Successful unpair clears
-every held thread for that host, including off-screen scopes and pending reads;
-failure resumes buffered work. `stop()` detaches this observer and awaits owned
-removal/flush work. There is no legacy timeline observer or frame-flush dependency.
-Production composition supplies the runtime item store as
-`threads`; its protected restore and query ownership are described in the
-[thread runtime](thread-runtime.md#restore-recovery-and-cleanup). Local pending
-sends and session prompts are not durable cache content.
+The writer requires `threads` and `lists`. Ordinary thread saves are detached
+`mutateThread` requests from the slice's `owned` change; list saves remain complete
+`replaceList` snapshots requiring the exact host's `conversationsReceived` receipt.
+Hydration publishes no owned change and schedules no save. Store no-ops and unchanged
+ownership references are skipped. Received repair/progress can schedule metadata-only
+work without validating/serializing the held item array. Production supplies
+`threadRuntime.items`; see [restore/query ownership](thread-runtime.md#restore-recovery-and-cleanup).
+Local unaccepted sends and session prompts are not durable cache content.
 
-The renderer writer coalesces bursts on a 200 ms timer in a per-record pending map.
-Canonical projected values are compared with the latest observed value, so
-transient-only changes and unchanged durable records submit no replacement.
-One async drain retains the newest update arriving while a prior write is pending.
-It also compares the final candidate with the last successful save: a burst that
-changes a saved value and then returns to it needs no replacement. Comparing only
-successive queued values misses that case.
+The renderer coalesces bursts on a 200 ms timer per host/conversation/epoch. It
+retains highest item revisions (including strict text-only prefix growth at an equal revision when all other fields match), explicit removals and unioned ranges, while preserving
+metadata/completion/boundary observations in order. An admitted new epoch or explicit
+reset supersedes prior pending ownership. A reset has a unique `resetId`, retained
+through coalescing and recorded in the protected header for idempotent retry after
+a lost acknowledgement. Reaccepting the same epoch without reset preserves saved
+history. Omitted items and memory-only holder loss never imply removal or reset;
+pending ownership survives holder deletion/recreation and navigation.
 
-Detached pending snapshots retain their original coordinates across navigation,
-host switches and disconnects. Removing an authoritative holder cancels its pending
-item replacement and comparison state, without deleting its disk record. A write
-already in flight remains ordered by the drain.
+One serial drain takes a batch while later received changes accumulate separately.
+Success acknowledges only that batch. Failure rejoins it before newer pending work,
+subject to reset/epoch supersession and host/deletion fences. A failed scope is not
+retried again in that drain and failure schedules no immediate retry timer; a later
+explicit flush or received event can retry. This retains work without spinning.
+List canonical-value comparison still suppresses unchanged received lists and bursts
+that return to the last successfully saved list value; it does not compare whole
+thread snapshots.
 
-Confirmed deletion shares this serial drain with replacements. It discards the
-exact conversation's buffered replacements, filters its entry from buffered host lists
+Detached changes keep their original coordinates across host switches and disconnects.
+Main applies completion intervals and oldest-boundary availability against saved
+fences, including unloaded evidence. OR-ing a certification flag while replacing
+metadata would let an earlier completion certify later live progress. See
+[owned admission and progress folding](chat-history-api.md#owned-authoritative-mutations).
+
+Confirmed deletion shares this serial drain with saves. It discards the
+exact conversation's buffered owned changes, filters its entry from buffered host lists
 without reordering peers, and waits behind any already in-flight write. A per-host
 deleted-id set suppresses subsequent daemon-item captures and filters delayed list
 captures for the writer's lifetime, including retained holder mutations and shutdown.
@@ -45,9 +50,9 @@ host list; removal itself is not skipped by replacement deduplication. Successfu
 unpair resets suppression for fresh same-server re-pairing.
 
 Removal entries use `[host, 'removeConversation', id]`, distinct from the item
-snapshot's `[host, 'daemon-items', id]` key. Confirmation cancels the snapshot key
-before queueing removal. Reusing that key would let a later holder clear cancel
-the queued disk deletion. Successful unpair also advances the host generation;
+mutation's `[host, 'daemon-items', id]` key. Confirmation cancels the mutation key
+before queueing removal. Keeping removal distinct prevents content coalescing from
+replacing disk deletion. Successful unpair also advances the host generation;
 completion of an older in-flight save may not restore its successful-comparison
 state. Otherwise fresh identical content after re-pairing could be suppressed.
 
@@ -72,7 +77,9 @@ both families and singleton completion/retirement state in `history_import`.
 Coordinates are exact UTF-16LE BLOBs; caller ids never become filenames. Lists
 validate their decrypted host against the requested owner. Full timeline/thread
 reads reconstruct only the addressed family; list reads decode only their cell.
-Replacements remain full replacements, including identical and empty snapshots.
+Retained replacements remain full replacements, including identical and empty
+snapshots. Ordinary thread mutations preserve unowned items/evidence using the
+[schema-7 authenticated layout](chat-history-api.md#api).
 Removing a conversation validates and deletes both formats and filters its saved
 list in one transaction without reordering peers. A resulting saved-empty list
 remains distinct from missing. Host removal includes off-screen records absent
@@ -121,16 +128,19 @@ no payload plaintext. Unreadable sources and unsupported databases are preserved
 never replaced with empty storage. Before completion, one bad source snapshot
 blocks import; afterward validation is scoped to affected indexed records.
 Retained timelines can outlive lists and grow independently of memory eviction.
-No new cryptography, network work or background pruning is involved.
+Mutable authentication uses standard SHA-256 under OS-protected roots. No new
+network work or background pruning is involved.
 
 ## Window close and app quit
 
 `writer.stop()` unsubscribes the required list and authoritative item observers,
 daemon events and host-removal notifications. It waits for already-started host removals to settle, then cancels the timer and drains
-buffered and in-flight replacements and confirmed conversation removals in order.
+buffered and in-flight owned changes, list replacements and confirmed conversation
+removals in order. Failed owned writes remain pending for a later flush; stop does
+not manufacture a successful commit or retry indefinitely.
 Deletion suppression remains active throughout the flush. Unsubscribing alone
 could acknowledge close before failed
-unpair resumes its buffered snapshots. Settlement cannot schedule a new timer after
+unpair resumes its buffered work. Settlement cannot schedule a new timer after
 stop. Main defers normal window close and `before-quit` teardown
 until preload's `onChatHistoryFlush` callback has stopped the writer and sent a
 `flushed` acknowledgement over `pyry:chat-history-flush`. Main then awaits already

@@ -194,3 +194,19 @@ describe('startFakeRelayForwarder', () => {
     expect(forwarder.url).toMatch(/^ws:\/\/127\.0\.0\.1:\d+$/)
   })
 })
+
+it('forwards every preceding opaque server frame before applying a captured close', async () => {
+  const forwarder = await startFakeRelayForwarder(); cleanups.push(() => forwarder.close())
+  const client = await connect(`${forwarder.url}/v1/client`); cleanups.push(() => client.terminate())
+  const server = await connect(`${forwarder.url}/v1/server`); cleanups.push(() => server.terminate())
+  await forwarder.whenReady()
+  const received: number[] = []
+  client.on('message', data => received.push(Buffer.from(toBytes(data))[0]))
+  const closed = new Promise<number>(resolve => client.once('close', resolve))
+  forwarder.closeClientAfterServerFrames(2, 4413)
+  const first = nextFrame(client); server.send(Buffer.from([1])); await first
+  expect(client.readyState).toBe(WebSocket.OPEN)
+  server.send(Buffer.from([2]))
+  expect(await closed).toBe(4413)
+  expect(received).toEqual([1, 2])
+})

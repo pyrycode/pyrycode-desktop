@@ -244,3 +244,20 @@ it('unknown and duplicate ordinary settings replies keep existing settlement gat
   expect(received).toHaveLength(before + 1)
   off(); h.connection.stop()
 })
+
+it.each(cases)('%s preserves independent conversation routing through the real preload', async (type, payload, eventType) => {
+  const received: StampedDaemonEvent[] = [], off = api.onDaemonEvent(e => received.push(e)), h = await connected()
+  const in_reply_to = h.request(type)
+  h.emit(frame(type, payload, { conversation_id: 'conversation', session_id: 'producer', in_reply_to }))
+  expect(received.at(-1)).toMatchObject({ type: eventType, envelopeConversationId: 'conversation', envelopeSessionId: 'producer', serverId: 'host' })
+  h.emit(frame(type, {}, { conversation_id: 'conversation', session_id: null, session_state_cleared: true }))
+  expect(received.at(-1)).toMatchObject({ type: 'sessionStateCleared', envelopeConversationId: 'conversation', envelopeSessionId: null })
+  off(); h.connection.stop()
+})
+
+it.each([null, '', 7, {}, []])('rejects malformed envelope conversation identity %j', conversation_id => {
+  expect(() => parseInboundMessage(frame('turn_state', { ...c, state: 'idle' }, { conversation_id }))).toThrow(WireDecodeError)
+})
+it('rejects conflicting envelope and payload conversation routes', () => {
+  expect(() => parseInboundMessage(frame('turn_state', { ...c, state: 'idle' }, { conversation_id: 'other' }))).toThrow(WireDecodeError)
+})

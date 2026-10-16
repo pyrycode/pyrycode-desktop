@@ -34,13 +34,27 @@ a second unguarded read. A one-shot injected context-loss error must recover thr
 a real Electron read; listener installation, clicks and pushed events are never replayed.
 
 `real-daemon-history-on-open.spec.ts` keeps recovery in its local
-`asks(): Promise<string[]>` reader. A five-second poll returns only when
-`readMainProcess` yields an actual cursor array, retaining that successful value
-for its caller. The unavailable sentinel never becomes an empty array, a count,
+`mainRead` reader, using the scoped synchronous adapter described below.
+A five-second poll returns only when inspection yields an actual value, retaining
+that successful value for its caller. The unavailable sentinel never becomes an empty array, a count,
 or a successful assertion. Opening-cursor, per-key and settlement checks all use
 this reader; listener installation, 205 posts, protected relaunch and native input
 remain single actions. Polling availability does not wait for a desired count or
 replace the caller's original count assertion.
+
+The shared client scenarios retain that read-only contract. Isolation
+read-back also retries only the exact transient error, for five seconds; it still
+requires the actual switches, an existing window and hidden state when configured.
+The indexed-history lifecycle check uses `readMainProcess` only for the post-close
+window count; its close/activate controls and original `toBe(0)` remain unchanged.
+`historyQueryEvidence.ts` addresses a separate lost installation acknowledgement:
+the installed IPC listener has a main-process identity marker. Inspection must
+confirm that exact listener. Only conclusive absence after transient loss permits
+a second guarded installation; a late evaluation cannot duplicate the listener or
+reset the collected requests. Fatal and inconclusive inspection failures fail setup.
+Unit fault cases execute the real callbacks, covering loss before and after effect,
+retained observations and unrelated failures. Native input, posts and assertions
+remain unchanged. See the [migration inventory](../../client-replay-migration.md).
 
 The [history diagnosis and validation](development-verification-history.md#known-gap-recovery-verification)
 distinguishes a failed post-ArrowUp inspection from a rejected history request.
@@ -49,6 +63,36 @@ while Electron was running; the repaired observer recovered and passed every
 original assertion. That proves read recovery without replay, but neither the
 upstream Electron/Playwright trigger nor the absent original gate report's
 assertion. Changing focus or scroll readiness would address an unproven cause.
+
+### Persistent awaited-inspector loss
+
+`readReplayMainProcess` in `e2e/fixtures/replayNativeStorage.ts` handles a stronger
+failure than one lost acknowledgement: Playwright's public main-process
+`evaluate` and `evaluateHandle` force `awaitPromise`, which can repeatedly lose
+even synchronous results after relaunch. More polling on that path cannot
+restore inspection. The [controlled diagnosis and counted Linux evidence](development-verification.md#replay-inspection-after-profile-relaunch)
+retain the original failures and same-process awaited/synchronous comparison.
+
+Only the replay SQLite prerequisite and history's `mainRead` use this adapter.
+It sends `Runtime.evaluate` through the current ElectronApplication's local
+inspector session with `includeCommandLineAPI: true`, `returnByValue: true` and
+`awaitPromise: false`. It serializes a client-owned synchronous callback called
+with `require('electron')`; daemon-supplied source and scenario mutations must
+never enter this path. The SQLite probe owns only a fresh in-memory database.
+No session is cached across profile relaunch. Playwright upgrades must preserve
+coverage of this internal session access and both relaunch scenarios.
+
+Recognized destroyed-context or collected-promise protocol errors yield
+`NOT_YET_AVAILABLE`; unrelated errors propagate unchanged. Valid `false`, `0`,
+`null`, `undefined` and `[]` remain values. Callback exceptions and promise results
+fail with the static `Replay main-process inspection failed` diagnostic.
+History polls availability for five seconds without changing its original value
+assertions. The native prerequisite polls unavailable reads every 100ms for five
+seconds, then fails `Replay main-process inspection unavailable`; an observed
+false probe still produces the existing Electron SQLite rebuild diagnostic.
+Observer installation continues to confirm the exact listener identity through
+its existing guarded path: recovery neither duplicates listeners nor resets
+collected requests. Input, posts and database setup are never blindly replayed.
 
 **Confirmed control resends.** Recovery needs evidence about the mutation's actual effect;
 an inconclusive read cannot authorize a resend. For renderer event delivery, watch the
@@ -120,6 +164,98 @@ includes that scenario passing (286 executed, 286 passed, 0 failed, 4 skipped).
 These passes supplement the deterministic recovery proof; the reason Electron lost its
 inspection context remains unproven. The original evaluation error and running-at-outcome
 launch-fate do not establish renderer navigation, an app crash or completed installation.
+
+### Disconnected-delivery observations and cleanup
+
+[`disconnectedDelivery.ts`](../../../e2e/fixtures/disconnectedDelivery.ts) is a
+single-consumer helper for `disconnected-message-delivery.spec.ts`. Socket-write
+observations use `readDeliveryObservation`: at most three `readMainProcess` attempts,
+then failure if every read is unavailable. Pending payloads use a five-second poll
+that retains the successful payload snapshot for the delivery assertions. The
+unavailable sentinel never becomes an empty array, zero or a passing assertion;
+unrelated errors propagate unchanged. Installation, forwarding, resume, clicks
+and frame delivery remain single effects outside read recovery.
+
+Installation runs inside `withDeliveryCleanup` so a lost installation acknowledgement
+still reaches cleanup without reinstalling. Restoration releases the held pairing
+read and restores `fs.readFile`, `WebSocket.prototype.send` and the original ordered
+`pyry:command` listener sequence. A retained restored marker makes late restoration
+callbacks no-ops: they cannot duplicate listener registration or forward held messages.
+Read-only confirmation checks the restored flag, released gate and all hook/listener
+identities; an absent installation marker needs no restoration.
+
+Cleanup permits at most two guarded restoration evaluations, each followed by at
+most three confirmation reads, without sleeps. Only transient acknowledgement loss
+followed by conclusive unrestored state permits recovery. Confirmed restoration
+succeeds even when its acknowledgement was lost; unavailable confirmation never
+authorizes replay or success. Exhausted reads/recovery, acknowledged mismatch and
+unrelated errors fail cleanup. App-first closure and unconditional `launch-fate`
+attachment remain owned by `launchPairedApp`.
+
+When cleanup succeeds, the exact original thrown value survives. When both the
+scenario and cleanup fail, `withDeliveryCleanup` retains both originals in
+`AggregateError.errors` **and includes both original stacks in its message**.
+Playwright serializes an Error's message and filtered stack without
+`AggregateError.errors`; retaining the objects alone can hide the original assertion
+in browser failure output. Cleanup failure also fails an otherwise passing scenario.
+
+[`disconnectedDelivery.test.ts`](../../../e2e/fixtures/disconnectedDelivery.test.ts)
+executes the actual evaluated callbacks against fake IPC, file and socket boundaries.
+Coverage distinguishes context loss before/after restoration, transient/exhausted
+confirmation, finite recovery, fatal errors and acknowledged mismatch. It also checks
+installation loss before/after effect, successful/failed resume, gate release,
+listener identity/order, late restoration without duplicate listeners or held-command
+replay, successful falsy reads, and visibility of both original failures.
+
+The [verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/2055#issuecomment-6213389616)
+dated 2026-10-16 confirms the following Linux x64 evidence.
+Controlled baseline: **20 executed, 6 passed, 14 failed, 0 skipped**;
+final fault coverage: **20 executed/passed, 0 failed/skipped**, with all 20 also
+present and passed in the unit gate (**9,123 executed/passed, 0 failed, 3 skipped**).
+A separate reporting regression failed before both original stacks were included.
+Logs remain in `/tmp/builder-2054/fault-before.log`, `reporting-before.log` and
+`fault-final.log`.
+
+| `accepted disconnected messages drain and settle:` mode | Focused executed/passed/failed/skipped | Complete-suite executed/passed/failed/skipped |
+| --- | --- | --- |
+| `automatic` | 10 / 10 / 0 / 0 | 1 / 1 / 0 / 0 |
+| `explicit` | 10 / 10 / 0 / 0 | 1 / 1 / 0 / 0 |
+| `terminal` | 10 / 10 / 0 / 0 | 1 / 1 / 0 / 0 |
+
+Focused `--repeat-each=10 --retries=0` evidence totals **30 executed/passed,
+0 failed/skipped/flaky**, every retry index 0, retained in
+`/tmp/builder-2054/focused-final.json` with empty matching `.stderr`.
+The dispatcher complete configured fake suite (`npx playwright test --reporter=json`)
+at `75c6e5c9b59cf4a1c9243cfc68c432fa208e47a1` totals **435 executed/passed,
+0 failed, 3 existing macOS-only skips, 0 flaky**;
+the table confirms each named mode is present and passed separately from the other
+432 passes. Both clipboard/parallel projects, two configured/actual workers and
+zero retries were unchanged on this host; the historical failing host used four
+workers. This satisfies execution at the existing configuration, without claiming
+a new four-worker run. Retained evidence is
+`/work/Projects/pyrycode-desktop-agents/logs/verifier-gate_#2054_8.log` and matching
+stderr (Vite deprecation warning only). These completed results supersede the
+builder plan/PR's pending full-suite status.
+
+All 30 focused and three complete-suite delivery `launch-fate` attachments report
+running at outcome, exit 0, no signal and no teardown failures. Neither report has
+report-level errors or failed cases. Delivery, socket-write, queue, text/identity/order,
+settlement, duplicate-replay barrier, cross-host isolation and visual assertions remain
+intact, without new skips, test retries, arbitrary sleeps or larger timeouts.
+macOS is outside this ticket's verification scope; no live-Claude acceptance is required.
+
+The [historical failure and artifact limits](https://github.com/pyrycode/pyrycode-desktop/issues/2054#issuecomment-6212772434)
+remain separate: during #2044 on Linux at `0ffe0b12fafa366a43c98990daa1169dffdb83e1`,
+the complete suite recorded **435 executed, 434 passed, 1 failed, 3 skipped**,
+with four workers, both projects and zero retries. The automatic case failed at
+`__delivery1853.restore()`; the packaged protected-storage check passed. Original
+reported paths are `/tmp/builder-2044-final-playwright.json`, matching `.stderr`,
+and `test-results/disconnected-message-deliv-a6f05--drain-and-settle-automatic-parallel/error-context.md`.
+The retrieved builder bundle contained a truncated log tail and empty pointers,
+corroborating the failure and unchanged subsequent passes without those original
+artifacts. Controlled faults prove bounded acknowledgement recovery and reporting;
+they do not identify the upstream Electron/Playwright trigger, establish whether
+the failed cleanup executed, or reveal an earlier assertion it might have concealed.
 
 ### Held thread read registration
 
@@ -220,5 +356,27 @@ the unit gate (9,208 executed/passed, 0 failed, 3 skipped). Fault injection prov
 recovery semantics, not reproduction of the upstream trigger. Counted browser
 [repetition and full-suite evidence](development-verification-layout-and-input.md#composer-native-setup-verification)
 preserve the menu proof separately.
+
+The single-consumer [`focusVisibleTailWindow`](../../../e2e/fixtures/visibleTailFocus.ts)
+serves `visible-tail-read.spec.ts`. Each synchronous control callback finds the live
+window and independently checks `isVisible()` before `show()` and `isFocused()` before
+`focus()`. Partial or late execution cannot repeat completed fields. Every control
+evaluation is followed by up to three read-only inspections through `readMainProcess`,
+without sleeps. Both visible and focused must be confirmed; only transient control
+loss plus a **final conclusive mismatch** permits the second and last guarded attempt.
+An earlier mismatch followed by unavailable inspection cannot authorize resend.
+Unavailable final confirmation, acknowledged mismatch, exhaustion and missing windows
+fail setup; unrelated errors and non-`Error` throws propagate unchanged.
+
+Native confirmation does not establish document readiness. The consuming `focus`
+still deletes its deliberate `document.hasFocus` override, polls genuine
+`document.hasFocus()` and only then dispatches the existing focus notification.
+Clicks, daemon frames, scenario actions and observer installation are never replayed.
+[`visibleTailFocus.test.ts`](../../../e2e/fixtures/visibleTailFocus.test.ts) executes
+the actual control/inspection callbacks against native-state fields, covering loss
+before/after effects, partial/late execution, repeated setup, unavailable reads,
+final-inconclusive rejection, exhaustion, missing windows and fatal/non-`Error` throws.
+See [distinct historical failures and counted Linux proof](development-verification-layout-and-input.md#visible-tail-native-acknowledgement-verification)
+for the original/repaired fault results and repetition/spec/full-gate evidence.
 
 `readAuthentication` keeps its own private copy of the same tolerance.

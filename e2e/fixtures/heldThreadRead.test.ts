@@ -22,13 +22,14 @@ function harness(outcomes: Outcome[] = []) {
   let registrations = 0, evaluations = 0
   const callbacks: Array<(electron: any) => unknown> = []
   const electron = { ipcMain }
-  const app = { evaluate: async (callback: (electron: any) => unknown) => {
-    callbacks.push(callback)
+  const app = { evaluate: async (callback: (electron: any, argument: any) => unknown, argument: unknown) => {
+    const invoke = (electron: any) => callback(electron, argument)
+    callbacks.push(invoke)
     const outcome = outcomes[evaluations++]
     if (outcome === 'before') throw transient()
     if (outcome instanceof Error || typeof outcome === 'number') throw outcome
     if (outcome === 'remove') { handlers.set(channel, original); delete state.__heldThreadRead }
-    const result = await callback(electron)
+    const result = await invoke(electron)
     if (outcome === 'after') throw transient()
     return result
   } } as Pick<ElectronApplication, 'evaluate'>
@@ -39,23 +40,34 @@ function harness(outcomes: Outcome[] = []) {
 afterEach(() => { delete state.__heldThreadRead; delete state.heldThreadReads })
 
 describe('installHeldThreadRead', () => {
+  it('holds the selected older demand after skipped pages and releases its listener', async () => {
+    const h = harness(); await installHeldThreadRead(h.app, 'beforeThreadPage', 2)
+    const handler = h.handlers.get(channel)!
+    for (const operation of ['openThreadPage', 'newestThreadPage', 'beforeThreadPage', 'beforeThreadPage'])
+      await handler({}, { operation })
+    expect(state.heldThreadReads).toBe(0)
+    const held = handler({}, { operation: 'beforeThreadPage' }); await Promise.resolve()
+    expect(state.heldThreadReads).toBe(1)
+    h.electron.ipcMain.emit(release); await held
+    expect(h.electron.ipcMain.listenerCount(release)).toBe(0)
+  })
   it('confirms registration, delegates other operations and restores before returning the held result', async () => {
     const h = harness()
     expect(await installHeldThreadRead(h.app)).toEqual({ installationAttempts: 1, inspectionAttempts: 1, contextLosses: 0 })
     const handler = h.handlers.get(channel)!
     expect(await handler('event', { operation: 'readList' })).toEqual({ status: 'stored' })
-    const pending = handler('held', { operation: 'readThread' })
+    const pending = handler('held', { operation: 'openThreadPage' })
     await Promise.resolve()
     expect(state.heldThreadReads).toBe(1)
     expect(h.electron.ipcMain.listenerCount(release)).toBe(1)
     // A concurrent read delegates, rather than installing a second release listener.
-    expect(await handler('next', { operation: 'readThread' })).toEqual({ status: 'stored' })
+    expect(await handler('next', { operation: 'openThreadPage' })).toEqual({ status: 'stored' })
     expect(state.heldThreadReads).toBe(1)
     h.electron.ipcMain.emit(release)
     expect(await pending).toEqual({ status: 'stored' })
     expect(h.handlers.get(channel)).toBe(h.original)
     expect(h.electron.ipcMain.listenerCount(release)).toBe(0)
-    expect(h.calls).toEqual([['event', { operation: 'readList' }], ['held', { operation: 'readThread' }], ['next', { operation: 'readThread' }]])
+    expect(h.calls).toEqual([['event', { operation: 'readList' }], ['held', { operation: 'openThreadPage' }], ['next', { operation: 'openThreadPage' }]])
   })
 
   it('confirms absence before retrying loss before effect', async () => {
@@ -101,7 +113,7 @@ describe('installHeldThreadRead', () => {
     const h = harness(['before'])
     await installHeldThreadRead(h.app)
     const wrapper = h.handlers.get(channel)!
-    const pending = wrapper({}, { operation: 'readThread' })
+    const pending = wrapper({}, { operation: 'openThreadPage' })
     await Promise.resolve()
     await h.callbacks[0](h.electron)
     expect(h.handlers.get(channel)).toBe(wrapper)

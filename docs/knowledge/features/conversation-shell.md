@@ -216,6 +216,12 @@ target's eligibility, but cannot upgrade it from the latest summary. With versio
 a same-row append and summary 11 received before commit cannot publish 11 through those
 callbacks. The complete new content and its paired inputs must first commit.
 
+The visible-tail browser spec's [native focus recovery](e2e-harness-context-recovery.md#native-window-setup)
+confirms window state before removing its deliberate document-focus override and
+requiring genuine `document.hasFocus()`. Its focus notification only rechecks the
+committed evidence above. See [counted Linux verification](development-verification-layout-and-input.md#visible-tail-native-acknowledgement-verification);
+recovered native acknowledgement alone grants no read target.
+
 The document must be focused and visible, the reader closed, and the actual newest shown
 source row's trailing edge inside the thread viewport between measured top/input chrome.
 Scrolling above it, chrome overlap, a collapsed ancestor or a folded tool run excludes the

@@ -30,15 +30,38 @@ function harness(write = async (_request: ChatHistoryRequest): Promise<ChatHisto
   const writer = createChatHistoryWriter({ threads, lists, write: save, log,
     receipt: () => ({ type: 'assistantDelta', serverId: 'a' }),
     subscribeEvents: on => { listener = on; return () => { listener = () => {} } }, schedule: () => () => {} })
-  const writes = () => save.mock.calls.map(([r]) => r).filter(r => r.operation === 'replaceThread')
+  const writes = () => save.mock.calls.map(([r]) => r).filter(r => r.operation === 'mutateThread')
   return { threads, writer, save, log, writes, event: (event: StampedDaemonEvent) => listener(event) }
 }
 const read = (threads: ReturnType<typeof createThreadItemStore>, response: Promise<ChatHistoryResult>) =>
-  readSavedTimeline({ threads, read: () => response, log: () => {} }, 'a', 'c')
+  readSavedTimeline({ threads, read: () => response.then(project), log: () => {} }, 'a', 'c')
+function project(result: ChatHistoryResult): ChatHistoryResult {
+  if (result.status !== 'stored' || result.snapshot.kind !== 'daemon-items') return result
+  const { items, ranges, arrivalOrder, ...metadata } = result.snapshot.thread
+  return { status: 'page', page: { partial: true, metadata: { ...metadata, hostId: result.snapshot.serverId, conversationId: result.snapshot.conversationId }, items, ranges, continuation: null,
+    ...(arrivalOrder === undefined ? {} : { arrivalPositions: items.map(i => arrivalOrder.indexOf(i.id)) }) } }
+}
+
+it('partial opening preserves omitted availability ownership and sparse arrival positions', async () => {
+  const target = createThreadItemStore(), api = target.getState()
+  const page = { partial: true as const, metadata: { hostId: 'a', conversationId: 'c', epoch: 'e',
+    version: 20, checkpoint: 20, repair: null, olderAvailable: false },
+    items: [{ ...item(10), id: 2 }, item(10)], ranges: [{ start: 900, end: 910 }],
+    arrivalPositions: [800, 20], availabilityStart: 1, continuation: null }
+  const handle = api.beginLocalRead('a', 'c')!
+  live(target, 40)
+  api.beginBatch('a', 'c', 'e')!.commit({ fromVersion: 0, version: 40,
+    ranges: [{ start: 100, end: 110 }], olderAvailable: true })
+  handle.complete(page)
+  api.beginBatch('a', 'c', 'e')!.commit({ fromVersion: 40, version: 50,
+    ranges: [{ start: 50, end: 60 }], olderAvailable: true })
+  expect(api.snapshot('a', 'c')).toMatchObject({ olderAvailable: false, arrivalOrder: [1, 2] })
+  expect([...target.getState().hosts.get('a')?.get('c')?.residency?.arrivalPositions ?? []]).toEqual([[2, 800], [1, 20]])
+})
 
 describe('daemon item cache ownership', () => {
   it.each(['matching', 'missing', 'error', 'reject', 'host', 'conversation', 'timeline', 'list', 'ok'] as const)(
-    'requests only readThread and admits matching daemon items: %s', async outcome => {
+    'requests bounded opening and admits matching daemon items: %s', async outcome => {
       const source = createThreadItemStore(), target = createThreadItemStore()
       live(source)
       const snapshot = saved(source.getState().snapshot('a', 'c')!)
@@ -52,10 +75,10 @@ describe('daemon item cache ownership', () => {
           : outcome === 'list' ? { version: 1, kind: 'list', serverId: 'a', conversations: [] } : snapshot }
       const log = vi.fn(), read = vi.fn(async () => {
         if (outcome === 'reject') throw Error('private detail')
-        return response
+        return project(response)
       })
       await readSavedTimeline({ threads: target, read, log }, 'a', 'c').done
-      expect(read.mock.calls).toEqual([[{ operation: 'readThread', serverId: 'a', conversationId: 'c' }]])
+      expect(read.mock.calls).toEqual([[{ operation: 'openThreadPage', serverId: 'a', conversationId: 'c', limit: 200 }]])
       expect(target.getState().snapshot('a', 'c')).toEqual(outcome === 'matching' ? snapshot.thread : null)
       if (outcome === 'matching') {
         await readSavedTimeline({ threads: target, read, log }, 'a', 'c').done
@@ -107,36 +130,101 @@ describe('daemon item cache ownership', () => {
     expect(target.getState().snapshot('a', 'c')?.items.map(item => item.id)).toEqual([2, 1])
     expect(target.getState().snapshot('a', 'c')?.arrivalOrder).toEqual([2, 1])
   })
-  it.each(['stored', 'missing', 'failure', 'rejection'] as const)('ignores delayed read outcomes after live admission: %s', async kind => {
+  it.each(['missing', 'failure', 'rejection'] as const)('ignores delayed read outcomes after live admission: %s', async kind => {
     const target = createThreadItemStore(), wait = held<ChatHistoryResult>()
     const task = read(target, kind === 'rejection' ? wait.promise.then(() => { throw Error('private') }) : wait.promise)
-    const source = createThreadItemStore(); live(source)
     live(target, 50)
     const before = target.getState().snapshot('a', 'c')
-    wait.resolve(kind === 'stored' ? { status: 'stored', snapshot: saved(source.getState().snapshot('a', 'c')!) }
-      : kind === 'missing' ? { status: 'missing' } : { status: 'error', code: 'unreadable' })
+    wait.resolve(kind === 'missing' ? { status: 'missing' } : { status: 'error', code: 'unreadable' })
     await task.done
     expect(target.getState().snapshot('a', 'c')).toBe(before)
   })
-  it.each(['cancel', 'repeat', 'epoch', 'conversation', 'host', 'all'] as const)(
+  it.each([true, false])('merges delayed restoration with admitted revisions and original arrival ties: metadata=%s', async metadata => {
+    const h = harness(), wait = held<ChatHistoryResult>(), task = read(h.threads, wait.promise), api = h.threads.getState()
+    const items = [1, 2, 3, 4].map(id => ({ ...item(10), id, content: { text: 'saved' } }))
+    const snapshot: ThreadSnapshot = { hostId: 'a', conversationId: 'c', epoch: 'e', items,
+      version: 10, checkpoint: 10, repair: null, ranges: [], ...(metadata ? { arrivalOrder: [2, 1, 3, 4] } : {}) }
+    for (const [id, rev] of [[1, 9], [2, 10], [3, 11], [5, 12]]) api.applyUpdate('a', {
+      type: 'thread_item_added', payload: { conversation_id: 'c', epoch: 'e', version: 20,
+        item: { ...item(rev), id, content: { text: 'live' }, timestamp: '1900' } } })
+    await h.writer.flush(); const before = h.writes().length
+    wait.resolve({ status: 'stored', snapshot: saved(snapshot) }); await task.done
+    expect(api.snapshot('a', 'c')?.items.map(i => [i.id, i.rev, i.content])).toEqual(
+      (metadata ? [2, 1, 3, 4, 5] : [1, 2, 3, 4, 5]).map(id => [id,
+        id === 3 ? 11 : id === 5 ? 12 : 10, { text: [2, 3, 5].includes(id) ? 'live' : 'saved' }]))
+    await h.writer.flush(); expect(h.writes()).toHaveLength(before)
+    api.applyUpdate('a', { type: 'thread_text_append', payload: { conversation_id: 'c', epoch: 'e',
+      version: 30, item_id: 2, base_rev: 10, rev: 11, text: '!' } })
+    await h.writer.flush(); expect(h.writes()).toHaveLength(before + 1)
+    await h.writer.stop()
+  })
+  it.each([false, true])('preserves saved obligations while folding admitted progress: completion=%s', async complete => {
+    const target = createThreadItemStore(), api = target.getState(), wait = held<ChatHistoryResult>(), task = read(target, wait.promise)
+    live(target, 400)
+    const batch = api.beginBatch('a', 'c', 'e')!
+    batch.applyItems([item(350)], 350)
+    if (complete) batch.commit({ fromVersion: 0, version: 250, ranges: [{ start: 20, end: 30 }], olderAvailable: true })
+    else batch.abandon()
+    const snapshot: ThreadSnapshot = { hostId: 'a', conversationId: 'c', epoch: 'e', items: [item(300)],
+      version: 300, checkpoint: 100, uncommittedVersion: 250, repair: { fromVersion: 100, throughVersion: 150 },
+      ranges: [{ start: 1, end: 10 }], olderAvailable: false }
+    wait.resolve({ status: 'stored', snapshot: saved(snapshot) }); await task.done
+    expect(api.snapshot('a', 'c')).toMatchObject({ version: 400, checkpoint: complete ? 250 : 100,
+      uncommittedVersion: 350, repair: complete ? null : snapshot.repair, olderAvailable: false,
+      ranges: complete ? [{ start: 1, end: 10 }, { start: 20, end: 30 }] : snapshot.ranges })
+    live(target, 500)
+    expect(api.snapshot('a', 'c')?.checkpoint).toBe(complete ? 250 : 100)
+  })
+  it.each(['cancel', 'repeat', 'epoch', 'reset', 'conversation', 'host', 'all'] as const)(
     'invalidates local reads across cancellation and reused scope identities: %s', async kind => {
+    for (const result of ['stored', 'missing', 'failed'] as const) {
       const target = createThreadItemStore(), source = createThreadItemStore(); live(source)
       const wait = held<ChatHistoryResult>(), task = read(target, wait.promise), api = target.getState()
       if (kind === 'cancel') task.cancel()
       if (kind === 'repeat') api.beginLocalRead('a', 'c')!.cancel()
       if (kind === 'epoch') { api.acceptEpoch('a', 'c', 'different'); api.acceptEpoch('a', 'c', 'e') }
+      if (kind === 'reset') { live(target); api.acceptEpoch('a', 'c', 'e', true) }
       if (kind === 'conversation') api.deleteConversation('a', 'c')
       if (kind === 'host') api.removeHost('a')
       if (kind === 'all') api.clearAll()
+      live(target, 50)
       const before = api.snapshot('a', 'c')
-      wait.resolve({ status: 'stored', snapshot: saved(source.getState().snapshot('a', 'c')!) }); await task.done
+      wait.resolve(result === 'stored' ? { status: 'stored', snapshot: saved(source.getState().snapshot('a', 'c')!) }
+        : result === 'missing' ? { status: 'missing' } : { status: 'error', code: 'unreadable' }); await task.done
       expect(api.snapshot('a', 'c')).toBe(before)
-      if (kind !== 'epoch') {
+      if (kind !== 'epoch' && kind !== 'reset') {
+        api.deleteConversation('a', 'c')
         const fresh = api.beginLocalRead('a', 'c')!
         fresh.complete(source.getState().snapshot('a', 'c'))
         expect(api.snapshot('a', 'c')?.items).toEqual([item()])
       }
+    }
     })
+  it.each(['empty', 'epoch', 'kind', 'invalid'] as const)('settles saved %s without replacing live authority', async kind => {
+    const target = createThreadItemStore(), wait = held<ChatHistoryResult>(), task = read(target, wait.promise)
+    live(target, 50)
+    const before = target.getState().snapshot('a', 'c')!
+    const snapshot: ThreadSnapshot = { hostId: 'a', conversationId: 'c', epoch: kind === 'epoch' ? 'other' : 'e',
+      version: 10, checkpoint: 10, repair: null, ranges: [], items: kind === 'empty' ? []
+        : [{ ...item(100), kind: kind === 'kind' ? 'tool_call' : 'assistant_message' }],
+      ...(kind === 'invalid' ? { arrivalOrder: [999] } : {}) }
+    wait.resolve({ status: 'stored', snapshot: saved(snapshot) }); await task.done
+    expect(target.getState().snapshot('a', 'c')?.items).toEqual(before.items)
+    if (kind === 'kind') expect(target.getState().snapshot('a', 'c')?.repair).toEqual({ fromVersion: 50, throughVersion: 50 })
+    if (kind === 'invalid' || kind === 'epoch') expect(target.getState().snapshot('a', 'c')).toBe(before)
+  })
+  it('keeps an admitted batch handle valid when its delayed saved owner settles', async () => {
+    const target = createThreadItemStore(), wait = held<ChatHistoryResult>(), task = read(target, wait.promise)
+    live(target, 20)
+    const api = target.getState(), batch = api.beginBatch('a', 'c', 'e')!
+    batch.applyItems([{ ...item(25), id: 2 }], 25)
+    wait.resolve({ status: 'stored', snapshot: saved({ hostId: 'a', conversationId: 'c', epoch: 'e',
+      version: 10, checkpoint: 10, items: [{ ...item(), id: 3 }], repair: null, ranges: [] }) })
+    await task.done
+    expect(batch.commit({ fromVersion: 10, version: 25, ranges: [] })).toEqual({ type: 'applied' })
+    expect(api.snapshot('a', 'c')).toMatchObject({ checkpoint: 25, uncommittedVersion: 0 })
+    expect(api.snapshot('a', 'c')?.items.map(i => i.id)).toEqual([3, 1, 2])
+  })
   it('flushes the newest snapshot through a held write and epoch replacement', async () => {
     const wait = held<ChatHistoryResult>(), started = held<void>()
     let first = true
@@ -144,7 +232,7 @@ describe('daemon item cache ownership', () => {
     live(h.threads); const flushing = h.writer.flush(); await started.promise
     live(h.threads, 20); live(h.threads, 5, 'a', 'new'); live(h.threads, 30, 'b')
     wait.resolve({ status: 'ok' }); await flushing
-    expect(h.writes().map(r => [r.serverId, r.snapshot.thread.epoch, r.snapshot.thread.version])).toEqual([
+    expect(h.writes().map(r => [r.serverId, r.change.metadata.epoch, r.change.metadata.version])).toEqual([
       ['a', 'e', 10], ['a', 'new', 5], ['b', 'e', 30] ])
     await h.writer.stop(); live(h.threads, 40)
     expect(h.writes()).toHaveLength(3)
@@ -160,7 +248,7 @@ describe('daemon item cache ownership', () => {
     live(h.threads, 40)
     wait.resolve({ status: 'ok' }); await flushing
     expect(h.writes().filter(r => r.serverId === 'a')).toHaveLength(1)
-    expect(h.save.mock.calls.map(([r]) => r.operation)).toEqual(['replaceThread', 'replaceThread', 'removeConversation'])
+    expect(h.save.mock.calls.map(([r]) => r.operation)).toEqual(['mutateThread', 'mutateThread', 'removeConversation'])
     expect(h.threads.getState().snapshot('b', 'c')?.version).toBe(30)
     await h.writer.stop()
   })
@@ -180,15 +268,16 @@ describe('daemon item cache ownership', () => {
   })
   it.each([true, false])('unpair invalidates old work and preserves another host: success=%s', async removed => {
     const h = harness(); live(h.threads); live(h.threads, 10, 'a', 'e', 'offscreen'); live(h.threads, 20, 'b')
-    const wait = held<ChatHistoryResult>(), task = readSavedTimeline({ threads: h.threads, read: () => wait.promise, log: () => {} }, 'a', 'unread')
+    const wait = held<ChatHistoryResult>(), task = readSavedTimeline({ threads: h.threads, read: () => wait.promise.then(project), log: () => {} }, 'a', 'unread')
     const settle = beginChatHistoryRemoval('a')
     await h.writer.flush(); expect(h.writes().map(r => r.serverId)).toEqual(['b'])
+    live(h.threads, 15, 'a', 'e', 'unread')
     settle(removed)
     wait.resolve({ status: 'stored', snapshot: saved({ ...h.threads.getState().snapshot('b', 'c')!, hostId: 'a', conversationId: 'unread' }) }); await task.done
     await h.writer.flush()
     expect(h.threads.getState().snapshot('a', 'offscreen') === null).toBe(removed)
     expect(h.threads.getState().snapshot('a', 'unread') === null).toBe(removed)
-    if (removed) { live(h.threads, 5); await h.writer.flush(); expect(h.writes().at(-1)?.snapshot.thread.version).toBe(5) }
+    if (removed) { live(h.threads, 5); await h.writer.flush(); expect(h.writes().at(-1)?.change.metadata.version).toBe(5) }
     expect(h.threads.getState().snapshot('b', 'c')?.version).toBe(20)
     await h.writer.stop()
   })

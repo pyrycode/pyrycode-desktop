@@ -35,15 +35,16 @@ too: a model pick or settings response preserves the batch, active question, sel
 and Other text. [Continue](question-panel-continue-answer.md) answers that original batch;
 closing it reveals the preserved composer draft.
 
-Picking a different model uses the existing model-only `set_session_settings` write for
-the active session, without sending a chat turn or resolving the question. This relies on
+Picking an own-agent model uses the existing model-only `set_session_settings` write for
+the active session, without sending a chat turn or resolving the question. The own-agent write relies on
 [daemon control-request delivery](https://github.com/pyrycode/pyrycode/issues/2280), which
 can reach the child while it is waiting for an answer. The optimistic label and rollback
 remain immediate; availability during questions adds no wait-for-next-turn label policy.
+An other-agent row uses the confirmed switch path below.
 
 ## `composerModelMenuModel`, one pure function deciding all three renderings
 
-`composerModelMenuModel(models, layers, agent)` decides the footer label, visible options and
+`composerModelMenuModel(models, layers, agent, pendingSwitchRow?)` decides the footer label, visible options and
 `currentId`. The [Run configuration sheet](conversation-shell-run-configuration.md#run-configuration-model-section-daemon-published-rows-975)
 uses the same decision for its Model radios. Keep these inputs separate:
 
@@ -60,21 +61,26 @@ pending-over-confirmed precedence without the snapshot base. `stored` is `snapsh
 a real empty saved model remains `''`. The announcement is conversation-scoped through
 [Announced-model store](announced-model-store.md).
 
-**Visible rows.** Filter to the conversation's agent, then omit every raw `value === 'default'` row.
-Retain all other rows in published order, with no deduplication or synthesis. Claude dropdown labels
-use `modelFamily(row.value)`, falling back to `display_name`; Codex labels use `display_name` verbatim.
-The sheet keeps published display names and resolutions. Option IDs and writes remain the raw `value`.
+**Visible rows.** Both agents share one list, omitting only raw `value === 'default'` rows.
+Retain the daemon's rows and order without headers, synthesis or deduplication; the daemon supplies
+newest-per-family choices. `composerModelRowLabel` uses Claude's `modelFamily(row.value)` with
+`display_name` fallback, and Codex's exact `display_name`. The sheet keeps published names and
+resolutions. Option IDs are strings of the visible row positions, not model values, so duplicate
+values within or across agents remain separate choices. The view recovers the actual clicked row
+from that same non-default list; settings and switch payloads still carry its raw `value`.
 The internal Claude default row stays available for recommendation lookup and
 [effort offerings](composer-effort-menu.md), even though neither model surface offers it.
 
 **Explicit marking.** A non-empty pending or confirmed pick wins; otherwise a saved model other than
 `''` or `'default'` is explicit. Mark only a visible row whose raw `value` equals that choice. An unmatched
-choice marks nothing, even if its resolution or family would match. Duplicate explicit values remain
-carried and can share the same marker; ambiguity stopping below applies to inherited matching.
+choice marks nothing, even if its resolution or family would match. Matching stays within
+`modelRowsFor(models, agent)`: a foreign row cannot acquire the current marker. Duplicate explicit
+values remain carried; the first own-agent match supplies the single positional marker.
+Ambiguity stopping below applies to inherited matching.
 A [remembered model](remembered-model.md) saved onto a new chat is an explicit choice and takes this rule.
 
 **Inherited marking.** With no pick and saved `''` or `'default'`, use a non-empty announcement against
-the visible rows in this order:
+the own-agent non-default rows in this order:
 
 1. Exact raw `row.value === announced`.
 2. Exact raw `row.resolved_model === announced`.
@@ -123,21 +129,23 @@ The table assumes a selection callback is available; without one, every held lab
 
 | Input | Rendering |
 |---|---|
-| no snapshot (`stored === null`), no pick and no announcement, even with a held model list | `null`: no trigger |
-| snapshot, pick or announcement available, but no visible non-default rows | inert label span, no chevron, role, tabindex, handler or options anchor |
-| snapshot, pick or announcement available, and visible non-default rows | `ComposerOptionsMenu` with the shared `currentId` |
+| no snapshot (`stored === null`), no pick, announcement or pending switch, even with a held model list | `null`: no trigger |
+| snapshot, pick, announcement or pending switch available, but no visible non-default rows | inert label span, no chevron, role, tabindex, handler or options anchor |
+| snapshot, pick, announcement or pending switch available, and visible non-default rows | `ComposerOptionsMenu` with the shared `currentId` |
 
 A snapshot naming no model is inheritance, even when the recommendation is unavailable: it can render
-`Model`. No snapshot is a distinct loading state and stays absent until a pick, announcement or snapshot
-arrives. The inert arm bypasses `ComposerOptionsMenu`, which would otherwise advertise and open an empty
+`Model`. No snapshot is a distinct loading state and stays absent until a pick, announcement,
+snapshot or pending switch arrives. The inert arm bypasses `ComposerOptionsMenu`, which would otherwise advertise and open an empty
 popup. The shared footer-button class has no pointer cursor and the inert arm omits the chevron.
 
 ## Per-agent filtering (#1651)
 
-A merged `model_list` contains both agents' rows, while each conversation can choose only its own agent's
-models. `modelRowsFor(models, agent)` preserves order and treats an untagged row as Claude; the model
-surfaces then exclude raw `value === 'default'`. Inherited announcement matching uses the same three tiers
-for both agents, entirely within those visible rows. Foreign rows cannot cause ambiguity or a match.
+Since #1662, listing spans both agents while current-model matching and capability lookups retain
+\#1651's agent boundary. `modelRowsFor(models, agent)` preserves order and treats an untagged row as
+Claude. Explicit and inherited matching use only that agent's non-default rows; foreign rows cannot
+cause ambiguity or a current match. Widening the list must not widen `publishedRowFor`, `effortRowFor`,
+permission offerings or recommendation lookup. Route using the clicked row's `agent`, never its
+model string: identical raw values can legitimately belong to different agents.
 
 `composerModelRowLabel` keys on the row's own agent: Claude uses the value-family rule, Codex uses the
 daemon's display name. Codex trigger labels remain daemon display names or raw announcements, with `Model`
@@ -154,16 +162,25 @@ for its agent resolution.
 ## The write
 
 The container supplies optional `onSelect` only for an addressable session whose
-unambiguous owning host reports `connected`. Otherwise the view keeps any held
-label as an inert span and unmounts an open menu, even with published rows present.
-The callback calls `changeConnectedSetting(conversationId, { field: 'model', value })`;
-that wrapper rechecks current stores before `changeSetting` can send or create an
-optimistic change. Bridge access stays at interaction time, never during render.
+resolved owning host reports `connected`. Selected pane coordinates take precedence;
+without matching selected coordinates, ownership must be unambiguous in the flattened list.
+Otherwise the view keeps any held label as an inert span and unmounts an open menu, even
+with published rows present.
+The callback passes the actual row to `selectConnectedModel(conversationId, row)`, which rechecks
+connection, addressability and the conversation's current agent at click time. It passes
+`conversationHostNow(conversationId)` to `selectAgentForConversation`, matching the
+`useConversationHost` subscription used by `useConversationAgent`. Two hosts may publish the
+same conversation ID with different agents: falling back to the flattened list here would
+default to Claude and either write a foreign model without confirmation or ignore a Codex pick.
+An own-agent row calls `changeConnectedSetting(conversationId, { field: 'model', value: row.value })`; an other-agent
+row calls `openAgentSwitch` with that exact row. Untagged means Claude in both directions. Opening
+sends no settings write or switch command. The switch store also revalidates the active owning pane
+and outgoing agent on confirmation. Bridge access stays at interaction time, never during render.
 See [the shared settings availability contract](conversation-shell-run-configuration.md#run-configuration-modeleffortyolo-sections-188),
 which also applies to the model-only footer during questions. Reconnection restores
 eligible controls without replaying blocked choices.
 
-Picking a row moves the trigger's label to the optimistic value at once and reverts it if the change is
+Picking an own-agent row moves the trigger's label to the optimistic value at once and reverts it if the change is
 rejected — not local state: `selectEffectiveSettings`'s pending-overlay-over-confirmed-over-snapshot
 composition is what moves it, and the same composition reverts it when the store drops the pending record
 on rejection. The menu itself has no error line in its 20px footer; the
@@ -172,6 +189,43 @@ and run-configuration sheet name the rejection, including while answering a ques
 This trigger also does not read
 `supports_auto_mode` and does not touch the permission mode — `SettingsChange` has no such field to send,
 and that control belongs to #682.
+
+## Confirmed switch presentation and success (#1662)
+
+`usePendingAgentSwitchRow(conversationId)` supplies a retained row only for `pending` status whose
+`serverId` equals the conversation's current owning host. It subscribes through
+`useConversationHost`, so selected host coordinates resolve colliding conversation IDs and
+changing the selected host under the same ID immediately removes a foreign pending overlay.
+Matching only the conversation ID would show another host's choice; resolving only flattened
+ownership would hide a valid selected-host pending choice. Opening or cancelling a confirmation
+installs no model overlay. Switch records pending synchronously before its one command; further
+other-agent picks open no dialog and send nothing. Effort is included only if the displayed effort
+at confirmation is supported by the picked row, as described in
+[the switch contract](switch-agent-request.md#renderer-confirmation-and-read-surface).
+
+Pending overrides the footer label with `composerModelRowLabel` of the retained row and marks that
+presentation in both lists. Matching compares agent (absent = Claude), raw value, display name and
+resolution, so another target row sharing its value cannot steal the marker. If that presentation
+is no longer published, keep the retained label but mark nothing. The switch overlay stays outside
+`runSettingsWriteStore`; effort and permission offerings still use outgoing settings and agent.
+A correlated owning-host refusal or abandonment removes the overlay and reveals the underlying
+model reading. Navigation retains pending for its conversation; disconnect, host removal or removal
+of the owning conversation abandons it. Reconnect never resends.
+
+A fresh owning-host conversation list establishing the target agent ends pending through the
+existing outcome path. Its `onSucceeded(conversationId)` clears only that conversation's outgoing
+announcement with `clearAnnouncedModelFor`, even when its pane is closed. The separate
+`onActiveSucceeded` resets outgoing settings and requests incoming settings only for the active
+owning pane, including clearing its snapshot and permission polling. Both callbacks are necessary:
+a retained announcement can outrank an incoming saved model even with no prior settings write, while
+a confirmed settings override can outrank the new snapshot independently. Opening, Cancel, refusal,
+foreign/unchanged lists and abandonment clear neither underlying reading. See
+[announcement lifetime](announced-model-store.md#the-store-srcrenderersrcstoreannouncedmodelstorets)
+and [the repaired settings lifetime](run-settings-write-store.md#settings-lifetime-on-agent-switch).
+
+After the incoming settings arrive, Codex's footer label uses its published display name; both
+pickers route target-agent rows as own-agent settings choices, and effort/permission lookups use
+the incoming agent. Both agents' model rows remain visible.
 
 ## New-chat model recall
 
@@ -304,13 +358,14 @@ accident of a fixture's launch state is the wrong thing to leave in place.
 
 ## Security
 
-`display_name` and `value` are claude-authored text that crossed the subprocess trust boundary, bounded
+`display_name` and `value` are daemon-published text from either agent that crossed the subprocess trust boundary, bounded
 by the daemon but not sanitized (see [Model-list store](model-list-store.md)). Since #1053, the
 **announced** identifier crosses the same boundary and is bounded the same way, by
 [Announced-model store](announced-model-store.md)'s producer (256 bytes) rather than sanitized. Each of
-the three reaches exactly one JSX text position (React's default escaping); `value` additionally reaches
-`key={option.id}` (React's own keyed reconciliation — a `Map` internally, not a plain-object index), a
-string comparison against `currentId`, and the `onSelect` pass-through into the write payload — no
+the three reaches escaped JSX text (React's default escaping). Raw values participate in array-scan
+matching and are passed through into settings or confirmed switch payloads. `option.id`, React keys
+and `currentId` use client-generated visible-row positions; daemon strings do not become option keys.
+The published text reaches no
 attribute, URL, filename, cache key, lookup path or log line, on any branch. The announced identifier also
 participates in exact raw value/resolution comparisons and the designated inherited family tier, using
 array scans rather than an object keyed by daemon text. It is a report used
@@ -329,8 +384,8 @@ value, the same tier as `.composer__model-label`'s CSS ellipsis one element up: 
 does not claim to, the store still holds every string verbatim, and React still escapes the one text
 position each label reaches. A family is a `[A-Za-z]+` prefix with one character upper-cased, so a control
 byte or a terminal escape can reach the DOM only through the unchanged verbatim fallback — the same path
-that carried it before this ticket. `publishedRowFor` still receives raw strings, `currentId` remains a
-raw published `value`, and `onSelect` sends that value. Family comparison is limited to the inherited
+that carried it before this ticket. `publishedRowFor` still receives raw strings; `currentId` is a
+visible-row position, and selection sends the clicked row's raw value. Family comparison is limited to the inherited
 selection tier above; it does
 not widen explicit-choice matching, indexing, keying or writes. Neither labels nor family derivation
 sanitize the held strings; React's text escaping remains the rendering boundary.
@@ -366,11 +421,47 @@ init. Waiting for an announcement during the parked question therefore observes 
 lifecycle. `e2e/real-claude-question-answer.spec.ts` records the ensuing announcement in its
 `resolved-target-model` attachment. Optimistic panel dismissal alone proves no continuation.
 
+`mergedModelPickers.test.tsx` checks merged order, positional IDs, duplicate values, inherited
+agent isolation, pending presentation and both-direction action routing with untagged Claude.
+`e2e/merged-model-pickers.spec.ts` drives footer and sheet entry points, including acknowledged
+own-agent picks, Cancel/Switch, duplicate suppression, refusal, abandonment and authoritative
+success. Native sheet buttons cover Enter and Space in both directions; disabled rows retain
+their reading without taking focus. Colliding-host cases cover selected-owner routing,
+matching-host pending and foreign-host exclusion, with exact per-host write/switch counts.
+A confirmed settings overlay surviving host navigation is separately tracked in
+[#2068](https://github.com/pyrycode/pyrycode-desktop/issues/2068); pending-switch isolation does
+not establish settings-overlay isolation. A row-disappearance assertion would contradict the
+merged list: after success, assert that the outgoing row remains visible and unmarked while
+the incoming row is current.
+
+The [October 16 verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1846#issuecomment-6219617302)
+for reviewed head `49ed9418` records the complete Linux fake-transport/captured-client gate:
+488 executed/passed, 0 failed, 4 existing skips, 0 flaky results or retries. All 20 merged-picker,
+2 confirmation, 4 offline-settings and 1 settings-round-trip cases executed and passed, with
+0 failed/skipped in those 27 cases. Keyboard, colliding-host, acknowledged own-pick and outgoing
+announcement regressions remain active. The settings dependency #1845 is repaired.
+
+CDP command observation at `window.pyry.sendCommand` sees the result of
+`sendConversationCommand`, including the selected owning `serverId`. Exact single-command
+assertions must include that host alongside the raw model and supported effort; the wire payload
+alone is not the bridge command shape.
+
+**Operator hand-over acceptance remains pending under `held:live-handover`.** Establish a fresh
+fact in Claude, switch the same conversation through the real picker to GPT-6 Luna at Low, then
+require a completed answer recalling the fact without restating it. The named live spec now
+implements that scenario, but its repaired version has only collected 1 test, 0 executed.
+The historical live failure remains failed. Record fresh current-main counts and same-attempt
+daemon revision, correlated terminal/answer, unchanged conversation ID, saved/applied Low settings
+and published Luna footer before releasing the hold. See the
+[live runbook](live-e2e-runbook.md#claude-to-luna-handover-acceptance-1662) for the exact test,
+attachments and historical results. Collection, fake transport and recorded new-channel proof
+cannot establish continuity from Claude; the automatic live gate is retired.
+
 Renderer tests are static server renders (CLAUDE.md), so they cannot prove clicks or effect delivery.
 `modelSelection.test.tsx` gives both surfaces identical input layers with independently stated expected
 row IDs and trigger labels. It covers the no-snapshot distinction, usable/empty/unmeasured/unmatched and
 ambiguous recommendations, value/resolution/family tiers and ambiguity, disagreement with the default,
-saved `default`, explicit matched/unmatched choices, agent filtering and Codex. Reducer-driven cases prove
+saved `default`, explicit matched/unmatched choices, agent-scoped matching and Codex. Reducer-driven cases prove
 pending, confirmed and rejected picks. Assert the marked row's identity on each surface: a count of one
 alone can pass with the wrong dropdown row selected.
 
@@ -379,7 +470,7 @@ and settings after a real turn. Its independent wire-data oracle checks both mod
 effort, retaining `inherited-model-selection` evidence. Live acceptance needs an actually executed passing
 test; collection or an all-skipped zero exit proves nothing.
 
-When a menu hides an internal row, derive positional click indices from the visible agent-filtered,
+When a menu hides an internal row, derive positional click indices from the visible merged,
 non-default rows. The real question driver once indexed the full list (Default, Sonnet, Fable, Opus,
 Haiku); the old Opus index clicked Haiku after Default disappeared. Acknowledgement and original-answer
 continuation still passed; only the ensuing announcement exposed the wrong model. Assert menu count and

@@ -73,26 +73,8 @@ export type ModelRefusalEvent = {
 )
 
 /**
- * A stored history entry's payload, decoded into the shape its LIVE `DaemonEvent` twin carries (#1227) —
- * one arm per type the timeline draws, plus the operator's own `message`, which appears only in history
- * (the daemon pushes no `message` frame on the interactive lane). A consumer can run the window's
- * existing live-lane mapping over one of these unchanged.
- *
- * IT MIRRORS `DecodedHistoryEvent` IN `src/main/transport/inboundMessage.ts` BY HAND rather than
- * importing it, and that is the placement rule rather than an oversight. `inboundMessage.ts` is IPC-free
- * by construction — the `transport/` directory holds the wire boundary and never imports this module — so
- * a type the decode produces cannot be shared across the boundary it exists to cross. `HistoryRequestFailure`
- * above and `AttachmentUploadFailure` already mirror a transport type the same way for the same reason.
- * The two are kept in agreement structurally: `daemonConnection`'s single emit assigns the decoded array
- * into this field, so an arm missing here is a compile error at that one site, and a type-only
- * mutual-assignability guard in `daemonConnection.test.ts` catches the other direction. One residual gap,
- * stated rather than papered over: an added OPTIONAL field on one side alone passes both checks.
- *
- * NO ARM CARRIES A `conversationId`. Every live-lane parser requires the payload's `conversation_id`, but
- * that value is DAEMON-ASSERTED while a page is attributed by CORRELATION to the conversation this client
- * asked about — so it is dropped at the decode, and `historyPageReceived.conversationId` stays the only
- * routing key on the page. Carrying both would hand a consumer two ids that can disagree and a routing
- * decision it must never be given, which is the misattribution #1222's correlation exists to remove.
+ * Retained saved-history and shared fake-translation vocabulary. Network history pages no longer
+ * cross Desktop IPC. Storage admission remains responsible for validating these stored shapes.
  *
  * SECURITY — DECODING MAKES THE SHAPE TRUSTED AND NEVER THE CONTENT. `assistantDelta.text`,
  * `toolUse.name` / `inputSummary` and BOTH the keys and the values of its `input` map,
@@ -198,40 +180,11 @@ export const DAEMON_EVENT_CHANNEL = 'pyry:daemon-event' as const
 export type DebugBundleFailure = 'unavailable' | 'stream-corrupt' | 'write-failed'
 
 /**
- * The closed set of ways one `request_history` can be refused (#1222) — `DebugBundleFailure`'s shape
- * applied to a correlated round trip, and information-minimising in the same way: a category, never a
- * message, a stack, an echoed cursor or a daemon string.
- *
- * IT DUPLICATES `HistoryRejectReason`'s MEMBERS BY HAND rather than importing them, and that is the
- * placement rule rather than an oversight. `inboundMessage.ts` is IPC-free by construction — the
- * `transport/` directory holds the wire boundary and never imports this module — so the narrowed type
- * cannot be shared across the boundary it exists to cross. `AttachmentUploadFailure` already mirrors
- * `DaemonErrorOutcome` the same way, for the same reason, and the two lists are kept in agreement by
- * the single mapping in `daemonConnection`'s emit. Each member's meaning is documented at its source.
- *
- * THE SIXTH MEMBER IS NOT A HEDGE. The daemon publishes five refusals for this verb, and a sixth
- * outcome is reachable anyway: when one stored entry is too large to fit in ANY page the daemon emits
- * it regardless and its own transport answers `message.too_long`, correlated to this client's ask. A
- * correlated refusal must always settle the outstanding request — a walk that dropped one would stall
- * with no terminal and no way to step past the entry — so anything outside the five arrives here.
- */
-export type HistoryRequestFailure =
-  | 'conversation-not-found'
-  | 'history-invalid-request'
-  | 'history-invalid-page-size'
-  | 'history-invalid-cursor'
-  | 'history-unavailable'
-  | 'unclassified'
-
-/**
  * Why a `set_system_prompt` write did not take (#1249). Every member is NON-RETRYABLE — which is why
- * this union's carrier has no `retryable` field, where `historyRequestFailed` has one: a flag whose
- * value is a constant across the whole set carries no information, and `HistoryRequestFailure`'s
- * reason for carrying one (exactly one retryable member, computed at the single emit so a walk driver
- * cannot re-derive it wrong) does not transfer to a set with none.
+ * this union's carrier needs no retryability flag.
  *
  * IT MIRRORS `SystemPromptRejectReason`'S TWO MEMBERS BY HAND rather than importing them, the
- * placement rule `HistoryRequestFailure` and `AttachmentUploadFailure` already follow:
+ * placement rule `AttachmentUploadFailure` already follows:
  * `inboundMessage.ts` is IPC-free by construction, so a type the decode produces cannot be shared
  * across the boundary it exists to cross. The lists are kept in agreement by the single mapping in
  * `daemonConnection`'s emit.
@@ -243,7 +196,7 @@ export type HistoryRequestFailure =
  * did, and would blur the one repair an operator can actually make — shorten the text — with one they
  * cannot.
  *
- * THE LAST MEMBER IS NOT A HEDGE, `HistoryRequestFailure`'s argument transplanted. The daemon
+ * The final member covers other correlated refusals. The daemon
  * publishes two refusals for this verb, and a correlated refusal must ALWAYS settle the outstanding
  * write: a code outside the published set that was dropped instead would leave #1250 reporting a
  * rejected write as permanently in flight.
@@ -1453,87 +1406,13 @@ type BaseDaemonEvent =
       models: readonly WireModelOption[]
       droppedModels: number
     }
-  // The two conversation-history arms (#1222) — one backward step of a scroll-back walk, and its
-  // refusal. Both cross from the background process, which owns the ask, the correlation and the
-  // decode; nothing in the window drives either yet (#1224 asks, #1223 renders, #1225 joins a page to
-  // the live stream), so all four exhaustive bridges take null arms.
-  //
-  // `conversationId` IS THE ONE FIELD ON BOTH ARMS THE DAEMON DID NOT ASSERT, and the provenance is
-  // `runConfigReceived`'s exactly: a `history_page` carries NO conversation id — a decision rather than
-  // an omission, since correlation rides `in_reply_to` and nothing in a page is echoed from the request
-  // — so it is resolved in the background process, which records each `request_history`'s envelope id
-  // against the conversation that request named and matches the reply back by `Envelope.in_reply_to`.
-  // What crosses is therefore CLIENT-OWNED: the id this app put in its own outbound frame, held in
-  // main-process memory and handed back, never a string parsed out of an inbound payload. That is the
-  // one thing not to generalise from the daemon-asserted ids on assistantDelta / modelAnnounced /
-  // toolUse — their warnings are theirs. What it DOES share with them is required-ness and the reason:
-  // an optional routing key invites `?? openConversation` fallbacks, which is the misattribution the
-  // correlation exists to remove, so a consumer that cannot resolve it drops the event rather than
-  // guessing. It is a routing key and not rendered text — never markup, an attribute, a URL, a
-  // filename, a cache key or a lookup path — and it reaches no log sink. The numeric `in_reply_to` it
-  // was resolved from is deliberately NOT carried: the window receives the id it supplied.
-  //
-  // SECURITY — `entries` IS REPLAYED CONTENT AND THE MOST UNTRUSTED PAYLOAD ON THIS UNION. Each entry
-  // is one stored envelope's worth, operator-authored for a stored `message` and `claude`-authored for
-  // a stored assistant frame, carrying EXACTLY the trust class of the live frame it mirrors — nothing
-  // about it is more trusted for having been stored, and the daemon's § Security model threat 1 lands
-  // here.
-  //
-  // SINCE #1227 NOTHING UNTYPED CROSSES. #1222 shipped this field as `readonly HistoryEntry[]` — a
-  // stored `type` string nothing re-validated beside a `payload` of arbitrary unparsed JSON — and the
-  // window would have had to parse it, on the wrong side of the boundary CLAUDE.md draws. The
-  // background process now decodes each entry against the same payload parser the live lane uses, so
-  // what crosses is `HistoryTimelineEntry`: a closed union of scalars, with the entry's `id` and `ts`
-  // beside it. That NARROWS this arm rather than widening it, and it is where the untrusted-text rules
-  // now live — see `HistoryTimelineEvent` above, which names every replayed string and binds each to
-  // plain text only, never a markup sink, an attribute, a URL, a filename, a cache key or a lookup path.
-  //
-  // TWO SKIPS ARE ORDINARY AND NEITHER COSTS THE PAGE. An entry of a stored type the timeline does not
-  // draw is skipped, and so is one whose payload fails to parse; order is preserved among the
-  // survivors, and a page every entry of which was skipped crosses as an EMPTY page rather than as a
-  // failure, so #1224's walk can still step past it. NO PROMPT EVER CROSSES: `modal_shown` /
-  // `question_shown` have no arm in the decode, so nothing answerable can reach the window from
-  // history, whether a future daemon starts logging one or a hostile one plants one in a page.
-  // No token, key or raw frame can ride either arm.
-  //
-  // `cursor` and `atStart` cross AS SENT and are never inferred from each other or from the entry
-  // count. `atStart` is the ONLY termination signal — a page filling exactly at the log's first entry
-  // reports it false with a usable cursor, and a SHORT page says nothing, since the daemon may serve
-  // fewer entries than asked to fit the envelope cap. The cursor is opaque: stored and handed back
-  // verbatim, never parsed, and NOT a secret and NOT a capability — it is deliberately unsigned, and
-  // authorization is pairing, enforced at the Noise handshake.
-  | {
-      type: 'historyPageReceived'
-      /** Complete validated envelope IDs, including undrawn payloads. Absent means unknown provenance. */
-      servedIds?: readonly number[]
-      conversationId: string
-      entries: readonly HistoryTimelineEntry[]
-      cursor: string
-      atStart: boolean
-    }
-  // The refusal half. `reason` is a CLIENT-OWNED literal narrowed from the daemon's `code` at the
-  // decode boundary and compared there against constants — no daemon string crosses, and neither the
-  // daemon's static message nor anything echoed from the request does either.
-  //
-  // `retryable` is CARRIED rather than left to the consumer to derive, which diverges from
-  // `DaemonErrorOutcome`'s "retryability is documented, not computed" posture on purpose. That posture
-  // holds because the attachment flags live in two upstream files, so no single client-side list could
-  // be right; here the whole set is one verb's, published in one section, with exactly ONE retryable
-  // member. Computing it once, at the single emit, is what stops the walk driver (#1224) from
-  // re-deriving it wrong into a retry loop against a relay that is merely withholding the frame.
-  | {
-      type: 'historyRequestFailed'
-      conversationId: string
-      reason: HistoryRequestFailure
-      retryable: boolean
-    }
   // The system-prompt read arm (#1230): what prompt a conversation holds, and whether the running
   // session was started with a different one. It crosses from the background process, which owns the
   // ask, the correlation and the decode; NOTHING IN THE WINDOW CONSUMES IT YET — the store is #1231
   // and the editor surface #1078 — so all four exhaustive bridges take a no-op arm.
   //
   // `conversationId` IS THE FIELD THE DAEMON DID NOT ASSERT, and the provenance is `runConfigReceived`'s
-  // and `historyPageReceived`'s exactly: a `system_prompt` reply carries NO conversation id, so it is
+  // exactly: a `system_prompt` reply carries NO conversation id, so it is
   // resolved in the background process, which records each `request_system_prompt`'s envelope id
   // against the conversation that request named and matches the reply back by `Envelope.in_reply_to`.
   // What crosses is CLIENT-OWNED — the id this app put in its own outbound frame, held in main-process
@@ -1590,7 +1469,7 @@ type BaseDaemonEvent =
   // `conversationId` IS THE CORRELATION HANDLE, and it is what keeps these off the
   // `workspaceFolderRejected` precedent above, which carries NOTHING. A bare outcome would satisfy a
   // careless reading of "exactly one confirmation outcome" while leaving the consumer unable to settle
-  // the write that caused it. Its provenance is `historyPageReceived`'s and `systemPromptReceived`'s
+  // the write that caused it. Its provenance is `systemPromptReceived`'s
   // exactly: the background process records each `set_system_prompt`'s envelope id against the
   // conversation that write named, and matches the answer back by `Envelope.in_reply_to`. What crosses
   // is CLIENT-OWNED — the id this app put in its own outbound frame — and on the confirmation that
@@ -1636,7 +1515,7 @@ type BaseDaemonEvent =
   // do not sum to the turn's total, so no consumer may accumulate them into one. A field crosses when
   // something needs it, not before — and a delta present on the arm is an invitation to sum it.
   //
-  // NO `daemonTs`, and the omission is the design. That mix-in marks the arms `decodeHistoryEvent`
+  // NO `daemonTs`, and the omission is the design. That mix-in marks the arms `HistoryTimelineEvent`
   // draws, which need (`type`, `ts`) as the join key between a served page and what the live stream
   // already drew; a stored `thinking_progress` is still skipped, so there is no page half to join
   // against and stamping it would advertise a join nothing can perform. `modelAnnounced`, not
@@ -1699,7 +1578,7 @@ type BaseDaemonEvent =
   // misses that lookup exactly as an unrecognised value does, and there is nothing on screen for a
   // truncation marker to qualify. A field crosses when something needs it, not before.
   //
-  // NO `daemonTs`, and the omission is the design. That mix-in marks the arms `decodeHistoryEvent`
+  // NO `daemonTs`, and the omission is the design. That mix-in marks the arms `HistoryTimelineEvent`
   // draws, which need (`type`, `ts`) as the join key between a served page and what the live stream
   // already drew; #1318 keeps this type armless there, so there is no page half to join against and
   // stamping it would advertise a join nothing can perform. `thinkingProgress` and `modelAnnounced`,
@@ -1764,7 +1643,7 @@ type BaseDaemonEvent =
   // (`ContextUsageMCPTool`), which is the existing split rather than a new one. `readonly` on each
   // array mirrors both precedents; the row interfaces stay mutable, exactly as `QueuedItem` does.
   //
-  // NO `daemonTs`, and the omission is the design. That mix-in marks the arms `decodeHistoryEvent`
+  // NO `daemonTs`, and the omission is the design. That mix-in marks the arms `HistoryTimelineEvent`
   // draws, which need (`type`, `ts`) as the join key between a served page and what the live stream
   // already drew; the decode arm takes no FrameTimestamp, so there is no page half to join against and
   // stamping it would advertise a join nothing can perform. `rateLimited` and `thinkingProgress`, not
@@ -1903,7 +1782,7 @@ type BaseDaemonEvent =
   // set beyond the one measured-benign status is unmeasured. Every field here is DAEMON-authored, so
   // narrowing is safe and widening would throw away a four-value switch for an open one.
   //
-  // NO `daemonTs`, and the omission is the design. That mix-in marks the arms `decodeHistoryEvent`
+  // NO `daemonTs`, and the omission is the design. That mix-in marks the arms `HistoryTimelineEvent`
   // draws, which need (`type`, `ts`) as the join key between a served page and what the live stream
   // already drew; #1514 keeps this type armless there — a stored `resetting` is SKIPPED rather than
   // served — so there is no page half to join against and stamping it would advertise a join nothing
@@ -1980,6 +1859,8 @@ type BaseDaemonEvent =
  * comparands and fail open on unusable input so uncertain identity cannot silently remove a row.
  */
 interface DaemonEventTimestamp {
+  /** Supplied envelope route; never inferred from a session tag. */
+  envelopeConversationId?: string
   /** Producing envelope session; distinct from any payload sessionId. */
   envelopeSessionId?: string | null
   /** Supplied wire correlation; existing request settlement remains main-owned. */

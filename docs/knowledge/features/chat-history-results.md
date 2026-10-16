@@ -8,7 +8,7 @@ Result states, local failure presentation and preservation rules for
 Saved-thread reading shows “Loading saved messages…” while pending in either connection
 state. Nonempty restored content shows “Offline. Showing saved messages.” only while
 the selected host is unavailable; connected opening and reconnect show no offline
-notice. Both `missing` and a stored empty daemon thread succeed and draw no notice at
+notice. Both `missing` and a saved-empty partial thread page succeed and draw no notice at
 all — a loaded, empty local read reads as the ordinary state of a chat opened for
 the first time on this machine, not a fault (\#1447). Errors, rejected
 IPC, invalid snapshots, unexpected result statuses and wrong host/conversation/kind
@@ -46,7 +46,7 @@ attach an error to a newer list or a cleared host.
 | `unreadable` | Reading, decryption, UTF-8/JSON decoding or stored-record validation failed. Duplicate snapshot identities are invalid. |
 | `unsupported-version` | The stored collection or a stored snapshot has a safe-integer numeric version other than 1, or SQLite schema admission rejects an unfamiliar version/nonempty unversioned database. Malformed snapshot version values are `unreadable`. |
 | `encryption-unavailable` | Protection is unavailable or raises `EncryptionUnavailableError`. The application store and indexed backends check availability before database access, including reads/removals. |
-| `write-failed` | A replacement or import mutation/outer COMMIT failed for another write/encryption reason, even when a read triggered import. |
+| `write-failed` | An owned mutation, replacement or import/outer COMMIT failed for another write/encryption reason, even when a read triggered import. |
 | `remove-failed` | A removal mutation/COMMIT or pending-source cleanup failed for another reason. Source cleanup can fail after the database deletion committed. |
 
 First access, including a read, can import the protected version-1 collection and
@@ -76,13 +76,15 @@ transaction committed; this error does not imply the deleted SQLite records were
 restored. Retained source bytes cannot resurrect them after restart or coordinate
 reuse. Cleanup reports only `history-source-retired` with `ok` or `remove-failed`.
 
-Indexed operations validate only the affected scope(s) in their own family, as
-described in [the API](chat-history-api.md#api). Content records, encrypted evidence, scope identity and
+After the one-time schema-5 conversion validates all authoritative scopes, indexed
+operations validate only affected scope(s) in their own family, as described in
+[the API](chat-history-api.md#api). Content records, encrypted evidence, scope identity and
 schema migration share one SQLite transaction. An insertion/deletion, encryption,
 decryption or validation failure rolls back changes and preserves the last committed
 snapshot; later operations remain usable. Even reads can commit the schema-1 key
 migration, schema-3 receipt-start index, schema-4 authoritative tables and schema-5
-list/import tables, but cannot commit them if selected validation or full
+list/import tables, plus the protected schema-6 conversion on an authoritative
+operation, but cannot commit them if selected validation or full
 reconstruction fails in that transaction. Unreadable data and
 unsupported schemas are never recreated or overwritten as recovery. The application
 store's initial completion check may already commit additive schema admission
@@ -91,8 +93,10 @@ before source validation; that creates no imported content or completion marker.
 Authoritative replacement and conversation removal fully validate the existing
 addressed snapshot; host removal validates all authoritative scopes for that exact
 host before deleting any. Their removals affect only `thread_scopes` and cascading
-`thread_records`, preserving legacy rows/evidence, lists and other hosts' equal ids.
-Every committed replacement receives a fresh UUID, even when identical or empty.
+`thread_records`/`thread_payloads`/`thread_auth`, preserving legacy rows/evidence, lists and other
+hosts' equal ids. Every committed replacement rotates the protected generation,
+even when identical or empty; the stable owner and unchanged same-epoch item
+ciphertext can survive replacement.
 Malformed saved metadata or index associations return `unreadable`, never an empty
 default. Validation failures precede mutation; later protection/SQL failures use
 `write-failed` or `remove-failed` and preserve the previous committed snapshot.
@@ -116,15 +120,29 @@ identity. The encrypted envelope closes that substitution for new writes.
 Original unwrapped records remain readable, using selected codec/index checks for
 pages and canonical whole-scope checks for full reads. Reads do not rewrite them.
 
-Authoritative header, item and range envelopes each bind their payload to the
-committed UUID and every structural index. The header contains scalar metadata,
-item/range counts and arrival-presence only; it contains no item, range or arrival
-arrays. Full reconstruction compares canonical records and indexes after shared
-snapshot validation. Selected reads compare envelopes and selected associations,
-including each item's protected containing-range ordinal, so missing or substituted
-evidence is `unreadable` without decoding unrelated history.
+Authoritative headers bind the stable owner and every header index; their protected
+value contains scalar metadata, item/range counts, arrival presence and continuation
+generation. Retained placements/ranges bind the current generation. Schema-7 mutable
+headers additionally protect authenticated roots, AVL held/shown/active counts, aggregate
+JSON-node count, reset identity and availability boundary. Mutable placements/ranges
+bind the stable owner; current-root proofs reject old-record/branch replay without
+rewriting untouched ciphertext. Rank verifies hinted parent routes from that root.
+Placements contain id/revision and SHA-256 of exact payload ciphertext; separate
+item envelopes bind owner, epoch, id/revision and content. Lookup/index facts must
+agree with those protected associations. See
+[ADR 0014](../decisions/0014-authenticated-owned-thread-mutations.md).
 
-Each indexed `payload` is protected by main-process `SecretEncryption` before it
+Full reads reconstruct and validate complete snapshots and reject orphan payloads.
+Selected reads authenticate only their selected paths, placements, payloads and
+necessary evidence. Mutable range predecessor proofs replace generation-bound range
+ordinals, preserving containing evidence across range merges. An unselected orphan
+remains a full-read failure rather than something bounded pages scan to discover.
+Owned conversion, records, roots and header share one transaction; aggregate-node
+overflow or failed mutation returns `write-failed` and preserves the last commit.
+Malformed owned IPC returns `invalid-request` before storage; malformed protected
+reads return `unreadable`. The writer retains failed ownership for a later flush/event.
+
+Each content-record `payload` is protected by main-process `SecretEncryption` before it
 reaches SQLite, including header coverage/cursors, rows, attachment metadata, raw
 unknown display text, authoritative scalar/item/range facts and individual evidence
 payloads. Production encryption keeps the existing Linux `basic_text` rejection.
@@ -138,18 +156,22 @@ unencrypted columns are:
 | `legacy_records` ownership | `scope`: committed-snapshot UUID referencing `legacy_scopes.identity`. |
 | Record selection/order | `kind`: `header`, `row`, `served`, `receipt`, `receipt-id`, `display`, `gap`, `gap-key` or `gap-refused`; `ordinal`, `parent`: nonnegative array positions (zero for unparented records). |
 | Evidence indexes | `entry_id`, `last_id`, `older_id`, `newer_id`: nonnegative safe integers or null; `row_key`: signed safe integer or null. |
-| `thread_scopes` | `identity`: fresh locally generated UUID; `server`, `conversation`: exact UTF-16LE ownership BLOBs, including NUL/lone-surrogate distinctions. |
-| `thread_records` ownership/order | `scope`: committed UUID; `kind`: `header`, `item` or `range`; `ordinal`: nonnegative held/range position (zero for header). |
+| `thread_scopes` | `identity`: stable locally generated owner UUID, fresh on creation; `server`, `conversation`: exact UTF-16LE ownership BLOBs, including NUL/lone-surrogate distinctions. |
+| `thread_records` ownership/order | `scope`: stable owner UUID; `kind`: `header`, `item` or `range`; `ordinal`: nonnegative held/range position in retained scopes, stable record ordinal in mutable scopes (zero for header). |
+| `thread_payloads` lookup | `scope`: stable owner UUID; `item_id`, `revision`: admitted nonnegative safe integers. Primary key `(scope, item_id)`; payload is protected and deletion cascades from the owner. |
 | Authoritative selection indexes | `arrival`: original nonnegative first-arrival position or null; `item_order`: nonnegative safe integer or null; `range_ordinal`: containing saved range position or null; `range_start`, `range_end`: nonnegative safe-integer range bounds or null. Unused indexes are null. |
+| `thread_auth` | `scope`: stable owner UUID; `tree`, `path` and TEXT `payload`: structural index names/addresses, child hashes/counts/heights, shown/active flags, attribution digests, placement/range digests and numeric identities, plus untrusted parent hints. No raw daemon text. Authenticated by protected header roots. |
 | `history_lists` | `server`: exact UTF-16LE host BLOB; `payload` is an encrypted complete list snapshot, validated against that owner. |
 | `history_import` | `singleton`: fixed integer 1, whose presence means import completed; `retired`: 0 for pending cleanup or 1 for recorded retirement. |
-| Schema/index metadata | `user_version`: integer 5 after successful transaction migration (base creation uses 2); indexes, including `legacy_receipt_start` and `thread_ranges`, duplicate only reviewed ownership and structural columns. |
+| Schema/index metadata | `user_version`: 7 after first owned transaction or opening-index conversion, 6 after retained protected conversion; additive legacy/list admission can stop at 5 (base creation uses 2). Indexes, including `legacy_receipt_start` and `thread_ranges`, duplicate only reviewed ownership and structural columns. |
 
-`payload` is a ciphertext BLOB. Timestamps, join strings, opaque cursors, attachment
+Content-record `payload` is a ciphertext BLOB; `thread_auth.payload` is the
+content-free structural TEXT exception above. Timestamps, join strings, opaque cursors, attachment
 fields, message text and raw unknown objects never become plaintext lookup/order
 columns. Ownership coordinates are intentionally unencrypted structural data, not
-filenames or authorization tokens. Authoritative epoch, item id/kind/revision,
-unknown JSON and scalar progress/repair/availability remain protected payloads.
+filenames or authorization tokens. Authoritative item id/revision are also numeric
+lookup columns and must match protected copies. Epoch, item kind/content, unknown
+JSON, scalar progress/repair/availability and generation remain protected payloads.
 
 Diagnostics contain only static lifecycle event names and operation/result codes:
 `history-storage-operation`, `history-storage-result`, `history-handler-result`,
@@ -176,16 +198,30 @@ removal retry, but another confirmed receipt can retry it.
 
 ## Bounded page results
 
-The [authoritative page operations](chat-history-api.md#main-only-bounded-authoritative-pages)
+The [authoritative page operations](chat-history-api.md#bounded-authoritative-opening-and-pages)
 return `{ status: 'page', page: { partial: true, metadata, items, ranges,
-arrivalPositions?, continuation } }`. Both newest and before use this result;
-neither is a `stored` full snapshot. `arrivalPositions`, when present, align only
+arrivalPositions?, availabilityStart?, continuation } }`. Authorized opening,
+newest and before requests all use this result; limits are integers 1–200, with
+opening fixed at 200 in production. Opening selects shown items plus active and
+recorded dependencies; newest/before count held items. None is a `stored` full
+snapshot. The partial codec validates exact ownership, items/ranges, sparse unique
+aligned arrival positions, optional boundary and opaque continuation before
+hydration. `arrivalPositions`, when present, align only
 with selected items. Ranges retain intact saved bounds and include the newest
 boundary anchor, but are only a selected subset. Unordered items add no coverage.
 `metadata` retains the saved ownership, epoch, applied version, complete checkpoint,
-unfinished version, repair and optional older availability. A null local
-continuation means only that no earlier held items remain; short/empty pages and
-local exhaustion change none of these daemon facts.
+unfinished version, repair and optional older availability. `availabilityStart`
+retains that reading's original boundary even when the oldest saved range is
+omitted. Selected ranges do not imply missing coverage. A null local continuation
+means only that no earlier local held boundary remains before the base window;
+opening closure can overlap a preceding held page. Short/empty pages and local
+exhaustion change none of these daemon facts and grant no read acknowledgement.
+
+Absent opening/newest scopes return `missing`; saved-empty scopes return a partial
+page with empty items, retained metadata and null continuation. Failed reads return
+classified errors and never masquerade as either. No opening error falls back to
+`readThread`. The fixed handler validates requests and authorizes saved hosts before
+storage, including disconnected hosts; keys/database/token contents remain in main.
 
 Authoritative malformed/over-limit/wrong-format tokens, cross-owner tokens, stale
 UUIDs and invalid boundaries use `invalid-request`, including after deletion or

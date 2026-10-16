@@ -236,7 +236,9 @@ export function ConversationScreen({
     : null, [authoritativeSnapshot, liveInput.sessionId, liveInput.activity.turnRunning, localSend?.reportsClearedThrough])
   const taskStops = useStore(threadRuntime.taskStops, s => s.entries)
   const queryKey = JSON.stringify([selectedHost, openConversationId])
-  const queryState = useStore(threadRuntime.state, s => s.queries.get(queryKey))
+  const networkQueryState = useStore(threadRuntime.state, s => s.queries.get(queryKey))
+  const localQueryState = useStore(threadRuntime.state, s => s.localQueries.get(queryKey))
+  const queryState = localQueryState && localQueryState.type !== 'idle' ? localQueryState : networkQueryState
   const complete = useStore(threadRuntime.state, s => s.complete.get(queryKey))
   const threadRestoring = useStore(threadRuntime.state, s => s.restoring.has(queryKey))
   const threadConnection = useSessionStore(s => selectedHost === null ? undefined : s.statuses.get(selectedHost))
@@ -323,7 +325,7 @@ export function ConversationScreen({
   const authoritativeRows = useMemo(() => authoritativeSnapshot
     ? [...authoritativeSnapshot.items, ...(localSend?.pending ?? [])] : undefined, [authoritativeSnapshot, localSend])
   const threadPin = useThreadScrollPin(openConversationId, authoritativeRows,
-    authoritative ? () => { if (selectedHost !== null) threadRuntime.query('older', selectedHost) } : undefined)
+    authoritative ? () => selectedHost !== null && threadRuntime.query('older', selectedHost) : undefined)
   const { scrollPin, followBottom, paneRef } = threadPin
   // #1579: every open asks for fresh MCP status, from the handler rather than a mount effect so one open
   // is one request. The sheet shows this same `activeConversation`. #1494: the overflow menu's item and the
@@ -395,13 +397,16 @@ export function ConversationScreen({
       )}
       </div>
       <div className="conversation__message-area">
-      {authoritative && !daemonOutdated && authoritativeSnapshot === null && queryState?.type === 'loading' && <p role="status">Loading messages…</p>}
-      {authoritative && !daemonOutdated && authoritativeSnapshot === null && queryState?.type === 'failed' && <ComposerHistoryFailure retryable
-        onRetry={() => { if (selectedHost !== null) threadRuntime.query('retry', selectedHost) }} />}
+      {authoritative && !daemonOutdated && authoritativeSnapshot === null && <div className="conversation__thread" aria-live="polite">
+        {queryState?.type === 'loading' && <p role="status">Loading messages…</p>}
+        {queryState?.type === 'failed' && <ComposerHistoryFailure retryable
+          onRetry={() => { if (selectedHost !== null) threadRuntime.query('retry', selectedHost) }} />}
+        <ThreadPromptSlot host={selectedHost} conversationId={openConversationId} />
+      </div>}
       {authoritative && authoritativeSnapshot && <ThreadItemsTimeline snapshot={authoritativeSnapshot} pin={threadPin}
         standaloneStatus={false}
         backgroundTasksOpen={panelOpen} onBackgroundTasksOpenChange={setPanelOpen}
-        onOlder={() => { if (selectedHost !== null) threadRuntime.query('older', selectedHost) }}
+        onOlder={() => selectedHost !== null && threadRuntime.query('older', selectedHost)}
         readInputs={threadSummary ? { row: threadSummary, readerOpen,
           completeThrough: complete?.epoch === authoritativeSnapshot.epoch ? complete.version : 0 } : undefined}
         sendInputs={{ midTurnInput: liveInput.runConfig?.midTurnInput === true, diagnose: window.pyry.sendDiagnostic, local: selectedHost !== null && openConversationId !== null && localSend !== null
@@ -429,7 +434,6 @@ export function ConversationScreen({
           }} />}
           <ThreadPromptSlot host={selectedHost} conversationId={openConversationId} />
         </>} />}
-      {authoritative && !daemonOutdated && authoritativeSnapshot === null && <ThreadPromptSlot host={selectedHost} conversationId={openConversationId} />}
       <TopOverlayControl onRepairHost={onRepairHost} threadLive={authoritative ? threadLive : undefined} />
       </div>
       {/* #962/#967: the region between the thread and the status area is EMPTY, and that emptiness is the
@@ -687,7 +691,7 @@ function measureThreadChrome(pane: HTMLElement): void {
  * dependency array it already runs after every render, so "jump to the bottom now" and "stay pinned while
  * the reply streams" are not two behaviours: both are consequences of the flag being `true`.
  */
-function useThreadScrollPin(conversationId: string | null, presentation?: object, onOlder?: () => void): ThreadPin {
+function useThreadScrollPin(conversationId: string | null, presentation?: object, onOlder?: () => boolean | void): ThreadPin {
   const ref = useRef<HTMLDivElement>(null)
   const paneRef = useRef<HTMLDivElement>(null)
   const following = useRef(true)
@@ -707,6 +711,28 @@ function useThreadScrollPin(conversationId: string | null, presentation?: object
   // The offset the pin itself last wrote, while the scroll event that write queued is still outstanding. See
   // `reassertPinnedToBottom` for why this exists and why it cannot go stale.
   const pinnedOffset = useRef<number | null>(null)
+  const coveredPosition = useRef<{
+    conversationId: string | null; width: number; height: number; top: number
+  } | null>(null)
+  const preserveCoveredPosition = (el: HTMLDivElement): void => {
+    if (!paneRef.current?.hasAttribute('data-covered')) {
+      coveredPosition.current = null
+      return
+    }
+    if (coveredPosition.current?.conversationId !== conversationId) coveredPosition.current = null
+    const before = viewport.current
+    const resized = el.clientWidth !== before.width || el.clientHeight !== before.height
+    if (!resized || before.width === 0) return
+    // Hidden rows cannot provide native scroll anchors. Remember the processed position
+    // before a resize clamp replaces it, whichever of scroll/layout/observation runs first.
+    coveredPosition.current ??= { conversationId, width: before.width, height: before.height,
+      top: pinnedOffset.current ?? scrollOffset.current }
+    const saved = coveredPosition.current
+    if (!following.current && el.clientWidth === saved.width && el.clientHeight === saved.height) {
+      el.scrollTop = saved.top
+      pinnedOffset.current = el.scrollTop
+    }
+  }
   const topAnchor = useRef<{
     row: Element
     top: number
@@ -853,6 +879,7 @@ function useThreadScrollPin(conversationId: string | null, presentation?: object
     const el = ref.current
     const pane = paneRef.current
     if (pane === null) return
+    if (el !== null) preserveCoveredPosition(el)
     const header = pane?.querySelector<HTMLElement>('.conversation__top-chrome')
     const input = pane?.querySelector<HTMLElement>('.conversation__input-chrome')
     measureThreadChrome(pane)
@@ -885,6 +912,7 @@ function useThreadScrollPin(conversationId: string | null, presentation?: object
       // an unmount, and the null path is that case.
       const region = ref.current
       const currentPane = paneRef.current
+      if (region !== null) preserveCoveredPosition(region)
       if (currentPane) measureThreadChrome(currentPane)
       if (region !== null) {
         syncRows(region)
@@ -937,14 +965,19 @@ function useThreadScrollPin(conversationId: string | null, presentation?: object
       chromeTargets.current.clear()
       topAnchor.current = null
       observedRegion.current = null
+      coveredPosition.current = null
     }
   }, [])
 
   const demandHistory = (el: HTMLDivElement): void => {
-    if (connectedConversationHostNow(conversationId) === null) return
+    const wasFollowing = following.current
     following.current = false
     rememberTop(el)
-    if (isNearTop({ scrollOffset: el.scrollTop, viewportHeight: el.clientHeight, contentHeight: el.scrollHeight })) onOlder?.()
+    if (isNearTop({ scrollOffset: el.scrollTop, viewportHeight: el.clientHeight, contentHeight: el.scrollHeight })) {
+      const accepted = onOlder ? onOlder() !== false : false
+      // A short offline thread with no saved demand still follows later intrinsic row growth.
+      if (!accepted && el.scrollTop === 0) following.current = wasFollowing
+    }
   }
 
   const readUpward = (el: HTMLDivElement): void => {
@@ -982,6 +1015,7 @@ function useThreadScrollPin(conversationId: string | null, presentation?: object
       // Timeline is not memoized, so a stable identity buys nothing and React attaches this directly.
       onScroll: (event) => {
         const el = event.currentTarget
+        preserveCoveredPosition(el)
         const movingDown = el.scrollTop > scrollOffset.current
         scrollOffset.current = el.scrollTop
         rememberTop(el)
@@ -1171,7 +1205,7 @@ function ThreadItemsView({ pin, snapshot, readInputs, sendInputs, taskInputs, tr
               : row.source.status === 'finished' ? ' agent-start-marker__finished' : ''}`} aria-hidden="true" />
             <span className="agent-start-marker__state">{row.source.active === true ? 'Agent working · ' : ''}{row.outcome}</span>
             <span aria-hidden="true">·</span>
-            <span className="agent-start-marker__description">{item?.kind === 'toolCall' ? item.inputSummary.slice(0, 4096) : ''}</span>
+            <span className="agent-start-marker__description">{item?.kind === 'toolCall' ? (toolHeadlineRuns(item).subject ?? '').slice(0, 4096) : ''}</span>
             <span className="agent-start-marker__action">Go to agent ↓</span>
           </button>
         </div>

@@ -18,9 +18,10 @@ export const recordedTest = test.extend<{
     const replay = new RecordedExchange(recording)
     let failed = false
     const app = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities: recording.capabilities },
+      buildInitialFrames: () => replay.start(), buildReconnectFrames: () => replay.reconnect(),
       buildReplyFrames: bytes => {
         try { return replay.reply(bytes) }
-        catch { failed = true; return [] } // Never echo payloads through the fake transport's error handling.
+        catch (error) { failed = true; throw error } // Never echo payloads through the fake transport's error handling.
       }
     }, { skipPairing: true, onLaunched: async app => {
       const identity = await (await app.firstWindow()).evaluate(() => window.pyry.deviceIdentity())
@@ -28,6 +29,7 @@ export const recordedTest = test.extend<{
       replay.setDeviceId(identity.deviceId)
     } })
     const server = app.servers[0]
+    replay.setTransportCloseObserver(({ code, afterServerFrames }) => server.forwarder.closeClientAfterServerFrames(afterServerFrames, code))
     await pairFromUnpairedLaunch(app.page, Buffer.from(JSON.stringify({ server: server.serverId,
       relay: `${server.forwarder.url}/v1/client`, token: 'dummy-token-not-a-real-credential',
       server_static_pubkey: Buffer.from(server.daemon.staticPublicKey).toString('base64') })).toString('base64url'))

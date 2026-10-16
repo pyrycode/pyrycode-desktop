@@ -1,4 +1,5 @@
-import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
+import { scenarioNonce } from './fixtures/clientScenario'
+import { test, expect, encodePairingPayload } from './fixtures/clientScenario'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
 // The credential-light real-daemon tier (#439) — a real spawned `pyry` daemon on #251's content-blind
@@ -69,7 +70,7 @@ test('real daemon persists a rename round-trip, visible in the channel list', as
 
   // A per-run nonce so reruns differ (defeats any accidental reply caching) and NEW_TITLE can never collide
   // with oldTitle.
-  const runNonce = Date.now()
+  const runNonce = scenarioNonce()
   const NEW_TITLE = `renamed ${runNonce}`
 
   // --- Drive the product rename UI: pencil → dialog → fill → Save. #1476 retitled the Channels pen's

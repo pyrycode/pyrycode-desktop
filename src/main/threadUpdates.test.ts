@@ -100,17 +100,18 @@ it.each(['relay-drop', 'handshake', 'terminal', 'driver-error', 'daemon-terminal
   else { h.emit(f[0]); h.emit(f[1]); expect(vi.getTimerCount()).toBe(0) }
   h.connection.stop(); expect(vi.getTimerCount()).toBe(0)
 })
-it('isolates equal conversation/update ids on different hosts and keeps replay admission independent of fragment progress', async () => {
+it('isolates equal conversation/update ids on different hosts and never resumes incomplete fragments with replay cursors', async () => {
   const a = await connected('a'), b = await connected('b'), f = frames()
   a.emit(f[0]); b.emit(f[0]); a.connection.reconnect()
   await vi.waitFor(() => expect(a.configs).toHaveLength(2))
-  expect((decodeEnvelope(a.configs[1].session.hello).payload as { last_event_id: number }).last_event_id).toBe(30)
+  expect(decodeEnvelope(a.configs[1].session.hello).payload).not.toHaveProperty('last_event_id')
+  expect(decodeEnvelope(a.configs[1].session.hello).payload).not.toHaveProperty('last_seen_ts')
   b.emit(f[1]); expect(b.events.at(-1)).toMatchObject({ type: 'threadUpdate', serverId: 'b' })
   expect(a.events.some(e => e.type === 'threadUpdate')).toBe(false)
   a.configs[1].onEvent({ type: 'handshake-complete', helloAck: a.ack })
   a.emit(f[1]); expect(a.events.at(-1)).toMatchObject({ type: 'threadRepairNeeded', serverId: 'a', conversationId: 'c', reason: 'sequence' })
   a.connection.reconnect(); await vi.waitFor(() => expect(a.configs).toHaveLength(3))
-  expect((decodeEnvelope(a.configs[2].session.hello).payload as { last_event_id: number }).last_event_id).toBe(31)
+  expect(decodeEnvelope(a.configs[2].session.hello).payload).not.toHaveProperty('last_event_id')
   expect(a.sent).toHaveLength(0); expect(b.sent).toHaveLength(0)
   a.connection.stop(); b.connection.stop()
 })

@@ -1,4 +1,4 @@
-import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
+import { test, expect, encodePairingPayload } from './fixtures/clientScenario'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
 // #481 — the missing half of #442. `set_session_settings` (model / effort / YOLO from the run-config

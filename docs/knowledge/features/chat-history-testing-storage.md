@@ -25,6 +25,10 @@ backend/fresh-owner harness:
   evidence ranges. Each requires 206 protected record reads, 202 payload reads and
   408 decrypts; structural traversal is allowed logarithmic growth. See
   [counted measurements and timings](chat-history-testing-native.md#counted-bounded-opening-validation).
+  The same fixture resets counters and measures a 200-item newest held traversal
+  page: 200 payload reads, at most 204 protected record reads and 408 decrypts at
+  both sizes. Structural work is counted separately; see
+  [traversal measurements](chat-history-testing-native.md#counted-unchanged-saved-traversal-validation).
 
 Filtering existing held pages would scan long hidden tails. Counting only decrypts
 would also miss repeated authenticated structural traversal: the first capture
@@ -150,5 +154,7 @@ gate recorded 428 executed/passed, 0 failed and 3 skipped. These callable
 main-process operations require no real-Claude or visual acceptance. Full indexed
 storage is now active. These legacy page methods remain main-only; authoritative
 opening uses the shared authorized page bridge and owned writes preserve unloaded
-history. User-driven older saved traversal remains #2042.
+history. User-driven unchanged saved traversal uses newest/before held pages;
+[protected restart and mounted fixtures](chat-history-testing-restoration.md#restoration)
+cover complete identities, opening omissions and independent offline/held demand.
 

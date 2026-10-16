@@ -49,9 +49,10 @@ Selected containing-range evidence plus the newest anchor remains intact.
 
 Those schema-6 fixtures retain full/page compatibility proof. Owned writes use the
 [schema-7 regressions](chat-history-testing-storage.md#owned-mutation-regressions-and-counted-validation).
-Production shown-opening uses authorized partial page IPC; user-driven older
-saved-page traversal remains #2042. See the
-[bounded-opening regressions](chat-history-testing-storage.md#bounded-opening-selection-and-work).
+Production shown-opening and newest-first saved traversal use authorized partial
+page IPC. The [restart and mounted regressions](chat-history-testing-restoration.md#restoration)
+cover opening omissions, offline/held-reply input, anchor offsets and local retry.
+See the [bounded-opening regressions](chat-history-testing-storage.md#bounded-opening-selection-and-work).
 Multi-family import, outer-commit rollback and
 [fresh-owner fixtures](chat-history-testing-contracts.md#demand-and-snapshot-contracts) still apply.
 
@@ -75,7 +76,9 @@ cover revision/arrival ties, saved repair/unfinished fences, surviving batches,
 protected fresh-owner overlap and mounted visibility while the server reply is held.
 Keep the covered-unfinished-progress and arrival-order restart tests. See
 [counted bounded-opening validation](chat-history-testing-native.md#counted-bounded-opening-validation)
-for the verified revision, execution counts, selected-work measurements and mounted case.
+for the opening measurements, and
+[unchanged traversal validation](chat-history-testing-native.md#counted-unchanged-saved-traversal-validation)
+for the current Linux revision, counted suite/native results and selected traversal work.
 
 ## Browser persistence and lifecycle
 

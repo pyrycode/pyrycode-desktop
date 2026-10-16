@@ -157,10 +157,41 @@ See [counted validation](#counted-savedlive-restoration-validation) and the earl
 The [legacy browser/liveness discussion](chat-history-testing.md#history-continuity-and-overlap)
 does not establish daemon-item live acceptance. Production opening admits bounded
 partial indexed pages and saves only owned changes; hydration emits no save or new
-progress/completeness/read receipt. Invalidated reads retry the bounded operation.
-User-driven older saved-page traversal remains #2042. See
+progress/completeness/read receipt. Explicit Retry repeats a failed bounded demand;
+invalidated tokens retain classified failure and valid content without recovery.
+Automatic recovery after mutations/replacements remains #2064. See
 [counted bounded-opening evidence](chat-history-testing-native.md#counted-bounded-opening-validation)
-for the inspected mounted held-reply and protected opening/reopen cases.
+and [unchanged traversal evidence](#counted-unchanged-saved-traversal-validation).
+
+`savedThreadTraversal.test.ts` extends the existing runtime/store fixtures for held
+admission. It exercises newest traversal despite null opening continuation,
+coalescing, explicit local retry and exhaustion offline; pending/failed server
+state stays independent. Sparse positions 800/20/5 and delayed higher/equal revisions
+pin first-arrival ordering and optional-field clears. Cleanup tables fence late
+success/failure after cancellation/navigation, epoch replacement, same-epoch reset,
+delete, unpair and global clear with reused strings. Protection/storage/token and
+IPC failure classifications retain facts without loops or private diagnostic text.
+Disjoint saved ranges `[100,200)` / `[900,1000)` leave the next network page at 900.
+
+`fresh protected traversal reaches every fragmented saved identity including opening
+omissions without writes` in the existing Node integration fixture saves 650 identities:
+250 shown and 400 hidden, including unordered content and an old active dependency.
+A fresh runtime opens 201 selected facts, then traverses newest/before held windows
+and compares the exact complete snapshot and 650 unique ids. All operations are
+reads and the result is marked restored. A token survives another fresh owner while
+unchanged, then returns `unreadable` after replacement; the displayed snapshot stays
+intact. Overlapping opening facts must not skip omitted saved content.
+
+The mounted `unchanged saved traversal scrolls independently while server reply is
+held` and `unchanged saved traversal scrolls independently offline` cases reuse that
+650-item fragmented shape after closing/reopening the protected profile. The online
+case positively observes the catch-up request while scripted transport withholds its
+reply. `heldThreadRead` can select an operation and skip count: holding the third
+`beforeThreadPage` lets the test compare the same visible row's offset across the
+final insertion and prove repeated wheel input coalesces. All 250 shown rows render,
+without additional network pages or read acknowledgements; saved unread evidence
+does not become acknowledged by hydration. Captures at 1100×773 preserve the existing
+sidebar, conversation pane, footer and notices.
 
 The direct legacy `beginLocalTimelineRead` admission, newest-demand and exclusive
 bridge/frame tests were removed with the renderer holder/producers in #2030.
@@ -215,3 +246,42 @@ The fake skips are two macOS badge cases and the macOS window-reopen case. macOS
 is outside this Linux ticket's verification scope. No live-Claude run was required
 or claimed. These are recorded builder/verifier results, not documentation-stage
 test reruns.
+
+### Counted unchanged saved traversal validation
+
+The [post-merge verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/2066#issuecomment-6217180444)
+and dispatcher gate report record Linux x64 on 2026-10-16 at
+`8fa5f23fc349c11d1564dfbb54d3ece845a74636`:
+
+| Run or included case | Executed | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| Full units, 400 passing files | 9,228 | 9,228 | 0 | 3 |
+| Complete configured Playwright suite, verifier gate 8 | 466 | 466 | 0 | 4 |
+| Saved traversal while server reply is held, included above | 1 | 1 | 0 | 0 |
+| Saved traversal offline, included above | 1 | 1 | 0 | 0 |
+| Packaged production-encryption check, included above | 1 | 1 | 0 | 0 |
+
+Both exact mounted traversal names above are explicitly present and passed in gate
+8. The verifier also confirms all four `no-op ... on a short offline thread keeps
+following row growth` cases passed. Both configured clipboard/parallel projects ran
+with two actual workers, zero retries/flaky results and no report-level errors;
+traversal launch-fate attachments report no teardown failures. The four skips are
+three macOS-only checks and the existing system-prompt fixme. Install, docs guard,
+Node/Electron rebuilds and build/typecheck passed. Pre-verify used `--no-suite`
+(three passed checks, two intentional skips); units ran in the separate gate.
+
+The [builder's validation record](../../specs/architecture/2063-saved-thread-traversal.md#validation-evidence)
+retains the historical complete run on implementation
+`58953c28970b4d81e8ee7d361110a1b2b22bfdc8`: **438 executed, 434 passed, 4 failed,
+3 skipped**. Removing the connectivity guard had released following on short offline
+threads even when no demand was accepted. Repair `b3a26802a30dc4061752a90d12d323fb9055e2eb`
+made the callback report accepted demand and restored prior following intent for
+zero-offset no-ops. The four failures and both new traversal cases then passed
+**6 executed/passed, 0 failed/skipped**. The later complete green gate above covers
+the repair and merged main; it does not turn the original failed run into a pass.
+
+See [bounded-work and packaged measurements](chat-history-testing-native.md#counted-unchanged-saved-traversal-validation)
+for fixture sizes, selected versus structural work, conversion and cold-opening
+times. Other operating systems are outside this Linux ticket's verification scope.
+No live-Claude run was required or claimed. These are recorded builder/verifier
+results; documentation ran only the docs guard.

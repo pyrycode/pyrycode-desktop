@@ -14,14 +14,16 @@ pairing-rejected hosts. Opening a saved chat requests the newest 200 shown
 `daemon-items` plus active and recorded dependencies through a bounded partial projection on demand.
 It never draws a saved legacy timeline. Offline display grants no network capability.
 Once that host accepts `thread`, opening and reconnect resume from the saved epoch
-and complete checkpoint. Older demand and Retry use the thread query coordinator.
+and complete checkpoint. Older input first traverses bounded saved held pages,
+even offline or while a server reply is pending/failed. Local loading/retry is
+independent; after local exhaustion, later demand uses the thread query coordinator.
 See [production restore and recovery](thread-runtime.md#restore-recovery-and-cleanup).
 Explicit Forget/Unpair removes the host's saved content after credential removal.
 Confirmed conversation deletion removes both saved conversation formats
 and that host/conversation's list entry.
 Observing, saving, flushing and restoration create no lifecycle demand themselves.
-Offline opening and scrolling retain the existing host-scoped request gates. Disk
-retention is independent of the legacy holder's ten-conversation memory limit.
+Offline opening and scrolling use saved-host authorization; connectivity gates
+apply only to network demand. Disk retention is independent of the legacy holder's ten-conversation memory limit.
 
 ## API
 
@@ -410,26 +412,29 @@ creates connection, working or recovery state.
 
 [`readSavedTimeline`](../../../src/renderer/src/store/savedTimelineRestorer.ts)
 keeps its runtime name but requires `threads` and requests `openThreadPage` with
-limit 200. It accepts validated partial daemon-item pages with the exact requested
-host and conversation, retaining sparse arrival positions and saved availability
+limit 200 by default. Explicit traversal demand selects newest/before held pages
+at the same limit. It accepts validated partial daemon-item pages with the exact
+requested host and conversation, retaining sparse arrival positions and saved availability
 boundary separately from selected coverage. Wrong kinds/coordinates, unexpected
-results, classified errors and rejected IPC fail the current handle without importing data; missing
-records complete it with null. There is no `readTimeline` fallback.
+results, classified errors and rejected IPC fail the current handle without importing
+data; missing opening records complete it with null. There is no `readTimeline` fallback.
 
 `threadRuntime.restore` invokes this reader, which opens the store-owned
 `beginLocalRead(host, conversation)` handle and returns `{ done, cancel }`.
-Held scopes prevent duplicate reads.
-Process-local tokens fence delayed completion and failure after cancellation,
-replacement reads, explicit reset, epoch replacement or conversation/host/global
+Default opening refuses held scopes; explicit held-page admission requires one
+and permits only one pending read. Process-local tokens fence delayed completion
+and failure after cancellation, replacement reads, explicit reset, epoch replacement or conversation/host/global
 clear, even if coordinate or epoch strings are reused. Initial epoch admission and
 same-owner live publication preserve the read. Explicit partial restoration merges
 saved-only items with admitted revisions and arrival ties while retaining saved
 repair/unfinished obligations; only exact completed coverage can release their
 checkpoint fences. See [store hydration](thread-item-store.md#snapshots-and-completed-batches).
 Hydration emits no owned save and certifies no new progress or read acknowledgement.
-Restoration creates no transport request or raw event; opening, reconnect,
-older demand and Retry use the [thread coordinator](thread-runtime.md#restore-recovery-and-cleanup)
-and introduce no legacy content request.
+Restoration creates no transport request or raw event. Opening/reconnect network
+catch-up remains coordinator-owned; older demand first consumes saved pages and
+Retry resumes local failure when present, otherwise delegates to that coordinator.
+See [runtime ownership](thread-runtime.md#independent-saved-traversal). No legacy
+content request is introduced.
 
 Confirmed `conversationDeleted` delivery queues `removeConversation` using its
 main-stamped host and confirmed id, even without a held scope or list entry.
@@ -547,9 +552,11 @@ Windows NSIS x64/arm64 targets remain configured; these smokes add no Linux/macO
 release channel. Bounded legacy pages remain callable main-only; authoritative
 opening and held-page variants use the fixed authorized bridge. Ordinary owned
 writes preserve unloaded history. Production opening uses partial selection with
-no full-read fallback; retained full operations remain callable. User-driven older
-saved traversal and anchor rebasing remain #2042. One-time conversion after import
-or retained replacement is separate from ordinary fresh-owner opening work. See
+no full-read fallback; retained full operations remain callable. Complete unchanged
+saved traversal starts newest-first independently of opening's shown-window token
+and preserves the visible-row anchor. Invalidated tokens retain classified failure
+and displayed facts; automatic mutation recovery remains #2064. One-time conversion
+after import or retained replacement is separate from ordinary fresh-owner opening work. See
 [the mutable-storage decision](../decisions/0014-authenticated-owned-thread-mutations.md).
 
 ## Testing

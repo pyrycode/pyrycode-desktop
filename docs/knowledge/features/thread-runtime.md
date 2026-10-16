@@ -35,11 +35,12 @@ active/recorded dependencies, preserving saved progress and sparse arrival order
 A legacy saved timeline is never drawn or converted. Protected indexed storage is
 the application backend; ordinary fresh-owner reads decode only selected facts and
 evidence after one-time conversion/import. Retried invalidated opening uses the
-same bounded selection with no full-read fallback. User-driven older saved traversal
-and anchor rebasing remain #2042. See [storage activation](chat-history-testing-native.md#native-runtime-and-packaged-proof).
+same bounded selection with no full-read fallback. User-driven traversal uses the
+[independent saved-demand path](#independent-saved-traversal) below. See
+[storage activation](chat-history-testing-native.md#native-runtime-and-packaged-proof).
 
-While a saved read is pending, query demand waits but same-owner live additions
-can already render. Local settlement merges saved-only rows and winning revisions
+While opening's saved read is pending, network query demand waits but same-owner
+live additions can already render. Local settlement merges saved-only rows and winning revisions
 with those live rows, keeping both visible while the server reply remains held.
 A connected opening or reconnect then supplies the admitted snapshot's epoch and
 complete checkpoint to the coordinator. Applied version, unfinished batches and
@@ -70,6 +71,43 @@ Text appends are published once per animation frame in arrival order. The first
 append schedules that frame. Other event types flush earlier appends before
 application. A bounded flush also handles a paused window. Teardown removes
 subscriptions and retires owned query and live state.
+
+### Independent saved traversal
+
+`query('older', host)` first consumes bounded saved pages for the exact selected
+host/conversation lifecycle. The first demand requests `newestThreadPage` even when
+opening returned null or included an old active dependency. Later demands follow
+only `residency.traversal`: undefined is unstarted, a string continues the held pass,
+and null is local exhaustion. Opening's shown-window continuation cannot enumerate
+all omitted hidden/newer held facts. Repeated demand coalesces into one local read;
+opening must settle before traversal starts. No new older network demand is sent
+on the input that exhausts local traversal; a later input delegates to the coordinator.
+Without saved residency, demand delegates directly.
+
+`localQueries` retains local idle/loading/failed state independently of network
+`queries`. A disconnected host or held/failed server reply cannot block saved demand.
+Local loading/failure takes precedence in the existing presentation without replacing
+network state. Upward input cannot retry a local failure: explicit Retry repeats
+that demand, otherwise Retry delegates to the coordinator. Errors retain displayed
+content and content-free classifications, with no automatic token recovery; recovery
+after an owned mutation/replacement remains #2064.
+
+The selected local job captures the item-store generation. Navigation cancels it;
+reset/epoch replacement, deletion, successful unpair and teardown retire it. Both
+page admission and failure presentation require current ownership, even after the
+same strings are reused. Same-lifecycle live/network/newest facts merge by compatible
+revision, with admitted facts winning ties and saved sparse arrival positions retained.
+Held-page hydration preserves resident progress and older-availability ownership,
+unioning only supplied saved ranges. It emits no owned save, new certificate or read
+acknowledgement. A disjoint saved range cannot advance network paging across a hole;
+local exhaustion offline still needs a connection when daemon completeness is unknown.
+
+The scroll callback returns whether local demand started or network demand is eligible.
+At zero with no accepted demand, the pin restores prior following intent so a short
+offline thread still follows intrinsic row growth. Accepted saved demand preserves
+the existing visible-row anchor and offset. See
+[scroll demand](conversation-shell-scroll-pin.md#user-demand-and-prepend-position) and
+[counted traversal proof](chat-history-testing-restoration.md#counted-unchanged-saved-traversal-validation).
 
 ## Navigation boundaries
 

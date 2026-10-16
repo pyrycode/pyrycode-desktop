@@ -314,10 +314,29 @@ strings after JSON/protection expansion. See [page failures](chat-history-result
 
 Authoritative full operations, collection import and owned mutations share the
 readers above. Production restoration uses `openThreadPage` with explicit partial
-admission. User-driven older saved-page traversal and anchor rebasing remain #2042;
-opening continuation denotes the held boundary before the base shown window, not
-a disjoint traversal of the active/dependency closure. Local continuation/exhaustion
-never certifies daemon completeness or changes saved checkpoint, repair or availability.
+admission. User-driven traversal starts separately at `newestThreadPage`, then
+follows its own `beforeThreadPage` continuations with limit 200. Opening's token
+precedes the base shown window; it cannot enumerate hidden items within/after that
+window, even when null. An old active dependency also cannot define the visited
+boundary. Overlapping opening/dependency facts merge by identity, so an unchanged
+saved generation is traversable completely without duplicate resident identities.
+
+Slice residency keeps `traversal` separately: undefined means unstarted, a string
+is the next opaque token, and null means locally exhausted. Neither short/empty
+pages nor null certify daemon completeness, clear repair, advance checkpoint or
+replace boundary-owned older availability. Only supplied saved ranges are unioned;
+loading `[100,200)` beside `[900,1000)` leaves the unsaved hole and the coordinator's
+network boundary at 900. Saved-but-unloaded content, resident content and acknowledged
+reads remain distinct. Hydration creates no owned save, coverage certificate or read
+acknowledgement. Local exhaustion offline retains connection-needed treatment when
+daemon completeness is unknown.
+
+Every owned write/replacement can invalidate the next token. Classified protection,
+storage/token and IPC failures preserve displayed valid facts; explicit Retry repeats
+the failed local demand without a recovery loop or full-read fallback. Automatic
+continuation recovery after mutation/replacement remains
+[#2064](https://github.com/pyrycode/pyrycode-desktop/issues/2064). See
+[runtime demand ownership](thread-runtime.md#independent-saved-traversal).
 
 ### Main-only bounded legacy pages
 
@@ -459,16 +478,20 @@ deletion clears that held scope and suppresses both saved formats; successful
 unpair invalidates all that host's held threads and reads. See
 [storage ordering](chat-history.md#storage-and-concurrency).
 
-`readSavedTimeline` requires `threads` and requests `openThreadPage` with limit 200.
-It returns `{ done, cancel }` and admits only a validated partial page with the exact
-requested host/conversation before completing the store-owned local read. Missing
-completes with null; saved-empty still contributes metadata. Unexpected full stored
-results fail. A retried invalidated opening uses the same bounded request, with no
-full-read fallback. The retained legacy IPC/storage operations above and shared format admission are unchanged; they are
-not renderer writer/restorer paths.
-`beginLocalRead(host, conversation)` returns null for held scopes; otherwise its
-one-shot complete/fail/cancel handle uses a process-local token. A replacement read,
-explicit reset, replacement of a held epoch or scoped cleanup invalidates it, even
+`readSavedTimeline` requires `threads`. Without explicit demand it requests
+`openThreadPage`; demand selects `newestThreadPage` or `beforeThreadPage` with its
+opaque continuation. Every request uses limit 200. It returns `{ done, cancel }`;
+`done` resolves to a static outcome used for local loading/retry. It admits only a
+validated partial page at the exact requested host/conversation before completing
+the store-owned read. Missing opening completes with null; saved-empty still
+contributes metadata. Unexpected full stored results fail. A retried invalidated
+opening uses the same bounded request, with no full-read fallback. The retained
+legacy IPC/storage operations above and shared format admission remain outside
+renderer writer/restorer paths.
+`beginLocalRead(host, conversation)` refuses held scopes for opening.
+`beginLocalRead(host, conversation, true)` explicitly admits a held-page read only
+with an existing scope and no read already pending. Its one-shot complete/fail/cancel
+handle uses a process-local token. A replacement read, explicit reset, replacement of a held epoch or scoped cleanup invalidates it, even
 when identity strings are reused. Initial epoch admission and same-owner publication
 preserve it. Validated partial saved results merge by revision and original arrival
 order with same-epoch admitted facts, preserving saved progress obligations through

@@ -11,7 +11,6 @@
 import type { StampedDaemonEvent } from '@shared/ipc/events'
 import { markdownPlainText } from '../screens/conversation/MarkdownReader'
 import { toolHeadline } from '../screens/conversation/toolHeadline'
-import type { ConversationTimelineState } from './conversationTimelineStore'
 import type { ThreadItem } from './threadTimeline'
 
 /** The three daemon events that raise a notification, as they arrive stamped with their server. */
@@ -19,28 +18,6 @@ export type NotifyEvent = Extract<StampedDaemonEvent, { type: 'turnEnd' | 'modal
 
 /** The most characters a preview keeps, the trailing `…` included — main's body cap, and mobile's. */
 export const NOTIFICATION_PREVIEW_CHARS = 200
-
-/**
- * The preview for `event`, or `null` when there is none and the notification keeps its fixed copy.
- *
- * The timeline map is keyed by conversation id alone, so the slice must also belong to the event's own
- * server: one stamped with a different `serverId` never supplies the preview (an unstamped one may, the
- * store's own `receivedSlice` reading). A conversation with no slice — never seen, or evicted past
- * `MAX_RETAINED_TIMELINES` — has no preview.
- *
- * - `turnEnd`: the newest assistant text item carrying the ending turn's id, markdown stripped to the
- *   text a reader sees (link text and code content kept). Another turn's text is never used.
- * - a `permission` modal: `Wants to run <tool>: <target>`, where `<tool>` is the modal's `prompt` (the
- *   daemon's stream approval path sets it to the tool name) and `<target>` is the collapsed row's
- *   headline for the newest result-less `toolCall` of that name.
- * - a `trust` modal and a question batch: none.
- */
-export function notificationPreviewIn(state: ConversationTimelineState, event: NotifyEvent): string | null {
-  const slice = state.timelines.get(event.conversationId)
-  if (slice === undefined) return null
-  if (slice.serverId !== undefined && slice.serverId !== event.serverId) return null
-  return notificationPreviewFromItems(slice.timeline.items, event)
-}
 
 export function notificationPreviewFromItems(items: readonly ThreadItem[], event: NotifyEvent): string | null {
   switch (event.type) {

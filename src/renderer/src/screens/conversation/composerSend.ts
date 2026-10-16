@@ -28,88 +28,21 @@ export interface PendingAttachmentTake {
   rollback: () => void
 }
 
-/**
- * The four effects submitMessage performs, injected so the helper stays pure and deterministic in
- * tests. `newMessageId` is `crypto.randomUUID()` in the container; tests inject a stub. `dispatch`
- * writes a `ThreadEvent` into `timelineStore` (#179): the user's message and the daemon's structured
- * reply now share the one ordered timeline surface.
- *
- * `dispatchFor` (#756) is the same echo's write into the keyed holder — the timeline's second
- * row-adding writer, folded into the conversation the message was SENT TO. REQUIRED, not optional, and
- * not an arity widening of `dispatch`: the opposite call from `subscribeTimeline`'s, for the reason
- * `ConversationScreen.tsx:1930-1934` already states — the cascade decides. This deps object had six
- * call sites in `composerSend.test.ts` plus the one container, so requiring the field cost six
- * mechanical test edits and buys a compile error for "forgot to wire it"; at `subscribeTimeline`'s
- * twenty that trade is unavailable, which is why the bridge went the other way.
- *
- * `now` (#1013) is the echo's clock — `Date.now` in the container, a constant in tests. It goes the
- * OPPOSITE way from `dispatchFor` above, and deliberately: requiring it would not merely cost mechanical
- * edits (this object now has thirteen call sites here, not the six that made `dispatchFor`'s trade cheap)
- * — it would REDDEN every whole-object `toHaveBeenCalledWith` assertion on the echo, since every deps
- * literal would then supply a clock and every echo would carry a defined `createdAt` where those assertions
- * name none. (#1213 paid exactly that price for `messageId`, which is REQUIRED in this deps object as
- * `newMessageId` and so is always defined: five such assertions gained the field. That cost was accepted
- * because the id is not optional at the producer — the wire frame needs it either way — whereas a clock
- * genuinely may be absent.) So `now` is optional, with no `Date.now` fallback: **an absent clock means no
- * stamp**,
- * the same rule `timelineBridge`'s seams follow, and an unstamped echo is a legal item (#1014 draws it as
- * the empty meta slot). The cost is that a forgotten wiring is silent rather than a compile error;
- * `composerSend.test.ts` pins the wired behaviour instead.
- *
- * `takeAttachments` (#1039) is the set of uploads that have completed since the last send — the files
- * this message is being sent with. It follows `now` in EVERY respect and for the same two reasons:
- * requiring it would cost thirteen mechanical edits at this file's deps literals (above the ten-call-site
- * boundary this pipeline splits at) to buy a compile error, and an unwired take means no attachments
- * rather than a fallback to some other source. It differs from `now` in one way that shapes the rest of
- * this module: **the take is destructive**. The composer's implementation returns the set AND clears it,
- * so calling it is what "this send consumed those attachments" means.
- *
- * ⭐ WHAT #1055 CHANGES, AND WHY THE OLD ORDERING COULD NOT SURVIVE IT. The paragraph that stood here
- * ended "that is why it is read exactly once, below the guarded send", and that placement is now
- * impossible: the taken ids RIDE the outbound frame, so they have to be known before the payload literal
- * is built. What survives verbatim is the half that still holds — the take is read exactly ONCE, and it
- * is read below BOTH `false` returns, so a blank Enter and a submit with no active conversation still
- * take nothing and the operator's attached file survives for the next send.
- *
- * What the move costs is an undo, and the dep's shape is where that is paid: it now answers a
- * `PendingAttachmentTake` — the set AND a `rollback` that puts it back — rather than the bare set. A send
- * whose bridge throws named nothing on the wire, so the files must still be attached for the retry
- * (#1055's third criterion); handing the undo back with the take is what keeps that from becoming a
- * second optional dep that could silently go unwired, the failure mode `now` already documents.
- */
+/** Captured send ownership and effects. Attachments are claimed only after the no-op guards. */
 export interface ComposerSendDeps {
-  serverId?: string
-  threadSend?: { store: ReturnType<typeof createThreadSendStore>; deviceId: string | null; version?: number }
+  serverId: string
+  threadSend: { store: ReturnType<typeof createThreadSendStore>; deviceId: string | null; version?: number }
   diagnose?: (record: MessageLifecycleDiagnostic) => void
   sendCommand: (command: RendererCommand) => void
-  dispatch: (event: ThreadEvent) => void
-  dispatchFor: (conversationId: string, event: ThreadEvent) => void
   newMessageId: () => string
   now?: () => number
   takeAttachments?: () => PendingAttachmentTake
 }
 
 /**
- * Submit the composer's current text into the ACTIVE conversation (#448). `conversationId` is the
- * id of the conversation this thread shows — the activeConversationStore's id at the container.
- * Returns `true` when the bridge accepts the submission (the container clears the input), `false` for
- * whitespace-only input, a null conversation id or a bridge exception.
- *
- * The null guard is #448's contract: the daemon validates `conversation_id` and rejects an unknown
- * id with an error frame, so sending under a placeholder is never correct. No active conversation →
- * no wire command AND no optimistic echo — an echo for a message that cannot be delivered would
- * paint a lie into the timeline.
- *
- * The `message_id` is minted ONCE and used TWICE — the wire command and the echo. #179 retired the
- * original "reuse the id so the daemon's re-echo dedupes" rationale and it stays retired: in interactive
- * mode the daemon streams no user-message event (the `DaemonEvent` union has no such arm, and the coarse
- * `message` fan-out is off), so the echo is the sole source of the user message and needs no dedup key.
- * #1213 puts the id back on the echo for an unrelated purpose — CORRELATION with the queued row the daemon
- * draws when it parks this message mid-turn — and the field's own comment below carries that argument. The
- * send is guarded (AC4): a bridge failure is swallowed, never propagated. The echo is published before
- * the bridge call so synchronous delivery observations find its identity. A bridge exception marks
- * that echo Not sent, preserving its text and attachments, rolls pending attachments back and returns
- * false so the container retains the draft for resubmission. An echo does not claim daemon delivery.
+ * Retain one locally unaccepted send before crossing the bridge, so synchronous feedback can find it.
+ * A bridge exception preserves recoverable text, marks local feedback and rolls attachments back.
+ * Acceptance and exact host/device/message settlement belong to the authoritative send store.
  */
 export function submitMessage(
   text: string,
@@ -119,7 +52,7 @@ export function submitMessage(
   const trimmed = text.trim()
   if (trimmed.length === 0 || conversationId === null) return false
   const threadSend = deps.threadSend, host = deps.serverId
-  if (threadSend && !host) return false
+  if (!host) return false
   const message_id = deps.newMessageId()
   const take = deps.takeAttachments?.()
   const named = take !== undefined && take.attachments.length > 0 ? take.attachments : undefined
@@ -134,24 +67,16 @@ export function submitMessage(
   // Both identities exist before the bridge can synchronously report delivery.
   const echo: ThreadEvent = { type: 'userText', text: trimmed, messageId: message_id,
     createdAt: deps.now?.(), attachments: named }
-  if (threadSend && host) threadSend.store.getState().retain(host, conversationId, threadSend.deviceId, echo)
-  else {
-    deps.dispatch(echo)
-    deps.dispatchFor(conversationId, echo)
-  }
+  threadSend.store.getState().retain(host, conversationId, threadSend.deviceId, echo)
   try {
     deps.sendCommand(sendMessageCommand(payload, deps.serverId))
-    if (threadSend && host) threadSend.store.getState().clearReports(host, conversationId, threadSend.version ?? 0)
+    threadSend.store.getState().clearReports(host, conversationId, threadSend.version ?? 0)
     return true
   } catch {
     diagnose('message-bridge-failed')
     take?.rollback()
     const failed: ThreadEvent = { type: 'messageDelivery', messageId: message_id, status: 'not-sent' }
-    if (threadSend && host) threadSend.store.getState().feedback(host, conversationId, failed)
-    else {
-      deps.dispatch(failed)
-      deps.dispatchFor(conversationId, failed)
-    }
+    threadSend.store.getState().feedback(host, conversationId, failed)
     return false
   }
 }

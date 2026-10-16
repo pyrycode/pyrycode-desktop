@@ -49,3 +49,8 @@ Run install, final main merge, pre-verify, build and the complete configured fak
 
 ## Open Questions
 None. The shared declarations' surviving imports determine what stays; no replacement hierarchy or rename cascade is introduced.
+
+## Revisions
+2026-10-16: The final caller audit found two unused queue action helpers, `dropQueuedMessage` and `sendQueuedNow`, whose presentation callers retired in #2023. Delete them and their exclusive tests; retain `QueuedRowHandle` in place. `ComposerSendDeps` now requires the captured host and authoritative pending-send store, removing its unused flat/keyed dispatch callbacks. Existing exact-settlement tests remain the proof; composer tests retain command, attachment and diagnostic assertions without constructing a legacy holder.
+
+The read publisher also requires an authoritative epoch and shown watermark; remove its optional legacy latest-entry eligibility branch. Its existing retry, acknowledgement and ownership cases now supply authoritative epochs. Shared presentation/translator declarations remain at their existing paths. Final written work remains below 800 inserted lines, with the recorded consumer-count exception unchanged.

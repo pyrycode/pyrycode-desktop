@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest'
 import { createThreadItemStore } from './threadItemStore'
 import { createChatHistoryWriter } from './chatHistoryWriter'
 import { createConversationListStore } from './conversationListStore'
-import { createConversationTimelineStore } from './conversationTimelineStore'
 import { readSavedTimeline } from './savedTimelineRestorer'
 import { beginChatHistoryRemoval } from './chatHistoryRemoval'
 import type { ChatHistoryRequest, ChatHistoryResult, ChatHistorySnapshot, ThreadSnapshot } from '@shared/chatHistory'
@@ -25,14 +24,14 @@ const held = <T,>() => {
   return { promise, resolve }
 }
 function harness(write = async (_request: ChatHistoryRequest): Promise<ChatHistoryResult> => ({ status: 'ok' })) {
-  const threads = createThreadItemStore(), lists = createConversationListStore(), timelines = createConversationTimelineStore()
+  const threads = createThreadItemStore(), lists = createConversationListStore()
   let listener: (event: StampedDaemonEvent) => void = () => {}
   const save = vi.fn(write), log = vi.fn()
   const writer = createChatHistoryWriter({ threads, lists, write: save, log,
     receipt: () => ({ type: 'assistantDelta', serverId: 'a' }),
     subscribeEvents: on => { listener = on; return () => { listener = () => {} } }, schedule: () => () => {} })
   const writes = () => save.mock.calls.map(([r]) => r).filter(r => r.operation === 'replaceThread')
-  return { threads, timelines, writer, save, log, writes, event: (event: StampedDaemonEvent) => listener(event) }
+  return { threads, writer, save, log, writes, event: (event: StampedDaemonEvent) => listener(event) }
 }
 const read = (threads: ReturnType<typeof createThreadItemStore>, response: Promise<ChatHistoryResult>) =>
   readSavedTimeline({ threads, read: () => response, log: () => {} }, 'a', 'c')
@@ -67,17 +66,6 @@ describe('daemon item cache ownership', () => {
       }
       expect(JSON.stringify(log.mock.calls)).not.toContain('private')
     })
-  it('ignores legacy timeline rows, receipts, identities and echoes', async () => {
-    const h = harness()
-    h.timelines.getState().dispatchLocalEcho('a', 'c', { type: 'userText', text: 'local', messageId: 'echo' })
-    h.timelines.getState().dispatchFor('c', { type: 'assistantDelta', turnId: 't', seq: 0, text: 'legacy' }, undefined, 1, 'a')
-    h.timelines.getState().recordHistoryPage('c', 'cursor', true, [1])
-    await h.writer.flush()
-    expect(h.save).not.toHaveBeenCalled()
-    live(h.threads)
-    await h.writer.stop()
-    expect(h.save.mock.calls.map(([request]) => request.operation)).toEqual(['replaceThread'])
-  })
   it('retains exact unfinished and repair fences after offline hydration', async () => {
     const source = createThreadItemStore(); live(source, 100)
     source.getState().requireRepair('a', 'c', 'e', 150)

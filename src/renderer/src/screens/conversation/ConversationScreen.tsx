@@ -47,18 +47,7 @@ import type { ConversationCreatedPayload, WireResetHandoff, WireAgent, MemorySea
 import type { ModelRefusalEvent, RelayLinkStatus } from '@shared/ipc/events'
 import { sessionStore, useSessionStore, initialSessionState, selectStatusFor, type ConnectionStatus } from '../../store/sessionStore'
 import { canRespondToPromptNow, usePromptResponseAvailability } from './promptResponseAvailability'
-// #758: only the store hook survives here — the composer's optimistic echo still writes the flat store
-// (dual-write, Strangler Fig). Its six selectors are gone with the reads below; retiring the store
-// itself is its own ticket.
-import { useTimelineStore } from '../../store/timelineStore'
 import { useCollapseToolUsesPrefStore, selectCollapseToolUses } from '../../store/collapseToolUsesPrefStore'
-import {
-  conversationTimelineStore,
-  useConversationTimelineStore,
-  selectTimelineFor,
-  type ConversationTimelineState
-} from '../../store/conversationTimelineStore'
-import { historyRetryDeps, retryHistoryPage, selectHistoryFailure } from './historyRetry'
 import {
   activeConversationStore,
   useActiveConversationStore,
@@ -71,10 +60,6 @@ import {
 } from '../../store/usageLimitStore'
 import { useReportedContextStore, selectReportedContextFor } from '../../store/reportedContextStore'
 import { contextTokenSource } from './contextTokenSource'
-import {
-  useBackgroundTaskRosterStore,
-  selectLiveTaskCountFor
-} from '../../store/backgroundTaskRosterStore'
 import { TopOverlay } from './TopOverlay'
 import { useUsagePillDismissalStore, usagePillDismissalStore } from '../../store/usagePillDismissalStore'
 import {
@@ -179,7 +164,7 @@ import {
 } from '../../store/questionPicksStore'
 import { sessionBoundaryTitle } from './sessionBoundaryViewModel'
 import { compactionBoundaryTitle } from './compactionBoundaryViewModel'
-import { formatSessionCost, latestSessionCostUsd, latestThreadSessionCostUsd } from './sessionCost'
+import { formatSessionCost, latestThreadSessionCostUsd } from './sessionCost'
 import { formatLastActivity, titleFor } from '../channels/channelListViewModel'
 // #1440 renamed this module for its new title. `requestRenameConversation` KEEPS its name: it owns the
 // `renameConversation` wire literal, and renaming the helper would drift it from the verb it sends.
@@ -192,48 +177,7 @@ import { EditChannelDialog } from '../channels/EditChannelDialog'
 import { BackgroundTaskPanelView } from './BackgroundTaskPanel'
 import type { RendererCommand } from '@shared/ipc/commands'
 
-// The conversation shell: a scrollable message thread above a pinned composer,
-// styled from the mobile Conversation Thread screen (Figma node 16-8) stretched
-// to the window. Since #179 the thread reads the structured-stream timeline store
-// (the single thread surface); the composer's echo writes there too.
-//
-// ConversationScreen is the store-bound container (smoke-tested for "renders without
-// throwing"); Timeline is the pure, props-in/markup-out view that the tests server-render with
-// an injected ThreadItem[] — the same container/view split PairingScreen uses. MessageThread /
-// MessageBubble are retained as pure, still-tested residue of the retired coarse path (a later
-// cleanup ticket removes them). Composer stays in-file; UnpairControl was in-file here too until
-// #1061 deleted it and the bare header row it owned.
-
-// #758: "no conversation is open" as a SELECTOR rather than as a sentinel id. Module-level, so its
-// identity is stable and the memoised binding below does not churn its subscription.
-const selectNothingHeld = (): null => null
-
-// #1260: the same treatment for the prepended-row count, and for `selectOpenTimelineFor`'s reason rather
-// than for symmetry — `''` is an ordinary key in the timeline holder, so `?? ''` could read another
-// conversation's count as the open one's. Module-level so the memoised binding's identity is stable.
-
-/**
- * #758: the selector that binds the chat pane to the OPEN conversation's own retained timeline — the
- * whole of the reader cutover. `null` in, no map lookup at all; an id in, that id's held slice or `null`.
- *
- * DO NOT reintroduce `selectTimelineFor(openConversationId ?? '')` — BackgroundTaskPanel.tsx:342's
- * idiom, which is safe THERE and not here. `''` is an ordinary key in the timeline holder (`dispatchFor`
- * mints a slice for whatever `conversation_id` the daemon asserts), so the sentinel would render that
- * slice as the open conversation's thread while nothing is open. Branching to `selectNothingHeld`
- * performs no lookup on that path, which makes the misattribution unavailable rather than unlikely.
- *
- * Exported for its unit tests and for that guard, not for a second caller: zustand v5 reads
- * `getInitialState()` under `renderToStaticMarkup`, so a seeded store is invisible to this repo's
- * renderer tier and the container can only ever be server-rendered against empty stores. The pure
- * derivation is therefore where the ticket's claim is testable at all — the `workingIndicatorState` /
- * `openToolName` / `isTurnRunning` posture already established in this file. The end-to-end proof is
- * e2e/conversation-switch-keeps-both-threads.spec.ts.
- */
-export function selectOpenTimelineFor(
-  openConversationId: string | null
-): (s: ConversationTimelineState) => TimelineState | null {
-  return openConversationId === null ? selectNothingHeld : selectTimelineFor(openConversationId)
-}
+// Conversation content comes from daemon items and locally unaccepted sends.
 
 export interface ConversationScreenProps {
   onOpenHostedApp?: (serverId: string, appId: string) => void
@@ -270,26 +214,8 @@ export function ConversationScreen({
   // subscription, only its position in the hook list changed (stable across renders).
   const activeConversation = useActiveConversationStore(selectActiveConversation)
   const collapseToolUses = useCollapseToolUsesPrefStore(selectCollapseToolUses)
-  // #758: the thread on screen is the OPEN conversation's own retained timeline, not the flat
-  // single-thread store — which `activateConversation` still resets on every switch, into a store nothing
-  // reads any more. That is the whole of "leaving a chat and coming back keeps both threads": the rows
-  // that arrived while the operator was elsewhere are still held under their own conversation's key.
-  //
-  // `??` and not `||`: an empty-string id must survive as an ordinary key rather than collapse into
-  // "nothing open" (the :281 / :1955 spelling this file already uses).
   const openConversationId = activeConversation?.id ?? null
   const actionsAvailable = useConversationActionAvailability(openConversationId)
-  // A useMemo-stable selector per id (the BackgroundTaskPanel.tsx:342 idiom) so a fresh closure per render
-  // does not churn the subscription. NOTHING wraps, copies, maps or derives the result inside the
-  // subscription, which is what keeps the selector's return Object.is-stable: a write for ANOTHER
-  // conversation rebuilds the outer map but copies every survivor by reference
-  // (conversationTimelineStore.ts:214-217), so `get(openId)` hands back the same slice object and this
-  // screen does not re-render. That is what makes the switch cheap.
-  const selectOpenTimeline = useMemo(
-    () => selectOpenTimelineFor(openConversationId),
-    [openConversationId]
-  )
-  const heldTimeline = useConversationTimelineStore(selectOpenTimeline)
   // Active metadata can be reseeded from the wire; the clicked saved coordinates remain client-owned.
   const selectedHost = savedTimelineTarget?.conversationId === openConversationId
     ? savedTimelineTarget.serverId
@@ -332,56 +258,12 @@ export function ConversationScreen({
     window.pyry.sendDiagnostic({ event: 'message-reply-appended', code: role })
   }, [selectedHost, openConversationId])
   const offline = useSessionStore(s => selectedHost !== null && s.statuses.get(selectedHost)?.type !== 'connected')
-  const heldSlice = useConversationTimelineStore(s => openConversationId === null ? undefined : s.timelines.get(openConversationId))
-  const ownSlice = heldSlice?.serverId === selectedHost ? heldSlice : undefined
-  const openTimeline = selectedHost !== null && ownSlice === undefined ? null : heldTimeline
-  const localStatus = authoritative ? threadRestoring ? 'loading' : 'loaded'
-    : ownSlice?.localRead ?? (ownSlice === undefined ? 'loading' : 'loaded')
-  const coverage = ownSlice?.coverage ?? (ownSlice?.history?.status === 'loaded'
-    ? ownSlice.history : ownSlice?.restored?.coverage)
-  // The absent-slice branch is WRITTEN OUT. `selectTimelineFor(id) ?? initialTimelineState` is banned at
-  // every read site (conversationTimelineStore.ts:44-49) because it collapses "nothing is held for this
-  // conversation" into "observed, nothing in the thread" with no type error and no failing test; the
-  // nullable return is what forces this branch to be written and reasoned about.
-  //
-  // What `null` means HERE is "no conversation is open" — not "the open one has no rows". #786 stamps the
-  // open conversation at the activation seam and `markViewed` CREATES its slice, so by the time this
-  // renders an open conversation always has one. The reachable cases are the nullary notification `open`
-  // before any conversation was activated (PairedShell.tsx:275) and a bare `<ConversationScreen />` in a
-  // test. Both readings put the SAME shipped empty thread on screen, and that resolution is a decision:
-  // with no conversation open there is no thread to be about, and an empty thread is the honest render —
-  // exactly today's behaviour against an empty flat store. No test can tell the two readings apart at this
-  // site, because both render identically; the test that CAN fail is the empty-string-key one in
-  // ConversationScreen.test.tsx's `selectOpenTimelineFor` describe.
-  const thread = authoritative ? { ...initialTimelineState, ...liveInput.status,
+  const localStatus = threadRestoring ? 'loading' : 'loaded'
+  const thread = { ...initialTimelineState, ...liveInput.status,
     thinkingTokens: liveInput.thinkingTokens, localSendPending: localSend?.localSendPending ?? null }
-    : openTimeline === null ? initialTimelineState : openTimeline
-  // The seven names below are `TimelineState`'s own seven fields, so every line of JSX under this container
-  // is untouched by the cutover. Subscribing to the whole slice rather than to seven narrow selectors is
-  // re-render-neutral: each of the six scalars' own comments recorded that it "adds no meaningful
-  // re-render churn beyond the items delta already here", so these are the same renders from one
-  // subscription instead of six.
-  //
-  //   items            — #179: the structured-stream rows, the single thread surface since the coarse
-  //                      MessageThread was retired. `ThreadItem` is already the render model (ADR 0008,
-  //                      camelCase, conversation_id-free), so it flows straight to the pure Timeline view.
-  //   phase            — #215: the coarse lifecycle phase. The container derives the indicator state and
-  //                      passes only that down, so the LABEL CHOICE stays a closed client-owned union.
-  //   stalled          — #317: the onset-only stall scalar; a plain boolean, so no daemon string reaches
-  //                      the view.
-  //   apiRetry         — #493: the live api-retry status; two integers and no string field.
-  //   compacting       — #496: the auto-compaction liveness fact; a plain boolean.
-  //   localSendPending — #650: the locally-opened working-indicator window — the one renderer-sourced
-  //                      scalar of the five, opened by the operator's own send.
-  //   thinkingTokens   — #1314: the latest thinking-token reading, or null. The second of the six to
-  //                      carry a value rather than a liveness fact, and like `apiRetry`'s two integers
-  //                      it is a number and no string field, so the view's "structurally cannot carry a
-  //                      daemon string" guarantee is preserved. It does NOT join the `ThreadStatus`
-  //                      record below: that record decides WHICH of the five labels the slot shows, and
-  //                      the reading changes none of that — it only extends the text of one of them.
   const { items, phase, stalled, apiRetry, compacting, localSendPending, thinkingTokens, resetting } =
     thread
-  const openTool = authoritative ? composerReports?.tool ?? null : openToolCall(items)
+  const openTool = composerReports?.tool ?? null
   // #1556: hoisted out of the JSX — the `openTool` precedent one line up — because the status row now has
   // TWO consumers of this one answer. The label has always read it; the icon's gate joins it, so deriving
   // it once is what stops the two from ever disagreeing about the same render (they disagreed for a full
@@ -420,9 +302,7 @@ export function ConversationScreen({
   // screen-local boolean → useState, never the store (ADR 0006), resetting to closed on remount for free.
   // #962 retired the clock trigger beside the status row (the design draws no home for it, and #580
   // owns the panel's final one), so the overflow menu's Background-tasks item flips it open now until
-  // that drawing lands; the panel reads the roster store itself
-  // and needs only the active conversation's id, derived from the `activeConversation` slice already held
-  // above (no second subscription). One overlay at a time in normal use.
+  // that drawing lands. Task membership comes from the authoritative snapshot.
   // #1634: the drawer no longer takes focus, so it must survive a conversation switch, and a switch remounts
   // this screen. The shell's props win when present; the local state is the bare-screen fallback only.
   const [localPanelOpen, setLocalPanelOpen] = useState(false)
@@ -458,7 +338,6 @@ export function ConversationScreen({
   // attachments and its upload listener are mount-local, so an early return here would silently drop them
   // on a same-conversation round trip through the reader. Hiding also keeps the thread's scroll position.
   const readerOpen = reader.state.type !== 'closed'
-  useReadObservation(authoritative ? null : openConversationId, readerOpen, paneRef, scrollPin.ref)
   return (
     <div className="conversation">
       {reader.state.type !== 'closed' && (
@@ -507,7 +386,7 @@ export function ConversationScreen({
           read as a fault. What survives is a read that has not settled (loading, failed) and an offline
           host whose read DID return rows — the one case where "Offline. Showing saved messages." is a
           true sentence. The disconnection itself is still announced, by the #279 banner above. */}
-      {selectedHost !== null && (localStatus !== 'loaded' || (offline && (authoritative ? authoritativeSnapshot?.items.length : items.length))) &&
+      {selectedHost !== null && (localStatus !== 'loaded' || (offline && authoritativeSnapshot?.items.length)) &&
         <SavedTimelineNotice status={localStatus} />}
       {/* #1627: a markdown file that could not be opened. One client-owned line, never the path or the
           reason; cleared by the next open, and gone with the screen on a conversation switch. */}
@@ -622,7 +501,7 @@ export function ConversationScreen({
                  pill opens the SAME overlay the overflow menu's Background-tasks item does. #1634: the pill
                  now TOGGLES it and shows whether it is open; the menu item still only opens. */
               <ComposerErrorSlotControl
-                threadReports={authoritative ? composerReports : undefined}
+                threadReports={composerReports}
                 onCommand={sendText}
                 backgroundTasksOpen={panelOpen}
                 onToggleBackgroundTasks={() => setPanelOpen(!panelOpen)}
@@ -673,7 +552,7 @@ export function ConversationScreen({
           conversation={activeConversation}
           now={now}
           // #1567: scanned only while the sheet is mounted; `items` is the open conversation's thread.
-          sessionCostUsd={authoritative ? latestThreadSessionCostUsd(authoritativeSnapshot, liveInput.sessionId) : latestSessionCostUsd(items)}
+          sessionCostUsd={latestThreadSessionCostUsd(authoritativeSnapshot, liveInput.sessionId)}
           onClose={() => setChannelInfoOpen(false)}
         />
       )}
@@ -1233,7 +1112,7 @@ function ThreadItemsView({ pin, snapshot, readInputs, sendInputs, taskInputs, tr
   const localPin = useThreadScrollPin(snapshot.conversationId, visibleItems, onOlder)
   const scrollPin = pin?.scrollPin ?? localPin.scrollPin
   const paneRef = localPin.paneRef
-  useReadObservation(null, false, pin?.paneRef ?? paneRef, scrollPin.ref, readInputs && { ...readInputs, snapshot })
+  useReadObservation(readInputs && { ...readInputs, snapshot }, pin?.paneRef ?? paneRef, scrollPin.ref)
   const [expandedTools, setTools] = useState<ReadonlySet<number>>(() => new Set())
   const [expandedRuns, setRuns] = useState<ReadonlySet<number>>(() => new Set())
   const items: ThreadItem[] = rows.map(row => row.item ?? { kind: 'userText', text: '' })
@@ -1720,7 +1599,7 @@ export const TimelineRow = memo(function TimelineRow({
         </div>
       )
     case 'userText':
-      // #179: the user's own message, sourced from the composer echo (composerSend → timelineStore).
+      // Shared user-message presentation for supplied items and local unaccepted sends.
       // The right-aligned user bubble mirrors MessageBubble's user treatment but carries the timeline's
       // role attribute (data-thread-role="user", distinct from MessageBubble's data-message-role so the
       // two test-count seams stay separate) and reuses .message-row--user / .bubble--user (no CSS
@@ -3980,13 +3859,6 @@ function Composer({
   const setText = (value: string): void => {
     if (serverId !== null && conversationId !== null) setDraft(serverId, conversationId, value)
   }
-  // #179: the optimistic echo now writes into timelineStore (a userText ThreadEvent), not sessionStore
-  // — content lives in one store. The send gate below still reads sessionStore's connection status;
-  // two stores in one component is fine (status vs. content are orthogonal facets).
-  const dispatch = useTimelineStore((s) => s.dispatch)
-  // Stamp the local echo with the resolved send host so saved-chat reopening retains it.
-  // The store action is stable, just like the flat timeline's dispatch.
-  const dispatchLocalEcho = useConversationTimelineStore((s) => s.dispatchLocalEcho)
   // #31: gate the send control on the live connection status. Selecting `status` re-renders the
   // Composer when it changes, so the control re-enables reactively on connect (AC3) with no reload.
   // The thread selects only the timeline `items` slice, so status changes don't re-render it.
@@ -4053,7 +3925,7 @@ function Composer({
         const sent = submitMessage(value, chat, { serverId, threadSend: { store: threadRuntime.sends, deviceId: identity.deviceId,
           version: threadRuntime.items.getState().snapshot(serverId, chat)?.version },
           diagnose: window.pyry.sendDiagnostic, sendCommand: sendConversationCommand,
-          dispatch: () => {}, dispatchFor: () => {}, newMessageId: () => crypto.randomUUID(),
+          newMessageId: () => crypto.randomUUID(),
           now: Date.now, takeAttachments: () => take })
         if (!sent) return // submitMessage owns attachment rollback; the retained draft remains editable.
         if (displayedError) live.getState().dispatch({ type: 'consume', displayed: displayedError })
@@ -4067,39 +3939,7 @@ function Composer({
       }).catch(restore).finally(() => { identityPending.current = false }) // The pending submission owns its attachment claim.
       return false // The continuation clears only the unchanged submitted draft after acceptance.
     }
-    // `window.pyry` is dereferenced only here, at interaction time — never during render — so the
-    // server-rendered container smoke test never touches the bridge. Do NOT hoist the deps object out of
-    // this function: that would move the dereference into the render path, where `window.pyry` does not
-    // exist under renderToStaticMarkup, and every container smoke test would throw.
-    const sent = submitMessage(value, activeConversationId, {
-      serverId,
-      diagnose: window.pyry.sendDiagnostic,
-      sendCommand: sendConversationCommand,
-      dispatch,
-      dispatchFor: (conversationId, event) => {
-        if (event.type === 'userText') dispatchLocalEcho(serverId, conversationId, event)
-        else if (event.type === 'messageDelivery') conversationTimelineStore.getState().dispatchFor(conversationId, { ...event, serverId })
-      },
-      newMessageId: () => crypto.randomUUID(),
-      // #1013: the echo's clock. Referenced, not called — `submitMessage` reads it once, past both of its
-      // early guards, so an empty or unowned submit never stamps. `Date.now` rather than a store value because
-      // the moment being recorded IS now: this line is inside the send handler, not the render path.
-      now: Date.now,
-      // #1039: the files this message is being sent with — the uploads that have completed since the last
-      // send. Referenced, not called, exactly like the clock above, and for a sharper reason: this take is
-      // DESTRUCTIVE (the hook clears its pending set in the same act), so calling it here would consume the
-      // operator's attachments on a submit `submitMessage` is about to refuse. That helper reads it once,
-      // below its early guards. A bridge exception rolls the take back for resubmission.
-      //
-      // Both of `sendText`'s callers reach this — the composer's own submit and ComposerActionsMenu's
-      // picked command — and that is correct: a slash command is a message that was sent, so it records
-      // and consumes what is pending exactly as a typed one does.
-      takeAttachments: attach.takePendingAttachments
-    })
-    // Follow the thread only when the bridge accepts the submission. A bridge exception returns false:
-    // its echo remains Not sent, the draft and pending attachments survive, and no follow pin is armed.
-    if (sent) { accepted?.(); onMessageSent() }
-    return sent
+    return false
   }
 
   // The notify now runs a line BEFORE the clear rather than a line after it. Inert: `onMessageSent` is
@@ -4723,30 +4563,7 @@ function ComposerErrorSlotControl({
   const open = useActiveConversationStore(selectActiveConversation)
   // #1656: the stopping banner's prefix names this conversation's agent.
   const agent = useConversationAgent(open?.id ?? null)
-  const historyHost = useConversationHost(open?.id ?? null)
-  const historyFailure = useConversationTimelineStore(s =>
-    selectHistoryFailure(open === null ? undefined : s.timelines.get(open.id), historyHost))
-  const retryHistory = (): void => {
-    if (open !== null && historyHost !== null && historyFailure !== null) {
-      retryHistoryPage(historyRetryDeps, open, historyHost, historyFailure)
-    }
-  }
-  // #1435: the open conversation's background-task count. `TopOverlayControl`'s usage read's shape, and
-  // for the same reasons — a fresh selector identity per render costs a re-subscribe and never a
-  // loop, because the selector returns a PRIMITIVE, so useSyncExternalStore's Object.is check
-  // short-circuits even when another conversation's write produces a new outer map.
-  //
-  // #1561: the number is the LIVE count, `selectLiveTaskCountFor`, not the roster's size. The listed
-  // tasks claude has not reported `completed` / `failed` / `stopped`, plus `droppedTasks` (the daemon
-  // caps a roster at 8 rows and a dropped entry has no id to match a status against). A roster's size
-  // alone kept the pill lit for a finished task whenever the emptier roster never came. The store owns
-  // the arithmetic so any other surface counting live tasks cannot disagree with this one. Both "no
-  // roster yet" and "nothing alive" read 0 and render no pill, a collapse this surface is entitled to
-  // make where the panel is not.
-  const legacyTaskCount = useBackgroundTaskRosterStore(
-    open === null ? NO_TASK_COUNT : selectLiveTaskCountFor(open.id)
-  )
-  const taskCount = threadReports === undefined ? legacyTaskCount : threadReports?.taskCount ?? 0
+  const taskCount = threadReports?.taskCount ?? 0
   // #1494: the open conversation's first failed MCP server not yet acknowledged, as a primitive — the
   // task-count read's shape, with the same hoisted constant for the no-conversation arm.
   const mcpFailure = useMcpStatusStore(
@@ -4758,14 +4575,8 @@ function ComposerErrorSlotControl({
     if (open !== null) mcpStatusStore.getState().acknowledgeMcpFailures(open.id)
     onOpenChannelInfo()
   }
-  const legacyLatest = useConversationTimelineStore((s) =>
-    open === null ? undefined : s.timelines.get(open.id)?.timeline.latestTurnEnd
-  )
-  const legacyBanner = useConversationTimelineStore((s) =>
-    open === null ? undefined : s.timelines.get(open.id)?.timeline.stoppingBanner
-  )
-  const latest = threadReports === undefined ? legacyLatest : threadReports?.latest
-  const stoppingBanner = threadReports === undefined ? legacyBanner : threadReports?.banner
+  const latest = threadReports?.latest
+  const stoppingBanner = threadReports?.banner
   const menu = useSlashCommandListStore((s) => open === null ? null : selectSlashCommandListFor(open.id)(s))
   const unavailable = markUnavailableActions(COMPOSER_ACTIONS, menu)
     .find((action) => action.id === '/compact')?.unavailable === true
@@ -4791,33 +4602,29 @@ function ComposerErrorSlotControl({
   const settingsError = useRunSettingsWriteStore(selectError)
   const sessionId = useSessionIdStore(selectSessionId)
   const writes = useRunSettingsWriteStore(s => s)
-  const legacyOffer = useConversationTimelineStore(s => open === null ? undefined : s.timelines.get(open.id)?.timeline.refusalOffer)
   const source = threadReports?.refusal
   const action = useStore(threadRuntime.refusals, s => source ? s.entries.get(JSON.stringify([source.host, source.chat])) : undefined)
   const ownAction = action?.source.epoch === source?.epoch && action?.source.session === source?.session &&
     action?.source.item === source?.item && action?.source.rev === source?.rev ? action : undefined
-  const offer = threadReports === undefined ? legacyOffer : source && !ownAction?.dismissed
+  const offer = source && !ownAction?.dismissed
     ? { report: source.report, changeId: ownAction?.changeId, rejected: ownAction?.rejected } : undefined
   // Navigation clears settings writes; the retained offer still owns an outstanding recovery.
   const modelPending = offer?.changeId !== undefined || [...writes.pending.values()].some(change => change.field === 'model')
   const switchBack = (): void => {
     const currentId = activeConversationStore.getState().activeConversation?.id
-    const currentOffer = currentId === undefined ? undefined : conversationTimelineStore.getState().timelines.get(currentId)?.timeline.refusalOffer
     const currentSession = sessionIdStore.getState().sessionId
     const currentWrites = runSettingsWriteStore.getState()
     const serverId = conversationHostNow(currentId ?? null)
     const currentItem = source && threadRuntime.items.getState().snapshot(source.host, source.chat)
     const stillOwn = source && currentItem?.epoch === source.epoch && currentItem.items.some(item => item.id === source.item && item.rev === source.rev)
     if (currentId === undefined || currentId !== open?.id || !offer ||
-        (source ? !stillOwn || source.host !== serverId || source.session !== currentSession || ownAction?.changeId !== undefined
-          : currentOffer !== offer || currentOffer?.changeId !== undefined) ||
+        (!source || !stillOwn || source.host !== serverId || source.session !== currentSession || ownAction?.changeId !== undefined) ||
         serverId === null || sessionStore.getState().statuses.get(serverId)?.type !== 'connected' || !isAddressableSessionId(currentSession) ||
         [...currentWrites.pending.values()].some(change => change.field === 'model')) return
     changeSetting({ sessionId: currentSession, sendCommand: sendConversationCommand,
       dispatch: event => {
         if (event.type === 'changeDispatched') {
-          if (source) threadRuntime.refusals.getState().begin(source, event.changeId)
-          else conversationTimelineStore.getState().dispatchFor(currentId, { type: 'refusalWriteStarted', offer, changeId: event.changeId })
+          threadRuntime.refusals.getState().begin(source, event.changeId)
           window.pyry.sendDiagnostic({ event: 'refusal-recovery', code: 'dispatched' })
         }
         currentWrites.dispatch(event)
@@ -4869,8 +4676,6 @@ function ComposerErrorSlotControl({
           stoppingBanner !== undefined ? <ComposerBannerReport report={stoppingBanner} agent={agent} /> : null
         )
       }
-      history={historyFailure === null || (historyFailure.purpose === 'gap' || historyFailure.purpose === 'gap-newest') ? null :
-        <ComposerHistoryFailure retryable={historyFailure.retryable} onRetry={retryHistory} />}
       mcpFailure={mcpFailure === null ? null : <ComposerMcpFailure name={mcpFailure} onOpen={openMcpFailure} />}
       /* The count is checked HERE and not left to the view's own guard: `??` tests the element, not what
          it renders, so an unconditionally constructed pill would occupy the slot at a zero count — the
@@ -4913,8 +4718,6 @@ function TopOverlayControl({ onRepairHost, threadLive }: {
     open === null ? NO_USAGE_LIMIT_READING : selectUsageLimitFor(open.id, nowSeconds)
   )
   const dismissed = useUsagePillDismissalStore(s => s.dismissed)
-  const sessionError = useConversationTimelineStore(s =>
-    open === null ? undefined : s.timelines.get(open.id)?.timeline.sessionError)
   const conversationId = open?.id
   const mountedConversation = useRef<string>()
   useEffect(() => {
@@ -4926,7 +4729,6 @@ function TopOverlayControl({ onRepairHost, threadLive }: {
       queueMicrotask(() => {
         if (mountedConversation.current !== conversationId) {
           if (threadLive && threadError) threadLive.getState().dispatch({ type: 'consume', displayed: threadError })
-          else conversationTimelineStore.getState().dispatchFor(conversationId, { type: 'sessionErrorCleared' })
         }
       })
     }
@@ -4957,7 +4759,7 @@ function TopOverlayControl({ onRepairHost, threadLive }: {
   }
   return (
     <TopOverlay
-      sessionError={threadLive ? threadError?.code : sessionError?.code}
+      sessionError={threadError?.code}
       resolution={resolution?.phase === 'displayed' ? resolution.kind : null}
       onDismissResolution={() => {
         if (resolution !== null) feedback.getState().dispatch({ type: 'resolutionDismissed', resolution })
@@ -4981,7 +4783,6 @@ const NO_USAGE_LIMIT_READING = (): UsageLimitReading | null => null
 // #1435: the same constant for the task-count read beside it, hoisted for the same reason — built inline
 // it would be a fresh function every render on the no-conversation-open arm, which useSyncExternalStore
 // answers with a re-subscribe per render for a value that is always the same `0` (#1561).
-const NO_TASK_COUNT = (): number => 0
 
 // #1494: the same constant for the MCP failure read, hoisted for the same reason.
 const NO_MCP_FAILURE = (): string | null => null

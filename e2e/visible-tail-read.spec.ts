@@ -385,41 +385,6 @@ test('committed folded tails require focus, uncovered viewport and a closed read
   await page.screenshot({ path: test.info().outputPath('read-tail-1280.png') })
 })
 
-// #2020: raw-event receipt identity has no equivalent in the canonical item protocol.
-test.skip('ID-less replay stays unknown until independently admitted history, and unseen live content restores attention', async ({ launchPairedApp }) => {
-  const commands: Envelope[] = []
-  const { app, page, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
-    const e = decodeEnvelope(bytes); commands.push(e)
-    return e.type === 'list_conversations' ? [list()] : []
-  } }, { onLaunched: async app => instrumentReadWork(await app.firstWindow()) })
-  await focus(app, page)
-  daemon.pushFrame(delta(undefined, 0, 'ID-less replay'))
-  await expect(page.locator('.bubble')).toHaveCount(1)
-  await settle(page)
-  expect(targets(commands)).toEqual([])
-  expect(await page.evaluate(() => window.readWork.observers.filter(o => o.read && o.targets.size > 0).length)).toBe(1)
-  await page.evaluate(() => window.readWork.reset())
-  expect(commands.filter(c => c.type === 'request_history')).toHaveLength(1)
-  const ask = commands.find(c => c.type === 'request_history')!
-  daemon.pushFrame(pageReply(ask.id, [{ id: 30, type: 'assistant_delta', ts,
-    payload: { conversation_id: row.id, turn_id: 't', seq: 0, text: 'ID-less replay' } }]))
-  await expect.poll(() => targets(commands)).toEqual([30])
-  await expect(page.locator('.bubble')).toHaveCount(1)
-  expect(await page.evaluate(() => ({ ...window.readWork.counts }))).toEqual({ constructors: 0, discovery: 0, listeners: 0, subscriptions: 0 })
-  daemon.pushFrame(markReply(30))
-  const dot = page.locator('.conversation-status-dot')
-  await expect(dot).toHaveClass(/--idle/)
-  await page.getByRole('button', { name: 'Sidebar menu', exact: true }).click()
-  await page.getByRole('menuitem', { name: 'Archive', exact: true }).click()
-  daemon.pushFrame(delta(31, 1, '\nUnseen while closed'))
-  await page.locator('.archive__back').click()
-  await expect(dot).toHaveClass(/--new-messages/)
-  daemon.pushFrame(markReply(30))
-  await expect(dot).toHaveClass(/--new-messages/)
-  expect(targets(commands)).toEqual([30])
-  expect(commands.filter(c => c.type === 'request_history')).toHaveLength(1)
-})
-
 for (const gate of ['visible', 'blurred', 'reader-covered', 'above-tail'] as const) {
   test(`late read contract rechecks the committed tail while ${gate}`, async ({ launchPairedApp }) => {
     const commands: Envelope[] = []

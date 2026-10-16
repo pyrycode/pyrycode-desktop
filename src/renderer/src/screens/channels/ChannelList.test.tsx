@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ReactNode, ComponentProps } from 'react'
 import type { SessionState, ConnectionStatus } from '../../store/sessionStore'
@@ -14,55 +14,39 @@ import {
 } from './ChannelList'
 import { UNKNOWN_WORKSPACE_LABEL } from './channelListViewModel'
 import type { HostLabelValue } from '../../store/hostLabelStore'
-import {
-  createConversationActivityStore,
-  type ConversationActivityStore
-} from '../../store/conversationActivityStore'
-import {
-  createConversationTimelineStore,
-  type ConversationTimelineStore
-} from '../../store/conversationTimelineStore'
-import {
-  createConversationLastReadStore,
-  type ConversationLastReadStore,
-  type ConversationLastReadStorage
-} from '../../store/conversationLastReadStore'
-import { createModalStore, type ModalStore } from '../../store/modalStore'
-import {
-  createQuestionBatchStore,
-  type QuestionBatchStore
-} from '../../store/questionBatchStore'
 
-// #801's per-row dot reads four app-wide SINGLETONS (#874 added the fourth), and A WRITE TO ANY OF THEM IS
-// INVISIBLE TO `renderToStaticMarkup`. React's server renderer resolves `useSyncExternalStore` through its
-// THIRD argument (react-dom-server.node.development.js:5283 returns `getServerSnapshot()` and never
-// subscribes), and zustand v5 wires that argument to `api.getInitialState()` (zustand/esm/react.mjs) — the
-// state captured at store CREATION, which no setter ever moves. Seeding the singletons therefore renders
-// three idle dots and proves nothing; this is a property of the whole node-environment renderer tier, not
-// of this file.
-//
-// So the four React BINDINGS are redirected onto per-file isolated store instances, built by the same
-// shipped factories and driven through the same shipped setters. Only the binding is replaced: `...actual`
-// keeps the real `selectActivityFor` / `selectTimelineFor` / `selectLastReadFor` /
-// `selectHasOutstandingFor`, so the row's id → entry lookup runs for real, and `isConversationUnread` and
-// `resolveConversationStatus` are untouched imports in `ChannelList.tsx`. What the #801 and #874 cases
-// below assert is exactly the wiring those tickets add.
-//
-// Each factory's body is evaluated at import time and touches none of the four consts below; only the
-// returned hook reads them, and it is not called until a render inside a test.
-const activityStore = createConversationActivityStore()
-const timelineStore = createConversationTimelineStore()
-// An in-memory port, never `localStorage`: the real singleton's port short-circuits on
-// `typeof window === 'undefined'`, but an isolated instance has to be handed something, and a fake keeps
-// this file's stores off any shared surface (conversationLastReadStore.ts:246-257).
-const lastReadMemory: ConversationLastReadStorage = { read: () => new Map(), write: () => {} }
-const lastReadStore = createConversationLastReadStore(lastReadMemory)
-// #874's fourth read. Named `promptStore` and not `modalStore`: the module's own app-wide singleton export
-// carries that name and the mock factory below spreads it, so a same-named local const — legal — would
-// invite a misread about which of the two a seed writes to.
-const promptStore = createModalStore()
-// #1700's fifth read: a pending question batch lights the same input-required dot a prompt does.
-const questionStore = createQuestionBatchStore()
+import { threadRuntime } from '../../store/threadRuntime'
+import { createThreadLiveState } from '../../store/threadLiveState'
+import type { DaemonEvent } from '@shared/ipc/events'
+const readEvidence = new Map<string, { last_shown_version: number; read_up_to: number }>()
+const seededLives = new Set<ReturnType<typeof threadRuntime.live>>()
+beforeEach(() => {
+  const lives = new Map<string, ReturnType<typeof threadRuntime.live>>()
+  vi.spyOn(threadRuntime, 'live').mockImplementation((host, id) => {
+    const key = JSON.stringify([host, id])
+    let live = lives.get(key)
+    if (!live) {
+      live = createThreadLiveState({ sendResponse: vi.fn(), isConnected: () => true })
+      lives.set(key, live)
+    }
+    return live
+  })
+})
+function supply(id: string, event: DaemonEvent): void {
+  const live = threadRuntime.live(DEFAULT_SERVER, id)
+  if (!seededLives.has(live)) {
+    seededLives.add(live)
+    vi.spyOn(live, 'getInitialState').mockImplementation(() => live.getState())
+  }
+  live.getState().dispatch({ type: 'summary', serverId: DEFAULT_SERVER,
+    summary: { id, current_session_id: 's' } })
+  const received = { ...event, serverId: DEFAULT_SERVER, envelopeSessionId: 's' }
+  live.getState().dispatch({ type: 'daemon', event: received })
+}
+afterEach(() => {
+  for (const live of seededLives) live.getState().dispatch({ type: 'summary', serverId: DEFAULT_SERVER, summary: null })
+  seededLives.clear(); readEvidence.clear(); vi.restoreAllMocks()
+})
 
 let hostSessionState: SessionState | null = null
 vi.mock('../../store/sessionStore', async (importActual) => {
@@ -74,31 +58,6 @@ vi.mock('../../store/sessionStore', async (importActual) => {
   }
 })
 afterEach(() => { hostSessionState = null })
-
-vi.mock('../../store/conversationActivityStore', async (importActual) => ({
-  ...(await importActual<typeof import('../../store/conversationActivityStore')>()),
-  useConversationActivityStore: <T,>(selector: (s: ConversationActivityStore) => T): T =>
-    selector(activityStore.getState())
-}))
-vi.mock('../../store/conversationTimelineStore', async (importActual) => ({
-  ...(await importActual<typeof import('../../store/conversationTimelineStore')>()),
-  useConversationTimelineStore: <T,>(selector: (s: ConversationTimelineStore) => T): T =>
-    selector(timelineStore.getState())
-}))
-vi.mock('../../store/conversationLastReadStore', async (importActual) => ({
-  ...(await importActual<typeof import('../../store/conversationLastReadStore')>()),
-  useConversationLastReadStore: <T,>(selector: (s: ConversationLastReadStore) => T): T =>
-    selector(lastReadStore.getState())
-}))
-vi.mock('../../store/modalStore', async (importActual) => ({
-  ...(await importActual<typeof import('../../store/modalStore')>()),
-  useModalStore: <T,>(selector: (s: ModalStore) => T): T => selector(promptStore.getState())
-}))
-vi.mock('../../store/questionBatchStore', async (importActual) => ({
-  ...(await importActual<typeof import('../../store/questionBatchStore')>()),
-  useQuestionBatchStore: <T,>(selector: (s: QuestionBatchStore) => T): T =>
-    selector(questionStore.getState())
-}))
 
 // The #218 idiom: server-render the pure view with injected props — no DOM harness, no store. The
 // container's store read + Date.now() are the only impurities and are exercised by the shell tests.
@@ -157,8 +116,7 @@ const render = (
       {...apps}
       conversations={conversations?.map(row => ({ ...row,
         ...(row.latest_entry_id !== undefined ? { last_shown_version: row.latest_entry_id } : {}),
-        ...(timelineStore.getState().timelines.has(row.id) && row.last_shown_version === undefined && row.latest_entry_id === undefined
-          ? { last_shown_version: 1, read_up_to: lastReadStore.getState().marks.has(row.id) ? 1 : 0 } : {}) })) ?? null}
+        ...readEvidence.get(row.id) })) ?? null}
       serverIds={serverIds}
       statuses={statuses}
       openConversationId={openConversationId}
@@ -894,71 +852,13 @@ describe('ChannelListView', () => {
       expect((markup.match(/conversation-status-dot--idle/g) ?? []).length).toBe(1)
     })
 
-    // THE ONE REAL TRAP IN THIS SUITE. The four stores are file-level instances shared by every case in
-    // this describe, so a seed left standing silently colours a LATER case's render — an `--idle` row
-    // quietly turning `--working`, which is a passing-looking wrong answer rather than a failure. Four
-    // clears, one per store, because no single boundary helper owns all four.
-    //
-    // The modal clear MUST NOT be a `dismissed` per seeded prompt. `dismissed` moves the id onto the
-    // `resolved` slice, where `reduceModal`'s `shown` arm reads a seen-then-resolved id as a no-op rather
-    // than an append — so a `dismissed`-based teardown leaves a later case's seed silently doing nothing,
-    // and that case renders an `--idle` row while asserting `--input-required`, a failure that reads as a
-    // product bug in the wiring #874 adds.
-    //
-    // It is `reset`, not `reconnected`, since #1140: the reconnect arm now clears only the conversations
-    // the event names, so a teardown built on it would have to enumerate every id these cases seed and
-    // would silently stop clearing the moment one was added. `reset` is the pairing-boundary arm and
-    // returns the store to its initial state whatever it holds — which is exactly what a teardown wants.
-    afterEach(() => {
-      activityStore.getState().clearAllActivity()
-      timelineStore.getState().clearAllTimelines()
-      lastReadStore.getState().clearAllLastRead()
-      promptStore.getState().dispatch({ type: 'reset' })
-      // `reconnected` clears every held batch whatever it holds — the question store's `reset`.
-      questionStore.getState().dispatch({ type: 'reconnected' })
-    })
-
-    // The seeds, named for the STATUS they produce rather than for the store they write, so each case
-    // below reads as the status it asserts.
-    const seedWorking = (id: string): void => activityStore.getState().setTurnRunning(id, true)
-
-    // #1516's fifth activity fact. A SECOND working seed rather than a widening of the first, because
-    // the claim is that this fact reaches the dot on its own — a case seeded through `setTurnRunning`
-    // would pass against a derivation that never reads `resetting` at all.
-    const seedResetting = (id: string): void => activityStore.getState().setResetting(id, true)
-
-    // `reconnected` is the cheapest honest unread seed: a zero-payload arm that MINTS A SLICE without
-    // appending an item (conversationTimelineStore.ts:279-282), landing on `isConversationUnread` branch 2
-    // — a slice held with no mark recorded reads as unread (conversationUnread.ts:59-60). No item append,
-    // no fabricated message, and no dependency on the timeline's content shape.
-    const seedUnread = (id: string): void =>
-      timelineStore.getState().dispatchFor(id, { type: 'reconnected' })
-
-    // The same slice, plus a mark that COVERS it: `0 > 0` is false, so branch 3 reads it as read.
-    const seedRead = (id: string): void => {
-      seedUnread(id)
-      lastReadStore.getState().recordLastRead(id, 0)
-    }
-
-    // #874: one outstanding prompt for that conversation. The event literal is built inline rather than
-    // imported out of `modalPrompts.test.ts`, but it borrows that builder's one load-bearing discipline
-    // (modalPrompts.test.ts:20-24): the `modalId` is DERIVED from the conversation id without being equal
-    // to it. Both fields are `string`, so a scan reading the wrong one is invisible to `tsc` and only
-    // distinct values can catch it.
-    const seedInputRequired = (id: string): void =>
-      promptStore.getState().dispatch({
-        type: 'shown',
-        conversationId: id,
-        modalId: `m-${id}`,
-        class: 'permission',
-        title: 'Allow tool use?',
-        prompt: 'Run `git status`?',
-        options: [
-          { id: 'allow', label: 'Allow' },
-          { id: 'deny', label: 'Deny' }
-        ],
-        defaultOptionId: 'allow'
-      })
+    const seedWorking = (id: string): void => supply(id, { type: 'turnState', conversationId: id, state: 'thinking' })
+    const seedResetting = (id: string): void => supply(id, { type: 'resetting', conversationId: id, active: true, phase: 'restarting', handoff: '' })
+    const seedUnread = (id: string): void => { readEvidence.set(id, { last_shown_version: 10, read_up_to: 0 }) }
+    const seedRead = (id: string): void => { readEvidence.set(id, { last_shown_version: 10, read_up_to: 10 }) }
+    const seedInputRequired = (id: string): void => supply(id, { type: 'modalShown', conversationId: id,
+      modalId: `m-${id}`, class: 'permission', title: 'Allow tool use?', prompt: 'Run?',
+      options: [{ id: 'allow', label: 'Allow' }], defaultOptionId: 'allow' })
 
     // Three rows spread across both trees and two workspaces, so every claim below is a claim about more
     // than one row — a single-row fixture cannot tell "resolved per row" from "resolved once for all".
@@ -1029,8 +929,6 @@ describe('ChannelListView', () => {
       // held, no mark recorded — and the activity store is fed independently of which conversation is
       // open, so the dot is correct with no "open conversation" concept involved anywhere.
       seedWorking('d2')
-      expect(timelineStore.getState().timelines.has('d2')).toBe(false)
-      expect(lastReadStore.getState().marks.has('d2')).toBe(false)
       expect(chunkFor(render(threeRows()), 'Third conversation')).toContain(STATUS_DOT_WORKING)
     })
 
@@ -1052,8 +950,6 @@ describe('ChannelListView', () => {
       // The retention half of AC4 at the row: the seeded id is absent from BOTH the timeline and the
       // last-read stores, and the activity store is fed independently of which conversation is open.
       seedResetting('d2')
-      expect(timelineStore.getState().timelines.has('d2')).toBe(false)
-      expect(lastReadStore.getState().marks.has('d2')).toBe(false)
       expect(chunkFor(render(threeRows()), 'Third conversation')).toContain(STATUS_DOT_WORKING)
     })
 
@@ -1142,8 +1038,6 @@ describe('ChannelListView', () => {
       // renders with none (the helper's default), so no row is the open one here and the dot's four
       // facts stay independent of that state — which is the claim, and it did not move.
       seedInputRequired('d2')
-      expect(timelineStore.getState().timelines.has('d2')).toBe(false)
-      expect(lastReadStore.getState().marks.has('d2')).toBe(false)
       expect(chunkFor(render(threeRows()), 'Third conversation')).toContain(
         STATUS_DOT_INPUT_REQUIRED
       )
@@ -1151,27 +1045,15 @@ describe('ChannelListView', () => {
 
     it('draws the input-required dot for a pending question batch alone, and drops it on dismissal (#1700)', () => {
       // The batch id is derived from, never equal to, the conversation id, as `seedInputRequired` does.
-      questionStore.getState().dispatch({
-        type: 'shown',
-        conversationId: 'd1',
-        questionBatchId: 'q-d1',
-        questions: [
-          {
-            question: 'Which branch?',
-            header: 'Branch',
-            options: [{ label: 'main', description: '' }],
-            multiSelect: false
-          }
-        ]
-      })
+      supply('d1', { type: 'questionShown', conversationId: 'd1', questionBatchId: 'q-d1', questions: [
+        { question: 'Which branch?', header: 'Branch', options: [], multi_select: false }
+      ] })
       seedWorking('d1')
       let markup = render(threeRows())
       expect(chunkFor(markup, 'Help me debug auth flow')).toContain(STATUS_DOT_INPUT_REQUIRED)
       expect(countOf(markup, STATUS_DOT_INPUT_REQUIRED)).toBe(1)
       // Answering and Cancel both resolve a batch through `dismissed`; the row falls back to working.
-      questionStore
-        .getState()
-        .dispatch({ type: 'dismissed', questionBatchId: 'q-d1', outcome: 'answered', source: 'remote' })
+      supply('d1', { type: 'questionDismissed', questionBatchId: 'q-d1', outcome: 'answered', source: 'remote' })
       markup = render(threeRows())
       expect(chunkFor(markup, 'Help me debug auth flow')).toContain(STATUS_DOT_WORKING)
       expect(countOf(markup, STATUS_DOT_INPUT_REQUIRED)).toBe(0)

@@ -79,3 +79,13 @@ None. Shared declarations with surviving storage or fake consumers remain; only 
 ## Revisions
 
 2026-10-16: Typecheck and units found exclusive page assertions in six additional mixed parser specs: `modelRefusal.test.ts`, `toolParent.test.ts`, `stoppedTurn.test.ts`, `turnEndMetrics.test.ts`, `compaction.test.ts` and `toolDenied.test.ts` under `src/main/transport/`. Retire only their history branches, preserving their live parsing and metrics assertions. This follows the planned exclusive-fixture removal without changing production scope.
+
+## Validation evidence
+
+Linux, 2026-10-16, tested source `afe635930ce58ffba12c02bc6537cd424ba1c4e7`, containing merged main `41bd0e2173d5`. Node 25.8.0, Electron 33.4.11. This evidence-only plan update does not change tested code.
+
+- Install, all five pre-verify checks, `npm run build` and docs guard passed. Full units: 9,037 executed/passed, 0 failed, 3 skipped across 391 passing files. Node/Electron SQLite addon rebuilds both passed.
+- Complete `npx playwright test --reporter=json`: 435 executed/passed, 0 failed, 3 skipped, 0 flaky, 0 retries. Original configuration: workers 4, clipboard and parallel projects, no test/project/shard selection. All 15 thread activation cases, all 12 thread item cases and all 3 reader-menu cases passed. No top-level errors or fake-daemon setup error attachments.
+- Fake skips: two macOS app-badge cases and the macOS window-reopen case. macOS is outside this Linux ticket's verification scope. No live tests changed or live result claimed.
+- Full fake report: `/tmp/builder-2025-playwright-final.json`, SHA256 `f21380a086f5fb52c508c548265423c5623aa8153ea4b90e6a0c04435a92078c`; stderr `/tmp/builder-2025-playwright-final.stderr.log`. Final gate/build logs are `/tmp/builder-2025-final-preverify.log` and `/tmp/builder-2025-final-build.log`.
+- Initial complete fake run on `072e01596f5c2a57e93aedca33ffc86e5b0fe8ae`: 435 executed, 434 passed, 1 failed, 3 skipped. The 800px reader return-scroll assertion expected 1300 and received 1020. Track investigation in [#2047](https://github.com/pyrycode/pyrycode-desktop/issues/2047), Backlog, priority:low. A focused isolated-main comparison passed once (1 executed/passed); that diagnostic alone does not establish the cause. The final complete rerun passed without skipping or weakening this assertion. Initial report remains `/tmp/builder-2025-playwright.json`.

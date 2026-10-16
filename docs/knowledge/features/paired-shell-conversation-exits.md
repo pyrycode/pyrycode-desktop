@@ -246,12 +246,14 @@ inert footer until one of those edges eventually fired. Since pyrycode#2085 the 
 is what makes asking immediately on open worth doing.
 
 `ActivateConversationDeps.requestConversationConfig` runs last and outside the
-id-change gate. Every activation reaches it, including re-opening the same chat;
+host-or-ID-change gate. Every activation reaches it, including re-opening the same chat;
 requests require the unique owning host to be connected:
 
 ```
 previous = getActiveConversation()
-if (previous?.id !== conversation.id) { clearSessionId(); clearRunConfig() }
+if (previous?.id !== conversation.id || previous?.serverId !== conversation.serverId) {
+  clearSessionId(); clearRunConfig()
+}
 setActiveConversation(conversation)
 requestConversationConfig(conversation.id)
 ```
@@ -352,14 +354,17 @@ newly opened one — the one arrow of the four that never self-heals, since noth
 nothing pushes it unsolicited. **The member is not renamed** for the fourth store it now covers — it
 names the act, not the store list, and its signature stays `() => void` at both declaration sites.
 
-`activateConversation` clears session and configuration only on an ID change, then records the
-fresh payload and requests configuration on every activation, as shown above. Same-chat reopening
-preserves held configuration while refreshing it.
+`activateConversation` clears session and configuration when either the conversation ID or the
+renderer-owned `serverId` changes (#2068), before publishing the incoming payload. Two hosts with
+colliding conversation IDs therefore have separate configuration lifetimes. Host metadata appearing
+or disappearing also ends the lifetime; when both hosts are absent, legacy same-ID reopening remains
+unchanged. Every activation refreshes the payload and requests configuration. Same-host/same-ID
+reopening preserves held configuration, including confirmed choices, while refreshing it.
 
 **Placement differs between the two helpers, and each placement is load-bearing:**
 
-- **`activateConversation`** calls it *inside* the id-change gate, alongside `clearSessionId` — so a
-  re-open of the chat already open leaves the run configuration and session id standing. Being
+- **`activateConversation`** calls it *inside* the host-or-ID-change gate, alongside `clearSessionId` — so a
+  re-open of the same host's chat leaves the run configuration and session id standing. Being
   inside the gate also puts it ahead of `requestConversationConfig`, which
   sits last and outside the gate: the ordering #1166 documents for `clearSessionId` applies unchanged
   here — the clear must precede the ask, or a reply landing in the same tick would be blanked by the

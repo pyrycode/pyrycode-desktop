@@ -18,7 +18,7 @@ export type ThreadApplyResult =
   | { type: 'repair'; hostId: string; conversationId: string; epoch: string; throughVersion: number;
       reason: 'missing' | 'base' | 'incompatible' | 'kind' | 'coverage' }
 type Slice = { snapshot: ThreadSnapshot; restored?: ThreadSnapshot; owned?: OwnedThreadChanges; generation: symbol; uncommittedVersion: number; byId: ReadonlyMap<number, HeldItem>;
-  availabilityStart?: number; residency?: Pick<ThreadHistoryPage, 'continuation' | 'arrivalPositions'> }
+  availabilityStart?: number; residency?: { continuation: string | null; arrivalPositions: ReadonlyMap<number, number> } }
 type Batch = {
   applyItems: (items: readonly ThreadItem[], version: number) => readonly ThreadApplyResult[]
   commit: (certificate: ThreadBatchCertificate) => ThreadApplyResult
@@ -205,7 +205,8 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
             }
             publish(host, conversation, { snapshot, restored: snapshot, generation: admitted?.generation ?? Symbol(),
               uncommittedVersion: snapshot.uncommittedVersion ?? 0, byId, availabilityStart,
-              ...(page ? { residency: { continuation: page.continuation, arrivalPositions: page.arrivalPositions } } : {}) })
+              ...(page ? { residency: { continuation: page.continuation,
+                arrivalPositions: new Map(page.items.map((item, index) => [item.id, arrivals?.[index] ?? index])) } } : {}) })
             log?.event({ event: 'thread-items-restored', code: 'stored' })
           },
           fail: end, cancel: end

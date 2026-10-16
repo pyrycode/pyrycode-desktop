@@ -56,6 +56,7 @@ it('partial opening preserves omitted availability ownership and sparse arrival 
   api.beginBatch('a', 'c', 'e')!.commit({ fromVersion: 40, version: 50,
     ranges: [{ start: 50, end: 60 }], olderAvailable: true })
   expect(api.snapshot('a', 'c')).toMatchObject({ olderAvailable: false, arrivalOrder: [1, 2] })
+  expect([...target.getState().hosts.get('a')?.get('c')?.residency?.arrivalPositions ?? []]).toEqual([[2, 800], [1, 20]])
 })
 
 describe('daemon item cache ownership', () => {

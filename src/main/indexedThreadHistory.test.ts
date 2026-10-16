@@ -36,8 +36,11 @@ const newest = (limit = 2) => ask('newestThreadPage', { limit })
 it('bounded opening selects shown, active and recorded dependencies after fresh reopen', async () => {
   const h = setup(), s = snapshot(0)
   const items: ThreadSnapshot['items'] = [
-    { id: 1, kind: 'agent', rev: 1, shown: true, active: false, order: 1 },
+    { id: 0, kind: 'agent', rev: 1, shown: false, active: false, order: 0 },
+    { id: 1, kind: 'agent', rev: 1, shown: true, active: false, order: 1, parent: 0, ended_order: 77, status: 'finished',
+      content: { name: 'Agent', tool_use_id: 'call', task_id: 'task', task_link: { task_id: 'task', tool_call_id: 'call' } } },
     { id: 2, kind: 'turn_end', rev: 1, shown: false, session: 's', agent: 'a', turn: 't', parent: 1, content: { output_tokens: 12 } },
+    { id: 3, kind: 'future', rev: 1, shown: false, parent: 1 },
     ...Array.from({ length: 240 }, (_, n) => ({ id: n + 10, kind: 'assistant_message', rev: 1,
       shown: true, order: n + 10, session: 's', agent: 'a', turn: 't', parent: 1,
       content: { text: String(n), ts: String(999 - n) } })),
@@ -47,7 +50,8 @@ it('bounded opening selects shown, active and recorded dependencies after fresh 
   expect(await h.store.execute(put(fixture))).toEqual({ status: 'ok' })
   h.database.close()
   const fresh = h.fresh(), p = await page(fresh.store, ask('openThreadPage', { limit: 200 }))
-  expect(p.items.map(i => i.id)).toEqual([1, 2, ...Array.from({ length: 200 }, (_, n) => n + 50), 1000])
+  expect(p.items.map(i => i.id)).toEqual([0, 1, 2, ...Array.from({ length: 200 }, (_, n) => n + 50), 1000])
+  expect(p.items.find(i => i.id === 1)).toEqual(items[1])
   expect(p.arrivalPositions).toEqual(p.items.map(i => items.length - 1 - items.findIndex(v => v.id === i.id)))
   expect(p.metadata.checkpoint).toBe(100)
   expect(p.items.find(i => i.id === 2)?.shown).toBe(false)

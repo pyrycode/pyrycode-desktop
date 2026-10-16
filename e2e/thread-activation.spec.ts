@@ -445,6 +445,9 @@ test('restore overlapping live content retains complete progress across an inter
       snapshot: { ...result.snapshot, thread: { ...thread, version: 25, uncommittedVersion: 25,
         items, arrivalOrder: items.map(i => i.id) } } })
     if (saved.status !== 'ok') throw Error('expected saved fixture')
+    // Pay retained replacement conversion during setup; the held fresh-owner open must be bounded.
+    const converted = await window.pyry.chatHistory({ operation: 'openThreadPage', serverId: 'fake-daemon', conversationId: id, limit: 200 })
+    if (converted.status !== 'page' || converted.page.items.length !== 201) throw Error('expected converted opening fixture')
   }, { id: SEEDED_ROW.id, extra: item(9, 'Saved-only row during held catch-up') })
   await app.close()
   holdReply = true

@@ -20,7 +20,7 @@ export async function focusVisibleTailWindow(app: Pick<ElectronApplication, 'eva
     let ready: boolean | typeof NOT_YET_AVAILABLE = NOT_YET_AVAILABLE
     for (let inspection = 0; inspection < 3; inspection++) {
       // Recovery reads only native state; it never shows/focuses the window.
-      ready = await readMainProcess(app, ({ BrowserWindow }) => {
+      ready = await readMainProcess<boolean>(app, ({ BrowserWindow }) => {
         const window = BrowserWindow.getAllWindows()[0]
         if (!window) throw new Error('Missing visible-tail window')
         return window.isVisible() && window.isFocused()

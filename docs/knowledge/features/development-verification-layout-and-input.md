@@ -415,6 +415,55 @@ Use the Electron window's native paste operation for this case.
 Seed the clipboard before the first paste and distinguish rejection branches in
 the fake responses.
 
+### Visible-tail focus reliability
+
+In [`visible-tail-read.spec.ts`](../../../e2e/visible-tail-read.spec.ts), a timeout
+at `document.hasFocus()` does not establish concurrent-window focus theft. The
+[classification and retained evidence](../../specs/architecture/2051-visible-tail-focus-reliability.md)
+record two independent Linux complete-suite failures on `b3291233`, each
+**435 executed, 434 passed, 1 failed, 3 skipped**, four actual workers, both
+projects and zero retries. Each completed `read-work-30`, installed the second
+document probe, then failed the five-second genuine-focus poll before
+`read-work-400`; both apps remained running at outcome and exited cleanly.
+The isolated baseline/candidate/batched comparison was pass/fail/pass, each
+**1 executed, 0 skipped**, zero retries and one actual worker. Concurrent test
+windows were therefore unnecessary to reproduce the failure.
+
+Repeated synchronous protected-path writes are the supported storage-related
+trigger: #2044's batching repair coalesces writes within the transaction, and
+complete compositions subsequently passed with focus/display code unchanged.
+The reports measure neither main-loop latency nor native-window/webContents focus,
+so the exact path from storage work to delayed page focus remains uncertain.
+Keep the [400-item coalescing regression](chat-history-testing.md#owned-mutation-regressions-and-counted-validation)
+and existing read spec; no residual setup defect or duplicate regression is justified.
+The helper shows/focuses the native window, removes any document focus override,
+and positively polls genuine `document.hasFocus()` before its focus notification.
+Preserve that predicate, processing/React-commit barriers, observer lifecycle and
+read-work assertions at both 30 and 400 rows. A synthetic event alone cannot supply
+the positive barrier; longer timeouts, retries, skips or serialization would weaken
+the existing proof.
+
+The [verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/2057#issuecomment-6213507072)
+records final-head acceptance on `a0200f81b4fea6d186b1eceb2bb77edd4450c704`,
+2026-10-16, Linux x64. `npx playwright test --reporter=json` ran **436 executed,
+436 passed, 0 failed, 3 skipped, 0 flaky**, four actual workers, clipboard
+**30 passed** and parallel **406 passed/3 skipped**, zero retries and no filters.
+Shown Linux windows and the shared run-owned Xvfb display remain unchanged.
+The named `read setup is reused across committed same-row deltas on short and long threads`
+case was present and passed: **1 executed/passed, 0 failed/skipped**, retry 0.
+Both `read-work-30` and `read-work-400` report zero constructors/discovery/listeners/
+subscriptions, complete documents and clean two-app launch fate. There were no
+top-level errors or fake-daemon setup-failure attachments; stderr contains only
+the existing Vite CJS warning. Skips are two macOS badge cases and macOS window
+reopen; macOS and live-Claude are outside this ticket's scope.
+
+The plan separates the dependency's 435-case pass, builder's 435-case pass on
+`42b94d17`, documentation-only evidence commit `25fc4fec`, and this later
+436-case gate after main's initial-thread-loading/Retry regression merged.
+Inspect retained reports before requesting another run: a stale refinement
+summary can omit subsequently available complete-suite evidence. A targeted pass
+alone does not prove full-composition reliability or erase the historical failures.
+
 ### Composer native setup verification
 
 The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1838#issuecomment-6030292632)

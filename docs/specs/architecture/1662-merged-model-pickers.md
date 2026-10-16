@@ -104,7 +104,31 @@ Security re-review **PASS** (2026-10-14, builder self-review per `builder/securi
 
 ## Documentation handoff
 
+2026-10-16 recovery handoff: the automatic live gate is retired. Preserve `held:live-handover` until the operator runs the exact fresh-Claude-fact → same-conversation GPT-6 Luna at Low → recall-without-restatement scenario. Record executed/passed/failed/skipped counts and same-attempt daemon revision, correlated terminal/answer, saved/applied settings and Luna footer evidence. Historical full/focused Linux failures remain failures; the base collected zero tests and establishes no comparison or handover PASS.
+
 - Pending documentation stage: `docs/knowledge/features/composer-model-menu.md`, `composerModelMenuModel` and per-agent filtering sections: merged daemon-order rows, hidden defaults, positional option IDs, clicked-row routing, untagged Claude and existing label rules; owning-host pending labels, suppression and rollback; invalidate the outgoing announcement on authoritative success.
 - Pending documentation stage: `docs/knowledge/features/conversation-shell-run-configuration.md`, Model section: merged published names/descriptors and pending marking; effort and permission offerings stay with the outgoing agent until success. Carry the #1845 settings lifecycle finding until repaired.
 - Pending live acceptance: retain the operator's exact Claude-to-GPT-6-Luna low-effort hand-over scenario from Testing strategy, recording the correct answer requiring the pre-switch fact and the footer's Luna name. Dispatcher credentialed validation remains separate from fake evidence.
 - Pending documentation stage: `docs/knowledge/features/live-e2e-runbook.md`, Automated coverage and Current real-claude gate state: record the new named Luna hand-over test's executed/pass counts, same-attempt daemon revision, published row and `handover-answer` evidence only after the dispatcher live gate executes it successfully.
+
+## Revisions — 2026-10-16 live validation recovery
+
+Read `completedReply` in `e2e/real-claude-luna-handover.spec.ts`, the existing Codex-channel `observe` thread-item pattern, `ThreadItem`/`ThreadUpdate`/`ThreadReply`, `installTurnCompletionEvidence`, `waitForEffortProof`, the current recorded Codex terminal shapes, the previous verifier verdicts and retained full/focused/base Linux reports. Current main includes #1935 (`bbcd8943`) and thread delivery. No remote feature branch overlaps this spec, its new proof fixture/tests or this plan. This rework adds approximately 400 test/helper/plan lines, two exported test helpers, one consumer, no product/API changes and no new acceptance criterion.
+
+Extract a pure `completedHandoverReply(events, after, owner)` test helper. First reproduce the existing rejection with Codex's empty `outcome` and `terminal_reason`. Accept only undefined, empty or the respective expected `success`/`completed` values; continue requiring `end_turn`, no error flag/category and nonempty correlated assistant text. Keep legacy evidence support and add the shipped Codex observer's thread full-item/revision-patch/text-append folding. Thread identity includes owning host, conversation, epoch, item ID, session and turn. Only matching base revisions advance items; repeated/older revisions cannot duplicate text. Require fresh live assistant activity after the send checkpoint so a history snapshot alone cannot prove the answer. Match the terminal and assistant within the same session/agent/epoch/turn, excluding nested items. A thread reset invalidates held items, including a same-epoch reset. Use the owning conversation's current settings session as authority, never a session inferred from model text.
+
+Keep page-side synchronous event capture and its `finally` unsubscribe. Add thread events to that capture, use the pure helper in the bounded completion poll and attach the matched outgoing/incoming terminal alongside the answer. Attach attempt evidence on failure as well: daemon revision, commands/events, settings and model/effort footer from the same page snapshot. Do not change credentials, fixture provisioning, wire decoding, product behavior or existing picker assertions/counters.
+
+Lifecycle and identity checks (unit test scenarios in `e2e/fixtures/lunaHandoverProof.test.ts`):
+
+| Event | Coverage |
+| --- | --- |
+| Claude/Codex success shapes, including each independently empty optional field | accepts successful terminal shapes |
+| Error/cancellation or mismatched host/conversation/session/turn | rejects unsuccessful and unrelated completion |
+| Full item followed by text append/change and repeated/older/bad-base revisions | folds only correlated newer revisions without duplicate text |
+| Reconnect/history snapshot after the checkpoint | history alone and pre-send assistant activity cannot prove a fresh reply |
+| Epoch replacement or same-epoch reset, reused IDs and nested items | cannot combine different lifetimes or child-agent replies |
+
+Run the focused fixture regressions, existing picker/confirmation/offline fake specs, the affected recorded Codex-channel scenario, live-spec collection (collection is not execution), client-test typecheck, final pre-verify gate and build on Linux after merging current main. Keep normal independent verifier review; operator-owned live acceptance remains held and no automatic gate is assumed.
+
+Security re-review **PASS** (2026-10-16, builder self-review per `builder/security-review.md`): trust is unchanged at decoded daemon events and the existing UI command boundary; proof requires host/conversation/session/turn ownership and revision correlation. No token, login or secret is read or attached. Test-owned attempt attachments use fixed names and no daemon-derived paths/storage keys. No Electron, IPC, crypto, network transport or production log/telemetry surface changes; existing isolation, Noise and safeStorage remain authoritative. The observer is owned by one test, synchronously captures events and unsubscribes in `finally`; pure replay creates no timer or background job. Hostile daemon fields remain inert evidence, with failed/error/cancelled terminals excluded. All nine review categories have no new MUST FIX or SHOULD FIX finding.

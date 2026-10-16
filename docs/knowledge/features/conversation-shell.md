@@ -21,7 +21,7 @@ daemon `user_message`; local content is retired rather than matched by text or k
 as accepted truth. No resend repairs display, and legacy echoes and `queueStore`
 add no rows to this view. #2023 removed `Timeline`, `foldQueuedRows`, provisional
 Agent placement and the roster-connected drawer. Shared row/types remain; reducer,
-roster/bridge and history producers stay until #2024.
+roster/bridge producers stay until #2030; #2029 separately retired renderer legacy saved IO.
 
 Accepted user items without a positive order sit at the tail in snapshot first-arrival
 order. Delivery revises that same scoped item into its supplied positive position,
@@ -222,6 +222,22 @@ ownership is host-qualified; legacy publication still requires unambiguous ID ow
 main retains its independent ambiguous-connected-owner refusal. Thus a recorded renderer
 attempt is not proof of wire delivery. See [mounted evidence](development-verification.md#authoritative-thread-read-evidence)
 and [legacy publication](conversation-last-read-store.md#how-it-works).
+
+### Navigation and cleanup
+
+Creation, opening/reopening, switching, archive/delete and unpair retain active/session,
+configuration/prompt and pairing cleanup while leaving flat/keyed legacy timelines alone (#2028).
+Same-ID activation preserves held configuration but always requests a refresh; an ID change clears
+session and configuration before requesting the new chat's readings. Creation opens the
+host-qualified thread runtime without creating a legacy slice or marking it viewed.
+
+Navigation publishes no read evidence. `PairedShell` retains `useConversationLastRead`, now only a
+wrapper around authoritative `useReadPublication`; its local count writer/subscription is removed.
+Deletion still requires owning-host admission before active exit. Authoritative item, pending-send
+and protected-storage cleanup keep their independent host-qualified lifecycle and ordering. See
+[activation/exits](paired-shell-conversation-exits.md),
+[deletion admission](paired-shell-conversation-deletion.md#confirmed-deletion-and-host-authority) and
+[counted validation](thread-runtime.md#navigation-retirement-validation).
 
 ### Permission resolution notices
 

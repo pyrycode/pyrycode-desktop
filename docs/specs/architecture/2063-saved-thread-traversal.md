@@ -87,3 +87,5 @@ Sizing: one traversal deliverable; forecast 260 production + 365 tests/helpers +
 ## Revisions
 
 2026-10-16: Extend the existing packaged 801-item fixture to enumerate all held pages after protected reopen, and the existing indexed opening counter fixture to measure a 200-item held traversal page separately. No storage contract change. Mounted fixtures reuse `heldThreadRead` with an operation and skip count to hold the final insertion and compare the visible row offset. Actual implementation remains below the forecast.
+
+2026-10-16: The complete fake suite exposed the existing four `no-op ... on a short offline thread keeps following row growth` regressions after removing the connectivity guard. `query` now returns whether local demand started or network demand is eligible; the scroll pin restores prior following intent when input has no upward range and no accepted demand. The existing no-op specs remain unchanged and must pass alongside the new offline traversal cases.

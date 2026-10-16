@@ -67,15 +67,15 @@ export function createThreadRuntime(deps: {
     selected.local?.cancel(); selected.local = undefined
     localState(selected.host, selected.chat, { type: 'idle' })
   }
-  function demandLocal(type: 'older' | 'retry', host: string): void {
+  function demandLocal(type: 'older' | 'retry', host: string): boolean {
     const target = selected
-    if (disposed || !target || target.host !== host) return
+    if (disposed || !target || target.host !== host) return false
     const slice = items.getState().hosts.get(host)?.get(target.chat)
     const status = state.getState().localQueries.get(key(host, target.chat))
-    if (target.local || state.getState().restoring.has(key(host, target.chat))) return
-    if (type === 'retry' && status?.type !== 'failed') { query.input({ type, serverId: host }); return }
-    if (status?.type === 'failed' && type !== 'retry') return
-    if (!slice?.residency || slice.residency.traversal === null) { query.input({ type, serverId: host }); return }
+    if (target.local || state.getState().restoring.has(key(host, target.chat))) return false
+    if (type === 'retry' && status?.type !== 'failed') { query.input({ type, serverId: host }); return isLinked(host) }
+    if (status?.type === 'failed' && type !== 'retry') return false
+    if (!slice?.residency || slice.residency.traversal === null) { query.input({ type, serverId: host }); return isLinked(host) }
     const continuation = slice.residency.traversal
     const read = readSavedTimeline({ threads: items, read: deps.read, log: deps.log }, host, target.chat,
       continuation === undefined ? { operation: 'newestThreadPage' } : { operation: 'beforeThreadPage', continuation })
@@ -89,6 +89,7 @@ export function createThreadRuntime(deps: {
       localState(host, target.chat, code === 'stored' || code === undefined ? { type: 'idle' }
         : { type: 'failed', purpose: 'older', reason: code, retryable: true })
     })
+    return true
   }
   // There is no legacy route: any selected host and conversation draws through the item view.
   const isThread = (host: string | null, chat: string | null): boolean => host !== null && chat !== null

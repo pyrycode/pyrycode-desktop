@@ -31,23 +31,28 @@ On Linux/macOS, `npm run check:history-native -- /tmp/history-native-proof` pack
 an isolated entrypoint, launches the packaged Electron app and writes `runtime.stdout`
 and `runtime.stderr` beneath the supplied scratch directory. It uses the actual
 `electronSecretEncryption` through activated `createChatHistoryStore`, imports
-both protected formats, closes/reopens the database and compares parser-normalized
-content structurally. An owned item revision is committed and compared exactly
-after another fresh reopen. A 500-receipt by 200-id fixture exercises 100,000 memberships,
-full replacement and exact fresh reopen. It checks all history-directory files for
-fixture plaintext and reports versions, packaged/asar/native-unpacked flags,
+a mixed version-1 source containing an intentionally invalid retired timeline body,
+a list and 1,000 retained daemon items. It asserts no legacy scope was imported,
+closes/reopens the database and compares parser-normalized retained content
+structurally. An owned item revision is committed and all 1,000 retained items
+are compared exactly after another fresh reopen, including unchanged peers.
+Protected full replacement changes epoch/progress and must match exactly after
+a fresh reopen; elapsed replacement time is recorded separately. It checks all
+history-directory files for fixture plaintext and reports versions, packaged/asar/native-unpacked flags,
 static stage and nonzero test counts. An 801-item authoritative fixture opens the
 last 200 shown items despite 500 hidden items, retaining one hidden active item
 and two evidence ranges. It records first conversion separately, closes the database,
 then checks exact partial content, checkpoint and opaque continuation through a
 fresh owner while measuring cold opening. A separate fresh owner then enumerates
 all newest/before held windows, including opening omissions, and compares exact
-content/order with 801 unique identities alongside the opening and saturated
+content/order with 801 unique identities alongside opening and retained-item
 persistence assertions. Its `saved-recovery` stage loads two held windows, commits
 metadata-only invalidation, closes/reopens the database, then follows the paired
 capability/continuation to exact recovery of all 801 identities. Recovery elapsed
 time and recovered identity count are separate output fields; the original
-opening/traversal and 100,000-membership persistence assertions remain.
+opening/traversal assertions remain beside the 1,000-item retained replacement.
+Plaintext scanning includes the ignored legacy, retained list/item/attachment and
+owned-update sentinels. Retired receipt saturation is no longer an active fixture.
 Failure or missing/all-skipped evidence is nonzero. It adds no release channel.
 
 [`history-native.spec.ts`](../../../e2e/history-native.spec.ts) includes
@@ -61,6 +66,63 @@ direct smoke invocation rejects them before packaging imports or scratch creatio
 pins Windows rejection. Run the native proof on the operating system running the
 ticket; opposite-OS scheduling is outside scope. Existing NSIS x64/arm64 targets
 remain unchanged.
+
+### Counted legacy storage retirement validation
+
+The [final verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/2048#issuecomment-6223383960)
+and dispatcher gate report record Linux x64 on 2026-10-16 at
+`b2ce9704efd144bc3f1d45636e734a37bc4a4d4f`. This contains implementation
+`446a5171209c377ed13115ceed353228f9289ef7` and integrated main `ebea25db7928`;
+the intervening change records validation only. These fresh results supersede
+the earlier 9,106-unit/435-application acceptance totals:
+
+| Run or included named case | Executed | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| Full units, 402 passing files | 9,291 | 9,291 | 0 | 3 |
+| Complete configured application suite, verifier gate 8 | 492 | 492 | 0 | 4 |
+| `packaged protected history commits and reopens with production encryption`, included above | 1 | 1 | 0 | 0 |
+| History-on-open captured replay, included above | 1 | 1 | 0 | 0 |
+| Builder separate guarded history-on-open replay | 1 | 1 | 0 | 0 |
+
+The packaged test is explicitly present and passed in gate 8. The verifier inspected
+raw `/tmp/pyry-history-native-07920c/runtime.stdout` and `runtime.stderr`:
+Electron 33.4.11 / embedded Node 20.18.3 / better-sqlite3 12.4.1, production
+`gnome_libsecret`, packaged/ASAR/native-unpacked true. Mixed-source ignore and
+retained list/item import, protected replacement/fresh reopen, owned update,
+plaintext exclusion, bounded opening and exact traversal/recovery of all 801
+identities pass. Raw stderr contains system-bus/GPU diagnostics without failed
+storage assertions. These are recorded production-encryption results; reversible
+unit encryption and captured replay alone could not establish them.
+
+The complete suite used four actual workers, both projects, no selection/shard
+filters, zero flaky results/retries, no top-level errors or fake-daemon-setup
+failure attachments. All 29 recorded exchanges finished with zero remaining
+requests. Application skips are three macOS-only cases and the existing
+system-prompt-reset fixme; unit skips are existing opt-in checks. Pre-verify,
+install, native rebuilds, build and docs guard passed. The gate manifest and
+counted unit/application reports are
+`/work/Projects/pyrycode-desktop-agents/logs/verifier-gate_#2026.pass.json`,
+`verifier-gate_#2026_5.log` and `verifier-gate_#2026_8.log` in that logs directory.
+macOS is outside this Linux ticket's verification scope.
+
+`a real daemon lazily fills a served gap after more than 200 entries written while
+Electron is closed` remains enabled in `real-daemon-history-on-open.spec.ts`. The
+verifier explicitly confirms this scenario passed in the complete gate and records checkpoint 2, successful resume and zero legacy requests in the
+passing scenario. The builder's separate guarded replay records zero forbidden
+executable launches. These establish captured-client behavior, with no fresh
+live-provider claim. The [operator handoff](https://github.com/pyrycode/pyrycode-desktop/issues/2026#issuecomment-6217676663)
+closed #2046 and retired the automatic live hold; the obsolete skip was removed.
+The withdrawn native repair task ran no worker and supplies no test pass.
+
+Historical live failures remain failed. The candidate and unchanged main
+`41bd0e2173d5` each recorded **1 executed, 0 passed, 1 failed, 0 skipped** at the
+initial channel-post baseline, before storage assertions. The
+[plan's original validation](../../specs/architecture/2026-retire-legacy-history.md#validation--linux-x64-2026-10-16)
+retains `/tmp/builder-2026/live-source.json`, `/tmp/builder-2026/main-live.json`,
+the baseline screenshot and daemon provenance. The later automatic live run
+`2026-10-16T06-36-03-277Z` timed out with unreadable/incomplete output and has no
+per-test counts. Neither that run, gate retirement nor the replay pass converts
+those failures into live acceptance or creates a pending automatic gate.
 
 ### Counted saved traversal recovery validation
 

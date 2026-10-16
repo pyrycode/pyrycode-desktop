@@ -5,7 +5,6 @@ import {
 import { EncryptionUnavailableError, type SecureStore, type SecretEncryption } from './secureStore'
 import type { DiagnosticLog } from './diagnosticLog'
 import type { createHistoryDatabase } from './historyDatabase'
-import { createIndexedLegacyHistory } from './indexedLegacyHistory'
 import { createIndexedThreadHistory } from './indexedThreadHistory'
 import type Database from 'better-sqlite3'
 
@@ -23,7 +22,17 @@ function decode(bytes: Uint8Array): ChatHistorySnapshot[] {
   }
   if (value.version !== 1) throw UNSUPPORTED_CHAT_HISTORY_VERSION
   if (!('snapshots' in value) || !Array.isArray(value.snapshots)) throw INVALID_CHAT_HISTORY
-  const snapshots = value.snapshots.map(parseChatHistorySnapshot)
+  const snapshots: ChatHistorySnapshot[] = []
+  for (const snapshot of value.snapshots) {
+    if (typeof snapshot === 'object' && snapshot !== null && snapshot.kind === 'timeline') {
+      if (typeof snapshot.version !== 'number' || !Number.isSafeInteger(snapshot.version)) throw INVALID_CHAT_HISTORY
+      if (snapshot.version !== 1) throw UNSUPPORTED_CHAT_HISTORY_VERSION
+      // Recognition only: retired payloads never enter retained admission or indexed storage.
+      parseChatHistoryRequest({ operation: 'readThread', serverId: snapshot.serverId, conversationId: snapshot.conversationId })
+      continue
+    }
+    snapshots.push(parseChatHistorySnapshot(snapshot))
+  }
   if (snapshots.some((snapshot, i) => snapshots.slice(0, i).some((other) => sameRecord(snapshot, other)))) {
     throw INVALID_CHAT_HISTORY
   }
@@ -38,12 +47,12 @@ function failure(error: unknown, fallback: 'unreadable' | 'write-failed' | 'remo
       : error instanceof EncryptionUnavailableError ? 'encryption-unavailable' : fallback }
 }
 
-/** One main-process instance owns import and both indexed families for the app lifetime. */
+/** One main-process instance owns retained import and scoped cleanup for the app lifetime. */
 export function createChatHistoryStore(deps: {
   secureStore: SecureStore; log: DiagnosticLog; encryption: SecretEncryption; database: ReturnType<typeof createHistoryDatabase>
 }) {
   const { secureStore, log, encryption, database } = deps
-  const legacy = createIndexedLegacyHistory(deps), threads = createIndexedThreadHistory(deps)
+  const threads = createIndexedThreadHistory(deps)
   let queue: Promise<unknown> = Promise.resolve()
   let closed = false
   const requireSuccess = (result: ChatHistoryResult): ChatHistoryResult => {
@@ -73,8 +82,7 @@ export function createChatHistoryStore(deps: {
         if (db.prepare('SELECT singleton FROM history_import').get()) return
         const missing = snapshots.filter(snapshot => {
           if (snapshot.kind === 'list') return list(db, snapshot.serverId) === null
-          const backend = snapshot.kind === 'timeline' ? legacy : threads
-          const existing = backend.executeSync({ operation: snapshot.kind === 'timeline' ? 'readTimeline' : 'readThread',
+          const existing = threads.executeSync({ operation: 'readThread',
             serverId: snapshot.serverId, conversationId: snapshot.conversationId })
           if (existing.status === 'page') throw INVALID_CHAT_HISTORY
           requireSuccess(existing)
@@ -85,8 +93,7 @@ export function createChatHistoryStore(deps: {
         for (const snapshot of missing) {
           if (snapshot.kind === 'list') saveList(db, snapshot)
           else {
-            const backend = snapshot.kind === 'timeline' ? legacy : threads
-            const result = backend.executeSync({ operation: snapshot.kind === 'timeline' ? 'replaceTimeline' : 'replaceThread',
+            const result = threads.executeSync({ operation: 'replaceThread',
               serverId: snapshot.serverId, conversationId: snapshot.conversationId, snapshot })
             if (result.status === 'page') throw INVALID_CHAT_HISTORY
             requireSuccess(result)
@@ -127,11 +134,6 @@ export function createChatHistoryStore(deps: {
       const result = database.transaction((db): ChatHistoryResult => {
         if (operation === 'openThreadPage' || operation === 'newestThreadPage' || operation === 'beforeThreadPage')
           return requireSuccess(threads.executeSync(request))
-        if (operation === 'readTimeline' || operation === 'replaceTimeline') {
-          const result = requireSuccess(legacy.executeSync(request))
-          reading = operation === 'readTimeline'
-          return result
-        }
         if (operation === 'readThread' || operation === 'replaceThread' || operation === 'mutateThread') {
           const result = threads.executeSync(request)
           if (result.status === 'page') throw INVALID_CHAT_HISTORY
@@ -144,7 +146,11 @@ export function createChatHistoryStore(deps: {
         reading = false
         if (operation === 'replaceList') saveList(db, request.snapshot)
         else {
-          requireSuccess(legacy.executeSync(request))
+          // Retire ignored records by exact ownership, without reconstructing their payloads.
+          const server = Buffer.from(serverId, 'utf16le')
+          if (operation === 'removeServer') db.prepare('DELETE FROM legacy_scopes WHERE server = ?').run(server)
+          else db.prepare('DELETE FROM legacy_scopes WHERE server = ? AND conversation = ?')
+            .run(server, Buffer.from(request.conversationId, 'utf16le'))
           const result = threads.executeSync(request)
           if (result.status === 'page') throw INVALID_CHAT_HISTORY
           requireSuccess(result)

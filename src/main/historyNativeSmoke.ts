@@ -16,7 +16,7 @@ void app.whenReady().then(async () => {
     node: process.versions.node, adapter: '12.4.1', packaged: app.isPackaged,
     backend: process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : 'os-keychain',
     asar: __filename.includes('app.asar/'), unpacked: false, stage: 'runtime', executed: 1, passed: 0, failed: 0, skipped: 0,
-    saturatedMemberships: 100_000, saturatedReplacementMs: 0,
+    retainedItems: 1000, protectedReplacementMs: 0,
     openingFixtureItems: 801, openingSelected: 200, openingActive: 1, openingDependencies: 0, openingEvidence: 2,
     openingConversionMs: 0, coldOpeningMs: 0, recoveryMs: 0, recoveredIdentities: 0 }
   const database = createHistoryDatabase({ userDataPath: app.getPath('userData') })
@@ -31,27 +31,28 @@ void app.whenReady().then(async () => {
     const secureStore = createSecureStore({ encryption, persistence: fileSecretPersistence(join(app.getPath('userData'), 'secrets')) })
     const fresh = () => createChatHistoryStore({ database, encryption, secureStore, log: { event: () => {} } })
     const store = fresh()
-    const ids = Array.from({ length: 200 }, (_, i) => i)
-    const snapshot = { version: 1, kind: 'timeline', serverId: 'smoke', conversationId: 'chat', prependedRows: 0,
-      items: [{ kind: 'userText', text: 'NATIVE-CONTENT-1979', attachments: [{ attachmentId: 'a', filename: 'NATIVE-ATTACHMENT-1979' }] }],
-      coverage: { status: 'received', cursor: 'NATIVE-CURSOR-1979', atStart: false },
-      served: { ids, highestId: 199, receipts: Array.from({ length: 500 }, (_, i) => ({
-        ids, cursor: `page-${i}`, atStart: false })) } }
+    const legacy = { version: 1, kind: 'timeline', serverId: 'smoke', conversationId: 'chat',
+      items: 'NATIVE-LEGACY-2026', coverage: null }
+    const list = { version: 1, kind: 'list', serverId: 'smoke', conversations: [{ id: 'chat',
+      name: 'NATIVE-LIST-2026', is_promoted: false, is_archived: false, cwd: '/',
+      last_message_ts: '', last_used_at: '', workspace_label: null }] }
     const thread = { version: 1, kind: 'daemon-items', serverId: 'smoke', conversationId: 'chat', thread: {
-      hostId: 'smoke', conversationId: 'chat', epoch: 'native', version: 1, checkpoint: 1, ranges: [], repair: null,
-      items: [{ id: 1, rev: 1, kind: 'future', content: { text: 'NATIVE-THREAD-1975' } }] } }
+      hostId: 'smoke', conversationId: 'chat', epoch: 'native', version: 2, checkpoint: 1, uncommittedVersion: 2,
+      ranges: [{ start: 1, end: 1 }], repair: null,
+      items: Array.from({ length: evidence.retainedItems }, (_, id) => ({ id, rev: 1, kind: 'future',
+        content: { text: 'NATIVE-THREAD-1975', attachment: 'NATIVE-ATTACHMENT-2026' } })) } }
     evidence.stage = 'fixture-admission'
-    parseChatHistorySnapshot(snapshot); parseChatHistorySnapshot(thread)
-    await secureStore.set('chat-history', Buffer.from(JSON.stringify({ version: 1, snapshots: [snapshot, thread] })))
+    parseChatHistorySnapshot(list); parseChatHistorySnapshot(thread)
+    await secureStore.set('chat-history', Buffer.from(JSON.stringify({ version: 1, snapshots: [legacy, list, thread] })))
     evidence.stage = 'import'
-    const result = await store.execute({ operation: 'readTimeline', serverId: 'smoke', conversationId: 'chat' })
-    evidence.stage = result.status === 'error' ? result.code : 'compare-import'
-    if (result.status !== 'stored' || !isDeepStrictEqual(result.snapshot, parseChatHistorySnapshot(snapshot))) throw new Error('import')
-    database.close()
+    const result = await store.execute({ operation: 'readThread', serverId: 'smoke', conversationId: 'chat' })
+    if (result.status !== 'stored' || !isDeepStrictEqual(result.snapshot, parseChatHistorySnapshot(thread))) throw new Error('import')
+    if (database.transaction(db => db.prepare('SELECT 1 FROM legacy_scopes').get()) !== undefined) throw new Error('legacy-import')
+    await store.close()
     evidence.stage = 'reopen'
     const next = fresh()
-    const reopened = await next.execute({ operation: 'readTimeline', serverId: 'smoke', conversationId: 'chat' })
-    if (reopened.status !== 'stored' || !isDeepStrictEqual(reopened.snapshot, parseChatHistorySnapshot(snapshot))) throw new Error('reopen')
+    const reopened = await next.execute({ operation: 'readList', serverId: 'smoke' })
+    if (reopened.status !== 'stored' || !isDeepStrictEqual(reopened.snapshot, parseChatHistorySnapshot(list))) throw new Error('list')
     const reopenedThread = await next.execute({ operation: 'readThread', serverId: 'smoke', conversationId: 'chat' })
     if (reopenedThread.status !== 'stored' || !isDeepStrictEqual(reopenedThread.snapshot, parseChatHistorySnapshot(thread))) throw new Error('thread')
     evidence.stage = 'owned-update'
@@ -65,19 +66,18 @@ void app.whenReady().then(async () => {
     database.close()
     const owned = await fresh().execute({ operation: 'readThread', serverId: 'smoke', conversationId: 'chat' })
     if (owned.status !== 'stored' || !isDeepStrictEqual(owned.snapshot,
-      parseChatHistorySnapshot({ ...thread, thread: { ...thread.thread, items: [updatedItem], arrivalOrder: [1] } }))) throw new Error('owned-reopen')
-    // A saturated full replacement decrypts old memberships and protects every new record.
-    // Report completion and duration rather than assuming a short renderer polling deadline.
-    evidence.stage = 'saturated-replacement'
-    const repeated = { ...snapshot, served: { ...snapshot.served, receipts: [...snapshot.served.receipts.slice(1),
-      { ids, cursor: 'repeat', atStart: false }] } }
+      parseChatHistorySnapshot({ ...thread, thread: { ...thread.thread, items: [updatedItem, ...thread.thread.items.slice(1)], arrivalOrder: thread.thread.items.map(item => item.id) } }))) throw new Error('owned-reopen')
+    evidence.stage = 'protected-replacement'
+    const replacement = { ...thread, thread: { ...thread.thread, epoch: 'replacement', checkpoint: 2, uncommittedVersion: 0 } }
     const started = performance.now()
-    const replaced = await next.execute({ operation: 'replaceTimeline', serverId: 'smoke', conversationId: 'chat', snapshot: repeated })
+    const replaced = await next.execute({ operation: 'replaceThread', serverId: 'smoke', conversationId: 'chat', snapshot: replacement })
     if (replaced.status !== 'ok') throw new Error('replacement')
-    evidence.saturatedReplacementMs = Math.round(performance.now() - started)
-    database.close()
-    const saved = await fresh().execute({ operation: 'readTimeline', serverId: 'smoke', conversationId: 'chat' })
-    if (saved.status !== 'stored' || !isDeepStrictEqual(saved.snapshot, parseChatHistorySnapshot(repeated))) throw new Error('saturation-reopen')
+    evidence.protectedReplacementMs = Math.round(performance.now() - started)
+    await next.close()
+    const final = fresh()
+    const saved = await final.execute({ operation: 'readThread', serverId: 'smoke', conversationId: 'chat' })
+    if (saved.status !== 'stored' || !isDeepStrictEqual(saved.snapshot, parseChatHistorySnapshot(replacement))) throw new Error('replacement-reopen')
+    await final.close()
     evidence.stage = 'bounded-opening'
     const openingItems = [
       ...Array.from({ length: 300 }, (_, id) => ({ id, rev: 1, kind: 'future', shown: true, order: id })),
@@ -133,7 +133,7 @@ void app.whenReady().then(async () => {
     const directory = join(app.getPath('userData'), 'history')
     for (const name of readdirSync(directory)) {
       const bytes = readFileSync(join(directory, name))
-      if (['NATIVE-CONTENT-1979', 'NATIVE-ATTACHMENT-1979', 'NATIVE-CURSOR-1979', 'NATIVE-THREAD-1975', 'NATIVE-OWNED-2044'].some(s => bytes.includes(Buffer.from(s)))) throw new Error('plaintext')
+      if (['NATIVE-LEGACY-2026', 'NATIVE-LIST-2026', 'NATIVE-ATTACHMENT-2026', 'NATIVE-THREAD-1975', 'NATIVE-OWNED-2044'].some(s => bytes.includes(Buffer.from(s)))) throw new Error('plaintext')
     }
     evidence.passed = 1; evidence.stage = 'complete'
   } catch { evidence.failed = 1 }

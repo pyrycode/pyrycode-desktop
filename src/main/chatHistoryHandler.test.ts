@@ -56,12 +56,12 @@ describe('chat history injected handler', () => {
     expect(h.loadById).not.toHaveBeenCalled()
     const snapshots = {
       list: { version: 1, kind: 'list', serverId: 'saved', conversations: [] },
-      timeline: { version: 1, kind: 'timeline', serverId: 'saved', conversationId: 'chat', items: [], prependedRows: 0, coverage: { status: 'unknown' } }
+      thread: { version: 1, kind: 'daemon-items', serverId: 'saved', conversationId: 'chat', thread: { hostId: 'saved', conversationId: 'chat', epoch: 'e', version: 0, checkpoint: 0, ranges: [], repair: null, items: [] } }
     }
-    for (const operation of ['readList', 'readTimeline', 'replaceList', 'replaceTimeline', 'removeConversation', 'removeServer']) {
+    for (const operation of ['readList', 'readThread', 'replaceList', 'replaceThread', 'removeConversation', 'removeServer']) {
       const request = { operation, serverId: 'saved',
-        ...(['readTimeline', 'replaceTimeline', 'removeConversation'].includes(operation) ? { conversationId: 'chat' } : {}),
-        ...(operation === 'replaceList' ? { snapshot: snapshots.list } : operation === 'replaceTimeline' ? { snapshot: snapshots.timeline } : {}) }
+        ...(['readThread', 'replaceThread', 'removeConversation'].includes(operation) ? { conversationId: 'chat' } : {}),
+        ...(operation === 'replaceList' ? { snapshot: snapshots.list } : operation === 'replaceThread' ? { snapshot: snapshots.thread } : {}) }
       h.execute.mockRejectedValueOnce(new Error('/secret token private-content'))
       expect(await h.handle(null, request)).toEqual({ status: 'error', code: operation.startsWith('read') ? 'unreadable'
         : operation.startsWith('replace') ? 'write-failed' : 'remove-failed' })
@@ -115,16 +115,16 @@ describe('chat history injected handler', () => {
     const h = setup()
     h.execute.mockResolvedValue({ status: 'ok' })
     const remove = h.handle(null, { operation: 'removeConversation', serverId: 'saved', conversationId: 'chat' })
-    const stale = h.handle(null, { operation: 'readTimeline', serverId: 'saved', conversationId: 'chat' })
+    const stale = h.handle(null, { operation: 'readThread', serverId: 'saved', conversationId: 'chat' })
     const staleList = h.handle(null, { operation: 'replaceList', serverId: 'saved', snapshot: {
       version: 1, kind: 'list', serverId: 'saved', conversations: [{ id: 'chat', name: null, cwd: '/',
         is_promoted: false, is_archived: false, last_message_ts: '', last_used_at: '', workspace_label: null }] } })
-    const peer = h.handle(null, { operation: 'readTimeline', serverId: 'saved', conversationId: 'peer' })
+    const peer = h.handle(null, { operation: 'readThread', serverId: 'saved', conversationId: 'peer' })
     await remove
     expect(await stale).toEqual({ status: 'error', code: 'unknown-host' })
     expect(await staleList).toEqual({ status: 'error', code: 'unknown-host' })
     expect(await peer).toEqual({ status: 'ok' })
-    expect(await h.handle(null, { operation: 'readTimeline', serverId: 'saved', conversationId: 'chat' })).toEqual({ status: 'ok' })
+    expect(await h.handle(null, { operation: 'readThread', serverId: 'saved', conversationId: 'chat' })).toEqual({ status: 'ok' })
   })
 
   it('composes cleanup failure with successful unpair and connection teardown', async () => {

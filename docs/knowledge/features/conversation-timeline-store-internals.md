@@ -347,10 +347,9 @@ Legacy overlap still uses (`type`, `ts`); operator rows join by nonempty message
 never text. The daemon supplies the same timestamp to the log and live fan-out.
 
 Unresolvable or ambiguous live comparisons fail open. Malformed envelopes and
-malformed declared saved metadata reject admission instead. The
-[snapshot contract](chat-history.md#retained-display-contributions) defines the
-allowlisted contribution operations, strict references, bounds and legacy unknown
-provenance.
+malformed declared saved metadata rejected admission instead. This describes the
+retired reconstruction path. Current [protected storage](chat-history-storage.md#protected-collection)
+ignores old timeline bodies rather than admitting their contribution schema.
 
 Known gaps derive from exact served ids held before admission, including skipped
 envelopes. Newest overlap containing the held high-water creates no tail marker;

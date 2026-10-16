@@ -65,8 +65,9 @@ describe('saved list restoration', () => {
       const results: Record<string, ChatHistoryResult> = {
         missing: { status: 'missing' }, empty: stored('a', []),
         error: { status: 'error', code: 'unreadable' }, 'wrong-host': stored('b'),
-        'wrong-kind': { status: 'stored', snapshot: { version: 1, kind: 'timeline', serverId: 'a',
-          conversationId: 'same', items: [], prependedRows: 0, coverage: { status: 'unknown' } } },
+        'wrong-kind': { status: 'stored', snapshot: { version: 1, kind: 'daemon-items', serverId: 'a',
+          conversationId: 'same', thread: { hostId: 'a', conversationId: 'same', epoch: 'e', version: 0,
+            checkpoint: 0, ranges: [], repair: null, items: [] } } },
         ok: { status: 'ok' }
       }
       if (kind === 'rejected') s.pending.get('a')!.reject()

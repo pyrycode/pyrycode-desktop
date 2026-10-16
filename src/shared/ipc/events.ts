@@ -49,8 +49,7 @@ import type {
  * daemon: no summing, differencing or clamping, so `0` and negatives arrive unchanged. What "not
  * reported" means (absent, `0`) is the display's call, not this carrier's. All are this turn's except
  * `costUsdTotal`, which is the SESSION's running total in US dollars, claude's estimate. Rides the live
- * and history `turnEnd` arms here and the renderer's `turnEnd` / `turnBoundary`. Not persisted:
- * `DurableThreadItem` does not carry it.
+ * and history `turnEnd` arms here and the renderer's `turnEnd` / `turnBoundary`. These metrics remain live-only.
  */
 export interface TurnEndMetrics {
   durationMs?: number

@@ -22,9 +22,10 @@
     "e2e": "npm run build && playwright test",
     "e2e:real-claude": "npm run build && playwright test --config playwright.real-claude.config.ts",
     "e2e:real:gate": "npm run build && playwright test --config playwright.real-claude.config.ts --reporter=list,./e2e/reporters/zeroExecutedGate.ts",
-    "e2e:recorded": "npm run build && playwright test --config playwright.recorded.config.ts",
-    "e2e:recordings:capture": "node scripts/record-exchanges.mjs capture",
-    "e2e:recordings:verify": "node scripts/record-exchanges.mjs verify"
+    "e2e:recorded": "npm run build && node scripts/run-offline-replay.mjs",
+    "e2e:recordings:capture": "node scripts/client-recordings.mjs capture",
+    "e2e:recordings:verify": "node scripts/client-recordings.mjs verify",
+    "typecheck:client-tests": "tsc --noEmit -p tsconfig.client-tests.json"
   },
   "dependencies": {
     "better-sqlite3": "12.4.1",

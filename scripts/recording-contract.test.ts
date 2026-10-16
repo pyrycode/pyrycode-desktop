@@ -32,3 +32,16 @@ describe('recording request contract verification', () => {
     }
   })
 })
+
+it('compares explicit fresh scenario inputs but still detects altered content and causal checkpoints', () => {
+  const make = (nonce: number) => ({ ...fixture(), scenario: { id: 'claude-queue-delivery', inputs: { nonce } },
+    barriers: [{ before: 1, name: 'release-tool' }], wire: fixture().wire.map((entry, index) => index === 3
+      ? { ...entry, message: { ...entry.message, payload: { ...entry.message.payload, text: `run=${nonce} reply briefly` } } } : entry) })
+  expect(requestContract(make(123))).toBe(requestContract(make(456)))
+  const changed = make(456)
+  changed.wire[3].message.payload.text += ' using a different tool'
+  expect(requestContract(changed)).not.toBe(requestContract(make(123)))
+  const reordered = make(456)
+  reordered.barriers[0].before = 3
+  expect(requestContract(reordered)).not.toBe(requestContract(make(123)))
+})

@@ -1,7 +1,8 @@
+import { scenarioNonce, scenarioDaemonRevision, scenarioDesktopRevision, scenarioInput, liveProof, scenarioEffect, scenarioMode } from './fixtures/clientScenario'
 import { type Page } from '@playwright/test'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
+import { test, expect, encodePairingPayload } from './fixtures/clientScenario'
 import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
@@ -151,7 +152,7 @@ test('real claude enqueues a mid-turn send, drops it before drain, and runs no t
   // SILENT so it does not flood the ordered frame stream and delay msg2's queue_state. msg2 is a short,
   // distinct queued send whose text is matched only to scope the drop control (content we control, not model
   // output).
-  const runNonce = Date.now()
+  const runNonce = scenarioNonce()
   const gatePath = join(daemon.workdir, `queue-drop-gate-${runNonce}`)
   const msg1 =
     `Use the Bash tool to run this exact command in the foreground; do NOT run it in the background. ` +
@@ -294,7 +295,7 @@ test('real claude enqueues a mid-turn send, drops it before drain, and runs no t
   // Only now, strictly AFTER the dequeue is asserted, does turn 1 stop being held: claude's `[ -f <gate> ]`
   // becomes true, the tool returns, and the turn drains naturally (no interrupt). This is the deterministic
   // release that replaces the old timing-dependent long prompt.
-  await writeFile(gatePath, '')
+  await scenarioEffect('release-tool', () => writeFile(gatePath, ''))
 
   // --- Wait for quiesce (AC4). ---
   // Two independent DOM reflections of the turn ending, different fabric: the button retracts from the real

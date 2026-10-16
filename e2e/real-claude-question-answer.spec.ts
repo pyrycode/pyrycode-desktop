@@ -85,6 +85,7 @@ const QUESTION_MODEL = 'claude-sonnet-5'
 test.use({
   skipPermissions: false,
   interactiveRunner: 'stream-json',
+  stdioPermissionPrompt: true,
   allowRemotePermissions: true,
   // The ONLY model under which a live AskUserQuestion call has been measured in either tree. The daemon
   // side runs both its question gates under it deliberately and records why: tool-selection reliability is

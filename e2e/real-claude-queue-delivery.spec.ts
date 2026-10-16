@@ -1,3 +1,4 @@
+import { scenarioNonce, scenarioDaemonRevision, scenarioDesktopRevision, scenarioInput, liveProof, scenarioEffect, scenarioMode } from './fixtures/clientScenario'
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
@@ -5,7 +6,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { Page } from '@playwright/test'
 import { COMMAND_CHANNEL, type RendererCommand } from '../src/shared/ipc/commands'
-import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/realDaemon'
+import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/clientScenario'
 import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 import { daemonIdentity } from './fixtures/daemonVersion'
@@ -30,12 +31,11 @@ for (const scenario of [
   test(`real claude ${scenario.name}`, async ({ relay, daemon }, testInfo) => {
     test.setTimeout(540_000)
     // The fixture resolves this same executable. Read the binary, not a checkout that may be newer.
-    const { stdout } = await promisify(execFile)(process.env.PYRY_BIN || 'pyry', ['version'], { timeout: 10_000 })
-    const revision = daemonIdentity(stdout)
+  const revision = scenarioDaemonRevision()
     testInfo.annotations.push({ type: 'daemon-revision', description: revision })
 
     await withIsolatedElectronApp(async ({ app, page }) => {
-      const nonce = Date.now()
+      const nonce = scenarioNonce()
       const markers = ['FIRST', 'SECOND', 'THIRD'].map(label => `QUEUE_${label}_${nonce}_DONE`)
       const expected = scenario.drop ? [0, 2] : scenario.count === 1 ? [0, 1] : [0, 1, 2]
       const gate = join(daemon.workdir, `queue-release-${nonce}`)
@@ -72,9 +72,9 @@ for (const scenario of [
         expect((await readEvidence(page, expected)).thread, 'actual app connection negotiated thread').toBe(true)
         await composer.fill(first)
         await composer.press('Enter')
-        await expect.poll(() => existsSync(entered), { timeout: TURN_TIMEOUT }).toBe(true)
+        await liveProof(async () => { await expect.poll(() => existsSync(entered), { timeout: TURN_TIMEOUT }).toBe(true) })
         await expect(stop).toBeVisible()
-        expect(existsSync(gate)).toBe(false)
+        await liveProof(() => { expect(existsSync(gate)).toBe(false) })
 
         for (const message of followups) {
           await composer.fill(message)
@@ -103,8 +103,8 @@ for (const scenario of [
         // Enqueue (and any drop) is established while the ordinary first turn is still held.
         expect((await readEvidence(page, expected)).turns.every(turn => turn.completions === 0)).toBe(true)
         await expect(stop).toBeVisible()
-        expect(existsSync(gate)).toBe(false)
-        await writeFile(gate, 'release\n', { mode: 0o600 })
+        await liveProof(() => { expect(existsSync(gate)).toBe(false) })
+        await scenarioEffect('release-tool', () => writeFile(gate, 'release\n', { mode: 0o600 }))
         released = true
 
         await expect.poll(async () => (await readEvidence(page, expected)).complete,

@@ -61,3 +61,22 @@ as successful captures or replay coverage.
 Claude spec. It is relevant board context but has no current scenario to migrate.
 #1662's requested two-agent handover is also separate acceptance from the
 existing Codex channel test. Neither can be closed on replay results alone.
+
+## Baseline repairs found by live execution
+
+Core #3502 restores authenticated cold/idle query demand and keeps a joined
+view alive until its connection generation retires. The unchanged two-turn
+Claude check and history reopen acceptance run against that source-stamped
+isolated candidate before its merge. Desktop maps the daemon's native reset
+cause to the existing session divider presentation.
+
+The history test now obtains its conversation ID from the real conversation
+list (and independently checks the registry during live execution). Its fresh
+profile reads backward with repeated trusted input: production requests one
+bounded page per input, so one Home key cannot establish coverage of 205 rows.
+Every original assertion remains. The already completed resumed profile exits
+before the independent fresh profile, giving each captured connection one
+sequential lifetime. Question fixtures explicitly enable the daemon's stdio
+permission/question bridge; the original answer, cancel and model assertions
+remain. Channel section counting selects Channels and Chats, since Apps is a
+separate section now.

@@ -1,7 +1,8 @@
+import { scenarioNonce, scenarioDaemonRevision, scenarioDesktopRevision, scenarioInput, liveProof, scenarioEffect, scenarioMode } from './fixtures/clientScenario'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { type Page } from '@playwright/test'
-import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/realDaemon'
+import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/clientScenario'
 import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 import { daemonIdentity } from './fixtures/daemonVersion'
@@ -48,6 +49,7 @@ async function observe(page: Page) {
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Debugger.enable')
   const { result } = await cdp.send('Runtime.evaluate', { expression: 'window.pyry.sendCommand' })
+  if (!result.objectId) throw new Error('Settings command observation is unavailable')
   await cdp.send('Debugger.setBreakpointOnFunctionCall', {
     objectId: result.objectId,
     condition: "(['requestSessionSettings', 'setSessionSettings'].includes(arguments[0].type) && globalThis.__effortEvidence.push(arguments[0]), false)"
@@ -91,7 +93,7 @@ async function assistantCount(page: Page): Promise<number> {
 
 async function turn(page: Page, number: number): Promise<void> {
   const before = await assistantCount(page)
-  await page.getByPlaceholder('Message…').fill(`Reply with one short word. run=${Date.now()} turn=${number}`)
+  await page.getByPlaceholder('Message…').fill(`Reply with one short word. run=${scenarioNonce()} turn=${number}`)
   await page.getByRole('button', { name: 'Send', exact: true }).click()
   await expect.poll(() => assistantCount(page), { timeout: TURN }).toBeGreaterThan(before)
   await expect(page.locator('.bubble__cursor')).toHaveCount(0, { timeout: TURN })
@@ -110,8 +112,7 @@ async function refresh(page: Page, proof: Awaited<ReturnType<typeof observe>>, i
 test('applied effort, confirmed preference, restart, chat recall and channel creation choice', async ({ relay, daemon }, testInfo) => {
   test.setTimeout(480_000)
   // Read the actual binary's revision or release version; never claim an unversioned daemon passed.
-  const { stdout } = await promisify(execFile)(process.env.PYRY_BIN || 'pyry', ['version'], { timeout: 10_000 })
-  const revision = daemonIdentity(stdout)
+  const revision = scenarioDaemonRevision()
   testInfo.annotations.push({ type: 'daemon-revision', description: revision })
   await testInfo.attach('daemon-revision', { body: Buffer.from(revision), contentType: 'text/plain' })
 

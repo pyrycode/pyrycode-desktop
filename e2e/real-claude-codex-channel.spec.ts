@@ -1,7 +1,8 @@
+import { scenarioNonce, scenarioDaemonRevision, scenarioDesktopRevision, scenarioInput, liveProof, scenarioEffect, scenarioMode } from './fixtures/clientScenario'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { Page } from '@playwright/test'
-import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/realDaemon'
+import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/clientScenario'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 import { daemonIdentity } from './fixtures/daemonVersion'
 import type { StampedDaemonEvent } from '../src/shared/ipc/events'
@@ -80,7 +81,7 @@ async function assistantCount(page: Page): Promise<number> {
 
 async function turn(page: Page): Promise<void> {
   const before = await assistantCount(page)
-  await page.getByPlaceholder('Message…').fill(`Reply with one short word. run=${Date.now()}`)
+  await page.getByPlaceholder('Message…').fill(`Reply with one short word. run=${scenarioNonce()}`)
   await page.getByRole('button', { name: 'Send', exact: true }).click()
   await expect.poll(() => assistantCount(page), { timeout: TURN }).toBeGreaterThan(before)
   await expect(page.locator('.bubble__cursor')).toHaveCount(0, { timeout: TURN })
@@ -88,8 +89,7 @@ async function turn(page: Page): Promise<void> {
 
 test('real GPT-6 Luna channel replies with Low effort from creation', async ({ relay, daemon }, testInfo) => {
   test.setTimeout(360_000)
-  const { stdout } = await promisify(execFile)(process.env.PYRY_BIN || 'pyry', ['version'], { timeout: 10_000 })
-  const revision = daemonIdentity(stdout)
+  const revision = scenarioDaemonRevision()
   testInfo.annotations.push({ type: 'daemon-revision', description: revision })
   await testInfo.attach('daemon-revision', { body: Buffer.from(revision), contentType: 'text/plain' })
 
@@ -149,7 +149,7 @@ test('real GPT-6 Luna channel replies with Low effort from creation', async ({ r
       const createdBefore = proof.created().length
       const readsBeforeCreate = proof.settings().length
       const acksBeforeCreate = proof.acks().length
-      const name = `Luna live ${Date.now()}`
+      const name = `Luna live ${scenarioNonce()}`
       await page.getByRole('button', { name: 'Create channel', exact: true }).click({ force: true })
       const dialog = page.getByRole('dialog', { name: 'Create channel', exact: true })
       await dialog.getByRole('textbox', { name: 'Channel name:', exact: true }).fill(name)

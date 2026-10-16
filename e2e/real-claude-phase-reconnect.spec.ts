@@ -1,10 +1,11 @@
+import { scenarioNonce, scenarioDaemonRevision, scenarioDesktopRevision, scenarioInput, liveProof, scenarioEffect, scenarioMode } from './fixtures/clientScenario'
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { connect, createServer, type Socket } from 'node:net'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
-import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
+import { test, expect, encodePairingPayload } from './fixtures/clientScenario'
 import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 import { daemonIdentity } from './fixtures/daemonVersion'
@@ -57,11 +58,10 @@ test('real claude restores the status after reconnect during the same running tu
   relay, daemon, page
 }, testInfo) => {
   test.setTimeout(300_000)
-  const { stdout } = await promisify(execFile)(process.env.PYRY_BIN || 'pyry', ['version'], { timeout: 10_000 })
-  const revision = daemonIdentity(stdout)
+  const revision = scenarioDaemonRevision()
   testInfo.annotations.push({ type: 'daemon-revision', description: revision })
   const proxy = await clientProxy(relay.url)
-  const nonce = Date.now()
+  const nonce = scenarioNonce()
   const entered = join(daemon.workdir, `phase-reconnect-entered-${nonce}`)
   const release = join(daemon.workdir, `phase-reconnect-release-${nonce}`)
   try {
@@ -78,7 +78,7 @@ test('real claude restores the status after reconnect during the same running tu
     )
     await page.getByRole('button', { name: 'Send', exact: true }).click()
     // A real tool has STARTED, rather than only an optimistic local-send window being visible.
-    await expect.poll(() => existsSync(entered), { timeout: TURN_TIMEOUT }).toBe(true)
+    await liveProof(async () => { await expect.poll(() => existsSync(entered), { timeout: TURN_TIMEOUT }).toBe(true) })
     await expect.poll(async () => (await readPhaseReconnect(page)).turnIds.length).toBe(1)
     // The held foreground tool names Bash and may append elapsed time. Recognize its existing
     // presentation as well as the generic phase copy, returning no daemon text to the test process.
@@ -90,10 +90,11 @@ test('real claude restores the status after reconnect during the same running tu
     expect(current?.state === 'thinking' || current?.state === 'responding').toBe(true)
     testInfo.annotations.push({ type: 'baseline-before-drop', description: `running phase: ${current?.state}` })
     expect(before.endedTurnIds).toEqual([])
-    expect(existsSync(release)).toBe(false)
+    await liveProof(() => { expect(existsSync(release)).toBe(false) })
     const heldUserRows = await page.locator('[data-thread-role="user"]').count()
     expect(heldUserRows).toBe(1)
 
+    await scenarioEffect('drop-connection', async () => {})
     proxy.drop()
     await expect.poll(async () => (await readPhaseReconnect(page)).connections,
       { timeout: RECONNECT_TIMEOUT }).toBe(before.connections + 1)
@@ -109,7 +110,7 @@ test('real claude restores the status after reconnect during the same running tu
     await expect.poll(hasRunningLabel).toBe(true)
     expect(restored.turnIds).toEqual(before.turnIds)
     expect(restored.endedTurnIds).toEqual([])
-    expect(existsSync(release)).toBe(false)
+    await liveProof(() => { expect(existsSync(release)).toBe(false) })
     await expect(page.locator('[data-thread-role="user"]')).toHaveCount(heldUserRows)
     testInfo.annotations.push({ type: 'baseline', description: 'unchanged desktop restored the phase during the original running turn' })
     await testInfo.attach('phase-reconnect-baseline', {
@@ -118,13 +119,13 @@ test('real claude restores the status after reconnect during the same running tu
         originalTurnStillRunning: true })), contentType: 'application/json'
     })
 
-    await writeFile(release, '')
+    await scenarioEffect('release-tool', () => writeFile(release, ''))
     await expect.poll(async () => (await readPhaseReconnect(page)).endedTurnIds,
       { timeout: TURN_TIMEOUT }).toEqual(before.turnIds)
     await expect(page.locator('.composer-status__label')).toHaveCount(0, { timeout: TURN_TIMEOUT })
   } finally {
     // Release even on a failed assertion; the real fixture then reaps the entire child process group.
-    try { await writeFile(release, '') } finally {
+    try { await liveProof(() => writeFile(release, '')) } finally {
       try { await stopPhaseReconnect(page) } finally { await proxy.close() }
     }
   }

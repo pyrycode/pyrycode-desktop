@@ -106,6 +106,17 @@ describe('daemon item presentation', () => {
     expect(html.indexOf('summary 6')).toBeLessThan(html.indexOf('info supplied'))
   })
 
+  it('renders raw daemon reset causes as exactly one session delimiter and preserves unknown summaries', () => {
+    const html = render([item(1, 'session_divider', { cause: 'operator_reset', occurred_at: '2026-10-16T00:00:00Z' },
+      { summary: 'Session changed: operator_reset' })])
+    expect(html.match(/class="session-delimiter"/g)).toHaveLength(1)
+    expect(html).toContain('Session reset')
+    expect(render([item(1, 'session_divider', { cause: 'future' }, { summary: 'supplied summary' })]))
+      .not.toContain('class="session-delimiter"')
+    expect(render([item(1, 'session_divider', { cause: 'future' }, { summary: 'supplied summary' })]))
+      .toContain('supplied summary')
+  })
+
   it('keeps hidden items held and uses escaped inert summaries for unsupported facts', () => {
     const html = render([
       item(1, 'assistant_message', { text: 'hidden text' }, { shown: false }),

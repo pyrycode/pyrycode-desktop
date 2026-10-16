@@ -1,8 +1,9 @@
+import { scenarioNonce, scenarioDaemonRevision, scenarioDesktopRevision, scenarioInput, liveProof, scenarioEffect, scenarioMode } from './fixtures/clientScenario'
 import { execFile } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { readFile } from 'node:fs/promises'
-import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/realDaemon'
+import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/clientScenario'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 import { NOT_YET_AVAILABLE, readMainProcess } from './fixtures/mainProcessRead'
 import { daemonIdentity } from './fixtures/daemonVersion'
@@ -14,24 +15,34 @@ test.use({ spawnClaude: false, seedPromoted: true, requiredCapabilities: ['inter
 
 test('a real daemon lazily fills a served gap after more than 200 entries written while Electron is closed', async ({ relay, daemon }, testInfo) => {
   test.setTimeout(240_000)
-  const { stdout } = await promisify(execFile)(process.env.PYRY_BIN ?? 'pyry', ['version'], { timeout: 10_000 })
-  const revision = daemonIdentity(stdout)
+  const revision = scenarioDaemonRevision()
   expect(revision, 'thread acceptance requires a source-stamped isolated daemon binary').toMatch(/^[a-f0-9]{7,40}$/)
   testInfo.annotations.push({ type: 'daemon-revision', description: revision })
-  const channel = `history-open-${Date.now()}`
-  const baseline = `saved baseline ${Date.now()}`
-  const marker = `closed desktop post ${Date.now()}`
+  const channel = `history-open-${scenarioNonce()}`
+  const baseline = `saved baseline ${scenarioNonce()}`
+  const marker = `closed desktop post ${scenarioNonce()}`
   const closedPosts = Array.from({ length: 205 }, (_, index) => `${marker} row ${String(index).padStart(3, '0')}`)
   const post = async (text: string): Promise<void> => {
+    await scenarioEffect('channel-post', async () => {
     try {
       await promisify(execFile)(process.env.PYRY_BIN ?? 'pyry', ['channel',
         `-pyry-socket=${join(dirname(daemon.workdir), '.pyry', 'test.sock')}`, 'post',
         '--name', channel, '--text', text], { timeout: 45_000 })
     } catch { throw new Error('channel post failed') } // Never print argv, payload or child output.
+    })
   }
   await withIsolatedElectronApp(async initial => {
     const { page, app } = initial
     await watchPhaseReconnect(page)
+    await page.evaluate(name => {
+      ;(window as any).__historyConversationId = ''
+      window.pyry.onDaemonEvent(event => {
+        if (event.type === 'conversationsReceived') {
+          const row = event.conversations.find(row => row.name === name)
+          if (row) (window as any).__historyConversationId = row.id
+        }
+      })
+    }, channel)
     await pairFromUnpairedLaunch(page, encodePairingPayload({ ...daemon.pairFields, relay: `${relay.url}/v1/client` }))
     await expect(page.locator('.channel-list__rename')).toBeVisible({ timeout: 45_000 })
     await page.locator('.channel-list__rename').click()
@@ -45,8 +56,12 @@ test('a real daemon lazily fills a served gap after more than 200 entries writte
     await post(baseline)
     await expect(page.locator('.conversation__thread .bubble').filter({ hasText: baseline })).toHaveCount(1)
     // Inspect only this fixture's synthetic conversation registry, never pairing credentials.
-    const registry = JSON.parse(await readFile(join(dirname(daemon.workdir), '.pyry', 'test', 'conversations.json'), 'utf8'))
-    const conversationId: string = registry.conversations.find((c: { name?: string }) => c.name === channel).id
+    const conversationId = await page.evaluate(() => (window as any).__historyConversationId as string)
+    await liveProof(async () => {
+      const registry = JSON.parse(await readFile(join(dirname(daemon.workdir), '.pyry', 'test', 'conversations.json'), 'utf8'))
+      const savedId: string = registry.conversations.find((c: { name?: string }) => c.name === channel).id
+      expect(conversationId).toBe(savedId)
+    })
     const savedText = () => page.evaluate(async ({ serverId, conversationId }) => {
       const authoritative = await window.pyry.chatHistory({ operation: 'readThread', serverId, conversationId })
       if (authoritative.status === 'stored' && authoritative.snapshot.kind === 'daemon-items')
@@ -80,6 +95,9 @@ test('a real daemon lazily fills a served gap after more than 200 entries writte
       expect(asks[0]).toEqual({ type: 'thread_catch_up', version: savedCheckpoint })
       expect(asks.some(ask => ask.type === 'legacy')).toBe(false)
       // A separately authenticated fresh profile has no saved checkpoint and must page the newest window.
+      // The resumed-profile assertions are complete. Exit it before the independent
+      // fresh-profile proof so every captured connection has one causal lifetime.
+      await fresh.close()
       const pair = await daemon.mintPairing()
       await withIsolatedElectronApp(async ({ page: clean, app: cleanApp }) => {
         await cleanApp.evaluate(({ ipcMain }) => {
@@ -96,6 +114,17 @@ test('a real daemon lazily fills a served gap after more than 200 entries writte
         await expect(history).toContainText(closedPosts.at(-1)!, { timeout: 45_000 })
         await history.press('Home')
         await expect.poll(() => cleanApp.evaluate(() => (globalThis as any).__threadPageAsks.includes('thread_page'))).toBe(true)
+        // Each trusted upward input requests one bounded page. Keep reading backward
+        // until the original oldest-entry assertion can establish complete coverage.
+        for (let step = 0; step < 10; step++) {
+          await expect(history.getByRole('status').filter({ hasText: 'Loading messages…' })).toHaveCount(0)
+          if ((await history.innerText()).includes(baseline)) break
+          const before = await history.locator('.bubble').count()
+          await history.press('Home')
+          await expect.poll(() => history.evaluate(el => el.scrollTop)).toBe(0)
+          await history.press('ArrowUp')
+          await expect.poll(() => history.locator('.bubble').count()).toBeGreaterThan(before)
+        }
         await expect(history).toContainText(baseline, { timeout: 45_000 })
         expect(await cleanApp.evaluate(() => (globalThis as any).__threadPageAsks.includes('legacy'))).toBe(false)
       })
@@ -137,7 +166,7 @@ test('a real daemon lazily fills a served gap after more than 200 entries writte
     const asks = async (): Promise<string[]> => {
       let observed: string[] | undefined
       await expect.poll(async () => {
-        const value = await readMainProcess(reopened, () => (globalThis as any).__openingHistoryProof.asks as string[])
+        const value = await readMainProcess<string[]>(reopened, () => (globalThis as any).__openingHistoryProof.asks as string[])
         if (value === NOT_YET_AVAILABLE) return false
         observed = value
         return true

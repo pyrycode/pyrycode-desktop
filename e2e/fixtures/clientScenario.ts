@@ -12,10 +12,13 @@ import { daemonIdentity } from './daemonVersion'
 import type { ExchangeCapture } from './exchangeCapture'
 
 export { expect } from '@playwright/test'
+export type { SpawnedDaemon } from './realDaemon'
 export { encodePairingPayload, withIsolatedElectronApp } from './realDaemon'
 export const scenarioMode = process.env.PYRY_CLIENT_MODE ?? 'live'
 if (!['live', 'capture', 'replay'].includes(scenarioMode)) throw new Error('Unknown client scenario mode')
 type CaptureGlobal = typeof globalThis & { __desktopExchangeCapture?: ExchangeCapture }
+const scenarioId = (name: string, title: string): string => name === 'claude-queue-delivery'
+  ? `${name}-${createHash('sha256').update(title).digest('hex').slice(0, 8)}` : name
 type Inputs = { nonce: number; [key: string]: unknown }
 let state: { inputs: Inputs; source: Recording['source']; checkpoint: (name: string) => Promise<void> } | undefined
 
@@ -50,6 +53,11 @@ export function scenarioDesktopRevision(): string {
 
 const capture = live.extend<{ _clientCapture: void }>({
   _clientCapture: [async ({ daemon, spawnClaude }, use, info) => {
+    const assertCleanSource = () => {
+      if (execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], { encoding: 'utf8' }).trim())
+        throw new Error('Commit the source before capturing client scenarios')
+    }
+    assertCleanSource()
     const output = process.env.PYRY_CLIENT_RECORDING_DIR, binary = process.env.PYRY_BIN
     if (!output || !binary) throw new Error('Client capture requires explicit output directory and test daemon')
     const build = execFileSync('go', ['version', '-m', binary], { encoding: 'utf8' })
@@ -96,18 +104,19 @@ const capture = live.extend<{ _clientCapture: void }>({
       await use()
       if (failure) throw failure
       if (info.status !== 'passed' || info.errors.length) return
+      assertCleanSource()
       const answerNonces = wire.filter(e => e.direction === 'client' && e.message.type === 'modal_answer')
         .map(e => (e.message.payload as Record<string, unknown>).answer_token)
       const normalize = (value: unknown): unknown => {
         if (typeof value === 'string') {
           const index = answerNonces.indexOf(value)
-          return index >= 0 ? `recorded-answer-nonce-${index + 1}` : value.replaceAll(daemon.workdir, '/recorded/workspace')
+          return index >= 0 ? `recorded-answer-nonce-${index + 1}` : value.replaceAll(daemon.workdir, '/recorded/workspace').replaceAll(resolve(daemon.workdir, '..'), '/recorded')
         }
         if (Array.isArray(value)) return value.map(normalize)
         if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, normalize(v)]))
         return value
       }
-      const id = basename(info.file, '.spec.ts').replace(/^real-/, '')
+      const id = scenarioId(basename(info.file, '.spec.ts').replace(/^real-/, ''), info.title)
       const recording: Recording = { format: 'pyrycode.daemon-exchange', version: 2, source,
         scenario: { id, inputs: state!.inputs, workspace: '/recorded/workspace' }, capabilities,
         deviceId: devices[0], devices, barriers, wire: normalize(wire) as RecordedEntry[] }
@@ -136,7 +145,8 @@ const replay = base.extend<ReplayFixtures>({
   stdioPermissionPrompt: [false, { option: true }], allowRemotePermissions: [false, { option: true }],
   claudeModel: ['haiku', { option: true }], requiredCapabilities: [[], { option: true }],
   seedCwdSubdir: ['', { option: true }], codexCapture: [false, { option: true }],
-  recording: async ({ recordingName }, use) => {
+  recording: async ({ recordingName }, use, info) => {
+    recordingName = scenarioId(recordingName, info.title)
     if (!/^[a-z][a-z0-9-]*$/.test(recordingName)) throw new Error('Client recording name is required')
     const directory = process.env.PYRY_CLIENT_RECORDING_DIR ?? resolve('e2e/recordings')
     const recording = parseRecording(readFileSync(join(directory, `${recordingName}.json`), 'utf8'))

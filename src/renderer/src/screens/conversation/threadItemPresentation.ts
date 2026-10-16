@@ -72,6 +72,18 @@ function metrics(c: Record<string, unknown>) {
     cacheReadTokens: numeric(c.cache_read_tokens), cacheCreationTokens: numeric(c.cache_creation_tokens),
     durationMs: numeric(c.duration_ms) }
 }
+function sessionDividerReason(c: Record<string, unknown>): 'clear' | 'idle_evict' | 'workspace_change' | undefined {
+  if (c.reason === 'clear' || c.reason === 'idle_evict' || c.reason === 'workspace_change') return c.reason
+  // Native thread content retains the daemon's raw cause rather than a legacy
+  // session_transition reason. Recognize only the documented reset causes.
+  if (c.reason !== undefined) return undefined
+  switch (c.cause) {
+    case 'operator_reset': case 'claude_clear': case 'agent_switch': return 'clear'
+    case 'capacity_eviction': case 'idle_sleep': return 'idle_evict'
+    case 'workspace_change': return 'workspace_change'
+    default: return undefined
+  }
+}
 function presentation(s: Held): ThreadItem | null {
   const c = record(s.content)
   if (!c || typeof s.status !== 'string' || !['running', 'done', 'failed', 'denied', 'interrupted', 'queued', 'delivered', 'lost', 'dropped',
@@ -107,10 +119,11 @@ function presentation(s: Held): ThreadItem | null {
           ? { toolName: d.tool_name, decisionReasonType: d.decision_reason_type, decisionReason: d.decision_reason,
             message: d.message, truncatedFields: strings(d.truncated_fields), droppedFields: strings(d.dropped_fields) } : undefined }
     }
-    case 'session_divider':
-      return c.reason === 'clear' || c.reason === 'idle_evict' || c.reason === 'workspace_change'
-        ? { kind: 'sessionBoundary', reason: c.reason, workspaceCwd: text(c.workspace_cwd) ?? null,
-          occurredAt: text(c.occurred_at) ?? '' } : null
+    case 'session_divider': {
+      const reason = sessionDividerReason(c)
+      return reason ? { kind: 'sessionBoundary', reason, workspaceCwd: text(c.workspace_cwd) ?? null,
+        occurredAt: text(c.occurred_at) ?? '' } : null
+    }
     case 'compaction':
       return typeof c.trigger === 'string' ? { kind: 'compactionBoundary', failed: c.trigger === 'failed',
         manual: c.trigger === 'manual', preTokens: numeric(c.pre_tokens), postTokens: numeric(c.post_tokens) } : null

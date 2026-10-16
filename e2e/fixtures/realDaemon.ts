@@ -541,6 +541,7 @@ export type IsolatedElectronApp = {
   app: ElectronApplication
   userDataDir: string
   relaunch(whileClosed?: () => Promise<void>): Promise<IsolatedElectronApp>
+  close(): Promise<void>
 }
 
 /**
@@ -598,6 +599,11 @@ export async function withIsolatedElectronApp(
     await clientAppLifecycle.opened?.(app, page)
     return {
       app, page, userDataDir,
+      async close() {
+        if (current !== app || relaunching) throw new Error('close fixture: stale app handle')
+        await close(app)
+        current = null
+      },
       async relaunch(whileClosed) {
         if (current !== app || relaunching) throw new Error('restart fixture: stale app handle')
         relaunching = true

@@ -1,10 +1,11 @@
+import { scenarioNonce, scenarioDaemonRevision, scenarioDesktopRevision, scenarioInput, liveProof, scenarioEffect, scenarioMode } from './fixtures/clientScenario'
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { promisify } from 'node:util'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { DaemonEvent } from '../src/shared/ipc/events'
-import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/realDaemon'
+import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/clientScenario'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 import { daemonIdentity } from './fixtures/daemonVersion'
 
@@ -22,19 +23,20 @@ type DriveWindow = typeof window & { permissionProof: Proof }
 
 test('operator bypass stays confirmed through a no-op write, then the menu returns to bypass and Manual approval enforces Read', async ({ relay, daemon }, testInfo) => {
   test.setTimeout(360_000)
-  const { stdout } = await promisify(execFile)(process.env.PYRY_BIN || 'pyry', ['version'], { timeout: 10_000 })
-  const revision = daemonIdentity(stdout)
+  const revision = scenarioDaemonRevision()
   testInfo.annotations.push({ type: 'daemon-revision', description: revision })
   await testInfo.attach('daemon-revision', { body: Buffer.from(revision), contentType: 'text/plain' })
   // sessions.settingsFromEntry normalizes absent permission_mode + false/absent yolo to default.
-  const registry = JSON.parse(await readFile(join(dirname(daemon.workdir), '.pyry/test/sessions.json'), 'utf8'))
-  expect(registry.sessions[0].yolo ?? false).toBe(false)
-  expect(registry.sessions[0].permission_mode || 'default').toBe('default')
   const noteDir = join(dirname(daemon.workdir), '.pyry/test/handoff-notes')
-  await mkdir(noteDir, { recursive: true, mode: 0o700 })
   const note = join(noteDir, 'permission-probe.txt')
-  const witness = randomUUID()
-  await writeFile(note, `${witness}\n`, { mode: 0o600 })
+  const witness = scenarioInput('witness', randomUUID)
+  await liveProof(async () => {
+    const registry = JSON.parse(await readFile(join(dirname(daemon.workdir), '.pyry/test/sessions.json'), 'utf8'))
+    expect(registry.sessions[0].yolo ?? false).toBe(false)
+    expect(registry.sessions[0].permission_mode || 'default').toBe('default')
+    await mkdir(noteDir, { recursive: true, mode: 0o700 })
+    await writeFile(note, `${witness}\n`, { mode: 0o600 })
+  })
   await withIsolatedElectronApp(async ({ page }) => {
     await page.evaluate(() => {
       const proof: Proof = { readings: [], acks: [], turns: [], modals: [], tools: [], off: () => {} }
@@ -44,14 +46,14 @@ test('operator bypass stays confirmed through a no-op write, then the menu retur
           proof.readings.push({ conversationId, sessionId, permissionMode, ackCount: proof.acks.length })
         }
         if (event.type === 'sessionSettingsUpdated') proof.acks.push(event.sessionId)
-        if (event.type === 'turnEnd') proof.turns.push(event.conversationId)
+        if (event.type === 'turnEnd') proof.turns.push(event.conversationId!)
         const supplied = event.type === 'threadReply' && event.reply.type === 'thread_items' ? event.reply.payload.items
           : event.type === 'threadUpdate' && event.update.type === 'thread_item_added' ? [event.update.payload.item] : []
         for (const item of supplied) {
-          if (item.kind === 'turn_end' && item.parent === undefined && 'conversationId' in event) proof.turns.push(event.conversationId)
+          if (item.kind === 'turn_end' && item.parent === undefined && 'conversationId' in event) proof.turns.push(event.conversationId!)
           if (item.kind === 'tool_call' && item.content !== null && typeof item.content === 'object' &&
               !Array.isArray(item.content) && 'name' in item.content && 'conversationId' in event)
-            proof.tools.push({ conversationId: event.conversationId, read: item.content.name === 'Read' })
+            proof.tools.push({ conversationId: event.conversationId!, read: item.content.name === 'Read' })
         }
         if (event.type === 'modalShown' && event.class === 'permission') proof.modals.push({
           // The daemon's title is "Permission required"; its prompt carries the tool name.

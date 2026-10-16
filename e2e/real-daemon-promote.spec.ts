@@ -1,3 +1,4 @@
+import { scenarioNonce, scenarioDaemonRevision, scenarioDesktopRevision, scenarioInput, liveProof, scenarioEffect, scenarioMode } from './fixtures/clientScenario'
 import type { Page } from '@playwright/test'
 import { test, expect, encodePairingPayload } from './fixtures/clientScenario'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'

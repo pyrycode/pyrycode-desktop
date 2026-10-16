@@ -46,9 +46,12 @@ export function createQueueTurnEvidence(options: {
         if (item.kind !== 'assistant_message' && item.kind !== 'tool_call' && item.kind !== 'turn_end') return
         let turn = turns.get(item.turn)
         if (!turn) { turn = { start: order, end: 0, completions: 0, normal: false, markers: [], suffix: '' }; turns.set(item.turn, turn) }
-        if (item.kind === 'assistant_message' && typeof content.text === 'string') options.markers.forEach((marker, index) => {
-          if (content.text.includes(marker) && !turn.markers.includes(index)) turn.markers.push(index)
-        })
+        if (item.kind === 'assistant_message' && typeof content.text === 'string') {
+          const text = content.text
+          options.markers.forEach((marker, index) => {
+            if (text.includes(marker) && !turn!.markers.includes(index)) turn!.markers.push(index)
+          })
+        }
         if (item.kind === 'turn_end' && !ended.has(item.id)) {
           ended.add(item.id); turn.end = order; turn.completions += 1
           turn.normal = content.stop_reason === 'end_turn' && content.is_error !== true &&

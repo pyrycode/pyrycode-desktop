@@ -1,6 +1,7 @@
+import { scenarioNonce, scenarioDaemonRevision, scenarioDesktopRevision, scenarioInput, liveProof, scenarioEffect, scenarioMode } from './fixtures/clientScenario'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/realDaemon'
+import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/clientScenario'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { daemonIdentity } from './fixtures/daemonVersion'
@@ -11,9 +12,9 @@ test.use({ interactiveRunner: 'stream-json', claudeModel: 'sonnet', requiredCapa
 test('daemon-built thread streams, places an agent, reconnects, resets and reopens saved items', async ({ relay, daemon }, info) => {
   test.setTimeout(600_000)
   const run = promisify(execFile)
-  const daemonRevision = daemonIdentity((await run(process.env.PYRY_BIN ?? 'pyry', ['version'], { timeout: 10_000 })).stdout)
+  const daemonRevision = scenarioDaemonRevision()
   expect(daemonRevision, 'isolated test binary must identify its source revision').toMatch(/^[a-f0-9]{7,40}$/)
-  const desktopRevision = (await run('git', ['rev-parse', 'HEAD'])).stdout.trim()
+  const desktopRevision = scenarioDesktopRevision()
   info.annotations.push({ type: 'daemon-revision', description: daemonRevision })
   await withIsolatedElectronApp(async initial => {
     const { page } = initial
@@ -22,7 +23,7 @@ test('daemon-built thread streams, places an agent, reconnects, resets and reope
     await expect(page.locator('.channel-list__row-open')).toBeVisible({ timeout: 45_000 })
     await confirmCreateChat(page)
     expect(await readPhaseReconnect(page)).toMatchObject({ interactive: true, thread: true })
-    const nonce = Date.now(), first = `THREAD_AGENT_${nonce}`, second = `THREAD_RESET_${nonce}`
+    const nonce = scenarioNonce(), first = `THREAD_AGENT_${nonce}`, second = `THREAD_RESET_${nonce}`
     const composer = page.getByPlaceholder('Message…')
     await composer.fill(`Use the Agent tool to run a small background subagent task that replies READY. Wait for its result, then reply with only ${first}.`)
     await composer.press('Enter')

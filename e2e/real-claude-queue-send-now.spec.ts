@@ -1,10 +1,11 @@
+import { scenarioNonce, scenarioDaemonRevision, scenarioDesktopRevision, scenarioInput, liveProof, scenarioEffect, scenarioMode } from './fixtures/clientScenario'
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { Page } from '@playwright/test'
-import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/realDaemon'
+import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/clientScenario'
 import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 import { daemonIdentity } from './fixtures/daemonVersion'
@@ -33,12 +34,11 @@ const readEvidence = (page: Page) => page.evaluate(() =>
 
 test('real claude reads a Send now message inside the running turn', async ({ relay, daemon }, testInfo) => {
   test.setTimeout(360_000)
-  const { stdout } = await promisify(execFile)(process.env.PYRY_BIN || 'pyry', ['version'], { timeout: 10_000 })
-  const revision = daemonIdentity(stdout)
+  const revision = scenarioDaemonRevision()
   testInfo.annotations.push({ type: 'daemon-revision', description: revision })
 
   await withIsolatedElectronApp(async ({ page }) => {
-    const nonce = Date.now()
+    const nonce = scenarioNonce()
     const marker = `SENDNOW_${nonce}_MARK`
     const gate = join(daemon.workdir, `send-now-release-${nonce}`)
     const entered = join(daemon.workdir, `send-now-entered-${nonce}`)
@@ -62,7 +62,7 @@ test('real claude reads a Send now message inside the running turn', async ({ re
 
       await composer.fill(first)
       await composer.press('Enter')
-      await expect.poll(() => existsSync(entered), { timeout: TURN_TIMEOUT }).toBe(true)
+      await liveProof(async () => { await expect.poll(() => existsSync(entered), { timeout: TURN_TIMEOUT }).toBe(true) })
       await expect(stop).toBeVisible()
 
       await composer.fill(second)
@@ -70,7 +70,7 @@ test('real claude reads a Send now message inside the running turn', async ({ re
       await expect(queuedRow).toHaveCount(1, { timeout: TURN_TIMEOUT })
       const sendNow = queuedRow.getByRole('button', { name: 'Send queued message now' })
       await expect(sendNow).toBeEnabled()
-      expect(existsSync(gate)).toBe(false)
+      await liveProof(() => { expect(existsSync(gate)).toBe(false) })
       await sendNow.click()
 
       // The daemon takes the message off the backlog for the running turn; the hold still stands.
@@ -80,7 +80,7 @@ test('real claude reads a Send now message inside the running turn', async ({ re
       await expect(stop).toBeVisible()
       expect((await readEvidence(page)).turns.every((turn) => turn.completions === 0)).toBe(true)
 
-      await writeFile(gate, 'release\n', { mode: 0o600 })
+      await scenarioEffect('release-tool', () => writeFile(gate, 'release\n', { mode: 0o600 }))
       released = true
       await expect(stop).toHaveCount(0, { timeout: TURN_TIMEOUT })
       await expect(page.locator('.bubble__cursor')).toHaveCount(0)

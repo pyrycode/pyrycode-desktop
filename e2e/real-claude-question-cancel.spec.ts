@@ -1,6 +1,7 @@
+import { scenarioNonce, scenarioDaemonRevision, scenarioDesktopRevision, scenarioInput, liveProof, scenarioEffect, scenarioMode } from './fixtures/clientScenario'
 import { type Locator, type Page } from '@playwright/test'
 import { readdir } from 'node:fs/promises'
-import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
+import { test, expect, encodePairingPayload } from './fixtures/clientScenario'
 import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
@@ -92,6 +93,7 @@ const QUESTION_MODEL = 'claude-sonnet-5'
 test.use({
   skipPermissions: false,
   interactiveRunner: 'stream-json',
+  stdioPermissionPrompt: true,
   allowRemotePermissions: true,
   // The ONLY model under which a live AskUserQuestion call has been measured in either tree. The daemon
   // side runs its question gates under it deliberately: tool-selection reliability is worth more than
@@ -317,7 +319,7 @@ test('real claude raises a clarifying question that refusing through Cancel stop
   // A per-run nonce so reruns differ, never asserted on (Date.now() is fine in a spec). The base name is
   // derived from it and is the ONLY thing the absence walk matches on; the workdir is `mkdtemp`'d fresh
   // per test, so a cross-run collision cannot make the walk read a stale artefact.
-  const nonce = Date.now()
+  const nonce = scenarioNonce()
   const base = `note-${nonce}`
   const message = questionCancelTrigger(base, nonce)
 
@@ -450,6 +452,7 @@ test('real claude raises a clarifying question that refusing through Cancel stop
   // The work the question was gating left no artefact. Read only after quiesce, so the tool phase is
   // definitively over, and non-vacuous because of the allow arm above: a claude that guessed an answer
   // and pressed on would have had its Write approved and its file would be sitting here.
+  await liveProof(async () => {
   const artefacts = await findArtefacts(daemon.workdir, base)
   expect(
     artefacts.slice(0, MAX_REPORTED_ARTEFACTS).map((entry) => bounded(entry, TEXT_LOG_CAP)),
@@ -457,4 +460,5 @@ test('real claude raises a clarifying question that refusing through Cancel stop
       'claude did not honour the deny and pressed on with the work the question was gating. Paths are ' +
       `relative to the workdir and bounded; at most ${MAX_REPORTED_ARTEFACTS} are shown.`
   ).toEqual([])
+  })
 })

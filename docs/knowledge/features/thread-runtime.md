@@ -72,9 +72,12 @@ queue store/actions and local-count last-read store/cleanup are also gone.
 
 Shared declarations stay at `threadTimeline.ts` and `backgroundTaskRosterStore.ts`;
 shared translation remains at `timelineBridge.ts`. Those paths no longer imply a
-content producer. Main/IPC request and recovery retirement remains #2025;
-saved-format admission and indexed legacy storage retirement remains #2026.
-Their surviving contracts are not removed by renderer deletion.
+content producer. #2025 removes the main/IPC raw-history command, correlation,
+page/failure events, exclusive decoder and replay/resync recovery. Initial and
+reconnect hellos omit both replay fields. Live-envelope metadata/admission,
+thread queries/checkpoints, host/fragment isolation and held-send `sendPairing`
+fencing remain; see [retired network surface](request-history-send.md).
+Saved-format admission and indexed legacy storage retirement remains #2026.
 
 Active ID/session/configuration/prompt cleanup remains synchronous before exit navigation. Same-ID
 reopening preserves held configuration and requests a refresh every time. Server removal samples
@@ -245,3 +248,36 @@ shared translator/presentation tests remain. The verdict references dispatcher
 logs directory. These are recorded gate results, not documentation-stage reruns.
 macOS is outside this Linux ticket's verification scope. No real-Claude result or
 visual capture is claimed; existing live obligations remain in the runbook.
+
+### Main request and recovery retirement validation
+
+The [#2025 verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/2049#issuecomment-6209638001)
+records Linux gates on 2026-10-16 at
+`aed31cfc8fae69954696af09909f53643541ce6d`. Full units: **9,037 executed/passed,
+0 failed, 3 skipped**, 391 passing files. Complete configured
+`npx playwright test --reporter=json`: **435 executed/passed, 0 failed,
+3 skipped, 0 flaky, 0 retries**, four workers, clipboard/parallel projects and no
+selection/shard filters. All 15 thread-activation, 12 thread-items and 3
+markdown-reader-menu cases were present and passed. The activation cases include
+missing-`thread` isolation/recovery and zero legacy requests on open, reconnect,
+paging and retry; the dispatcher's named `paging and retry` result also passed.
+No top-level errors or fake-daemon setup error attachments were reported.
+
+Install, docs guard, build and Node/Electron addon rebuilds passed. Pre-verify
+used `--no-suite` (three checks passed, two intentionally skipped); subsequent
+unit/build gates covered units/typecheck. The three fake skips were two macOS
+badge cases and the macOS window-reopen case. macOS is outside this Linux ticket's
+verification scope. Credentialed real-Claude tests were not run or claimed.
+
+The [builder's recorded runs](../../specs/architecture/2025-retire-history-recovery.md#validation-evidence)
+retain the initial complete Linux fake run at
+`072e01596f5c2a57e93aedca33ffc86e5b0fe8ae`: **435 executed, 434 passed,
+1 failed, 3 skipped**. The 800px reader return-scroll assertion expected 1300 and
+received 1020. A one-test isolated-main comparison passed (1 executed/passed,
+0 failed, 0 skipped); that diagnostic does not establish attribution. Cause
+remains under investigation in [#2047](https://github.com/pyrycode/pyrycode-desktop/issues/2047).
+The builder's final complete rerun at
+`afe635930ce58ffba12c02bc6537cd424ba1c4e7` passed **435 executed/passed,
+0 failed, 3 skipped**, followed by the complete verifier pass above. Neither
+complete pass skipped or weakened the reader assertion; the earlier failure
+remains recorded as failed.

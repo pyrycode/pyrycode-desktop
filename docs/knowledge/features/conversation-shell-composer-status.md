@@ -220,38 +220,13 @@ producer.
 
 ## History page failure and Retry
 
-A settled failure shows “Could not load older messages” with `role="status"` only
-for the displayed conversation's exact owning host while connected, behind every
-occupant in the priority above. An unowned slice, another host's equal conversation
-id, or another conversation cannot supply it. `ComposerHistoryFailure` uses the
-existing recovery layout and `button-small button-small--error`; Retry appears
-only for `retryable: true`. Daemon failure text never supplies the copy.
-
-`retryHistoryPage` rechecks the captured displayed conversation object, connected
-host, exact held failure object and retryability at activation. Navigation (even
-to a new object with the same id), disconnect or a new settlement invalidates the
-action. A local read in progress or outstanding request prevents dispatch. Pending
-and failed state retain the requested cursor and purpose (`older` or `newest`).
-Retry delegates to `requestHistoryPage`, resending that captured cursor with
-`HISTORY_PAGE_LIMIT = 200`; newest Retry sends `cursor: ''` even when retained
-backwards coverage reports `atStart: true`. Completed coverage blocks older Retry;
-legacy failures without cursor/purpose fall back to backwards coverage.
-The [existing history request path](request-history-send.md#the-one-fact-that-shapes-every-piece)
-preserves rows and successful oldest-end coverage. Starting a retry
-removes the settled message and button while pending; correlated success clears
-failure, and a new failure supplies its new retryability. No automatic retry is
-introduced. Fresh backwards demand can still ask after either classification,
-subject to current host ownership, pending/completed-walk guards and trusted
-upward input within two thread viewport heights of the top. Page arrival,
-programmatic scroll, resize and compensation create no backwards demand. See
-[opening/reconnect lifecycle](chat-history.md#received-state-admission-and-ownership).
-
-`historyRetry.test.ts` covers state and stale actions; `historyRetry.test.tsx`
-covers ownership, pending disappearance and priority through the real container.
-`e2e/history-retry.spec.ts` compares the full retry payload and fresh correlation
-id, holds the reply to prove one pending request and retained rows, then releases
-success. Immediate replies could conceal duplicate-demand bugs. It also delivers
-a nonretryable error and proves fresh upward demand remains available.
+Production Older and Retry actions use host-addressed authoritative thread queries
+and their owning query state. The legacy `retryHistoryPage`/`requestHistoryPage`
+cursor/purpose producers and exclusive tests retired with #2030; #2025 removes
+the remaining main/IPC request, reply/failure events and page decoding. See
+[thread recovery](thread-runtime.md#restore-recovery-and-cleanup) and
+[counted activation evidence](thread-runtime.md#main-request-and-recovery-retirement-validation).
+The shared recovery presentation remains available; no raw-history fallback exists.
 
 ## The usage-limit notice — moved to the Top overlay (#1321; moved by #1604)
 

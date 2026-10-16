@@ -73,17 +73,20 @@ it('a lost reset acknowledgement does not reset newer facts when the same owned 
 })
 
 it.each([
-  [200, true, false], [50, true, true], [100, true, false], [100, false, false]
-] as const)('saved exhaustion at 100 survives boundary %s with availability %s', async (start, available, expected) => {
+  [200, true, false, false], [50, true, true, false], [100, true, false, false], [100, false, false, false],
+  [100, false, false, true], [200, false, true, true]
+] as const)('saved availability at 100 survives boundary %s with availability %s', async (start, available, expected, initial) => {
   for (const coalesced of [false, true]) {
     const { fresh, api, writer } = await cache()
     try {
       api.acceptEpoch('a', 'c', 'e')
-      api.beginBatch('a', 'c', 'e')!.commit({ fromVersion: 0, version: 1, ranges: [{ start: 100, end: 110 }], olderAvailable: false })
+      api.beginBatch('a', 'c', 'e')!.commit({ fromVersion: 0, version: 1, ranges: [{ start: 100, end: 110 }], olderAvailable: initial })
       if (!coalesced) await writer.flush()
       api.deleteConversation('a', 'c'); api.acceptEpoch('a', 'c', 'e')
       api.beginBatch('a', 'c', 'e')!.commit({ fromVersion: 0, version: 2, ranges: [{ start, end: start + 10 }], olderAvailable: available })
       await writer.flush()
+      // This holder's metadata still describes its subset boundary, not saved history.
+      api.requireRepair('a', 'c', 'e', 3); await writer.flush()
       // Metadata-only recreation must not change the retained certified boundary.
       api.deleteConversation('a', 'c'); api.acceptEpoch('a', 'c', 'e'); await writer.flush()
       expect(await fresh().execute({ operation: 'readThread', serverId: 'a', conversationId: 'c' })).toMatchObject({ status: 'stored', snapshot: {

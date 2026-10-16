@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3'
 import type { createHistoryDatabase } from './historyDatabase'
 import { EncryptionUnavailableError, type SecretEncryption } from './secureStore'
 import type { DiagnosticLog } from './diagnosticLog'
+import { MAX_SERVER_ID_LENGTH } from '../shared/ipc/unpair'
 import { parseChatHistoryRequest, parseChatHistorySnapshot, threadHistoryCodec, INVALID_CHAT_HISTORY,
   UNSUPPORTED_CHAT_HISTORY_VERSION, MAX_CHAT_HISTORY_ITEMS, type ChatHistoryRequest, type ChatHistoryResult, type ChatHistorySnapshot, type ThreadSnapshot } from '../shared/chatHistory'
 
@@ -74,7 +75,7 @@ function natural(value: unknown): number {
   return value
 }
 function resetIdentity(value: unknown): string {
-  if (typeof value !== 'string' || value.length > 4096) throw INVALID_CHAT_HISTORY
+  if (typeof value !== 'string' || value.length > MAX_SERVER_ID_LENGTH) throw INVALID_CHAT_HISTORY
   return value
 }
 function order(value: unknown): number | null {

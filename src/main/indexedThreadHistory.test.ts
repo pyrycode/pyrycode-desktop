@@ -104,6 +104,13 @@ it('separately flushed JSON aggregates reject overflow atomically and stay reada
   expect(await fresh.store.execute(owned(s, { removeIds: [1], items: [entry(2)] }))).toEqual({ status: 'ok' })
 })
 
+it('retains the shared reset identity length boundary across a fresh owner', async () => {
+  const h = setup(), s = snapshot(0)
+  expect(await h.store.execute(owned(s, { resetId: 'r'.repeat(8192) }))).toEqual({ status: 'ok' })
+  h.database.close()
+  expect(await h.fresh().store.execute(ask('readThread'))).toMatchObject({ status: 'stored' })
+})
+
 it('balanced owned ordering preserves ties, movements, internal removals and authenticated parent routes', async () => {
   const h = setup(), s = snapshot(0)
   const ids = Array.from({ length: 40 }, (_, i) => i).sort((a, b) => (a * 17) % 41 - (b * 17) % 41)

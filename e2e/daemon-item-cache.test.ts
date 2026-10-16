@@ -28,6 +28,33 @@ async function cache() {
   return { fresh, source, api, writer }
 }
 
+it('same-epoch holder recreation saves only owned facts and metadata without erasing unloaded history', async () => {
+  const { fresh, source, api, writer } = await cache()
+  api.acceptEpoch('a', 'c', 'e')
+  const batch = api.beginBatch('a', 'c', 'e')!
+  const item = (id: number, rev: number) => ({ id, rev, kind: 'assistant_message', order: id,
+    active: false, shown: true, status: 'done', summary: '', content: { text: String(id) } })
+  batch.applyItems([item(1, 1), item(2, 1), item(3, 1)], 10)
+  batch.commit({ fromVersion: 0, version: 10, ranges: [{ start: 1, end: 4 }] })
+  await writer.flush()
+  source.getState().deleteConversation('a', 'c')
+  source.getState().acceptEpoch('a', 'c', 'e')
+  await writer.flush()
+  const recreated = await fresh().execute({ operation: 'readThread', serverId: 'a', conversationId: 'c' })
+  expect(recreated).toMatchObject({ status: 'stored', snapshot: { thread: { checkpoint: 10,
+    ranges: [{ start: 1, end: 4 }], items: [item(1, 1), item(2, 1), item(3, 1)] } } })
+  source.getState().applyUpdate('a', { type: 'thread_item_added', payload: { conversation_id: 'c', epoch: 'e', version: 20, item: item(2, 20) } })
+  source.getState().requireRepair('a', 'c', 'e', 30)
+  await writer.stop()
+  const saved = await fresh().execute({ operation: 'readThread', serverId: 'a', conversationId: 'c' })
+  expect(saved.status).toBe('stored')
+  if (saved.status !== 'stored' || saved.snapshot.kind !== 'daemon-items') throw Error('expected thread')
+  expect(saved.snapshot.thread.items.map(i => [i.id, i.rev])).toEqual([[1, 1], [2, 20], [3, 1]])
+  expect(saved.snapshot.thread.ranges).toEqual([{ start: 1, end: 4 }])
+  expect(saved.snapshot.thread.arrivalOrder).toEqual([1, 2, 3])
+  expect(saved.snapshot.thread.repair?.throughVersion).toBe(30)
+})
+
 it.each([false, true])('protected writer-to-offline-store restart retains completion=%s', async complete => {
   const { fresh, api, writer } = await cache()
   try {

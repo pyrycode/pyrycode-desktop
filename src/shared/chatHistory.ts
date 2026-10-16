@@ -104,7 +104,16 @@ export type ChatHistorySnapshot = { version: 1; serverId: string } & (
       coverage: { status: 'unknown' } | { status: 'received'; cursor: string; atStart: boolean }
     }
 )
+export type OwnedThreadChanges = {
+  metadata: Omit<ThreadSnapshot, 'items' | 'ranges' | 'arrivalOrder'>
+  acceptEpoch: boolean
+  certified?: boolean
+  items: ThreadSnapshot['items']
+  removeIds: readonly number[]
+  ranges: ThreadSnapshot['ranges']
+}
 export type ChatHistoryRequest = { serverId: string } & (
+  | { operation: 'mutateThread'; conversationId: string; change: OwnedThreadChanges }
   | { operation: 'readList' }
   | { operation: 'removeServer' }
   | { operation: 'readTimeline'; conversationId: string }
@@ -490,6 +499,19 @@ export function parseChatHistorySnapshot(value: unknown): ChatHistorySnapshot {
 export function parseChatHistoryRequest(value: unknown): ChatHistoryRequest {
   const v = record(value)
   const serverId = id(v.serverId)
+  if (v.operation === 'mutateThread') {
+    if (Object.keys(v).some(k => !['operation', 'serverId', 'conversationId', 'change'].includes(k))) return invalid()
+    const conversationId = id(v.conversationId), c = record(v.change)
+    if (Object.keys(c).some(k => !['metadata', 'acceptEpoch', 'certified', 'items', 'removeIds', 'ranges'].includes(k))) return invalid()
+    const items = retainedItems(c.items)
+    const removeIds = array(c.removeIds, readId), ids = new Set(items.map(i => i.id))
+    if (ids.size !== items.length || new Set(removeIds).size !== removeIds.length || removeIds.some(id => ids.has(id))) return invalid()
+    return { operation: 'mutateThread', serverId, conversationId, change: {
+      metadata: retainedMetadata(c.metadata, serverId, conversationId), acceptEpoch: bool(c.acceptEpoch),
+      certified: c.certified === undefined ? false : bool(c.certified),
+      items, removeIds, ranges: retainedRanges(c.ranges)
+    } }
+  }
   const operation = choice(v.operation, ['readList', 'replaceList', 'readTimeline', 'replaceTimeline', 'readThread', 'replaceThread', 'removeConversation', 'removeServer'])
   const hasConversation = operation === 'readTimeline' || operation === 'replaceTimeline' || operation === 'readThread' || operation === 'replaceThread' || operation === 'removeConversation'
   const replacing = operation === 'replaceList' || operation === 'replaceTimeline' || operation === 'replaceThread'

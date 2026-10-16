@@ -84,3 +84,15 @@ After the final main merge run install, pre-verify, build, focused changed tests
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-16
+
+## Revisions
+
+2026-10-16 — Resolved the index representation question. Schema 7 adds `thread_auth` in the first owned transaction; each addressed schema-6 scope is fully validated and converted lazily in that same transaction. Other scopes retain their existing full/page representation. Four authenticated radix trees bind item lookup, lexical held positions/rank counts, numeric order plus stable arrival, and normalized range starts. The OS-protected header carries their current roots. SHA-256 covers each path and canonical child references/leaf facts; leaf digests bind exact protected placement/range bytes. No supporting module or dependency is added.
+
+Full replacement preserves supplied held order and stable payload ciphertext through the retained path. Mutable conversion retains exact payload bytes and initializes fractional hexadecimal positions from held ordinals. Owned revisions with unchanged order retain position; additions/order changes use the authenticated numeric-order/arrival tree, including unloaded neighbors. This avoids trusting a partial holder's apparent tail. Pages traverse authenticated rank counts and predecessor range proofs; continuation generation rotates independently. Explicit removals leave stable arrival gaps. All mutable metadata and lookup remain main-only.
+
+Owned changes contain plain changed items, explicit removal IDs, metadata, new certified ranges, epoch intent and a `certified` flag. Only successful `beginBatch.commit` sets certification; live/repair/holder-recreation metadata cannot discharge a saved repair or unfinished-progress fence. The writer validates/serializes only these changed facts, merges pending revisions/evidence and retains failed work for a later flush. Memory-only disappearance does not cancel pending ownership.
+
+New regressions in `indexedThreadHistory.test.ts` cover fresh-owner subset preservation, metadata-only recreation/progress fences, explicit removal/reset, stale continuations, range merging with untouched placements, placement/range/branch replay, transactional rollback/retry and failed schema-6 conversion. `ordinary owned validation, serialization and protected record work stay bounded as unrelated history grows` compares 10 and 1,000 saved items. Existing cache/removal/arrival-restart proofs now execute the owned operation; the new cache case covers same-epoch recreation with unloaded neighbors. Writer tests cover held failure/newer work and memory-only loss. The packaged smoke now updates one owned item and compares exact fresh-reopen content before continuing its retained-format proof.
+
+The final implementation is smaller than the initial conservative forecast: approximately 800 written lines including this plan and focused fixture extensions. The depth-cap sizing exception remains recorded; no new split or exported construction signature is introduced.

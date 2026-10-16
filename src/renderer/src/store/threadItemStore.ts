@@ -1,6 +1,6 @@
 import { createStore } from 'zustand/vanilla'
 import type { ThreadItem, ThreadUpdate } from '../../../shared/wire/thread'
-import { parseChatHistorySnapshot, type ThreadSnapshot } from '../../../shared/chatHistory'
+import { parseChatHistorySnapshot, type ThreadSnapshot, type OwnedThreadChanges } from '../../../shared/chatHistory'
 export type { ThreadSnapshot } from '../../../shared/chatHistory'
 
 type HeldItem = Readonly<Pick<ThreadItem, 'id' | 'kind' | 'rev'> & Record<string, unknown>>
@@ -16,7 +16,7 @@ export type ThreadApplyResult =
   | { type: 'applied' | 'ignored' | 'stale' }
   | { type: 'repair'; hostId: string; conversationId: string; epoch: string; throughVersion: number;
       reason: 'missing' | 'base' | 'incompatible' | 'kind' | 'coverage' }
-type Slice = { snapshot: ThreadSnapshot; restored?: ThreadSnapshot; generation: symbol; uncommittedVersion: number; byId: ReadonlyMap<number, HeldItem> }
+type Slice = { snapshot: ThreadSnapshot; restored?: ThreadSnapshot; owned?: OwnedThreadChanges; generation: symbol; uncommittedVersion: number; byId: ReadonlyMap<number, HeldItem> }
 type Batch = {
   applyItems: (items: readonly ThreadItem[], version: number) => readonly ThreadApplyResult[]
   commit: (certificate: ThreadBatchCertificate) => ThreadApplyResult
@@ -71,8 +71,17 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
   return createStore<ThreadItemStore>((set, get) => {
     const reads = new Map<string, Map<string, symbol>>()
     const read = (host: string, conversation: string): Slice | undefined => get().hosts.get(host)?.get(conversation)
-    function publish(host: string, conversation: string, slice: Slice): void {
+    function publish(host: string, conversation: string, slice: Slice,
+      change: { item?: HeldItem; ranges?: readonly Range[]; acceptEpoch?: boolean; certified?: boolean } = {}): void {
       reads.get(host)?.delete(conversation)
+      if (slice.snapshot !== slice.restored) {
+        const { items: ignoredItems, ranges: ignoredRanges, arrivalOrder: ignoredArrival, ...metadata } = slice.snapshot
+        void ignoredItems; void ignoredRanges; void ignoredArrival
+        slice = { ...slice, owned: { metadata, acceptEpoch: change.acceptEpoch ?? false,
+          certified: change.certified ?? false,
+          items: change.item === undefined ? [] : [change.item],
+          removeIds: [], ranges: change.ranges ?? [] } }
+      }
       const hosts = new Map(get().hosts), conversations = new Map(hosts.get(host))
       conversations.set(conversation, slice)
       hosts.set(host, conversations)
@@ -94,11 +103,11 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
       const newer = !held || item.rev > held.rev
       const byId = new Map(slice.byId)
       if (newer) byId.set(item.id, detach(item))
-      success(host, conversation, slice, byId, version, live, newer)
+      success(host, conversation, slice, byId, version, live, newer, newer ? byId.get(item.id) : undefined)
       return { type: newer ? 'applied' : 'ignored' }
     }
     function success(host: string, conversation: string, slice: Slice, byId: ReadonlyMap<number, HeldItem>,
-      version: number, live: boolean, changed: boolean): void {
+      version: number, live: boolean, changed: boolean, item?: HeldItem): void {
       const s = slice.snapshot
       const nextVersion = Math.max(s.version, version)
       const checkpoint = live && !s.repair && slice.uncommittedVersion <= s.checkpoint ? Math.max(s.checkpoint, version) : s.checkpoint
@@ -108,7 +117,7 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
         uncommittedVersion, snapshot: Object.freeze({ ...s,
         items: changed ? ordered(byId) : s.items,
         arrivalOrder: changed ? Object.freeze([...byId.keys()]) : s.arrivalOrder,
-        version: nextVersion, checkpoint, uncommittedVersion }) })
+        version: nextVersion, checkpoint, uncommittedVersion }) }, { item })
       log?.event({ event: 'thread-items-applied', code: live ? 'live' : 'batch' })
     }
     return {
@@ -147,7 +156,7 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
         publish(host, conversation, { generation: Symbol(), uncommittedVersion: 0, byId: new Map(), snapshot: Object.freeze({
           hostId: host, conversationId: conversation, epoch, items: Object.freeze([]), arrivalOrder: Object.freeze([]),
           version: 0, checkpoint: 0, uncommittedVersion: 0, ranges: Object.freeze([]), repair: null
-        }) })
+        }) }, { acceptEpoch: true })
         log?.event({ event: 'thread-items-epoch' })
       },
       requireRepair(host, conversation, epoch, version) {
@@ -180,7 +189,7 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
         }
         const byId = new Map(slice.byId)
         byId.set(held.id, next)
-        success(host, conversation, slice, byId, u.version, true, true)
+        success(host, conversation, slice, byId, u.version, true, true, next)
         return { type: 'applied' }
       },
       beginBatch(host, conversation, epoch) {
@@ -227,7 +236,7 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
               uncommittedVersion: c.version >= slice.uncommittedVersion ? 0 : slice.uncommittedVersion,
               snapshot: Object.freeze({ ...s, ranges, olderAvailable,
               uncommittedVersion: c.version >= slice.uncommittedVersion ? 0 : slice.uncommittedVersion,
-              version: Math.max(s.version, c.version), checkpoint: Math.max(s.checkpoint, c.version), repair: null }) })
+              version: Math.max(s.version, c.version), checkpoint: Math.max(s.checkpoint, c.version), repair: null }) }, { ranges: c.ranges, certified: true })
             log?.event({ event: 'thread-items-batch', code: 'committed' })
             return { type: 'applied' }
           },

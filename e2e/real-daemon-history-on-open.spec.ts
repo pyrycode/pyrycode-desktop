@@ -8,6 +8,7 @@ import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './f
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 import { NOT_YET_AVAILABLE, readMainProcess } from './fixtures/mainProcessRead'
 
+import { installHistoryQueryEvidence } from './fixtures/historyQueryEvidence'
 import { watchPhaseReconnect, readPhaseReconnect } from './fixtures/phaseReconnectEvidence'
 
 // Retry only an inspection read when Electron loses its CDP promise. Never retry
@@ -91,14 +92,7 @@ test('a real daemon lazily fills a served gap after more than 200 entries writte
     }, { serverId: daemon.pairFields.server, conversationId })
     if (savedCheckpoint !== null) {
       const fresh = await initial.relaunch(async () => { for (const text of closedPosts) await post(text) })
-      await fresh.app.evaluate(({ ipcMain }) => {
-        const asks: { type: string; version?: number }[] = []
-        ;(globalThis as any).__threadHistoryAsks = asks
-        ipcMain.on('pyry:command', (_event, command) => {
-          if (command.type === 'queryThread') asks.push({ type: command.query.type, version: command.query.payload.version })
-          if (command.type === 'requestHistory') asks.push({ type: 'legacy' })
-        })
-      })
+      await installHistoryQueryEvidence(fresh.app, 'resume')
       await fresh.page.locator('.channel-list__row-open').filter({ hasText: channel }).click()
       const thread = fresh.page.locator('.conversation__thread')
       await expect(thread).toContainText(closedPosts.at(-1)!, { timeout: 45_000 })
@@ -112,14 +106,7 @@ test('a real daemon lazily fills a served gap after more than 200 entries writte
       await fresh.close()
       const pair = await daemon.mintPairing()
       await withIsolatedElectronApp(async ({ page: clean, app: cleanApp }) => {
-        await cleanApp.evaluate(({ ipcMain }) => {
-          const asks: string[] = []
-          ;(globalThis as any).__threadPageAsks = asks
-          ipcMain.on('pyry:command', (_event, command) => {
-            if (command.type === 'queryThread') asks.push(command.query.type)
-            if (command.type === 'requestHistory') asks.push('legacy')
-          })
-        })
+        await installHistoryQueryEvidence(cleanApp, 'page')
         await pairFromUnpairedLaunch(clean, encodePairingPayload({ ...pair, relay: `${relay.url}/v1/client` }))
         await clean.locator('.channel-list__row-open').filter({ hasText: channel }).click()
         const history = clean.locator('.conversation__thread')

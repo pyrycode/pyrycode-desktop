@@ -236,7 +236,9 @@ export function ConversationScreen({
     : null, [authoritativeSnapshot, liveInput.sessionId, liveInput.activity.turnRunning, localSend?.reportsClearedThrough])
   const taskStops = useStore(threadRuntime.taskStops, s => s.entries)
   const queryKey = JSON.stringify([selectedHost, openConversationId])
-  const queryState = useStore(threadRuntime.state, s => s.queries.get(queryKey))
+  const networkQueryState = useStore(threadRuntime.state, s => s.queries.get(queryKey))
+  const localQueryState = useStore(threadRuntime.state, s => s.localQueries.get(queryKey))
+  const queryState = localQueryState && localQueryState.type !== 'idle' ? localQueryState : networkQueryState
   const complete = useStore(threadRuntime.state, s => s.complete.get(queryKey))
   const threadRestoring = useStore(threadRuntime.state, s => s.restoring.has(queryKey))
   const threadConnection = useSessionStore(s => selectedHost === null ? undefined : s.statuses.get(selectedHost))
@@ -968,7 +970,6 @@ function useThreadScrollPin(conversationId: string | null, presentation?: object
   }, [])
 
   const demandHistory = (el: HTMLDivElement): void => {
-    if (connectedConversationHostNow(conversationId) === null) return
     following.current = false
     rememberTop(el)
     if (isNearTop({ scrollOffset: el.scrollTop, viewportHeight: el.clientHeight, contentHeight: el.scrollHeight })) onOlder?.()

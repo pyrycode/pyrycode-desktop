@@ -44,13 +44,14 @@ Runtime selection owns local read cancellation. The item-store private read toke
 
 | Event | Coverage |
 | --- | --- |
-| Repeated upward input / retry after local failure, with held server reply | runtime local-demand unit and mounted traversal case |
-| Fresh protected reopen, opening omissions and null opening token | protected restart traversal unit |
-| Delayed page overlapping newest/live/network facts and progress | local admission unit |
-| Navigation and return using identical strings | local-demand cancellation unit |
-| Epoch replacement / same-epoch reset / delete / unpair / clear | parameterized local admission cleanup unit |
-| Saved mutation invalidates next token | protected restart stale-token assertion; no recovery |
-| Local exhaustion offline / fragmented ranges | runtime and protected restart assertions |
+| Repeated upward input / retry after local failure | `traverses newest despite null opening token, coalesces, retries locally and exhausts offline` |
+| Fresh protected reopen and opening omissions | `fresh protected traversal reaches every fragmented saved identity including opening omissions without writes` |
+| Delayed page overlapping newest/live/network facts and progress | `merges sparse arrivals, full revisions and clears without certifying or saving hydration` |
+| Navigation and return using identical strings | `fences delayed local errors after %s` |
+| Epoch replacement / same-epoch reset / delete / unpair / clear | `fences late held-page success after %s with reused strings` |
+| Saved mutation invalidates next token | protected traversal restart test above, stale-token assertion; no recovery |
+| Local exhaustion / fragmented network boundaries | `loads saved pages independently of a %s server reply and keeps fragmented paging at 900` |
+| Mounted held/offline scrolling and row offset | `unchanged saved traversal scrolls independently while server reply is held` / `unchanged saved traversal scrolls independently offline` |
 
 ## Error handling
 
@@ -82,3 +83,7 @@ None. A newest-first held pass is simpler than changing opening/token formats an
 **Date:** 2026-10-16
 
 Sizing: one traversal deliverable; forecast 260 production + 365 tests/helpers + 95 plan/log lines = 720 written lines, no new exported abstraction, at most 6 consumer sites, five observable criteria, at most eight reject branches.
+
+## Revisions
+
+2026-10-16: Extend the existing packaged 801-item fixture to enumerate all held pages after protected reopen, and the existing indexed opening counter fixture to measure a 200-item held traversal page separately. No storage contract change. Mounted fixtures reuse `heldThreadRead` with an operation and skip count to hold the final insertion and compare the visible row offset. Actual implementation remains below the forecast.

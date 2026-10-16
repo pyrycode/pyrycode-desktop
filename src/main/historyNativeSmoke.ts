@@ -98,6 +98,16 @@ void app.whenReady().then(async () => {
       typeof opened.page.continuation !== 'string' ||
       !isDeepStrictEqual(opened.page.items.map(i => i.id), [...Array.from({ length: 200 }, (_, n) => n + 100), 2000]) ||
       opened.page.ranges.length !== 2 || opened.page.metadata.checkpoint !== 1) throw Error('opening-reopen')
+    evidence.stage = 'saved-traversal'
+    const traversalStore = fresh(), all = []
+    let traversed = await traversalStore.execute({ ...request, operation: 'newestThreadPage' })
+    for (let n = 0; n < 5; n++) {
+      if (traversed.status !== 'page') throw Error('traversal-page')
+      all.unshift(...traversed.page.items)
+      if (traversed.page.continuation === null) break
+      traversed = await traversalStore.execute({ ...request, operation: 'beforeThreadPage', continuation: traversed.page.continuation })
+    }
+    if (!isDeepStrictEqual(all, openingItems) || new Set(all.map(i => i.id)).size !== 801) throw Error('traversal-content')
     evidence.stage = 'protected-bytes'
     const directory = join(app.getPath('userData'), 'history')
     for (const name of readdirSync(directory)) {

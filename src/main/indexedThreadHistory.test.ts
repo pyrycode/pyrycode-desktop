@@ -123,6 +123,13 @@ it('cold opening payload work stays bounded as unrelated older, hidden and range
     expect(result).toEqual({ records: 206, payloads: 202, decrypts: 408 })
     console.info('opening-work', JSON.stringify({ unrelated, fixtureItems: items.length, selected: 200, active: 1,
       dependencies: 1, evidence: 3, structural, ...result, coldMs, conversionMs }))
+    structural = 0; records = 0; payloads = 0; decrypt.mockClear()
+    const traversing = performance.now(), held = await page(fresh.store, newest(200))
+    expect(held.items).toHaveLength(200)
+    expect(payloads).toBe(200); expect(records).toBeLessThanOrEqual(204)
+    expect(decrypt.mock.calls.length).toBeLessThanOrEqual(408)
+    console.info('traversal-work', JSON.stringify({ unrelated, fixtureItems: items.length, selected: 200,
+      structural, records, payloads, decrypts: decrypt.mock.calls.length, coldMs: performance.now() - traversing }))
     vi.restoreAllMocks(); return result
   }
   expect(await measure(500)).toEqual(await measure(10))

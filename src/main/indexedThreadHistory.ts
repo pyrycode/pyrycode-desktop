@@ -134,8 +134,10 @@ export function createIndexedThreadHistory(deps: {
     return { status: 'page', page: { partial: true, metadata: h.metadata, items, ranges,
       ...(h.hasArrival ? { arrivalPositions: selected.map(r => natural(r.arrival)) } : {}), continuation } }
   }
-  return {
-    async execute(value: unknown): Promise<ThreadHistoryResult> {
+  const api = {
+    async execute(value: unknown): Promise<ThreadHistoryResult> { return api.executeSync(value) },
+    /** Main-only synchronous seam for atomic multi-family import and removal. */
+    executeSync(value: unknown): ThreadHistoryResult {
       const report = (result: ThreadHistoryResult): ThreadHistoryResult => {
         log.event({ event: 'history-storage-result', code: result.status === 'error' ? result.code : result.status }); return result
       }
@@ -202,4 +204,5 @@ export function createIndexedThreadHistory(deps: {
       }
     }
   }
+  return api
 }

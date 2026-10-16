@@ -2,10 +2,14 @@ import {
   parseChatHistoryRequest, parseChatHistorySnapshot, INVALID_CHAT_HISTORY, UNSUPPORTED_CHAT_HISTORY_VERSION,
   type ChatHistoryRequest, type ChatHistoryResult, type ChatHistorySnapshot
 } from '../shared/chatHistory'
-import { EncryptionUnavailableError, type SecureStore } from './secureStore'
+import { EncryptionUnavailableError, type SecureStore, type SecretEncryption } from './secureStore'
 import type { DiagnosticLog } from './diagnosticLog'
+import type { createHistoryDatabase } from './historyDatabase'
+import { createIndexedLegacyHistory } from './indexedLegacyHistory'
+import { createIndexedThreadHistory } from './indexedThreadHistory'
+import type Database from 'better-sqlite3'
 
-// IDs are record values, never blob names. One collection also makes scoped removal atomic.
+// Fixed migration source only; ownership ids remain record values, never blob names.
 const NAME = 'chat-history'
 function sameRecord(a: ChatHistorySnapshot, b: ChatHistorySnapshot): boolean {
   return a.serverId === b.serverId && a.kind === b.kind &&
@@ -25,60 +29,138 @@ function decode(bytes: Uint8Array): ChatHistorySnapshot[] {
   }
   return snapshots
 }
+function failure(error: unknown, fallback: 'unreadable' | 'write-failed' | 'remove-failed'): Extract<ChatHistoryResult, { status: 'error' }> {
+  if (typeof error === 'object' && error !== null && 'status' in error && error.status === 'error' && 'code' in error &&
+    (error.code === 'write-failed' || error.code === 'remove-failed' || error.code === 'unreadable' || error.code === 'encryption-unavailable' || error.code === 'unsupported-version'))
+    return { status: 'error', code: error.code }
+  return { status: 'error', code: error === UNSUPPORTED_CHAT_HISTORY_VERSION ? 'unsupported-version'
+    : error === INVALID_CHAT_HISTORY ? 'unreadable'
+      : error instanceof EncryptionUnavailableError ? 'encryption-unavailable' : fallback }
+}
 
-/** One main-process instance owns the collection. Never construct one service per request. */
-export function createChatHistoryStore(deps: { secureStore: SecureStore; log: DiagnosticLog }) {
-  const { secureStore, log } = deps
+/** One main-process instance owns import and both indexed families for the app lifetime. */
+export function createChatHistoryStore(deps: {
+  secureStore: SecureStore; log: DiagnosticLog; encryption: SecretEncryption; database: ReturnType<typeof createHistoryDatabase>
+}) {
+  const { secureStore, log, encryption, database } = deps
+  const legacy = createIndexedLegacyHistory(deps), threads = createIndexedThreadHistory(deps)
   let queue: Promise<unknown> = Promise.resolve()
+  let closed = false
+  const requireSuccess = (result: ChatHistoryResult): ChatHistoryResult => {
+    if (result.status === 'error') throw result
+    return result
+  }
+  function list(db: Database.Database, serverId: string): Extract<ChatHistorySnapshot, { kind: 'list' }> | null {
+    const row = db.prepare<[Buffer], { payload: unknown }>('SELECT payload FROM history_lists WHERE server = ?').get(Buffer.from(serverId, 'utf16le'))
+    if (!row) return null
+    if (!(row.payload instanceof Uint8Array)) throw INVALID_CHAT_HISTORY
+    const snapshot = parseChatHistorySnapshot(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(encryption.decrypt(row.payload))))
+    if (snapshot.kind !== 'list' || snapshot.serverId !== serverId) throw INVALID_CHAT_HISTORY
+    return snapshot
+  }
+  function saveList(db: Database.Database, snapshot: Extract<ChatHistorySnapshot, { kind: 'list' }>): void {
+    const payload = encryption.encrypt(Buffer.from(JSON.stringify(snapshot)))
+    db.prepare('INSERT OR REPLACE INTO history_lists VALUES (?, ?)').run(Buffer.from(snapshot.serverId, 'utf16le'), Buffer.from(payload))
+  }
+  async function importSource(): Promise<void> {
+    if (database.transaction(db => db.prepare('SELECT singleton FROM history_import').get()) !== undefined) return
+    const bytes = await secureStore.get(NAME)
+    const snapshots = bytes === null ? [] : decode(bytes)
+    let writing = false
+    try {
+      database.transaction(db => {
+        // A second owner may have completed while the protected read was pending.
+        if (db.prepare('SELECT singleton FROM history_import').get()) return
+        const missing = snapshots.filter(snapshot => {
+          if (snapshot.kind === 'list') return list(db, snapshot.serverId) === null
+          const backend = snapshot.kind === 'timeline' ? legacy : threads
+          const existing = backend.executeSync({ operation: snapshot.kind === 'timeline' ? 'readTimeline' : 'readThread',
+            serverId: snapshot.serverId, conversationId: snapshot.conversationId })
+          if (existing.status === 'page') throw INVALID_CHAT_HISTORY
+          requireSuccess(existing)
+          return existing.status === 'missing'
+        })
+        // Validation is complete; raw failures now include mutation and the outer COMMIT.
+        writing = true
+        for (const snapshot of missing) {
+          if (snapshot.kind === 'list') saveList(db, snapshot)
+          else {
+            const backend = snapshot.kind === 'timeline' ? legacy : threads
+            const result = backend.executeSync({ operation: snapshot.kind === 'timeline' ? 'replaceTimeline' : 'replaceThread',
+              serverId: snapshot.serverId, conversationId: snapshot.conversationId, snapshot })
+            if (result.status === 'page') throw INVALID_CHAT_HISTORY
+            requireSuccess(result)
+          }
+        }
+        db.prepare('INSERT INTO history_import VALUES (1, 0)').run()
+      })
+    } catch (error) { throw failure(error, writing ? 'write-failed' : 'unreadable') }
+  }
+  async function retireSource(): Promise<boolean> {
+    if (!database.transaction(db => db.prepare('SELECT singleton FROM history_import WHERE retired = 0').get())) return true
+    try {
+      // Completion is already durable. Never reopen/decrypt this source, even after cleanup failure.
+      await secureStore.delete(NAME)
+      database.transaction(db => db.prepare('UPDATE history_import SET retired = 1 WHERE singleton = 1').run())
+      log.event({ event: 'history-source-retired', code: 'ok' })
+      return true
+    } catch {
+      log.event({ event: 'history-source-retired', code: 'remove-failed' })
+      return false
+    }
+  }
   function report(result: ChatHistoryResult): ChatHistoryResult {
     log.event({ event: 'history-storage-result', code: result.status === 'error' ? result.code : result.status })
     return result
   }
   async function run(request: ChatHistoryRequest): Promise<ChatHistoryResult> {
     log.event({ event: 'history-storage-operation', code: request.operation })
-    let snapshots: ChatHistorySnapshot[]
     try {
-      const bytes = await secureStore.get(NAME)
-      snapshots = bytes === null ? [] : decode(bytes)
+      if (!encryption.isAvailable()) throw new EncryptionUnavailableError()
+      await importSource()
     } catch (error) {
-      return {
-        status: 'error', code: error === UNSUPPORTED_CHAT_HISTORY_VERSION ? 'unsupported-version' : 'unreadable'
-      }
+      return failure(error, 'unreadable')
     }
     const { operation, serverId } = request
-    if (operation === 'readList' || operation === 'readTimeline' || operation === 'readThread') {
-      const snapshot = snapshots.find((s) => s.serverId === serverId && (operation === 'readList'
-        ? s.kind === 'list' : s.kind === (operation === 'readThread' ? 'daemon-items' : 'timeline') && s.conversationId === request.conversationId))
-      return snapshot === undefined ? { status: 'missing' } : { status: 'stored', snapshot }
-    }
-    let next: ChatHistorySnapshot[]
-    if (operation === 'replaceList' || operation === 'replaceTimeline' || operation === 'replaceThread') {
-      const index = snapshots.findIndex((s) => sameRecord(s, request.snapshot))
-      next = snapshots.slice()
-      if (index < 0) next.push(request.snapshot)
-      else next[index] = request.snapshot
-    } else if (operation === 'removeServer') {
-      next = snapshots.filter((s) => s.serverId !== serverId)
-    } else {
-      next = snapshots.filter((s) => !(s.serverId === serverId && s.kind !== 'list' &&
-          s.conversationId === request.conversationId))
-        .map((s) => s.serverId === serverId && s.kind === 'list'
-          ? { ...s, conversations: s.conversations.filter((c) => c.id !== request.conversationId) } : s)
-    }
+    let reading = true
     try {
-      if (JSON.stringify(next) === JSON.stringify(snapshots)) return { status: 'ok' }
-      if (next.length === 0) await secureStore.delete(NAME)
-      else await secureStore.set(NAME, new TextEncoder().encode(JSON.stringify({ version: 1, snapshots: next })))
-      return { status: 'ok' }
+      const result = database.transaction((db): ChatHistoryResult => {
+        if (operation === 'readTimeline' || operation === 'replaceTimeline') {
+          const result = requireSuccess(legacy.executeSync(request))
+          reading = operation === 'readTimeline'
+          return result
+        }
+        if (operation === 'readThread' || operation === 'replaceThread') {
+          const result = threads.executeSync(request)
+          if (result.status === 'page') throw INVALID_CHAT_HISTORY
+          requireSuccess(result)
+          reading = operation === 'readThread'
+          return result
+        }
+        const saved = list(db, serverId)
+        if (operation === 'readList') return saved === null ? { status: 'missing' } : { status: 'stored', snapshot: saved }
+        reading = false
+        if (operation === 'replaceList') saveList(db, request.snapshot)
+        else {
+          requireSuccess(legacy.executeSync(request))
+          const result = threads.executeSync(request)
+          if (result.status === 'page') throw INVALID_CHAT_HISTORY
+          requireSuccess(result)
+          if (operation === 'removeServer') db.prepare('DELETE FROM history_lists WHERE server = ?').run(Buffer.from(serverId, 'utf16le'))
+          else if (saved) saveList(db, { ...saved, conversations: saved.conversations.filter(c => c.id !== request.conversationId) })
+        }
+        return { status: 'ok' }
+      })
+      const retired = await retireSource()
+      return !retired && operation.startsWith('remove') ? { status: 'error', code: 'remove-failed' } : result
     } catch (error) {
-      return {
-        status: 'error', code: error instanceof EncryptionUnavailableError ? 'encryption-unavailable'
-          : operation === 'removeServer' || operation === 'removeConversation' ? 'remove-failed' : 'write-failed'
-      }
+      return failure(error, reading ? 'unreadable' : operation.startsWith('remove') ? 'remove-failed' : 'write-failed')
     }
   }
   return {
+    async close(): Promise<void> { closed = true; await queue; database.close() },
     execute(value: unknown): Promise<ChatHistoryResult> {
+      if (closed) return Promise.resolve(report({ status: 'error', code: 'unreadable' }))
       let request: ChatHistoryRequest
       try {
         request = parseChatHistoryRequest(value)

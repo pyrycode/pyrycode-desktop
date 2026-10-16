@@ -1,7 +1,8 @@
 # Protected local chat history
 
 The main-process service stores ordered conversation lists, legacy timeline display
-records and daemon-item snapshots through the [secure store](secure-store.md). A
+records and daemon-item snapshots in protected indexed SQLite storage, using the
+same OS-backed protection as the [secure store](secure-store.md). A
 fresh service instance can read saved content without a connection or Noise handshake. Host identity is the
 saved pairing record's `server` field, so equal conversation ids on different
 hosts remain separate.
@@ -35,7 +36,7 @@ The legacy coverage, receipt and display contracts below describe retained forma
 and producer/store behavior, not renderer persistence. The renderer no longer
 observes or restores those timelines; shared admission is unchanged.
 
-Both legacy backends use the unchanged `parseChatHistorySnapshot` admission and
+Legacy full operations use the unchanged `parseChatHistorySnapshot` admission and
 allowlisted projection for full snapshots. Indexed disk reconstruction preserves
 supplied held order, optional-field absence and all admitted evidence; equal or misleading timestamps
 never reorder rows. Ownership remains exact and case-sensitive. SQLite coordinates
@@ -458,7 +459,7 @@ The parsers reject oversized values without truncating them:
 
 These limits govern individual admitted records, including the aggregate receipt-id
 bound above. Receipt expiration does not evict durable display rows. There is no
-ten-chat disk cap, automatic snapshot eviction, total collection-size bound or
+ten-chat disk cap, automatic snapshot eviction, total disk-size bound or
 history-download policy.
 
 ## Results and failure preservation
@@ -468,17 +469,33 @@ for saved-read notices, result/error classifications and preservation after fail
 
 ## Storage and concurrency
 
-The application still uses the [protected collection and buffered writer](chat-history-storage.md).
-The independently callable SQLite foundation exposes
-[`createHistoryDatabase`](../../../src/main/historyDatabase.ts) and
-[`createIndexedLegacyHistory`](../../../src/main/indexedLegacyHistory.ts). One main-process
-owner lazily opens a reusable synchronous connection at
-`history/history.sqlite` beneath trusted `userDataPath`; its caller closes it
-explicitly. Directory creation uses mode 0700 and the database is set to 0600.
-Reads and mutations run synchronously within transactions, with no await across
-snapshot reconstruction or replacement. See [schema admission and migration](chat-history-api.md#api).
+Production `createChatHistoryStore` composes the indexed legacy and authoritative
+backends with protected list cells in schema 5. One main-process database owner
+lazily opens a reusable synchronous connection at `history/history.sqlite` beneath
+trusted `userDataPath`. The composition root retains it across window reopening;
+graceful app quit flushes renderers, drains handler/store admission and closes it.
+Directory creation uses mode 0700 and the database is set to 0600. Reads and
+mutations run synchronously within transactions; secure-store I/O is outside them.
+See [schema admission and migration](chat-history-api.md#api).
 
-Each committed scope has separately encrypted records for held rows, served ids,
+First access validates the complete encrypted version-1 `chat-history` source and
+imports missing lists and both snapshot families in one transaction with a durable
+completion marker. Existing indexed records win regardless of timestamps. Legacy
+rows stay legacy; parser-normalized order, optional absence and saved evidence
+survive. A failure before commit leaves no partial import or completion marker.
+After completion, no operation reopens/decrypts the source: timeline/thread reads
+select their family and list reads decode only their protected list cell.
+
+Source retirement has a separate durable flag. Cleanup retries delete the fixed
+source directly without replaying it, so a retained source cannot overwrite newer
+records or resurrect deletions after restart or identity reuse. Conversation
+removal commits both families and the saved list entry together; host removal
+includes off-screen scopes. Handler host/conversation generations reject stale
+queued work while fresh authorized replacements may reuse identical coordinates.
+The [storage reference](chat-history-storage.md#protected-collection) details queues,
+retirement failure and credential-first unpair ordering.
+
+Each committed legacy scope has separately encrypted records for held rows, served ids,
 ordered receipts and their individual id memberships, display contributions and
 row associations, gaps, legacy gap-key memberships and refused cursors. The encrypted
 header retains scope coverage, newest cursor, optional-evidence presence, allocator
@@ -486,6 +503,11 @@ and prepended count independently of those records. Plain numeric indexes suppor
 bounded page selection without a whole-timeline or all-evidence cell. Full
 reconstruction returns one committed snapshot and checks its records against
 canonical parser output.
+
+Authoritative scopes separately protect header metadata, held items and ranges,
+including first-arrival and containing-range associations. Lists are complete
+protected cells. Both full readers preserve exact supplied ownership and content;
+neither family converts into the other.
 
 Every replacement, including identical or empty content, receives a new random UUID
 snapshot identity; delete/recreate cannot reuse the previous commit's identity.
@@ -495,11 +517,11 @@ in [failure preservation](chat-history-results.md#results-and-failure-preservati
 
 The adapter is pinned to `better-sqlite3` 12.4.1. Host Node and Electron require
 separate native rebuilds; packaging rebuilds for the target ABI and unpacks the
-adapter from asar. See [commands and counted Linux/macOS proof](chat-history-testing.md#native-runtime-and-packaged-proof).
+adapter from asar. See [runtime preparation and counted native proof](chat-history-testing.md#native-runtime-and-packaged-proof).
 Windows NSIS x64/arm64 targets remain configured; these smokes add no Linux/macOS
-release channel. Main-only bounded legacy pages are independently callable;
-application binding and collection import belong to #1975, authoritative storage
-to #1974, and local-page consumers/partial writes to #1931.
+release channel. Bounded legacy and authoritative pages remain callable main-only;
+page IPC, renderer consumers and partial writes belong to #1931. Production reads
+and replacements still use complete snapshots.
 
 ## Testing
 

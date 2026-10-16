@@ -18,8 +18,15 @@ evidence for retained legacy APIs. They coexist with daemon records at the same
 host/conversation, but production display reads only `daemon-items`. Legacy reads
 never convert rows into authoritative items and supply no fallback route.
 
-[`createChatHistoryStore({ secureStore, log })`](../../../src/main/chatHistoryStore.ts)
-returns `execute(request: unknown): Promise<ChatHistoryResult>`.
+[`createChatHistoryStore({ secureStore, encryption, database, log })`](../../../src/main/chatHistoryStore.ts)
+returns `execute(request: unknown): Promise<ChatHistoryResult>` and async `close()`.
+It owns serialized import, protected lists and full operations over both indexed
+families. `close()` stops new admission, drains admitted work and closes the
+database; subsequent calls return `unreadable`. The composition root creates one
+store/database for the app lifetime. Window close flushes without closing that
+owner; graceful quit flushes renderers, awaits handler `drain()` and then closes
+the store. See [shutdown ordering](chat-history-storage.md#window-close-and-app-quit).
+
 [`createChatHistoryHandler({ store, pairedServers, log })`](../../../src/main/chatHistoryHandler.ts)
 returns an injected listener `(event: unknown, request: unknown)` with the same
 result. It validates and copies the request synchronously, then checks
@@ -39,7 +46,7 @@ invalid snapshots and coordinate mismatches return `invalid-request`. Its remova
 delete only the addressed legacy SQLite scope(s) and indexed evidence. They do not
 update lists or daemon-item records. The application-bound operations in the table
 below retain their existing wider removal behavior. Saved-host authorization remains
-with `createChatHistoryHandler` when application binding lands.
+with `createChatHistoryHandler` in production.
 
 The authoritative family has its own main-only
 [`createIndexedThreadHistory({ database, encryption, log })`](../../../src/main/indexedThreadHistory.ts).
@@ -51,15 +58,22 @@ hidden/unordered items, inert unknown JSON, explicit nulls and optional arrival
 metadata. Requests are detached and validated before database access. Removal
 affects only authoritative scopes for the exact owner, preserving legacy records,
 lists and other hosts' equal ids. This callable backend shares the supplied database
-owner; it introduces no application binding or authorization check.
+owner. Production `createChatHistoryStore` delegates full thread operations to it;
+direct backend calls perform no saved-host authorization.
+
+Both backends retain detached-callable Promise `execute` methods and expose
+main-only synchronous `executeSync` seams for enclosing multi-family transactions.
+The enclosing caller must throw classified error results to roll back its outer
+transaction; returning an error normally would commit it. No SQLite transaction
+may span asynchronous secure-store I/O.
 
 [`createHistoryDatabase({ userDataPath })`](../../../src/main/historyDatabase.ts)
 owns the connection and exposes synchronous `transaction(run)` plus `close()`.
 An empty schema-version-0 database initializes the base schema 2 transactionally;
-its first operation migrates to schema 4. An unversioned
+its first transaction migrates to schema 5. An unversioned
 database containing tables or an unfamiliar version is rejected without recreation.
 Schema 1 migrates TEXT ownership keys to UTF-16LE BLOBs inside the calling operation's
-transaction, then chains through schemas 2, 3 and 4, retaining ciphertext and
+transaction, then chains through schemas 2, 3, 4 and 5, retaining ciphertext and
 committed-snapshot UUIDs. Schema 3 adds only the partial `legacy_receipt_start`
 index on `(scope, entry_id, parent)` where `kind = 'receipt-id' AND ordinal = 0`.
 It lets adjacent-cursor selection skip non-start memberships in spanning receipts;
@@ -67,12 +81,33 @@ indexing all memberships would still allow that lookup's work to grow with older
 history. Schema 4 additively creates `thread_scopes`, `thread_records` and the
 `thread_ranges` index, preserving legacy data and the receipt-start index. Its
 idempotent creation also retains authoritative tables from the earlier schema-3
-branch layout. Both families use exact UTF-16LE BLOB ownership, preserving NUL and
-lone-surrogate distinctions. A later validation or decryption failure rolls back
-the migrations, index and version changes too,
-allowing retry. Migration preserves strings already stored in schema 1; it cannot
+branch layout. Schema 5 adds `history_lists(server, payload)` and
+`history_import(singleton, retired)`. List payloads are encrypted complete list
+snapshots; decoding validates their exact host ownership. The singleton's presence
+means import is complete; `retired: 0` means source cleanup is pending and
+`retired: 1` means cleanup was recorded. Lists and both families use exact UTF-16LE
+BLOB ownership, preserving NUL and lone-surrogate distinctions. A later validation
+or decryption failure in the same transaction rolls back its migrations, index and
+version changes too, allowing retry. Migration preserves strings already stored in schema 1; it cannot
 recover surrogate distinctions lost during earlier TEXT binding. Future schema
 additions require explicit versioned migrations; snapshot `version: 1` is unchanged.
+
+Before its first operation, the application store checks completion, then decrypts
+and validates the entire version-1 secure-store collection, including duplicate
+identities, through shared snapshot admission. It validates addressed destination
+records before mutation and imports only missing scopes/lists. Existing indexed
+content wins regardless of timestamps. Lists, both formats and completion commit
+together; no source I/O occurs inside that transaction. An absent source also
+commits completion. Failed import preserves the source and last committed records;
+later queued work can retry. Schema admission may already have committed during
+the completion check without importing any content.
+
+Once complete, the store never reads/decrypts the source again. After a successful
+operation transaction it retries direct source deletion while retirement is pending,
+then records retirement separately. Interruption between either commit and cleanup
+cannot replay old records. Reads/replacements remain available when source deletion
+fails; a removal reports `remove-failed` even if its SQLite deletion committed.
+See [failure preservation](chat-history-results.md#results-and-failure-preservation).
 
 Full reads reconstruct and validate one committed snapshot through
 `parseChatHistorySnapshot`, then compare canonical records with stored payloads
@@ -134,8 +169,8 @@ protection overhead fails without returning an inadmissible token. Copying owner
 and epoch strings into the token would break traversal for valid long surrogate
 strings after JSON/protection expansion. See [page failures](chat-history-results.md#bounded-page-results).
 
-Application binding and collection import remain #1975; reader activation and
-partial writes remain #1931. Local continuation/exhaustion never certifies daemon
+Full indexed storage and collection import are active. Page IPC, reader activation
+and partial writes remain #1931. Local continuation/exhaustion never certifies daemon
 completeness or changes saved checkpoint, repair or availability.
 
 ### Main-only bounded legacy pages
@@ -181,15 +216,16 @@ associations. A page is never submitted as a shortened snapshot to
 `parseChatHistorySnapshot`: complete receipt-union and whole-held-row validation
 remain required for full snapshots. See [page failures](chat-history-results.md#bounded-page-results).
 
-These methods add no IPC, preload or renderer capability. Application binding and
-collection import remain #1975; page IPC, renderer activation and partial writers
+These methods add no IPC, preload or renderer capability. Full indexed storage and
+collection import are active; page IPC, renderer activation and partial writers
 remain #1931. The application-bound API continues below.
 
 ### Application-bound operations
 
 [`src/main/index.ts`](../../../src/main/index.ts) registers one handler over one
 store for the app lifetime, sharing the existing secure store and paired-server
-store. Preload exposes `window.pyry.chatHistory(request): Promise<ChatHistoryResult>`
+store and one selected encryption adapter/database. Preload exposes
+`window.pyry.chatHistory(request): Promise<ChatHistoryResult>`
 on the fixed `pyry:chat-history` channel; `PyryApi` carries its type into the window.
 Reads and replacements need no handshake.
 
@@ -212,6 +248,19 @@ unpaired-state transition continue. `history-unpair-cleanup` records only static
 Successful cleanup removes the list and every timeline/daemon-item record for that
 `server` identity, including off-screen conversations absent from the latest list,
 while preserving other hosts' equal conversation/item ids.
+
+Conversation-scoped requests also capture a conversation generation at admission;
+`replaceList` captures generations for every listed conversation. A removal attempt
+that reaches storage and returns a result advances its conversation generation,
+including on classified failure, so already-queued saves, reads and stale lists
+cannot undo confirmed deletion. Host removal similarly advances host admission.
+Fresh saved-host requests can intentionally replace content at identical host,
+conversation and epoch strings. These process-local fences order admitted work;
+the durable import-completion marker prevents retained-source replay after restart.
+Successful conversation removal atomically deletes both families and its list
+entry, retaining ordered peers and a saved-empty list when appropriate. Every
+replacement remains full; omitting a conversation from a list alone never deletes
+its saved snapshots.
 
 Every request has `operation` and `serverId`. Additional fields are operation-specific:
 

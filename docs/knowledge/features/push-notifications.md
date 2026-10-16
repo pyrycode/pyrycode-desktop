@@ -67,7 +67,7 @@ decision and why renderer cleaning alone is insufficient.
 | `notificationActivated` `DaemonEvent` arm, nullary at #393, optional `token` since #1597 | `src/shared/ipc/events.ts` |
 | `notificationActivatedBridge.ts` (#393, re-validates the echoed token since #1597) | `src/renderer/src/store/notificationActivatedBridge.ts` |
 | `pushNotifyBridge.ts` — `notifyKindForEvent`, `subscribePushNotify`, `usePushNotify` (#392, `questionShown` added #1691); `createNotificationTargets`, `notificationRowFor` (#1597); `conversationMutedIn` (#1607) | `src/renderer/src/store/pushNotifyBridge.ts` |
-| `notificationPreviewIn`, `NotifyEvent`, `NOTIFICATION_PREVIEW_CHARS` — event-time preview selection and renderer cap | `src/renderer/src/store/notificationPreview.ts` |
+| `notificationPreviewFromItems`, `NotifyEvent`, `NOTIFICATION_PREVIEW_CHARS` — item-based preview selection and renderer cap | `src/renderer/src/store/notificationPreview.ts` |
 | `conversationTimelineStore` / `ConversationSlice.serverId` — retained per-conversation source and host stamp | `src/renderer/src/store/conversationTimelineStore.ts` |
 | `markdownPlainText` — existing remark-based plain-text extraction | `src/renderer/src/screens/conversation/MarkdownReader.tsx` |
 | `toolHeadline` — the collapsed tool row's subject, reused for permission previews | `src/renderer/src/screens/conversation/toolHeadline.ts` |
@@ -298,16 +298,13 @@ required (not defaulted) so an unwired call site is a type error, the same postu
 
 `previewFor?: (event: NotifyEvent) => string | null` is the optional seventh argument. It is called
 only after dedup, push and mute gates pass; a `null` result omits the `preview` key entirely.
-Production passes `(event) => notificationPreviewIn(conversationTimelineStore.getState(), event)`:
-a synchronous snapshot read at event time, with no new state, subscription or fetch. Deltas and
-`toolUse` arrive before the events they describe, and `timelineBridge` files them under their own
-conversation even when another conversation is open.
-
-`notificationPreviewIn` reads the slice keyed by `event.conversationId`. A missing slice, including
-one evicted past `MAX_RETAINED_TIMELINES`, yields `null`. The map is keyed only by conversation id,
-so a slice with a defined `serverId` different from `event.serverId` must also yield `null`; an
-unstamped slice remains usable, matching the store's own receipt rule. Name and mute lookups
-continue to use the event's server-scoped conversation-list slot.
+Production reads `threadRuntime.items` by the event's exact host/conversation,
+projects its daemon snapshot through `threadItemPresentations` and passes the
+resulting rows to shared `notificationPreviewFromItems`. A missing snapshot or
+host yields `null`, preserving fixed notification copy. There is no fetch, legacy
+slice, local echo or reconstructed preview fallback. #2030 deletes
+`notificationPreviewIn` with its holder dependency. Name and mute lookups continue
+to use the event's server-scoped conversation-list slot.
 
 - **`turnEnd`:** scan backward for the newest `assistantText` with `turnId === event.turnId`.
   Use only that item; never concatenate the turn or substitute an earlier turn's reply. Reuse

@@ -184,6 +184,13 @@ Node 20.18.3 / ABI 130 rejected. The unchanged full suite passed after the Elect
 rebuild; local verifier runner preparation was tracked by #2038, separately from
 the managed runner repair in #2018.
 
+The [renderer-retirement PR](https://github.com/pyrycode/pyrycode-desktop/pull/2039)
+records the same trap after indexed storage merged: 13 failures in the first
+post-merge fake run used the host-Node adapter. Rebuilding for Electron made all
+13 pass without source changes. The final counted Linux gate executed/passed
+435 cases, 0 failed, 3 skipped. Treat the earlier capture as failed and the later
+pass as separate evidence; the rebuild order is Node units, then Electron suite.
+
 On Linux/macOS, `npm run check:history-native -- /tmp/history-native-proof` packages
 an isolated entrypoint, launches the packaged Electron app and writes `runtime.stdout`
 and `runtime.stderr` beneath the supplied scratch directory. It uses the actual
@@ -401,17 +408,13 @@ Existing legacy browser/liveness proofs below do not establish daemon-item live
 acceptance. Production uses complete indexed snapshots; bounded pages remain
 main-only until #1931 activates consumers and partial writers.
 
-[`savedTimelineRestorer.test.ts`](../../../src/renderer/src/store/savedTimelineRestorer.test.ts)
-retains direct legacy `beginLocalTimelineRead` store-admission tests, including
-coverage, identities, host isolation, invalidation and eviction/reload. Its
-injected legacy-reader cases retire with the removed renderer branch; those store
-tests do not establish a production `readTimeline` path. Direct newest-demand and
-bridge/frame tests remain, while exclusive frame-persistence fixtures retire.
-The shared fake publisher remains active for authoritative browser scenarios.
-For direct legacy store tests, `beginLocalTimelineRead(host, id)!.complete(null)`
-stages a settled-empty read. An absence assertion alone can pass against a screen
-that renders nothing: when removing copy, pair updated assertions with a positive
-claim about what the screen now renders.
+The direct legacy `beginLocalTimelineRead` admission, newest-demand and exclusive
+bridge/frame tests were removed with the renderer holder/producers in #2030.
+`savedTimelineRestorer.test.ts` retains authoritative restoration coverage;
+there is no production `readTimeline` path. The shared fake publisher remains
+active for authoritative browser scenarios. An absence assertion alone can pass
+against a screen that renders nothing: when removing copy, pair updated assertions
+with a positive claim about what the screen now renders.
 
 [`savedListRestorer.test.ts`](../../../src/renderer/src/store/savedListRestorer.test.ts)
 covers ordered host isolation with equal ids, missing/empty/error results, duplicate
@@ -487,8 +490,10 @@ and this refactor required no live-Claude run.
 Production offline/live continuity and checkpoint overlap are covered by
 `thread-activation.spec.ts` and the authoritative cache restart fixtures above.
 The retired recording continuity cases no longer provide browser proof for legacy
-cursor/receipt persistence. Remaining legacy producer fixtures below describe
-reconstruction behavior, not the renderer's authoritative restore path.
+cursor/receipt persistence. The remaining renderer reconstruction producers and
+their exclusive fixtures were deleted in #2030. The historical overlap discussion
+below explains the old reconstruction path, not current executable regressions or
+authoritative restoration. See [completed inventory and validation](thread-runtime.md#renderer-producer-retirement-validation).
 
 [`real-daemon-history-on-open.spec.ts`](../../../e2e/real-daemon-history-on-open.spec.ts)
 saves a baseline with served/display evidence, fully exits Electron through the

@@ -111,20 +111,45 @@ The fake simplifies daemon persistence and folding into deterministic in-memory 
 
 Observed client regressions repaired here include composer reports, current-session errors and inventory, host-owned prompt/queue/task controls, retained prompt choices and rejection feedback, reply suggestions, native notifications and message acknowledgement diagnostics, shown-version attention before opening a chat, visible-tail read observation, scrolling and joined tool rows. Queue Send now follows the reported session capability. Packaged storage proof now collects and rebuilds dependencies from its isolated application directory, preserving production encryption.
 
-Legacy-only cases retained for #2020 cleanup:
+Legacy-only retirement inventory from #2020 (all 19 removals complete):
 
-| File | Cases | Retired behaviour asserted |
-| --- | --- | --- |
-| `chat-history-recording.spec.ts` | 9 | Legacy timeline snapshots, raw receipt ledgers, raw cursor coverage and their buffer lifecycle. Canonical cache/removal/restart behaviour stays covered by thread activation and protected cache tests. |
-| `history-gaps.spec.ts` | 2 | Renderer reconstruction and persistence of raw-event gaps. |
-| `reconnect-event-replay.spec.ts` | 1 | Raw hello replay joined to the legacy newest-history request. |
-| `queued-own-settlement.spec.ts` | 2 | Restoration of legacy tool identities from saved timeline rows. |
-| `history-on-open.spec.ts` | 1 | Retaining the retired non-cancellable history request across pane changes. |
-| `tool-groups.spec.ts` | 2 | Provisional roster identities and reconstruction from late raw history. Authoritative ancestry and ordinary grouped-tool interaction remain active. |
-| `background-task-reconnect.spec.ts` | 1 | Clearing roster-only inferred content into empty versus unobserved states. Canonical task items retain explicit lifecycle facts. |
-| `visible-tail-read.spec.ts` | 1 | Raw receipts without durable IDs establishing read eligibility through the renderer ledger. |
+| File | Cases | Retired behaviour asserted | Removed with |
+| --- | --- | --- | --- |
+| `chat-history-recording.spec.ts` | 9 | Legacy timeline snapshots, raw receipt ledgers, raw cursor coverage and their buffer lifecycle. Canonical cache/removal/restart coverage remains active. | #2029 renderer saved IO |
+| `history-gaps.spec.ts` | 2 | Renderer reconstruction and persistence of raw-event gaps; exclusive file deleted. | #2030 renderer producers |
+| `reconnect-event-replay.spec.ts` | 1 | Raw hello replay joined to the legacy newest-history request. | #2030 renderer producers |
+| `queued-own-settlement.spec.ts` | 2 | Restoration of legacy tool identities from saved timeline rows. | #2030 renderer producers |
+| `history-on-open.spec.ts` | 1 | Retaining the retired non-cancellable history request across pane changes. | #2030 renderer producers |
+| `tool-groups.spec.ts` | 2 | Provisional roster identities and reconstruction from late raw history. | #2023 presentation |
+| `background-task-reconnect.spec.ts` | 1 | Clearing roster-only inferred content into empty versus unobserved states. | #2023 presentation |
+| `visible-tail-read.spec.ts` | 1 | Raw receipts without durable IDs establishing read eligibility through the renderer ledger. | #2030 renderer producers |
 
-These 19 cases remain present and are explicitly skipped for cleanup. No reducer or unit suite is deleted. The existing desktop-isolation skip is separate. Final counted validation: the complete unchanged fake-suite configuration executed on macOS arm64 from source `8d2f3a03d69c7b81019354feca58d42e0008d977`. Of 454 collected cases, 434 executed and passed, zero failed/flaky/retried and 20 skipped. The skips are the 19 listed legacy-only cases plus the pre-existing desktop-isolation case. Start: 2026-10-15T19:19:56.833Z; elapsed: 336030 ms. All 1093 tracked source/configuration files compared equal between the executed frozen copy and the committed candidate. Source SHA256: `d9a8dad6719747fb828c73a7676dd63ad6784dca1ee0c8a19c0c0c84ce83562b`. Report SHA256: `65cf490a7911f9115ae85f7e9ab0d1e6b416b685a0eb5a7e11a309391bf5fbd1`.
+The last seven cases retired with their actual renderer producers in #2030;
+active cases in mixed files, the shared fake publisher and authoritative
+cache/removal/restart and conversation-feature coverage remain. Producer-only unit
+regressions were retained until their implementations were deleted. The
+[#2030 verifier](https://github.com/pyrycode/pyrycode-desktop/pull/2039#issuecomment-6208863531)
+records the complete configured Linux fake suite at
+`c42a778299612f1b9ac0f2d786cc02dc132fe2ae`: **435 executed/passed, 0 failed,
+3 skipped**, 0 flaky, four workers, both configured projects and zero retries.
+All 15 thread-activation and 12 thread-items cases, including both committed-visible
+read widths, are explicitly present and passed; both indexed-history lifecycle
+cases also passed. Units: **9,152 executed/passed, 0 failed, 30 skipped**; build and
+docs guard passed. The three browser skips are macOS-only badge/window cases;
+macOS is outside this Linux ticket's verification scope. See
+[current runtime evidence](../../knowledge/features/thread-runtime.md#renderer-producer-retirement-validation).
+No new real-Claude result is claimed.
+
+Historical activation validation, before these removals: the complete unchanged
+fake-suite configuration executed on macOS arm64 from source
+`8d2f3a03d69c7b81019354feca58d42e0008d977`. Of 454 collected cases, 434 executed
+and passed, zero failed/flaky/retried and 20 skipped. That run's skips were the 19
+then-retained legacy-only cases plus the pre-existing desktop-isolation case.
+Start: 2026-10-15T19:19:56.833Z; elapsed: 336030 ms. All 1093 tracked
+source/configuration files compared equal between the executed frozen copy and the
+committed candidate. Source SHA256:
+`d9a8dad6719747fb828c73a7676dd63ad6784dca1ee0c8a19c0c0c84ce83562b`.
+Report SHA256: `65cf490a7911f9115ae85f7e9ab0d1e6b416b685a0eb5a7e11a309391bf5fbd1`.
 
 The two-host reply/cache case additionally passed three consecutive executions. The full unit suite passed 10391 tests with 38 existing skips; the updated fixture protocol checks also passed. Build, docs, whitespace and all five pre-verifier checks passed after merging main through `39de28231e15`. The packaged native storage check passed with the production OS keychain backend. Evidence is retained at `/Users/juhanailmoniemi/.codex/visualizations/2026/10/15/01a14088-9b29-7673-905e-27f7d3940b1c/desktop-1908-validation`: `summary.json`, `playwright.json`, `playwright.log`, `pre-verify.log`, `fixture-unit.log`, `build.log`, `docs.log` and `cold-host-repeat.json`.
 

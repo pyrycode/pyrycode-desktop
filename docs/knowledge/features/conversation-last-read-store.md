@@ -1,30 +1,23 @@
 # Conversation last-read store
 
-The renderer's held mark of how far the operator has read into **each** conversation — a count of
-[thread timeline](thread-timeline.md) items seen, keyed by `conversationId`. This is the legacy
-fallback for non-thread rows without both daemon history/read fields. Complete non-thread rows use
-received durable history IDs; explicitly selected thread routes use received shown/read versions
-through [conversation unread](conversation-unread.md), independently of this local count.
+The retained legacy local item-count map, keyed by `conversationId` and persisted under
+`pyry.conversationLastRead`. Production daemon-built threads use host-qualified shown/read versions
+and [committed-visible-content publication](conversation-shell.md#authoritative-thread-read-publication).
+Missing authoritative metadata never enables a local-count fallback.
 
-Introduced in [#775](../codebase/775.md), split from #677. Shipped dormant — the holder and its read
-surface only, no writer, no reader — the same "populated and unread" posture the [conversation activity
-store](conversation-activity-store.md) shipped for #747 and the [conversation timeline
-holder](conversation-timeline-holder.md) shipped for #755 before their own feeds landed. #776 then made it
-survive a restart. **#777 landed the writer** — see [Configuration and usage](#configuration-and-usage)
-below and [Paired shell § The last-read stamp](paired-shell-conversation-exits.md#the-last-read-stamp-conversationlastreadbridgets-777)
-for the write path itself. **[#778](conversation-unread.md) landed the reader** — a framework-free predicate
-over this store's `selectLastReadFor` and [conversation timeline holder](conversation-timeline-holder.md)'s
-`selectTimelineFor`, reading neither via a bound hook here. **#779 clears it at the pairing boundary** — see
-[Configuration and usage](#configuration-and-usage) below. **[#1197](https://github.com/pyrycode/pyrycode-desktop/issues/1197)
-added a second, scoped clear** for the boundary the pairing does not fully end at — forgetting one of
-several paired servers now drops only that server's exclusive marks — see below.
+[#2028](https://github.com/pyrycode/pyrycode-desktop/issues/2028) removed navigation's count writer,
+`stampLastReadFor`, its dependencies and the legacy timeline subscription. `useConversationLastRead`
+remains mounted in `PairedShell` and calls only `useReadPublication`. The direct store API,
+persistence, legacy unread predicate and pairing/per-server cleanup remain available to other
+consumers. Standalone legacy producers/tests stay until #2030; #2029 separately retired renderer
+saved IO. Neither ticket changes the authoritative publisher's committed-snapshot requirements.
 
 ## What it does
 
 Holds one `LastReadMark` (a plain `number`) per conversation id. A key **absent** from the map means "this
 conversation has never been read"; a key present with value `0` means "read, and there was nothing in the
-thread at the time" — the two must stay distinct, because opening a conversation with an empty timeline
-legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`, never `||`.
+thread at the time" — the two must stay distinct even though navigation no longer stamps them.
+`selectLastReadFor` preserves the distinction with `??`, never `||`.
 
 ## How it works
 
@@ -34,7 +27,8 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
   checkpoint/repair/coverage fences. It observes the actual newest shown source row, excluding
   hidden descendants and proxies. It does not use the legacy display IDs below. Route epochs
   invalidate prior pending evidence; reconnect retries only already evidenced targets.
-- **Legacy daemon publication observes a committed display.** `useReadObservation`, mounted in
+- **The retained legacy observation implementation also requires a committed display.** It has no
+  production legacy content route since #2023. `useReadObservation`, mounted in
   `ConversationScreen`, updates a ref with the rendered slice and derived durable target only in a
   layout effect. Stable callbacks read that ref, never an initial captured slice or an uncommitted
   timeline-store snapshot; current list state supplies ownership and read eligibility only. Each
@@ -84,19 +78,11 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
   Send failure, refusal and a lower acknowledgement retain it without an automatic retry loop.
   Confirmation settles it; deletion, host/pairing removal, loss of the read contract or ambiguous/changed
   ownership discards it. A later owner never inherits another host's pending mark. Pending commands
-  are never persisted; the local count store below remains the legacy path.
-- **Selected thread routes and complete daemon rows suppress local stamping.** Both activation
-  and timeline-driven writes call
-  `stampLastReadFor`, whose production `isDaemonBacked(id)` dependency reads the current list at
-  invocation time, alongside explicit thread-route selections. Any selected thread with that ID
-  suppresses stamping even with missing metadata. Any matching non-thread row with both
-  `read_up_to` and `latest_entry_id` (including zero)
-  suppresses the write. The local map is ID-keyed, so a duplicate ID with a complete row on any host
-  also suppresses stamping for its legacy peer; selecting only the first match would make protection
-  depend on host order. Daemon unread still compares each actual row independently. The store's direct
-  `recordLastRead` API remains a local count writer, not a daemon mark publisher. A missing frame
-  `history_entry_id` never re-enables local authority for a complete daemon row; legacy rows receive
-  no read command and retain count persistence and both clear paths.
+  are never persisted; the local count store below remains a separate retained API.
+- **Navigation does not stamp.** The retired route/daemon-backed suppression branches are gone
+  with the count writer. Activation, reopening and timeline emission cannot call `recordLastRead`
+  through `conversationLastReadBridge`. The direct store API still writes a local count only; it
+  cannot publish a daemon read mark or clear authoritative attention.
 - **Shape:** the house four-part store (`zustand/vanilla` DI factory → app-wide singleton → `useStore`
   hook → selector factory bound to one id), the same shape as [conversation activity
   store](conversation-activity-store.md) and [conversation timeline
@@ -155,15 +141,10 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
 
     The ids reaching this path are the *departing* daemon's own claim, filtered to the exclusive set at
     its single call site rather than trusted verbatim — see [Unpair channel § The two renderer
-    callers](unpair-channel.md#the-two-renderer-callers) for `selectExclusiveConversationIdsFor`, the same
-    filter [conversation list store](conversation-list-store.md#the-per-server-drop-and-its-stricter-sibling-selector-since-1196)
-    applies to the sibling thread drop. **Called from `clearServerScopedState`, and only after its
-    departed-conversation loop has finished** — every `clearTimelineFor` inside that loop notifies
-    `conversationTimelineStore`'s subscribers synchronously, including #777's bridge, which re-stamps
-    whatever chat is open and, finding the slice gone, records a `0` for it; a drop placed *inside* the
-    loop would be re-minted by a later iteration. It is also the only effect in that helper's set reaching
-    outside memory, so running it last means a `localStorage` throw aborts no other clear. See [Paired
-    shell routing](paired-shell-routing.md) for the call site.
+    callers](unpair-channel.md#the-three-renderer-callers) for `selectExclusiveConversationIdsFor`,
+    the same rule used by [conversation list store](conversation-list-store.md#the-per-server-drop-and-its-stricter-sibling-selector-since-1196).
+    **Called from `clearServerScopedState` after its departed-ID exit loop**, so all in-memory cleanup completes before the one persistence operation that can throw.
+    There is no legacy timeline clear or count subscription to re-mint marks mid-loop.
 - **Legacy value shape — a count, not a timestamp or daemon history ID.** The older count design uses
   live timeline growth: the turn-stream IPC arms carry `conversationId` and `turnId` but no time field, `ConversationActivityEntry`
   is four booleans with no arrival marker, and the daemon's own `last_message_ts`/`last_used_at` do not
@@ -176,9 +157,8 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
   `Object.fromEntries`, map-into-object spread, or `JSON.stringify` of the map anywhere.
 - **Hard import constraint, checkable by grep:** this module's only imports are `zustand/vanilla` and
   `zustand`. No `./threadTimeline`, no `./conversationTimelineStore`, no `activeConversationStore`, no
-  `src/renderer/src/screens/`. Sampling `items.length` is #777's job at #777's call site — with no
-  reference to the open conversation or any timeline in scope, the `?? activeConversation` fallback this
-  keyed-store family exists to prevent is unavailable here, not merely forbidden.
+  `src/renderer/src/screens/`. With no reference to the open conversation or any timeline in scope,
+  the `?? activeConversation` fallback this keyed-store family exists to prevent is unavailable here.
 - **No bound, no eviction, no LRU** — the one deliberate divergence from [conversation timeline
   holder](conversation-timeline-holder.md), and the one place that precedent is *not* copied. An entry here
   is one number plus one bounded id string, the cheapest in the family — below [conversation activity
@@ -201,8 +181,8 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
   — **reject whole, never salvage per entry**, and silently, per the log-free rule below. The write-through
   call sits *inside* `recordLastRead`'s updater, *behind* the same-value guard, not ahead of it as the two
   scalar-preference precedents persist: `appendDelta` grows a streamed reply's tail item in place rather
-  than appending, so `items.length` is unchanged across most deltas, but #777 stamps the open conversation
-  on every delta — persisting ahead of the guard would fire one `localStorage.setItem` per delta.
+  than appending, so `items.length` is unchanged across most deltas. The former #777 subscription
+  would have persisted once per delta without this guard; direct repeat writes still need it.
 - **Testing a hostile key needs the right prototype probe.** `Object.prototype` owns a `__proto__`
   accessor by spec, so `Object.prototype.hasOwnProperty.call(Object.prototype, '__proto__')` is already
   `true` on a pristine realm — asserting it `false` fails on *correct* code. The assertion that actually
@@ -220,42 +200,31 @@ legitimately stamps `0`. `selectLastReadFor` preserves the distinction with `??`
 - Read one conversation: `useConversationLastReadStore(selectLastReadFor(conversationId))`.
 - Persistence key: `pyry.conversationLastRead` (the app's third `localStorage` key — a shared
   key-namespacing helper was considered and declined; see Related decisions).
-- **Writer since #777.** `conversationLastReadBridge.ts` (`src/renderer/src/store/`) is
-  `recordLastRead`'s one caller: `activateConversation` invokes the guarded `stampLastReadFor` outside
-  the id-change gate — a legacy re-open re-stamps — and
-  `useConversationLastRead()`, mounted in `PairedShell`, re-stamps the **open** conversation on every
-  `conversationTimelineStore` emission so content landing while it stays open never pushes its count past
-  its own local mark. Selected thread routes and complete daemon rows skip both writes, including
-  opening without a held timeline; incomplete non-thread rows retain the old behavior.
-  Persistence under `pyry.conversationLastRead`
-  and both pairing/per-server clears remain in place. See [Paired shell § The last-read
-  stamp](paired-shell-conversation-exits.md#the-last-read-stamp-conversationlastreadbridgets-777) for the write path,
-  including a reachable, deliberately unfixed edge case where the pairing- and conversation-teardown
-  clears can persist a spurious `0` over a true mark (below).
-  **Reader landed in [#778](conversation-unread.md). Whole-app clear landed in #779** — `clearAllLastRead()`,
-  wired as the seventh and last effect of [`clearPairingScopedState`](paired-shell-pair-server-route.md#the-pairserver-route-152),
-  called from unpair alone since [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141) retired
-  the pair-another-server call site (adding a server ends no pairing, so a still-paired server's read
-  marks have nothing to lose). Served by `storage.write(new Map())`, not a dedicated port
-  `clear()` (#776 declined that method).
-  **Per-server scoped clear landed in [#1197](https://github.com/pyrycode/pyrycode-desktop/issues/1197)** —
-  `clearLastReadFor(conversationIds)`, wired as the new `clearLastReadFor` member of `ClearServerScopedStateDeps`
-  and bound in `serverScopedClearDeps` (`src/renderer/src/clearServerScopedState.ts`) through
-  `conversationLastReadStore.getState().clearLastReadFor`. Called unconditionally as the last statement of
-  `clearServerScopedState`, after its per-departed-conversation `exitActiveConversation` loop — see
-  [Unpair channel § The two renderer callers](unpair-channel.md#the-two-renderer-callers) and [Paired
-  shell routing](paired-shell-routing.md) for both call sites (the composer's Re-pair control and the
-  Settings row's per-server Unpair).
+- **Publication hook:** `conversationLastReadBridge.ts` exports `useConversationLastRead()`, which
+  calls only `useReadPublication()` with its existing paired-shell mount and teardown lifetime.
+  It owns no count-stamp helper or legacy store subscription.
+- **Whole-app clear:** `clearAllLastRead()` is last in `clearPairingScopedState`, called only when
+  the pairing ends. Pairing another host and cancelling preserve held marks. It persists an empty
+  map through `storage.write`, without a separate port `clear()` method.
+- **Per-server clear:** `clearLastReadFor(ids)` is last in `clearServerScopedState`, after sampling
+  exclusive departed IDs, removing the host's list slot and exiting any matching active chat.
+  A shared ID claimed by another host survives. Both clears remain last because a storage failure
+  must not interrupt other in-memory cleanup; the old subscription re-mint hazard is retired.
 
 ## Testing
 
-Keep connection, replay and durable IDs distinct in fixtures: equal IDs would let a mistaken identity
-source pass. `visible-tail-read.spec.ts` uses connection `900` and replay `700` while asserting actual
-outbound durable targets. Its ID-less replay case checks both no read command and no additional
-history request; the existing opening request's independently admitted page then supplies target `30`
-without duplicating the bubble. `history-on-open.spec.ts` separately pins ordinary newest-page demand
-from #1815. Publisher tests cover zero, retained/folded contributions and ID-less changes; last-read
-bridge/store tests pin daemon-backed stamp suppression and legacy count persistence/clears.
+Navigation/cleanup tests adapt their existing real/spy factories and retain negative assertions
+against seeded legacy stores. Tests exclusive to count stamping and its removed subscription are
+deleted. Standalone count-store persistence and clear tests remain. Mounted authoritative
+publication is covered by both committed-visible-read variants in `thread-items.spec.ts`; all
+12 cases and all 15 `thread-activation.spec.ts` cases executed and passed in the
+[counted Linux #2028 gate](thread-runtime.md#navigation-retirement-validation): 432 executed,
+0 failed, 10 skipped overall. The publication hook's presence matters: deleting the wrapper would
+silently remove the retained publisher along with the retired subscription.
+
+Historical legacy publication tests kept connection, replay and durable IDs distinct so a mistaken
+identity source could not pass accidentally. The following evidence describes those earlier tests,
+not the current production content route or proof that disabled cases still execute.
 
 The [#1844 verifier confirmation](https://github.com/pyrycode/pyrycode-desktop/pull/1884#issuecomment-6050590586)
 at `ca1529d7` on 2026-10-08 records 9,587 unit tests executed/passed, 0 failed, 3 skipped, and
@@ -279,34 +248,12 @@ is claimed; the skips supply no acceptance evidence.
   conversations since the last pairing), and the keyspace is bounded by the operator's own opening of
   conversations rather than by anything the daemon can mint. No bound, no prune-on-load, no LRU. #779's
   whole-app pairing-boundary clear and #1197's per-server scoped clear are the only floors.
-- **A legacy teardown clear can persist a spurious `0` over a true mark on conversation delete/archive — reachable,
-  not fixed. Resolved for both boundaries the pairing can end or narrow at: the whole-app one by #779, the
-  per-server one by #1197.** Both `clearPairingScopedState` and `exitActiveConversation` clear
-  `conversationTimelineStore` one line before they clear `activeConversationStore` (code review, PR #792),
-  and `clearServerScopedState`'s per-departed-conversation loop clears one `conversationTimelineStore` slice
-  per iteration. #777's listener is subscribed to that store for as long as `PairedShell` is mounted, so it
-  fires mid-teardown (or mid-loop), still sees the torn-down conversation as "open," finds its timeline slice
-  already gone, and records `0` — persisted, since this is written through the same `recordLastRead` path
-  #776 wraps, and on the per-server path the loop notifies **once per departed conversation**, so a re-mint
-  is possible on every iteration, not just once. **`clearPairingScopedState` and `clearServerScopedState`
-  both absorb this, the same way**: #779 placed `clearAllLastRead()` last in the whole-app helper's body,
-  and #1197 placed `clearLastReadFor(departed)` last in the per-server helper's body — *after* its loop, not
-  inside it, since a drop placed inside would be re-minted by a later iteration — so either teardown's
-  spurious `0`s are wiped, in memory and on disk, before the helper returns. Both orderings are pinned by a
-  dedicated regression test (`invocationCallOrder`, not an end-state assertion — the re-stamp lives in a
-  React effect and no test in this repo runs that subscription, so only call order can catch a regression
-  here). See [Paired shell § The last-read
-  stamp](paired-shell-conversation-exits.md#the-last-read-stamp-conversationlastreadbridgets-777) for the
-  whole-app ordering argument and [Unpair channel § The two renderer
-  callers](unpair-channel.md#the-two-renderer-callers) for the per-server one.
-  **`exitActiveConversation` (deleting or archiving the open conversation) still has no such floor** — that
-  helper clears only the one conversation's own state, never the whole map, so archiving or deleting the
-  conversation you have 20 rows read into still drops its mark to `0` on the way out, persisted. No AC is
-  violated (the mark is still that conversation's honest count at that instant, and the conversation itself
-  is gone or filed away, so nothing reads the stale `0` back as meaningful) — recorded here so a future
-  ticket narrowing this further knows which half is already closed.
+- **Teardown cannot re-stamp `0`.** #2028 removed both navigation's timeline clears and the
+  count subscription that sampled a missing slice during teardown. The old delete/archive re-mint
+  edge is closed by retirement. Pairing and per-server local-mark cleanup still persist last to
+  contain storage exceptions.
 - **`recordLastRead` is named to avoid a collision, not by convention.** [Conversation timeline
-  holder](conversation-timeline-holder.md) already exports a nullary `markViewed`, which means something
+  holder](conversation-timeline-holder.md) already exposes `markViewed(conversationId)`, which means something
   unrelated (eviction ranking). `record…` says a value is being written; `mark…` in this directory says it
   is not — code review confirmed this as the right call rather than reopening it.
 
@@ -332,16 +279,11 @@ is claimed; the skips supply no acceptance evidence.
   — why the decode's reject path must stay silent rather than logging the untrusted blob.
 - [#775 codebase notes](../codebase/775.md) — the holder's implementation summary, code review, and
   lessons learned.
-- [Paired shell](paired-shell-conversation-exits.md#the-last-read-stamp-conversationlastreadbridgets-777) — #777's write
-  path (`conversationLastReadBridge.ts`), its two restore points, and the teardown-ordering edge case
-  above.
-- [Paired shell § the `pairServer` route](paired-shell-pair-server-route.md#the-pairserver-route-152) — #779's
-  `clearAllLastRead`, wired as `clearPairingScopedState`'s seventh and last effect, and the re-mint
-  ordering constraint that placement closes.
-- [Unpair channel § The two renderer callers](unpair-channel.md#the-two-renderer-callers) — #1197's
-  `clearLastReadFor`, wired as `clearServerScopedState`'s last effect (after its departed-conversation
-  loop), the exclusive-id-set filter it rides rather than takes a fresh read of, and both call sites
-  (composer Re-pair, Settings-row Unpair).
+- [Paired shell](paired-shell-conversation-exits.md#the-last-read-stamp-conversationlastreadbridgets-777)
+  — the retired stamp and retained authoritative publication mount.
+- [Pairing cleanup](paired-shell-pair-server-route.md#activation-and-pairing-cleanup) and
+  [per-server cleanup](unpair-channel.md#the-three-renderer-callers) — retained local mark removal,
+  exclusive-ID filtering and persistence-last ordering.
 - [Conversation list store § The per-server drop](conversation-list-store.md#the-per-server-drop-and-its-stricter-sibling-selector-since-1196)
   — `selectExclusiveConversationIdsFor`, the #1196 sibling filter `clearLastReadFor`'s call site reuses
   rather than duplicates.

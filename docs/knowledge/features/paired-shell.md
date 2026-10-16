@@ -28,28 +28,26 @@ Each section below keeps the heading it had here, so an existing `#anchor` still
 
 - [Routing and layout](paired-shell-routing.md) — The route model and its transition, the pure view and its container, the two-pane desktop layout, the seams at either end, and the data flow between them.
 - [The pair server route](paired-shell-pair-server-route.md) — The pairServer route: how the shell reaches the pairing surface and what it does while it is there.
-- [Conversation exits and stamps](paired-shell-conversation-exits.md) — What happens to the open thread when its conversation is deleted or archived, the last-read and view stamps written as the user moves between conversations, and (#1166) the run-configuration and model-list requests fired on every activation.
+- [Conversation exits and stamps](paired-shell-conversation-exits.md) — What happens to the open thread when its conversation is deleted or archived, the retirement of legacy last-read/view stamps, and (#1166) the run-configuration and model-list requests fired on every activation.
 
 ## What it does
 
-Conversation activation requests configuration and the [context reading](reported-context-store.md#how-it-works)
-only for a connected owner, including on same-chat reopening. A retained controller
-separately requests one newest history page per owned connected opening/reconnect
-after saved-read and outstanding-request settlement. Offline opening waits for its
-first connection; departure/disconnect invalidates delayed demand. Further
-[backwards pages](chat-history.md#received-state-admission-and-ownership)
-require trusted upward thread input; opening never fills the missing range.
+Conversation activation refreshes configuration for a connected owner on every opening, while
+same-ID reopening preserves held session/configuration/prompt state. Creation and sidebar opening
+use the host-qualified [thread runtime](thread-runtime.md) for protected `daemon-items` restoration
+and content recovery; clicked/creating coordinates survive active metadata refresh.
 
-The container mounts `createSavedListRestorer` for its lifetime, independently of
-route changes. Saved identities can populate the sidebar without a connected host;
-restoration never activates a conversation or dispatches navigation. Teardown
-cancels pending admission handles. See [saved-list restoration and stale-read
-admission](chat-history.md#received-state-admission-and-ownership).
+\#2028 retired navigation's flat/keyed timeline reset, creation, view marking and clearing, plus local
+row-count read stamping/subscription. #2029 separately retired renderer legacy saved IO; standalone
+legacy producers and their tests remain until #2030. `useConversationLastRead` stays mounted solely
+for authoritative `useReadPublication`; navigation grants no read evidence. See
+[activation and exits](paired-shell-conversation-exits.md) and
+[read publication](conversation-shell.md#authoritative-thread-read-publication).
 
-Opening a host-stamped sidebar row invokes saved-timeline restoration regardless of
-connection status. Explicit clicked coordinates survive active metadata refresh;
-reconnect preserves restored rows and their recording ownership. See
-[timeline admission and cancellation](chat-history.md#received-state-admission-and-ownership).
+The container still mounts `createSavedListRestorer` for its lifetime, independently of route
+changes. Saved identities can populate the sidebar without a connected host; restoration never
+activates a conversation or dispatches navigation. Teardown cancels pending admission handles.
+See [saved-list restoration](chat-history.md#received-state-admission-and-ownership).
 
 - The paired region now enters at a **list** view — the [Channel List home screen](channel-list.md)
   (two-tier Channels/Chats, [#141](../codebase/141.md); the non-promoted tier read "Recent
@@ -111,9 +109,10 @@ reconnect preserves restored rows and their recording ownership. See
   Unlike the three `open` triggers above, this reuses the existing absolute `back` transition — no new
   `PairedNav` arm, no `PairedRoute` member — via `useConversationDeletedExit` mounted beside
   `useConversationCreatedNav`. The callback now carries the main-stamped origin into
-  `confirmConversationDeleted`: exact retained-slice ownership authorizes removal, while only an active
-  match invokes the exit. A delayed confirmation after opening another conversation clears only the
-  deleted slice. See [confirmed deletion](paired-shell-conversation-deletion.md).
+  `confirmConversationDeleted`: exact owning-host admission and an active ID match authorize exit.
+  A delayed confirmation after opening another conversation leaves its state and the legacy holder
+  untouched. Authoritative runtime removal has its own boundary. See
+  [confirmed deletion](paired-shell-conversation-deletion.md).
 - [#653](../codebase/653.md) added a **fifth** `back` trigger, the archive sibling of #652's delete
   trigger: the discussion currently open in the thread returning to `list` once the daemon's
   authoritative conversation list shows it archived. Same reused `back` transition, same
@@ -196,37 +195,11 @@ src/renderer/src/
   (`renderToStaticMarkup` only), so its nav coverage is limited to `nextPairedRoute` reducer assertions.
   The branch logic (clear-iff-id-changed, clear-then-set ordering) is unit-tested directly on the pure
   helper in `activateConversation.test.ts` — see [#530 codebase notes](../codebase/530.md).
-- **`PairedShell.test.tsx` cannot exercise `clearPairingScopedState`'s wiring either, for the same
-  reason** — its coverage is `nextPairedRoute` reducer assertions and the `:114` SSR test guarding the
-  new module-scope import, not a driven `onUnpaired`/`onPairServerPaired` call. The fourteen-store clear
-  logic (four since #531, joined by `clearAnnouncedModel` at #593, `clearAllTimelines` at
-  [#757](../codebase/757.md), `clearAllSlashCommandLists` at
-  [#955](https://github.com/pyrycode/pyrycode-desktop/issues/955), `clearAllModelLists` at
-  [#977](https://github.com/pyrycode/pyrycode-desktop/issues/977), `clearAllLastRead` at
-  [#779](conversation-last-read-store.md), `clearAllConversations` at
-  [#1086](conversation-list-store.md#edge-cases-and-limitations) (§ AC5), `clearAllBacklogs` at
-  [#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138), `clearAllRosters` at
-  [#1139](https://github.com/pyrycode/pyrycode-desktop/issues/1139), `modalStore`'s `dispatch` at
-  [#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140), and `clearAllActivity` at
-  [#1145](https://github.com/pyrycode/pyrycode-desktop/issues/1145)) is unit-tested directly on the
-  pure helper in `clearPairingScopedState.test.ts`, including dedicated regression cases pinning
-  #779's and #977's ordering constraints (`clearAllLastRead` after `clearAllTimelines`, after
-  `clearAllSlashCommandLists` since #955 and after `clearAllModelLists` since #977, each pinned by
-  `mock.invocationCallOrder` rather than trusted from a comment). The helper itself still has exactly
-  one caller as of [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141) — unpair, via
-  `applyPairingChange`'s `unpaired` arm — but its own test suite is unaffected, since it drives
-  `clearPairingScopedState` directly rather than through a call site.
-  The residual this bullet used to name — the "clear runs before the route flips" ordering had no
-  executable assertion after [#531](../codebase/531.md) removed the one `unpairAction.test.ts` case that
-  pinned it — is now closed, and not the way this bullet predicted. No jsdom harness landed; instead
-  [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141) lifted the three pairing-change
-  callbacks out of `PairedShell`'s JSX into `applyPairingChange`
-  (`src/renderer/src/applyPairingChange.ts`), a pure, React-free helper in the
-  `activateConversation`/`exitActiveConversation`/`unpairAction` shape, and
-  `applyPairingChange.test.ts` pins the unpair arm's clear-then-navigate order with
-  `mock.invocationCallOrder` directly on the helper. The same lift is what makes AC1/AC3's negatives —
-  "pairing another server clears nothing," "cancelling clears nothing" — assertable at all: before
-  #1141 those were the absence of a call inside an inline arrow no test in this repo could invoke.
+- **Static renders cannot exercise pairing cleanup wiring.** Pure helper tests drive the existing
+  real/spy dependency factories, checking retained cleanup, idempotence, legacy-store preservation
+  and `clearAllLastRead` after all in-memory effects. `applyPairingChange.test.ts` pins unpair's
+  clear-before-navigation order and the no-clear pairing/cancel arms. Mounted deletion/unpair and
+  authoritative read publication have [counted coverage](thread-runtime.md#navigation-retirement-validation).
 
 ## Related
 
@@ -244,7 +217,7 @@ src/renderer/src/
 - [App icon attention badge](app-badge.md) / [#1592](https://github.com/pyrycode/pyrycode-desktop/issues/1592) — `useAppBadge`, mounted beside `usePushNotify`; not a nav trigger, but the same unmount-on-unpair teardown is what clears the badge when the last host is unpaired
 - [Workspace chip](conversation-shell-workspace-chip-and-picker.md#workspace-chip-278) / [#278](../codebase/278.md) — the same `conversationCreated` payload the FAB's nav callback carries, now also snapshotted into `activeConversationStore` for the empty-thread workspace chip
 - [Conversation shell](conversation-shell.md) / [#1](../codebase/1.md) — the thread view `PairedShellView` renders on `'thread'`, gaining `onBack` here
-- [Session store](session-store.md) — its `reset` action is one of the fifteen clears from here ([#531](../codebase/531.md), widened by [#593](../codebase/593.md), [#757](../codebase/757.md), [#779](conversation-last-read-store.md), [#955](https://github.com/pyrycode/pyrycode-desktop/issues/955), [#977](https://github.com/pyrycode/pyrycode-desktop/issues/977), [#1086](conversation-list-store.md), [#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138), [#1139](https://github.com/pyrycode/pyrycode-desktop/issues/1139), [#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140), [#1145](https://github.com/pyrycode/pyrycode-desktop/issues/1145) and [#1320](https://github.com/pyrycode/pyrycode-desktop/issues/1320)), run from unpair alone since [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141) retired the pair-another-server caller; the store-backed messages otherwise survive plain navigation untouched
+- [Session store](session-store.md) — its `reset` action remains in the pairing cleanup set here ([#531](../codebase/531.md), widened by [#593](../codebase/593.md), [#757](../codebase/757.md), [#779](conversation-last-read-store.md), [#955](https://github.com/pyrycode/pyrycode-desktop/issues/955), [#977](https://github.com/pyrycode/pyrycode-desktop/issues/977), [#1086](conversation-list-store.md), [#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138), [#1139](https://github.com/pyrycode/pyrycode-desktop/issues/1139), [#1140](https://github.com/pyrycode/pyrycode-desktop/issues/1140), [#1145](https://github.com/pyrycode/pyrycode-desktop/issues/1145) and [#1320](https://github.com/pyrycode/pyrycode-desktop/issues/1320)), run from unpair alone since [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141) retired the pair-another-server caller; the store-backed messages otherwise survive plain navigation untouched
 - [Announced-model store](announced-model-store.md) / [#593](../codebase/593.md) — `clearAnnouncedModel` is the fifth member of `clearPairingDeps`, added after the store shipped dormant at #588 and the deferred clear it flagged
 - [Slash-command-list store](slash-command-list-store.md) / [#955](https://github.com/pyrycode/pyrycode-desktop/issues/955) — `clearAllSlashCommandLists` is the eighth store added to `clearPairingDeps`, after the store shipped dormant at #954 following the same #588 → #593 precedent as the announced model; nullary and whole-map, reached only through this helper and never from a bridge arm or either call site, and sequenced to run before `clearAllLastRead` despite arriving after it
 - [Model-list store](model-list-store.md) / [#977](https://github.com/pyrycode/pyrycode-desktop/issues/977) — `clearAllModelLists` is the ninth store added to `clearPairingDeps`, after the store shipped dormant at #974 repeating the #588 → #593 / #954 → #955 sequence a third time; nullary and whole-map like its slash-command twin, and sharper because the rows are claude-authored — a clear taking a conversation id would let a daemon-supplied id steer which machine's model identities survive the boundary. Reached only through this helper, never a bridge arm or either call site; sequenced to run before `clearAllLastRead` despite arriving after it
@@ -253,20 +226,13 @@ src/renderer/src/
 - [Conversation activity store](conversation-activity-store.md) / [#1145](https://github.com/pyrycode/pyrycode-desktop/issues/1145) — `clearAllActivity` is the fourteenth store added to `clearPairingDeps`, and the fifth name to move off the header's own self-healing list by the same argument (after queue, roster and modal): it never appeared in this set at all, on the ground that the `connected` edge's whole-map clear was the sole enforcement of the pairing boundary for it. Scoping that edge to the reconnecting server's own listed conversations (#1145) retired the self-heal identically to its three siblings — a new pairing's first `connected` resolves an empty conversation list, matches no held key, and hands the state back unchanged. Nullary and whole-map, placed beside `dispatchModal` so the four cross-server siblings stay adjacent; sequenced to run before `clearAllLastRead` despite arriving after it
 - [Usage-limit store](usage-limit-store.md) / [#1320](https://github.com/pyrycode/pyrycode-desktop/issues/1320) — `clearAllUsageLimits` is the fifteenth store added to `clearPairingDeps`, and arrived by the original route rather than by a removed self-heal: it was pairing-scoped from the day it shipped, and its clear landed here alongside the store rather than in a later ticket, unlike every store above it back through `announcedModelStore`. Nullary and whole-map like its neighbours; latches because no re-assertion mechanism exists at all for this reading, and the store's own two exits — the read-time expiry and the daemon-driven `allowed` clear — never reach a departed pairing's residue (this used to be phrased as "the roster's reason"; since [#569](https://github.com/pyrycode/pyrycode-desktop/issues/569) gave `backgroundTaskRosterStore` a reconnect-scoped re-assertion path, the borrowed comparison no longer holds, though this store's own latch is unchanged); sequenced to run before `clearAllLastRead` despite arriving after it
 - [Reported-context store](reported-context-store.md) / [#1420](https://github.com/pyrycode/pyrycode-desktop/issues/1420) — `clearAllReportedContext` is the newest store added to `clearPairingDeps`, arriving by the same original route as its neighbour `usageLimitStore`: pairing-scoped from the day it shipped. Nullary and whole-map; latches for `usageLimitStore`'s reason with its one mitigation removed — this arm has no benign value to clear on at all, so the held reading has no exit but this one. The docblock's stated ordinal was dropped rather than corrected here — it had already rotted by one (`clearSessionFacts` was in the interface, missing from the list) — and the enumeration was completed instead of renumbered, so a future member cannot rot it a third time. Sequenced to run before `clearAllLastRead` despite arriving after it
-- [Conversation timeline holder](conversation-timeline-holder.md) / [#757](../codebase/757.md) —
-  `clearAllTimelines` (the sixth member of `clearPairingDeps`) and `clearTimelineFor` (the fourth clear in
-  `exitConversationDeps`), the keyed holder's first clears, both wired here immediately after each
-  helper's pre-existing flat-store `reset`
-- [Conversation last-read store](conversation-last-read-store.md) / [#779](https://github.com/pyrycode/pyrycode-desktop/pull/798) —
-  `clearAllLastRead` (the seventh store added, and always the last to execute), the only member that
-  reaches `localStorage` and the only one with an ordering constraint (after `clearAllTimelines` and,
-  since #955, after `clearAllSlashCommandLists`, and since #977 after `clearAllModelLists` too — all
-  strictly before `clearAllLastRead` runs, last overall);
-  see [§ The pairServer route](paired-shell-pair-server-route.md#the-pairserver-route-152) and [§ The last-read
-  stamp](paired-shell-conversation-exits.md#the-last-read-stamp-conversationlastreadbridgets-777) above
+- [Conversation timeline holder](conversation-timeline-holder.md) — retained legacy producer APIs;
+  navigation no longer creates, stamps or clears its slices.
+- [Conversation last-read store](conversation-last-read-store.md) — retained local mark persistence
+  and cleanup. `clearAllLastRead` remains last so storage exceptions cannot interrupt other clears.
 - [Unpair channel](unpair-channel.md) / [#173](../codebase/173.md) — the IPC boundary `onUnpaired` ultimately calls; [#531](../codebase/531.md) moved the session reset that used to run inside its first caller (`runUnpair`) to this file; [#1162](https://github.com/pyrycode/pyrycode-desktop/issues/1162) gave `onUnpaired` a second caller — the Settings screen's per-server Unpair action, reaching this same callback only once no paired record remains; [#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163) put `runUnpair` on the identical condition, so both callers now reach `onUnpaired` only once nothing is left paired, and deleted the whole-collection channel the original unconditional flip used
 - [Settings screen](settings-screen.md) / [#1162](https://github.com/pyrycode/pyrycode-desktop/issues/1162) — the `settings` case's third prop, `onUnpaired`, reused rather than given its own callback; see [Routing and layout § the pure view + container](paired-shell-routing.md#the-pure-view--container-pairedshelltsx) above
-- [Thread timeline (conversation model)](thread-timeline.md) / [#530](../codebase/530.md) / [#531](../codebase/531.md) — `timelineStore`'s `reset` arm ([#528](../codebase/528.md)) gets its first production dispatch site via `activateConversation` and its second via `clearPairingScopedState`
+- [Thread timeline (conversation model)](thread-timeline.md) / [#530](../codebase/530.md) / [#531](../codebase/531.md) — retained legacy model; #2028 removed navigation's flat-store reset callers
 - [Session-id store](session-id-store.md) / [#530](../codebase/530.md) / [#531](../codebase/531.md) — `clearSessionId` ([#529](../codebase/529.md)) gets its first production caller via `activateConversation` and its second via `clearPairingScopedState`
 - [Conversation delete (transport)](conversation-delete.md) / [#652](../codebase/652.md) — the
   `conversationDeleted` event this file's `conversationDeletedBridge` is a second, independent
@@ -280,44 +246,29 @@ src/renderer/src/
   — adds the `archive` route (chrome-only scaffold; tab bodies are #348's mount point).
 - [#530 codebase notes](../codebase/530.md) · Spec: `docs/specs/architecture/530-clear-per-conversation-context-on-switch.md`
   — replaces both carrying nav sites' direct `setActiveConversation` with `activateConversation`, clearing
-  the timeline and session id on an actual conversation switch.
+  per-conversation state on an actual switch; #2028 removed its legacy timeline mutation.
 - [#531 codebase notes](../codebase/531.md) · Spec: `docs/specs/architecture/531-clear-pairing-scoped-state.md`
   — wraps `onUnpaired`/`onPairServerPaired` in `clearPairingScopedState`, the unconditional four-store
   clear for when the pairing itself ends rather than the active conversation merely changing.
 - [#593 codebase notes](../codebase/593.md) · Spec: `docs/specs/architecture/593-announced-model-pairing-clear.md`
   — widens `clearPairingScopedState` to a fifth store, `announcedModelStore`, closing the deferral
   #588 flagged and #560 made observable.
-- [Conversation last-read store](conversation-last-read-store.md) / #777 — the store this shell's
-  `activateDeps.stampLastRead` and `useConversationLastRead()` write; source of the "open conversation's
-  mark equals its own held item count" invariant and its two restore points.
-  Spec: `docs/specs/architecture/777-open-conversation-last-read-write-path.md`.
-- [Conversation timeline holder](conversation-timeline-holder.md) /
-  [#786](https://github.com/pyrycode/pyrycode-desktop/issues/786) — the store this shell's
-  `activateDeps.markViewed` writes: the eviction-ranking write path that arms the ten-slice retained-
-  timelines bound. See [§ The view stamp](paired-shell-conversation-exits.md#the-view-stamp-activateconversationts-786) above for the
-  ordering rationale and the cross-wire hazard with `stampLastRead`.
+- [Conversation last-read bridge](paired-shell-conversation-exits.md#the-last-read-stamp-conversationlastreadbridgets-777)
+  — authoritative publication remains mounted after removal of local count stamping in #2028.
 - [#652 codebase notes](../codebase/652.md) · Spec:
   `docs/specs/architecture/652-delete-open-conversation-returns-to-list.md` — adds
   `exitActiveConversation` + `conversationDeletedBridge.ts`, a third id-gated clear-and-move helper
   beside `activateConversation` and `clearPairingScopedState`, driven by the daemon's `conversationDeleted`
   confirmation rather than a click.
-- [#757 codebase notes](../codebase/757.md) · Spec: `docs/specs/architecture/757-timeline-clears.md`
-  — widens `clearPairingScopedState` to a sixth store and `exitActiveConversation` to a fourth clear,
-  both wired to the [conversation timeline holder](conversation-timeline-holder.md)'s first two write
-  paths that remove rather than add.
-- [#779 PR #798](https://github.com/pyrycode/pyrycode-desktop/pull/798) · Spec:
-  `docs/specs/architecture/779-clear-last-read-marks-at-pairing-end.md` — widens `clearPairingScopedState`
-  to a seventh store, [`conversationLastReadStore`](conversation-last-read-store.md)'s
-  `clearAllLastRead`, the pairing-boundary counterweight to #776 persisting the marks, and always the
-  last to execute; the ordering
-  constraint (after `clearAllTimelines`, last overall) resolves half of #792's re-mint follow-up — see
-  [§ The last-read stamp](paired-shell-conversation-exits.md#the-last-read-stamp-conversationlastreadbridgets-777) above for the half that
-  stays open (`exitActiveConversation`).
+- [#757 codebase notes](../codebase/757.md) — historical legacy clear wiring, retired in #2028.
+- [#779 PR #798](https://github.com/pyrycode/pyrycode-desktop/pull/798) — local mark cleanup remains
+  last; the subscription-driven re-mint hazard is retired, while storage exceptions still require
+  in-memory cleanup to finish first.
 - [#955](https://github.com/pyrycode/pyrycode-desktop/issues/955) · Spec:
   `docs/specs/architecture/955-drop-slash-command-list-on-pairing-end.md` — widens
   `clearPairingScopedState` to an eighth store, [`slashCommandListStore`](slash-command-list-store.md)'s
   `clearAllSlashCommandLists`, closing the deferral #954 flagged and repeating the #588 → #593 precedent
-  verb for verb; nullary and whole-map like `clearAllTimelines`, and — despite arriving after
+  verb for verb; nullary and whole-map, and — despite arriving after
   `clearAllLastRead` — sequenced strictly before it, since `clearAllLastRead`'s "last overall" position
   is an execution constraint, not an arrival order.
 - [#977](https://github.com/pyrycode/pyrycode-desktop/issues/977) · Spec:
@@ -358,7 +309,7 @@ src/renderer/src/
   path (the daemon's connect-time reconcile re-sends still-outstanding prompts) — what it lacks, exactly
   like the roster, is one that reaches a *departed* server's prompts, since the reconcile re-sends only the
   newly paired server's. A dispatched action rather than a `clearAll*` setter, because `dispatch` is
-  `modalStore`'s only write path (the `dispatchTimeline`/`dispatchSession` shape, not the six nullary
+  `modalStore`'s only write path (the `dispatchSession` shape, not the nullary
   setters); the payload-free property is identical. Sequenced strictly before `clearAllLastRead` for the
   same reason as its siblings. Named the most ACTIONABLE residue in the set rather than the most
   sensitive: a retained permission prompt is a live control carrying a departed daemon's untrusted
@@ -366,7 +317,7 @@ src/renderer/src/
   issued, and `selectHasOutstandingFor` lights the sidebar's input-required dot off the same slice — the
   phantom is visible before anyone clicks it.
 - [Run configuration store](run-config-store.md) / [Model-list store](model-list-store.md) /
-  [#1166](https://github.com/pyrycode/pyrycode-desktop/issues/1166) — `activateDeps` gains a seventh
+  [#1166](https://github.com/pyrycode/pyrycode-desktop/issues/1166) — `activateDeps` gains a configuration-refresh
   member, `requestConversationConfig`, firing `requestRunConfigSnapshot` and the new `requestModelList`
   on every activation so the composer footer is live from the moment a chat opens rather than only after
   a turn ends. See [§ The run-configuration and model-list

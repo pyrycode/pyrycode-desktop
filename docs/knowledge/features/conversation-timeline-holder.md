@@ -1,42 +1,17 @@
 # Conversation timeline holder
 
-The renderer's held copy of **every** conversation's whole timeline — the ordered `items`, `phase`, and
-the transient state a [thread timeline](thread-timeline.md) carries — keyed by `conversationId`
-rather than scoped to whichever conversation is open, so leaving a chat and coming back does not throw
-its thread away. Bounded at ten and evicted least-recently-**viewed**, the one deliberate divergence from
-both of its keyed precedents.
+The retained legacy `conversationTimelineStore`: whole `TimelineState` slices keyed by
+conversation ID, bounded at ten with least-recently-viewed ordering. Its standalone methods and
+producer tests remain for #2030. Production content uses the host/conversation/epoch-scoped
+[daemon item store](thread-item-store.md) through [thread runtime](thread-runtime.md), without
+this holder's ten-slice eviction policy or any legacy presentation fallback.
 
-The [retained daemon item store](thread-item-store.md) is a separate factory scoped
-by host/conversation/epoch, retaining daemon identity, revisions and certified sync
-progress. It does not reconstruct rows or inherit this holder's ten-slice eviction
-policy; the holder remains the chat pane's render source until consumer migration.
-
-Introduced in [#755](../codebase/755.md), split from #675 alongside #751-#754 (the transport arms that
-widened eight `DaemonEvent`s with `conversationId`, all shipped), #756 (the writer), #757 (the clears) and
-\#758 (the reader cutover, shipped). #755 shipped the holder alone — no writer, no reader — the same
-"populated and unread" posture the [conversation activity store](conversation-activity-store.md) shipped
-for #747 before its own writer/reader landed. [#756](../codebase/756.md) gave it its first writer: both of
-the timeline's row-adding writers — the bridge fan-out and the composer's optimistic echo — now fold into
-this holder as well as into the flat store, dual-write (Strangler Fig, ADR 0008). [#757](../codebase/757.md)
-gave it its first clears — the whole map dropped at the pairing boundary, one slice dropped when the
-operator's open conversation is deleted out from under them — wired at the same two edges that already
-reset the flat store. Confirmed deletion now also removes explicitly owned inactive slices; see
-[deletion lifecycle](#confirmed-deletion-lifecycle).
-[#758](https://github.com/pyrycode/pyrycode-desktop/issues/758) gave it its first
-reader: `ConversationScreen` now renders the open conversation's own slice from this holder, so the holder
-is no longer invisible from the operator's side. Not to be confused with the [conversation timeline
-store](conversation-timeline-store.md) (`timelineStore.ts`), the existing **flat**, single-conversation
-store this one runs alongside — that store is still dual-written (the bridge fan-out and the composer's
-echo both still fold into it) but is no longer read by `ConversationScreen`; this one is the independent
-holder that now carries every retained conversation's thread and is the sole render source for the chat
-pane.
-
-[#786](https://github.com/pyrycode/pyrycode-desktop/issues/786) gave `markViewed` — the one write path
-still shipping unwired — its first production caller, at the activation seam (`activateConversation.ts`,
-constructed once in `PairedShell.tsx`; see [Paired shell § The view
-stamp](paired-shell-conversation-exits.md#the-view-stamp-activateconversationts-786)). This is what **arms** the ten-slice
-eviction bound in production: until then every slice was never-viewed and eviction silently degraded to
-first-write order. #758 remains the reader cutover, now depending on this rather than performing it.
+\#2023 removed legacy timeline presentation. #2028 removed navigation's resets, creation,
+`markViewed` and clears; #2029 separately retired renderer saved IO. When captured selected
+coordinates do not match, the shell still reads a slice's explicit owner for confirmed-deletion
+admission, flushing pending legacy folds first.
+Retained producer APIs below describe legacy behavior, not the current pane's content lifecycle.
+Shared `ThreadEvent`, `TimelineState` and presentation declarations remain in place.
 
 ## What it does
 
@@ -93,16 +68,15 @@ exactly the thread the operator stepped away from.
     a foreign-host snapshot leaves the full state unchanged. Missing origins retain compatibility.
     Queue snapshots remain in `queueStore`; see [local settlement](thread-timeline-internals.md#queued-own-echo-settlement).
   - `markViewed(conversationId)` — stamps a conversation as most recently viewed. Already-tail is a
-    same-object no-churn return (the common case: `activateConversation`'s `onOpen` fires on every row
-    click, including a re-click of the already-open row). Present-not-tail moves it. Absent **creates** it
-    at the tail, seeded with `initialTimelineState` — load-bearing, not a convenience: see § The eviction
+    same-object no-churn return. Navigation no longer calls it. Present-not-tail moves it. Absent
+    **creates** it at the tail, seeded with `initialTimelineState` — load-bearing, not a convenience: see § The eviction
     invariant.
-  - `clearAllTimelines()` — [#757](../codebase/757.md)'s pairing-boundary clear. Nullary by design, so
+  - `clearAllTimelines()` — the retained whole-map clear, unwired from pairing navigation in
+    #2028. Nullary by design, so
     "takes no conversation id at all" is a `tsc` guarantee rather than a test. Drops every retained slice;
     returns the state object unchanged when the map is already empty.
-  - `clearTimelineFor(conversationId)` — [#757](../codebase/757.md)'s single-conversation clear, fired
-    by owned confirmed deletion (active or inactive), active archive and explicit lifecycle cleanup.
-    Drops exactly that key,
+  - `clearTimelineFor(conversationId)` — the retained single-key clear. #2028 removed its
+    active-exit, inactive-deletion and per-server navigation callers. Drops exactly that key
     by `delete` rather than by overwriting with an empty slice, so the id reads absent afterwards; every
     other slice stays the same held object. Returns the state object unchanged when the key is already
     absent.
@@ -130,19 +104,9 @@ exactly the thread the operator stepped away from.
   `dispatchFor` (daemon-driven) can only ever insert at the head and never promotes, so the head-insert
   rule holds for the frame fan-out exactly as stated.
 
-  **What is not true, and was before [#786](https://github.com/pyrycode/pyrycode-desktop/issues/786):**
-  that only the operator can move a key to the tail. `markViewed`'s one call site is the activation seam
-  (`activateConversation.ts`, see [Paired shell § The view
-  stamp](paired-shell-conversation-exits.md#the-view-stamp-activateconversationts-786)), and of the three paths that reach it
-  two are the operator's own — a row click and a re-click of the row already open — while the third is the
-  daemon's own `conversationCreated` confirmation, which `useConversationCreatedNav` activates on
-  ungated. The tail is therefore **not** an operator-only region: a compromised paired daemon emitting N
-  `conversationCreated` frames mints N tail entries, each evicting the head, and can displace **every**
-  viewed slice rather than the at-most-one the head-insert rule bounds its own fan-out to. Accepted rather
-  than gated, on the actor: that is the paired daemon inside the Noise session, which on this same path
-  already resets the flat `timelineStore`, clears the session id and re-keys the pane, and already owns
-  the entire content stream. The relay is content-blind and outside the session, so it cannot mint a
-  `conversationCreated` at all.
+  Navigation no longer promotes keys: #2028 removed activation's `markViewed` call and creation's
+  `initializeCreatedTimeline`. A retained method's tail-insert behavior must not be mistaken for
+  production navigation policy. Standalone tests still cover the ordering algorithm until #2030.
 
   Ordering data comes **only** from write and view sequence — never from the id's own value. No sorting,
   comparing, normalizing, lowercasing, trimming or length-checking of keys anywhere; a lexicographic sort
@@ -182,70 +146,42 @@ exactly the thread the operator stepped away from.
   untrusted `conversationId` but assistant message text. [ADR 0007](../decisions/0007-content-free-diagnostics-by-construction.md)'s
   content-free rule keeps both out. A read miss and an eviction are both silent by design, not swallowed
   errors. The holder performs no persistence and never writes conversation content
-  to renderer web storage. The separate [chat-history writer](chat-history.md#received-state-admission-and-ownership)
-  saves display snapshots through main's protected storage with captured host
-  ownership. Clearing or evicting a slice leaves its saved copy and any buffered
-  snapshot intact; live session state remains confined to the holder.
+  to renderer web storage. The legacy saved-snapshot writer was separately retired by #2029;
+  authoritative item persistence belongs to [chat history](chat-history.md). Clearing or evicting
+  a legacy slice does not remove protected saved content.
 
 ### Local timeline admission
 
-`beginLocalTimelineRead` admits validated saved rows through an explicit completion
-handle, not fabricated daemon events. A process-local `localReadOwner` symbol,
-host and loading status reject stale success/failure after live content, successful
-owned page admission (including empty/undrawable/legacy settlement), local sends,
-cancellation, host replacement, clear or eviction. Notice replacement and
-consumption preserve the owner; settlement carries current sidecars and retires the
-owner, preventing both stranded loading and resurrection of a cleared notice.
-Same-host outstanding history and its cursor/purpose survive read start, settlement
-and cancellation; navigation cancels disk ownership, not the correlated page.
-Settled saved presentation survives newest pending/admission/failure so partial
-assistant rows stay quiescent until owned live content supersedes them.
-The holder remains keyed by conversation id; per-slice host evidence and the
-screen's selected-host check prevent equal ids from sharing saved content, including
-while connected. Reconnect and list refresh do not clear the slice or its ownership.
-Receipt-stamped mutations cannot append one host's content to another's restored
-rows. Successful restoration preserves durable identity metadata and coverage
-while initializing saved transient state afresh, preserving any current same-host
-session-error notice and conferring writer ownership without a save. Neither notice
-nor request owner is persisted.
-See [chat-history admission](chat-history.md#received-state-admission-and-ownership)
-for cache reuse and cancellation, and [saved coverage](chat-history.md#snapshot-contract)
-for its distinction from current server history. Evicted saved slices reload on
-opening within the same ten-slot bound; eviction never deletes their disk copies.
+The standalone `beginLocalTimelineRead` API admits validated saved rows through an explicit
+completion handle, not fabricated daemon events. A process-local owner symbol, host and loading
+status reject stale success/failure after accepted live/history content, local sends, cancellation,
+host replacement, clear or eviction. Notice replacement preserves ownership; settlement retires it
+while carrying current sidecars, so a late callback cannot resurrect a cleared notice. Same-host
+history request/cursor state survives local-read cancellation.
 
-Newly created chats use `initializeCreatedTimeline(serverId, conversationId)` after activation.
-Creation establishes an empty live slice owned by its stamped host, replacing any same-ID content
-from another host, with no local read, history request or restoration provenance. `markViewed`
-alone cannot establish that ownership; see the [creation-time loading regression and delayed-list
-coverage](paired-shell-routing.md#the-conversation-switch-remount-bug-and-the-panekey-fix).
+These are retained API guarantees. #2029 removed renderer legacy saved-IO wiring; production
+restoration opens authoritative daemon items through the thread runtime. Saved provenance is not
+network capability, and a legacy slice or pending handle cannot authorize production display.
+Eviction of a legacy slice never deletes protected disk content.
+
+Creation no longer calls `initializeCreatedTimeline`; the retained method can still establish an
+empty host-owned slice for standalone callers/tests. It has no production navigation role.
 
 ### Confirmed deletion lifecycle
 
-The shell's [confirmed-deletion decision](paired-shell-conversation-deletion.md#confirmed-deletion-and-host-authority)
-uses the confirmation's main-stamped host, requiring exact equality with the slice's explicit
-`serverId`. It never infers ownership from the active conversation. Missing/null origin, unknown
-ownership, absent slices and foreign-host collisions grant no removal or active-exit authority.
-The existing single-key clear makes duplicates harmless and preserves exact Map keys, including
-empty, `__proto__` and `constructor` ids, along with survivor references and iteration order.
+[Confirmed deletion](paired-shell-conversation-deletion.md#confirmed-deletion-and-host-authority)
+compares the main-stamped host with the captured selected host when its conversation matches.
+Otherwise it reads the legacy slice's explicit `serverId` after flushing accepted folds. Missing,
+unknown or foreign ownership grants no active-exit authority. A queued
+foreign-host fold may change the owner during that flush, so the getter cannot be replaced by a
+stale snapshot or active-host guess.
 
-An owned deletion of A removes A even after switching to B or with no active chat. B's route,
-selection, flat timeline, session, configuration and pending settings/system-prompt state survive.
-This closes the inactive-deletion retention gap left by the gated active exit; the helper's mismatch
-and no-active no-ops remain correct for navigation. Inactive archive flags, missing list rows,
-requests and rejections do not authorize this permanent-deletion path.
-
-Ownership is read only after `flushTimeline()`: `subscribeTimeline` and the published store drain
-accepted frame folds at mutation boundaries before the check/removal. A cancelled scheduled frame
-callback cannot replay those drained folds. If a queued foreign-host fold changes the owner, the
-old host's confirmation must be refused rather than clearing that replacement. Removal also retires
-`beginLocalTimelineRead`'s owning slice, so late success, failure or cancellation cannot recreate it.
-These guarantees cover work queued before confirmation; fresh post-deletion traffic is separate.
-
-Clearing this view adds no persistence deletion. The [chat-history writer](chat-history.md) already
-handles confirmed saved-history and daemon-item removal in its existing order. A sidebar row's
-absence alone cannot prove this view was removed: mounted coverage must check its retained selector
-as well as the surviving open chat. See
-[deletion regressions and counted evidence](paired-shell-conversation-deletion.md#regression-coverage).
+\#2028 removed active and inactive legacy clearing. The holder's map and slice references survive
+confirmation; only an owned active ID exits and clears active/session/configuration/prompt state.
+Inactive confirmation leaves another chat's state and route untouched and emits no
+`inactive-cleared` diagnostic. Authoritative item/pending-send/query/read cleanup and protected
+removal remain independent, host-qualified boundaries. A missing sidebar row does not prove those
+resources were removed; use [runtime lifecycle coverage](thread-runtime.md#navigation-retirement-validation).
 
 ### Stopped records and history isolation
 
@@ -265,60 +201,25 @@ boundary and transient reading with their slice.
 - File: `src/renderer/src/store/conversationTimelineStore.ts`.
 - Singleton: `conversationTimelineStore`. Hook: `useConversationTimelineStore(selector)`.
 - Read one conversation: `useConversationTimelineStore(selectTimelineFor(conversationId))`.
-- **Writer, as of [#756](../codebase/756.md):** `useTimelineBridge`'s fan-out calls `dispatchFor` for
-  every one of the eight id-carrying owned arms (`assistantDelta`/`turnEnd`/`turnState`/`toolUse`/
-  `toolResult`/`stallDetected`/`apiRetry`/`compacting` — the whole #675 family), keyed by each event's own
-  `conversationId`, never the open conversation's; and the composer's optimistic echo
-  (`composerSend.ts`) is wired through Composer to `dispatchLocalEcho`, keyed by the
-  resolved send host and conversation. Both writers also
-  keep writing the flat `timelineStore` unchanged (dual-write). **`markViewed` gained its first caller in
-  [#786](https://github.com/pyrycode/pyrycode-desktop/issues/786)** — wired at the activation seam — so
-  eviction ordering is now armed in production rather than degrading to first-write order; see § Edge
-  cases. **`markLocalSendQueued` gained its first and only caller in
-  [#1725](https://github.com/pyrycode/pyrycode-desktop/issues/1725)** — `QueueData`'s existing
-  `queue_state` subscription (see [Queue store](queue-store.md#the-data-path-srcrenderersrcstorequeuebridgets)),
-  no new subscription. The flat `timelineStore` is not dual-written here: `queue_state` has never
-  reached `reduceTimeline`, and this write targets the keyed holder's local indicator and echo facts.
-- **Reader, as of [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758):** `ConversationScreen`
-  binds `selectTimelineFor(openConversationId)` through a `useMemo`-stable selector factory
-  (`selectOpenTimelineFor`, exported from `ConversationScreen.tsx` for its own unit tests), keyed off
-  `activeConversationStore`'s id. See [Conversation shell § The open-conversation reader
-  cutover](conversation-shell-actions-menu-and-reader-cutover.md#the-open-conversation-reader-cutover-758).
-- **Clears, as of [#757](../codebase/757.md):** `clearAllTimelines()` — nullary, drops every retained
-  slice — is wired into `clearPairingScopedState`, the shared helper the unpair path calls (pairing
-  another server stopped calling it at [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141)
-  — it adds a server rather than ending a pairing). `clearTimelineFor(conversationId)` — drops exactly one slice, every
-  other conversation's held object untouched — is wired into `exitActiveConversation`, fired when the
-  conversation on screen was deleted or archived out from under the operator. Owned inactive deletion
-  calls that same single-key clear independently through `confirmConversationDeleted`; it does not reset
-  the flat store or navigate. The active-exit and pairing clears sit immediately after
-  each helper's pre-existing flat `dispatchTimeline({ type: 'reset' })` call, the same dual-write position
-  #756 established for the two writers. Both **delete** rather than overwrite with an empty slice, so a
-  cleared id reads absent through `selectTimelineFor`, not present-and-empty; both return the state object
-  unchanged on a no-op (already-empty map, already-absent key), which is what keeps
-  `clearPairingScopedState`'s idempotence claim true. `clearSessionErrorsForHost(serverId)`
-  runs on the main-stamped `connected` edge and clears only that host's held notices,
-  including off-screen slices, preserving read ownership, rows and unrelated slice references.
-  Reconnect never drops the timelines; growth between handshakes remains bounded by
-  `MAX_RETAINED_TIMELINES`.
-- **Reader cutover, shipped in [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758):**
-  `ConversationScreen`'s seven reads of the flat `timelineStore` (six selectors on the container plus
-  `InterruptControl`'s own `selectPhase`) collapsed into one subscription to this store's
-  `selectTimelineFor(openConversationId)`. `activateConversation`'s flat-store reset still fires on every
-  switch; it now fires into a store nothing renders from. `markViewed` was already wired at the switch
-  seam (`activateConversation.ts`) by
-  [#786](https://github.com/pyrycode/pyrycode-desktop/issues/786), so every open conversation already had
-  a slice by the time #758 needed one to read. `InterruptControl` was later deleted outright by
-  [#678](https://github.com/pyrycode/pyrycode-desktop/issues/678); the seventh read's descendant is now
-  `Composer`'s own `phase` prop, still sourced from this same container subscription.
+- **Retained producers:** the timeline bridge and legacy composer/queue helpers keep their
+  standalone behavior and tests until #2030. Production thread rendering and pending sends use
+  the authoritative runtime; retained APIs must not restore a legacy content route.
+- **Navigation:** activation, creation, exit, archive, confirmed active/inactive deletion and
+  pairing/per-server cleanup neither reset the flat timeline nor create, view-stamp or clear a
+  keyed slice. No timeline dependencies remain in the navigation effect objects. The deletion
+  ownership getter is deliberately retained as a read-side dependency.
+- **Legacy read/restore APIs:** `markViewed`, `initializeCreatedTimeline`, local read handles and
+  clear methods remain standalone APIs. #2029's saved-IO retirement is separate from #2028's
+  navigation cleanup; method availability does not establish a production caller.
+- **Reconnect producer behavior:** `clearSessionErrorsForHost(serverId)` clears only that host's
+  legacy notices and retains rows, read ownership and unrelated slice references. The retained
+  producer's bound remains `MAX_RETAINED_TIMELINES`.
 
 ## Edge cases and limitations
 
-- **History backfills rows only.** Reopening an evicted conversation restores its
-  saved slice then requests one newest page while connected. Further
-  [upward user demand](chat-history.md#received-state-admission-and-ownership)
-  uses held/restored oldest-end coverage; opening never fills the missing range.
-  An old stopped boundary can return; its live recovery reading cannot.
+- **Legacy history backfills rows only.** The retained reducer can restore an old stopped boundary,
+  but cannot revive its live recovery reading. This is standalone producer behavior; production
+  opening/paging is owned by [thread runtime](thread-runtime.md#restore-recovery-and-cleanup).
 - **Bounds slice count, not slice bytes.** `MAX_RETAINED_TIMELINES` caps how many conversations' threads
   are retained at once; it does not cap the size of any one thread. A hostile daemon inside an already-
   paired session can still grow one thread without limit via `assistantDelta` — today's flat
@@ -333,25 +234,17 @@ boundary and transient reading with their slice.
   their own copies of the same three facts as part of the full `TimelineState`. Decided, not pending — the
   two stores' per-fact clear semantics span 28 renderer references and are not being unpicked for this
   chain.
-- **Reachable-in-fact, not just in principle, since [#756](../codebase/756.md).** Before #756, nothing
-  wrote this store, so `MAX_RETAINED_TIMELINES` was a theoretical ceiling. Now that both writers are live,
-  a noisy or hostile daemon can mint a slice per unknown conversation id for the first time. The mitigation
-  — head-insert eviction — holds unmodified: the bound's cost is still capped at "displaces at most one
-  viewed slice," per #755's own hostile-burst coverage; #756 added no new test for it, only the note that
-  the scenario is no longer hypothetical.
-- **Eviction ranking armed in production since [#786](https://github.com/pyrycode/pyrycode-desktop/issues/786); rendered since [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758).**
-  `markViewed` gained its first caller at the activation seam; a slice is now promoted to the tail every
-  time the operator opens (or re-opens) its conversation, so the least-recently-viewed eviction policy
-  actually holds rather than degrading to first-write order. #758 gave the holder its first reader, so a
-  slice surviving eviction is now the operative fact behind AC2 ("switching away and back shows the thread
-  as it now stands"), not just an internal ranking with no visible consequence — including the ranking's
-  widened trust boundary (see § The eviction invariant, above).
+- **Retained producer bounds need standalone coverage.** A burst of unknown IDs inserts at the head,
+  displacing at most one viewed legacy slice before evicting its own never-viewed predecessors.
+  The algorithm remains covered independently of production navigation.
+- **Eviction is a legacy API contract.** Activation no longer promotes a slice at the navigation
+  seam. Do not use the holder's iteration order or ten-slice policy to reason about production
+  daemon item retention or read authority.
 
 ## Related decisions
 
 - [Conversation unread predicate](conversation-unread.md) — #778, a second consumer of `selectTimelineFor`
-  alongside [Conversation shell](conversation-shell-actions-menu-and-reader-cutover.md#the-open-conversation-reader-cutover-758): a
-  framework-free predicate, not a render, reading this store's output against [conversation last-read
+  formerly alongside the legacy pane: a framework-free predicate, reading this store's output against [conversation last-read
   store](conversation-last-read-store.md)'s mark to answer whether a conversation is unread.
 - [Conversation activity store](conversation-activity-store.md) — the direct structural precedent this
   store's shape is copied from rather than re-derived: same `ReadonlyMap` + copy-on-write + selector-
@@ -367,17 +260,12 @@ boundary and transient reading with their slice.
   page documents `timelineStore.ts`/`timelineBridge.ts`, which stayed dual-written but lost
   `ConversationScreen` as a reader when [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758)
   cut the screen over to this store.
-- [Conversation shell](conversation-shell.md) — `ConversationScreen`, this store's first and (as of
-  [#758](https://github.com/pyrycode/pyrycode-desktop/issues/758)) only reader. See
-  [§ The open-conversation reader cutover](conversation-shell-actions-menu-and-reader-cutover.md#the-open-conversation-reader-cutover-758).
+- [Conversation shell](conversation-shell.md) — the authoritative production pane; its legacy
+  keyed-holder render route was retired in #2023.
 - [Composer send](composer-send.md) — the second row-adding writer #756 folded into this holder, beside
   the bridge fan-out documented on [conversation timeline store](conversation-timeline-store.md).
-- [Paired shell](paired-shell.md) — `clearPairingScopedState` and `exitActiveConversation`, the two pure
-  helpers [#757](../codebase/757.md) wires the new clears into, and where they run inside `PairedShell`'s
-  nav flow; `activateConversation`, the pure helper
-  [#786](https://github.com/pyrycode/pyrycode-desktop/issues/786) wires `markViewed` into — see
-  [§ The view stamp](paired-shell-conversation-exits.md#the-view-stamp-activateconversationts-786) for the ordering rationale
-  (outside the id-change gate, after `setActiveConversation`).
+- [Paired shell](paired-shell-conversation-exits.md) — configuration/active-exit behavior after
+  retiring legacy navigation mutations; the deletion ownership getter remains.
 - [ADR 0007 — Content-free diagnostics by construction](../decisions/0007-content-free-diagnostics-by-construction.md).
 - [ADR 0008 — Thread timeline model](../decisions/0008-thread-timeline-model.md).
 - [#755 codebase notes](../codebase/755.md) — the holder's implementation summary, code review, and

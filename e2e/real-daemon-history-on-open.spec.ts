@@ -15,7 +15,7 @@ import { watchPhaseReconnect, readPhaseReconnect } from './fixtures/phaseReconne
 async function mainRead<T>(app: ElectronApplication, read: (electron: typeof import('electron')) => T): Promise<T> {
   let observed: T | typeof NOT_YET_AVAILABLE = NOT_YET_AVAILABLE
   await expect.poll(async () => {
-    observed = await readMainProcess(app, read)
+    observed = await readMainProcess<T>(app, read)
     return observed !== NOT_YET_AVAILABLE
   }, { timeout: 5_000 }).toBe(true)
   return observed as T

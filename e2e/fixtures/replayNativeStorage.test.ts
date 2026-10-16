@@ -103,7 +103,7 @@ describe('replay native storage prerequisite', () => {
 })
 
 describe('synchronous replay inspection', () => {
-  it.each([false, 0, null, undefined, []])('preserves a valid blank result: %j', async value => {
+  it.each([false, 0, null, undefined, []].map(value => [value]))('preserves a valid blank result: %j', async value => {
     const send = vi.fn(async () => ({ result: { value } }))
     expect(await readReplayMainProcess(inspectedApp(send), () => null)).toEqual(value)
     expect(send).toHaveBeenCalledWith('Runtime.evaluate', expect.objectContaining({

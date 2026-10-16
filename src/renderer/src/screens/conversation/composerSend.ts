@@ -220,103 +220,24 @@ export function shouldOfferReconnect(status: ConnectionStatus): boolean {
   )
 }
 
-/**
- * The connection banner's copy (#279) — a single, exported, module-level client-owned string. This is
- * the banner's ENTIRE text; it is never derived from `status`, so AC3 ("no daemon-supplied string is
- * rendered as the banner text") is a structural guarantee, not a convention (the EMPTY_THREAD_COPY /
- * ThinkingIndicator label idiom). It is deliberately lexically distinct from the status row's two strings
- * (`Host connection down!` #797, `Pairing error - Re-pair` #963) — it leads with "Cannot reach" and
- * shares no leading words — so the prominent banner and the row directly above the message box never read
- * as the same string stacked twice (AC5). Until #968 that set also held the three composer captions; they
- * are retired, and this banner is now the ONLY thing said in the `connecting` and `disconnected` arms.
- * A single constant, not a per-arm map: every non-connected arm is a state where pyry is unreachable, so
- * one sentence covers all three honestly (no "restored"/"lost" temporal claim), and a three-way copy split
- * would be three ways to say one fact. It is a client-owned constant, so PO/design may tune the wording;
- * the load-bearing contract is (a) one client-owned constant, (b) lexically distinct from the status row's
- * strings, (c) zero daemon-supplied substring. Apostrophe-free by design
- * — the EMPTY_THREAD_COPY / `Thinking…` convention — so a server-rendered `toContain` assertion matches
- * it verbatim (renderToStaticMarkup escapes `'` → `&#x27;`).
- */
+/** Generic connection explanation, retained when the banner moved into the overlay. */
 export const CONNECTION_BANNER_COPY =
   'Cannot reach pyrybox — your messages will not send until the connection is back.'
 
-/**
- * Whether the prominent, disconnected-only connection banner should show (#279) — the third,
- * independent read of the single `ConnectionStatus` slice, beside `composerAvailability` (the composer's
- * send gate) and `shouldOfferRepair` (the terminal-error escape hatch). True for every
- * non-connected arm (`disconnected` | `connecting` | `error`), false only when `connected` (AC1/AC2).
- *
- * Expressed as `!== 'connected'` rather than an exhaustive switch/assertNever (composerAvailability's
- * shape): unlike that gate — where each arm maps to different copy, so it must enumerate — every
- * non-connected arm maps to the SAME behavior (show the banner), so "show unless connected" is the
- * honest shape. Its fail-mode is correct too: a hypothetical future 5th `ConnectionStatus` arm would
- * default to SHOWING the not-connected band — the safe direction (over-showing a "not connected" banner
- * beats silently hiding it).
- */
+/** Client-owned explanation for the open host; error fields only select fixed copy. */
+export function connectionNotice(status: ConnectionStatus): string | null {
+  if (!shouldShowBanner(status)) return null
+  return status.type === 'error' && status.error.code === 'pairing-rejected'
+    ? 'Your pairing has expired or is no longer valid. Enter a new pairing code to reconnect.'
+    : isDaemonUpdateRequired(status) ? DAEMON_UPDATE_REQUIRED_COPY : CONNECTION_BANNER_COPY
+}
+
+/** Every non-connected state needs the connection explanation. */
 export function shouldShowBanner(status: ConnectionStatus): boolean {
   return status.type !== 'connected'
 }
 
-/**
- * The composer status row's error-chip copy (#797) — the chip's ENTIRE visible text, and one of the three
- * strings this module owns about the single `ConnectionStatus` fact (this, CONNECTION_BANNER_COPY and
- * COMPOSER_REPAIR_BUTTON_COPY; #968 retired the three `composerAvailability` captions that used to sit
- * beside them). It lives here rather than as a module-level constant in ConversationScreen.tsx (where
- * THINKING_COPY / STALL_COPY live), precisely so the lexical distinctness those three owe each other is
- * reviewable in one place.
- *
- * It carries CONNECTION_BANNER_COPY's three-part contract verbatim: (a) one client-owned constant,
- * (b) lexically distinct from the banner copy — it leads with "Host" and shares no leading word with
- * `Cannot reach pyrybox…`; its distinctness from the button that replaces it in the same slot is argued
- * in COMPOSER_REPAIR_BUTTON_COPY's own docblock below — and (c) zero daemon-supplied substring. (c) is
- * structural rather than conventional here too: ComposerErrorChip narrows on `status.type` and never
- * destructures `status.error`, so no ConnectionError field has a rendering path to escape, length-bound
- * or newline-strip. Apostrophe-free by design (renderToStaticMarkup escapes `'` → `&#x27;`, the standing
- * desktop lesson), so a server-rendered `toContain` matches it verbatim. PO/design may tune the wording
- * — the contract is load-bearing, the exact words are not; the exclamation mark is the mock's.
- */
-export const COMPOSER_ERROR_CHIP_COPY = 'Host connection down!'
-
-/**
- * The error chip's assistive-technology marking (#797, AC4) — rendered as visually hidden TEXT inside
- * the chip, ahead of COMPOSER_ERROR_CHIP_COPY, so the chip's error nature does not rest on its colour
- * alone. Hidden text rather than an `aria-label`, because a bare <div>/<span> maps to role="generic",
- * which ARIA 1.2 puts on the name-prohibited list — an aria-label there asserts green in a markup test
- * and is dropped by a real screen reader. See ComposerErrorChip's own comment.
- *
- * THE TRAILING SPACE IS LOAD-BEARING. It is the entire separator between the two runs when a screen
- * reader concatenates them into "Error: Host connection down!"; an editor's trim silently degrades the
- * announcement. composerSend.test.ts pins it. Client-owned and apostrophe-free like its sibling above.
- */
-export const COMPOSER_ERROR_CHIP_PREFIX_COPY = 'Error: '
-
-/**
- * The actionable-error button's label (#963) — the button that takes the chip's slot whenever
- * `shouldOfferRepair` is true, and the third of the strings this module owns about the single
- * `ConnectionStatus` fact. It lives here for COMPOSER_ERROR_CHIP_COPY's stated reason, which transfers
- * verbatim: the lexical distinctness these three owe each other is only reviewable if they sit together.
- *
- * The design's label pattern is "Type of error - Action", and both halves are load-bearing. The type is
- * what lets this occupant drop the chip's visually-hidden `Error: ` prefix — that prefix exists because
- * "Host connection down!" does not say it is an error, and "Pairing error" does. The action is what makes
- * the control read as a button rather than as a status. Since the button carries no `aria-label`, this
- * string is also the accessible name, which is the first time one of these three is both.
- *
- * It carries CONNECTION_BANNER_COPY's three-part contract: (a) one client-owned constant, (b) lexically
- * distinct from the two strings above — it leads with "Pairing" and shares no leading word with
- * `Host connection down!` or `Cannot reach pyrybox…` — and (c) zero daemon-supplied substring. The chip
- * copy is in that set even though the two never render together: they occupy the SAME slot, so a reader
- * who sees one and then the other must not read them as one string. (c) needs stating more carefully here than
- * for the chip: ComposerErrorChip narrows on `status.type` and never touches the error arm at all, while
- * this button's gate (`shouldOfferRepair`) READS `status.error.retryable` and `.code`. Those reads decide
- * a boolean and reach no markup — ConversationScreen's ComposerErrorSlot binds no local to `status.error`
- * — and ConversationScreen.test.tsx pins that with sentinel values on the button's own arm.
- *
- * Apostrophe-free by design (renderToStaticMarkup escapes `'` → `&#x27;`, the standing desktop lesson),
- * and the separator is an ASCII hyphen-minus for the same reason, so a server-rendered `toContain`
- * matches it verbatim. PO/design may tune the wording; the contract is load-bearing, the exact words are
- * not.
- */
+/** Client-owned visible and accessible label for the host repair action pill. */
 export const COMPOSER_REPAIR_BUTTON_COPY = 'Pairing error - Re-pair'
 
 /** Client-owned visible and accessible label; error fields never supply button content. */

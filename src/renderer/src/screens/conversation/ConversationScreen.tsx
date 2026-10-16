@@ -80,14 +80,8 @@ import {
   composerAvailability,
   shouldOfferRepair,
   shouldOfferReconnect,
-  COMPOSER_RECONNECT_BUTTON_COPY,
-  shouldShowBanner,
-  CONNECTION_BANNER_COPY,
-  DAEMON_UPDATE_REQUIRED_COPY,
   isDaemonUpdateRequired,
-  COMPOSER_ERROR_CHIP_COPY,
   COMPOSER_MESSAGE_DELIVERY_COPY,
-  COMPOSER_ERROR_CHIP_PREFIX_COPY,
   COMPOSER_REPAIR_BUTTON_COPY
 } from './composerSend'
 import { ComposerActionsMenu, COMPOSER_ACTIONS } from './ComposerActionsMenu'
@@ -260,7 +254,6 @@ export function ConversationScreen({
     window.pyry.sendDiagnostic({ event: 'message-reply-appended', code: role })
   }, [selectedHost, openConversationId])
   const offline = useSessionStore(s => selectedHost !== null && s.statuses.get(selectedHost)?.type !== 'connected')
-  const localStatus = threadRestoring ? 'loading' : 'loaded'
   const thread = { ...initialTimelineState, ...liveInput.status,
     thinkingTokens: liveInput.thinkingTokens, localSendPending: localSend?.localSendPending ?? null }
   const { items, phase, stalled, apiRetry, compacting, localSendPending, thinkingTokens, resetting } =
@@ -377,19 +370,6 @@ export function ConversationScreen({
           onBackgroundTasks={() => setPanelOpen(true)}
         />
       )}
-      {/* #279: the prominent, disconnected-only connection banner — the top of the thread, above the
-          message list. A third read of the connection status, distinct from the composer's send gate
-          below. #1061 deleted the bare `.conversation__header` row that used to sit between the two,
-          so the banner is now the first thing under the overflow menu's gate; nothing else in this
-          region moved. */}
-      <ConnectionBannerControl />
-      {/* #1447: a read that settled on nothing gets no notice. An empty local copy is the ordinary state
-          of a chat opened for the first time on this machine, and announcing it in the error-red band
-          read as a fault. What survives is a read that has not settled (loading, failed) and an offline
-          host whose read DID return rows — the one case where "Offline. Showing saved messages." is a
-          true sentence. The disconnection itself is still announced, by the #279 banner above. */}
-      {selectedHost !== null && (localStatus !== 'loaded' || (offline && authoritativeSnapshot?.items.length)) &&
-        <SavedTimelineNotice status={localStatus} />}
       {/* #1627: a markdown file that could not be opened. One client-owned line, never the path or the
           reason; cleared by the next open, and gone with the screen on a conversation switch. */}
       {reader.state.type === 'closed' && reader.state.notice && (
@@ -434,7 +414,9 @@ export function ConversationScreen({
           }} />}
           <ThreadPromptSlot host={selectedHost} conversationId={openConversationId} />
         </>} />}
-      <TopOverlayControl onRepairHost={onRepairHost} threadLive={authoritative ? threadLive : undefined} />
+      <TopOverlayControl onRepairHost={onRepairHost} threadLive={authoritative ? threadLive : undefined}
+        savedMessages={selectedHost !== null && offline && !daemonOutdated && authoritativeSnapshot?.items.some(item => item.shown === true) === true}
+        loadingSavedMessages={selectedHost !== null && threadRestoring} />
       </div>
       {/* #962/#967: the region between the thread and the status area is EMPTY, and that emptiness is the
           design (Figma 102:4 stacks the message area straight onto the input area). #493's api-retry,
@@ -1085,15 +1067,6 @@ function MessageBubble({ message }: { message: Message }): JSX.Element {
       </div>
     </div>
   )
-}
-
-export function SavedTimelineNotice({ status }: {
-  status: 'loading' | 'loaded' | 'failed'
-}): JSX.Element {
-  const text = status === 'failed' ? 'Could not read saved messages on this device.'
-    : status === 'loading' ? 'Loading saved messages…'
-      : 'Offline. Showing saved messages.'
-  return <p className="conversation__banner" role="status">{text}</p>
 }
 
 type ThreadItemsProps = {
@@ -4324,81 +4297,12 @@ export function QuestionPanelSlot({ batch }: { batch: QuestionBatch }): JSX.Elem
     }} />
 }
 
-// #279: the prominent, disconnected-only connection banner's pure view — the third read of the
-// ConnectionStatus slice (beside the composer gate and the re-pair prompt), and the surface
-// composerSend's docstring already reserves ("the connection banner's surface"). Returns null unless
-// shouldShowBanner(status); when shown, renders a single band carrying CONNECTION_BANNER_COPY and
-// nothing derived from `status` — so no daemon-supplied string (ConnectionError.message) can reach it
-// (AC3, a structural guarantee, not a convention — the EMPTY_THREAD_COPY / ThinkingIndicator idiom).
-// Visibility is a `status` PROP (not a store read) so the present/absent matrix is proven by directly
-// server-rendering this view (the ComposerErrorSlot discipline, RepairPrompt's before #963 retired it).
-// role="status" makes it a polite live region: the band persists visually, so a polite announcement
-// suffices and nothing is lost by not stealing focus. It was also written to avoid an assertive
-// double-announce with the composer's own caption; #968 retired that caption, so this band is now the
-// only announcement of the transition in every non-connected arm — the reason for `status` over `alert`
-// is unchanged, and the surface it was avoiding is simply gone.
-export function ConnectionBanner({ status }: { status: ConnectionStatus }): JSX.Element | null {
-  if (!shouldShowBanner(status)) return null
-  return (
-    <p className="conversation__banner" role="status">
-      {status.type === 'error' && status.error.code === 'pairing-rejected'
-        ? 'Your pairing has expired or is no longer valid. Enter a new pairing code to reconnect.'
-        : isDaemonUpdateRequired(status) ? DAEMON_UPDATE_REQUIRED_COPY : CONNECTION_BANNER_COPY}
-    </p>
-  )
-}
-
-// The store-bound container for the connection banner (#279). Selects only `status` (selectStatus) so
-// it re-renders exactly on a connection-status change and never on a timeline delta (AC4 reactivity —
-// the same narrow-slice seam the composer gate and ComposerErrorSlotControl already use; no new store
-// wiring, no window.pyry dereference, no effects — a pure read). Unlike that control, whose visible
-// branches both need `error`, the banner's disconnected branch is a VISIBLE state, so the initial
-// (disconnected) store is enough to server-render the container's shown path.
+// Resolve the open conversation's host independently of the app-wide last connection event.
 function useOpenConnectionStatus(): ConnectionStatus {
   const open = useActiveConversationStore(s => s.activeConversation)
   const serverId = useConversationHost(open?.id ?? null)
   return useSessionStore(s => serverId === null ? initialSessionState.status
     : selectStatusFor(serverId)(s) ?? initialSessionState.status)
-}
-
-function ConnectionBannerControl(): JSX.Element | null {
-  const status = useOpenConnectionStatus()
-  return <ConnectionBanner status={status} />
-}
-
-// #797: the connection-error chip filling the right-hand slot #796 reserved in the composer status row
-// (Figma 112:3529). The FOURTH read of the ConnectionStatus slice and the narrowest of them: it reads the
-// discriminant to decide WHETHER to show, and reads nothing out of the arm it shows for.
-//
-// IT NEVER DESTRUCTURES `status.error`. That is the whole of AC2 and it is deliberately structural, not
-// conventional — the CONNECTION_BANNER_COPY guarantee one component over. Neither `message` nor `code`
-// reaches the DOM as text, in an attribute, in a title, or into a console.* while debugging; since there
-// is no rendering path for either, there is nothing to escape, length-bound or newline-strip, and nothing
-// that can be forgotten. The design carries this independently: the mock's text node is a single 132x16
-// line, which a relayed ErrorPayload.message would not fit.
-//
-// A <div>, not the banner's <p>. The banner is a paragraph in a band; this chip lives in a row with a
-// hard height: 24px and this repo ships no global box-sizing/margin reset, so a <p>'s UA margin would be
-// a live layout hazard against AC3 for no semantic gain.
-//
-// NO LIVE REGION — no role="status", no role="alert", no aria-live. The ConnectionStatusIndicator ruling
-// below applies verbatim ("a STATIC labelled group, not a live region"): the banner (#279) already
-// politely announces disconnects, and
-// shouldShowBanner is true on the `error` arm, so a connected → error transition mounts the banner and
-// this chip in the same commit. Two polite regions would queue two announcements of one fact.
-//
-// AC4's marking is HIDDEN TEXT, not an aria-label. An aria-label on a bare <div>/<span> is prohibited by
-// ARIA 1.2 — those elements map to role="generic", which is on the name-prohibited list, so browsers drop
-// the name: it would look right in the markup, assert green in a toContain, and do nothing for a real
-// screen reader. A real text node cannot be dropped. Do not "simplify" this back to an attribute.
-export function ComposerErrorChip({ status }: { status: ConnectionStatus }): JSX.Element | null {
-  if (status.type !== 'error') return null
-  return (
-    <div className="composer-status__error">
-      <span className="composer-status__error-prefix">{COMPOSER_ERROR_CHIP_PREFIX_COPY}</span>
-      {COMPOSER_ERROR_CHIP_COPY}
-    </div>
-  )
 }
 
 // #1435: the count of background tasks claude has alive in the open conversation — the slot's LAST
@@ -4477,16 +4381,9 @@ export function ComposerMcpFailure({ name, onOpen }: {
   )
 }
 
-// #963: the status row's right-hand slot, resolved. An error the operator can ACT on becomes a button in
-// the slot the chip otherwise holds (operator ruling 2026-09-02), which is what retires #167's separate
-// `.composer__repair` block beneath the composer — one control, in the place the operator already looks.
-//
-// Reconnect is the one actionable error left here (#1604 moved Re-pair to the Top overlay), ahead of
-// the chip and all connected-only occupants. Error fields select a branch but never supply markup, attributes, accessible copy or logs.
-// Inject status and handlers so the pure view remains statically testable without stores or window.
+// The composer's remaining occupants keep their connected-only priority chain.
 export function ComposerErrorSlot({
   status,
-  onReconnect,
   notice,
   recovery,
   refusal,
@@ -4495,7 +4392,6 @@ export function ComposerErrorSlot({
   taskCount
 }: {
   status: ConnectionStatus
-  onReconnect: () => void
   notice: JSX.Element | null
   recovery?: JSX.Element | null
   refusal?: JSX.Element | null
@@ -4503,54 +4399,7 @@ export function ComposerErrorSlot({
   mcpFailure?: JSX.Element | null
   taskCount?: JSX.Element | null
 }): JSX.Element | null {
-  // #1604 moved Re-pair out of this slot into the conversation's Top overlay (`TopOverlayControl`), so
-  // pairing rejection — which `shouldOfferReconnect` excludes — now falls through to the chip below.
-  if (shouldOfferReconnect(status)) {
-    return (
-      <button type="button" className="button-small button-small--error" onClick={onReconnect}>
-        {COMPOSER_RECONNECT_BUTTON_COPY}
-      </button>
-    )
-  }
-  // #1321 SPLIT THIS ARM IN TWO, and the split is what makes AC4 structural. Through #963 the delegate
-  // covered all four connection arms at once, because ComposerErrorChip's own guard returns null on three
-  // of them. With a third occupant below, the `error` discriminant has to be asked HERE, or the notice
-  // would render beside the chip instead of behind it. #797's view, its treatment and its tests are
-  // untouched: this reaches it on exactly the arm it already showed on.
-  if (status.type === 'error') return <ComposerErrorChip status={status} />
-  // The notice fills the slot ONLY WHILE THE CONNECTION IS HEALTHY, which is stricter than AC4's "with a
-  // connection error live" and deliberately so. A connection error — actionable or not — is the more
-  // urgent fact and makes a quota reading stale anyway; the same is true while disconnected or
-  // connecting, where #279's banner is up saying so, and a quota claim beside it would contradict it.
-  //
-  // `notice` is a ReactNode-shaped prop rather than the reading itself — ComposerStatusArea's own
-  // `trailing` seam one level down. This view stays a slot that knows its occupants' PRIORITY and nothing
-  // about a usage window, which is also what keeps the added prop cheap: every pre-existing call site
-  // passes `notice={null}` and no assertion in them moved. Required rather than optional, on the standing
-  // rule that an optional prop is the silent-omission hole a type cannot catch.
-  //
-  // #1435 APPENDS THE TASK COUNT TO THE END OF THIS CHAIN, and the end is the whole of its AC3: every
-  // reading already here outranks it, so a re-pair, an error, a recovery, a refusal, a notice or a
-  // history failure replaces it. ONE precedence rule, not a second beside it — and the count needs no
-  // connection gate of its own, since the whole chain already sits inside the `connected` arm and the
-  // three other arms still return null unchanged (AC2's connection half, for free).
-  //
-  // `taskCount` is OPTIONAL, matching `recovery` / `refusal` / `history` rather than `notice`. The
-  // paragraph above argues the other way and is left standing because its reasoning is sound in general;
-  // it loses HERE on cost — required would rewrite every pre-existing ComposerErrorSlot render in this
-  // file's specs to add `taskCount={null}`, for a hole one call site cannot fall into.
-  //
-  // AN ABSENT OCCUPANT MUST ARRIVE AS ACTUAL `null`, never as an element whose component renders
-  // nothing: `??` tests the ELEMENT, not what it renders, so a non-null placeholder wins the slot and
-  // hides everything below it. That rule is why ComposerErrorSlotControl checks its count before
-  // constructing the pill, and it is stated here rather than only there because this is the expression it
-  // constrains. At the chain's LAST position nothing is below to hide, so it is not yet load-bearing for
-  // precedence — it is kept because it is the rule the day a sixth occupant is appended, and because
-  // creating the element unconditionally would put an empty node in the slot AC2 requires be empty.
-  //
-  // #1494 inserts the MCP failure notice after the history failure and ahead of the task count: every
-  // error above outranks it, and it outranks a count that is not a failure. It is that sixth occupant,
-  // so the null rule above is now load-bearing for it — the container passes actual null when absent.
+  // Connection feedback lives in TopOverlay; other occupants remain connected-only.
   return status.type === 'connected'
     ? recovery ?? refusal ?? notice ?? history ?? mcpFailure ?? taskCount ?? null
     : null
@@ -4666,21 +4515,9 @@ function ComposerErrorSlotControl({
     }, { field: 'model', value: offer.report.originalModel })
   }
 
-  const handleReconnect = async (): Promise<void> => {
-    const open = selectActiveConversation(activeConversationStore.getState())
-    const serverId = conversationHostNow(open?.id ?? null)
-    if (serverId === null) return
-    try {
-      await window.pyry.reconnectServer(serverId)
-    } catch {
-      window.pyry.sendDiagnostic({ event: 'composer-reconnect-failed', code: 'bridge-rejected' })
-    }
-  }
-
   return (
     <ComposerErrorSlot
       status={status}
-      onReconnect={handleReconnect}
       recovery={recoveryCopy === null ? null : (
         <div className="stopped-turn-recovery" role="status">
           <span>{recoveryCopy}</span>
@@ -4738,7 +4575,9 @@ function ComposerErrorSlotControl({
 //
 // Repair resolves the host from the stores at CLICK time and delegates to the shell, preserving this
 // host's saved credentials and held chats — the slot's former `handleRepair`, moved.
-function TopOverlayControl({ onRepairHost, threadLive }: {
+function TopOverlayControl({ onRepairHost, threadLive, savedMessages, loadingSavedMessages }: {
+  savedMessages: boolean
+  loadingSavedMessages: boolean
   onRepairHost?: (serverId: string) => void
   threadLive?: ReturnType<typeof threadRuntime.live>
 }): JSX.Element | null {
@@ -4786,13 +4625,29 @@ function TopOverlayControl({ onRepairHost, threadLive }: {
       dismiss()
     }
   }, [resolution, feedback])
+  const handleReconnect = async (): Promise<void> => {
+    const current = selectActiveConversation(activeConversationStore.getState())
+    const serverId = conversationHostNow(current?.id ?? null)
+    if (serverId === null || !shouldOfferReconnect(selectStatusFor(serverId)(sessionStore.getState()) ?? initialSessionState.status)) return
+    try {
+      await window.pyry.reconnectServer(serverId)
+    } catch {
+      window.pyry.sendDiagnostic({ event: 'composer-reconnect-failed', code: 'bridge-rejected' })
+    }
+  }
   const handleRepair = (): void => {
     const current = selectActiveConversation(activeConversationStore.getState())
     const serverId = conversationHostNow(current?.id ?? null)
-    if (serverId !== null) onRepairHost?.(serverId)
+    if (serverId !== null && shouldOfferRepair(selectStatusFor(serverId)(sessionStore.getState()) ?? initialSessionState.status)) {
+      onRepairHost?.(serverId)
+    }
   }
   return (
     <TopOverlay
+      connectionStatus={status}
+      savedMessages={savedMessages}
+      loadingSavedMessages={loadingSavedMessages}
+      onReconnect={handleReconnect}
       sessionError={threadError?.code}
       resolution={resolution?.phase === 'displayed' ? resolution.kind : null}
       onDismissResolution={() => {

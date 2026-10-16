@@ -48,6 +48,7 @@ test('host B connection loss leaves host A healthy and its composer usable', asy
   await expect(page.getByRole('button', { name: COMPOSER_REPAIR_BUTTON_COPY, exact: true })).toHaveCount(0)
   await expect(page.locator('.composer-status__error')).toHaveCount(0)
   await expect(page.locator('.conversation__banner')).toHaveCount(0)
+  await expect(page.locator('.conversation__top-overlay')).toHaveCount(0)
   await expect(page.getByRole('region', { name: 'Repair pairing', exact: true })).toHaveCount(0)
 })
 

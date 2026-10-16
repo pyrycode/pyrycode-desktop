@@ -11,12 +11,12 @@
 // client-owned `variant` (never a template — the `ComposerUsageLimitNotice` ruling this view inherits);
 // the X's accessible name and the Re-pair copy are client constants.
 //
-// NO LIVE REGION, on the status-row chip's ruling: #279's banner already announces connection changes,
-// and the usage reading is not a place to queue announcements.
+// Connection/restoration feedback owns one polite region. Other occupants retain their own semantics.
 import type { ModalResolution } from '../../store/modalPrompts'
 import type { UsageLimitReading } from '../../store/usageLimitStore'
 import { isUsageReadingDismissed, usageLimitNotice } from './usageLimitNotice'
-import { COMPOSER_REPAIR_BUTTON_COPY } from './composerSend'
+import { COMPOSER_REPAIR_BUTTON_COPY, COMPOSER_RECONNECT_BUTTON_COPY, connectionNotice, shouldOfferReconnect } from './composerSend'
+import type { ConnectionStatus } from '../../store/sessionStore'
 
 /** The X's accessible name — client-owned, since the glyph itself says nothing to a screen reader. */
 export const USAGE_PILL_DISMISS_LABEL = 'Dismiss usage notice'
@@ -30,8 +30,16 @@ export function TopOverlay({
   onRepair,
   resolution,
   onDismissResolution,
-  sessionError
+  sessionError,
+  connectionStatus,
+  savedMessages = false,
+  loadingSavedMessages = false,
+  onReconnect
 }: {
+  connectionStatus?: ConnectionStatus
+  savedMessages?: boolean
+  loadingSavedMessages?: boolean
+  onReconnect?: () => void
   sessionError?: string
   resolution: ModalResolution['kind'] | null
   onDismissResolution: () => void
@@ -43,8 +51,9 @@ export function TopOverlay({
   onRepair: () => void
 }): JSX.Element | null {
   const usage = reading === null || isUsageReadingDismissed(reading, dismissed) ? null : reading
+  const connection = connectionStatus === undefined ? null : connectionNotice(connectionStatus)
   // No pills, no element: the overlay takes no space and leaves nothing in the tree.
-  if (usage === null && resolution === null && sessionError === undefined && !repair) return null
+  if (usage === null && resolution === null && sessionError === undefined && !repair && connection === null && !loadingSavedMessages) return null
   const notice = usage === null ? null : usageLimitNotice(usage, nowSeconds)
   return (
     <div className="conversation__top-overlay">
@@ -105,6 +114,20 @@ export function TopOverlay({
                 : 'Claude stopped responding.'}
           </span>
         </div>
+      )}
+      {(connection !== null || loadingSavedMessages) && (
+        <div className="top-overlay-pill top-overlay-pill--error" role="status" aria-live="polite" aria-atomic="true">
+          <span className="top-overlay-pill__text">
+            {connection}
+            {connection !== null && savedMessages && <> <span>Offline. Showing saved messages.</span></>}
+            {loadingSavedMessages && <> <span>Loading saved messages…</span></>}
+          </span>
+        </div>
+      )}
+      {connectionStatus !== undefined && shouldOfferReconnect(connectionStatus) && (
+        <button type="button" className="top-overlay-pill top-overlay-pill--error" onClick={onReconnect}>
+          {COMPOSER_RECONNECT_BUTTON_COPY}
+        </button>
       )}
       {repair && (
         <button type="button" className="top-overlay-pill top-overlay-pill--error" onClick={onRepair}>

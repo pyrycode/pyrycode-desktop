@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, vi, type MockInstance } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
   ConversationScreen,
-  SavedTimelineNotice,
   MessageThread,
   TimelineRow,
   ThinkingIndicator,
@@ -33,8 +32,6 @@ import {
   StatusSheet,
   ComposerErrorSlot,
   ComposerTaskCount,
-  ConnectionBanner,
-  ComposerErrorChip,
   ContextUsageReading,
   isTurnRunning,
   isStatusIconTurning,
@@ -52,8 +49,6 @@ import { PERMISSION_MODE_LABELS } from './ComposerPermissionModeMenu'
 import { COMPOSER_ATTACH_LABEL } from './ComposerAttach'
 import {
   CONNECTION_BANNER_COPY,
-  COMPOSER_ERROR_CHIP_COPY,
-  COMPOSER_ERROR_CHIP_PREFIX_COPY,
   COMPOSER_REPAIR_BUTTON_COPY,
   COMPOSER_RECONNECT_BUTTON_COPY
 } from './composerSend'
@@ -3052,326 +3047,34 @@ describe('StatusSheet — the Run configuration host modal', () => {
   })
 })
 
-// Inject status to prove the slot's branch decisions and mutual exclusion under static rendering.
-// Store-bound renders use getInitialState(), so they cannot exercise every status without a spy.
-describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
-  const ack = {
-    protocol_version: '1',
-    server_id: 's',
-    conn_id: 'c',
-    capabilities: []
+// Connection feedback belongs to the overlay; other occupants retain their priority and gating.
+describe('ComposerErrorSlot', () => {
+  const connected: ConnectionStatus = { type: 'connected', ack: {
+    protocol_version: '1', server_id: 's', conn_id: 'c', capabilities: []
+  } }
+  const occupants = {
+    recovery: <span>RECOVERY</span>, refusal: <span>REFUSAL</span>, notice: <span>NOTICE</span>,
+    history: <span>HISTORY</span>, mcpFailure: <span>MCP</span>, taskCount: <span>TASKS</span>
   }
-
-  it.each([
-    ['DAEMON_CODE_SENTINEL', 'Connection error - Reconnect']
-  ])('renders only the fixed button for %s without error fields', (code, copy) => {
-    const markup = renderToStaticMarkup(<ComposerErrorSlot
-      status={{ type: 'error', error: { code, message: 'DAEMON_MESSAGE_SENTINEL', retryable: false } }}
-      onReconnect={() => {}}
-      notice={<span>NOTICE</span>} recovery={<span>RECOVERY</span>}
-      refusal={<span>REFUSAL</span>} history={<span>HISTORY</span>} taskCount={<span>TASKS</span>}
-    />)
-    expect(markup).toBe(`<button type="button" class="button-small button-small--error">${copy}</button>`)
-    expect(markup).not.toMatch(/DAEMON_|aria-label|title=|data-/)
+  it.each<ConnectionStatus>([
+    { type: 'disconnected' }, { type: 'connecting' },
+    ...['transport', 'pairing-rejected', 'unpair', 'not-paired'].flatMap(code =>
+      [false, true].map(retryable => ({ type: 'error' as const,
+        error: { code, retryable, message: 'SECRET' } })))
+  ])('keeps all composer occupants absent for $type', status => {
+    expect(renderToStaticMarkup(<ComposerErrorSlot status={status} {...occupants} />)).toBe('')
   })
-
-  it.each(['unpair', 'not-paired'])('retains only the chip for %s', code => {
-    const markup = renderToStaticMarkup(<ComposerErrorSlot
-      status={{ type: 'error', error: { code, message: 'private', retryable: false } }}
-      onReconnect={() => {}} notice={null}
-    />)
-    expect(markup).toContain(COMPOSER_ERROR_CHIP_COPY)
-    expect(markup).not.toContain('<button')
-  })
-
-  // #1604: Re-pair lives in the Top overlay now, so pairing rejection — excluded from reconnect — falls
-  // through to the existing chip, whatever else is offered to the slot.
-  it('renders the chip and NOT Re-pair for explicit non-retryable pairing rejection (#1604)', () => {
-    const markup = renderToStaticMarkup(
-      <ComposerErrorSlot onReconnect={() => {}}
-        status={{ type: 'error', error: { code: 'pairing-rejected', message: 'gave up', retryable: false } }}
-        notice={<span>NOTICE</span>}
-      />
-    )
-    expect(markup).toContain(COMPOSER_ERROR_CHIP_COPY)
-    expect(markup).not.toContain(COMPOSER_REPAIR_BUTTON_COPY)
-    expect(markup).not.toContain('<button')
-    expect(markup).not.toContain('NOTICE')
-  })
-
-  // #167's AC4, preserved verbatim through the swap: a RETRYABLE daemon error is a transient
-  // daemon-side condition, not a broken pairing, so it gets the plain chip and is never offered a
-  // re-pair. shouldOfferRepair's `!retryable` gate is what makes this arm fall through to the chip.
-  it('renders the chip and NOT the button for a retryable daemon error (AC1, #167 AC4)', () => {
-    const markup = renderToStaticMarkup(
-      <ComposerErrorSlot onReconnect={() => {}}
-        status={{
-          type: 'error',
-          error: { code: 'server.binary_offline', message: 'offline', retryable: true }
-        }}
-        notice={null}
-      />
-    )
-    expect(markup).toContain('composer-status__error')
-    expect(markup).toContain(COMPOSER_ERROR_CHIP_COPY)
-    expect(markup).not.toContain(COMPOSER_REPAIR_BUTTON_COPY)
-  })
-
-  // Failed unpair is excluded from both recovery actions to avoid a self-loop.
-  it('renders the chip and NOT the button after a failed unpair (AC1, #167 AC5)', () => {
-    const markup = renderToStaticMarkup(
-      <ComposerErrorSlot onReconnect={() => {}}
-        status={{
-          type: 'error',
-          error: { code: 'unpair', message: 'Could not forget this pairing.', retryable: false }
-        }}
-        notice={null}
-      />
-    )
-    expect(markup).toContain('composer-status__error')
-    expect(markup).not.toContain(COMPOSER_REPAIR_BUTTON_COPY)
-  })
-
-  // AC1's empty half, in the STRICT exact-empty form the ComposerErrorChip describe below uses: that is
-  // what proves "the slot is empty, not an empty element", which a not.toContain would pass on a
-  // rendered-but-empty wrapper.
-  it('renders nothing at all while disconnected — not an empty element (AC1)', () => {
-    expect(
-      renderToStaticMarkup(<ComposerErrorSlot onReconnect={() => {}} status={{ type: 'disconnected' }} notice={null} />)
-    ).toBe('')
-  })
-
-  it('renders nothing at all while connecting — not an empty element (AC1)', () => {
-    expect(
-      renderToStaticMarkup(<ComposerErrorSlot onReconnect={() => {}} status={{ type: 'connecting' }} notice={null} />)
-    ).toBe('')
-  })
-
-  it('renders nothing at all while connected — not an empty element (AC1)', () => {
-    expect(
-      renderToStaticMarkup(<ComposerErrorSlot onReconnect={() => {}} status={{ type: 'connected', ack }} notice={null} />)
-    ).toBe('')
-  })
-
-  // AC4, and the one assertion this view needs that the chip's own describe cannot supply. Unlike
-  // ComposerErrorChip — which narrows on `status.type` and never touches the error arm at all — this
-  // view calls shouldOfferReconnect, which READS `status.error.retryable` and `.code`. Those two reads are
-  // one line away from a value a future edit could render, so the guarantee is pinned rather than
-  // argued: on the arm that reads them, neither sentinel reaches the markup.
-  it('never renders ConnectionError.message or .code on the button arm (AC4)', () => {
-    const markup = renderToStaticMarkup(
-      <ComposerErrorSlot onReconnect={() => {}}
-        status={{
-          type: 'error',
-          error: { code: 'DAEMON_SECRET_CODE', message: 'DAEMON_SECRET_DETAIL', retryable: false }
-        }}
-        notice={null}
-      />
-    )
-    expect(markup).toContain(COMPOSER_RECONNECT_BUTTON_COPY)
-    expect(markup).not.toContain('DAEMON_SECRET_DETAIL')
-    expect(markup).not.toContain('DAEMON_SECRET_CODE')
-  })
-
-  // AC4's accessible-name half: the visible text IS the name, so there is no aria-label to drift from
-  // it and no hidden prefix — the label says "Pairing error" itself, which is exactly why the chip's
-  // visually-hidden `Error: ` run is not carried over to this occupant.
-  it('takes its accessible name from the visible text — no aria-label, no hidden prefix (AC4)', () => {
-    const markup = renderToStaticMarkup(
-      <ComposerErrorSlot onReconnect={() => {}}
-        status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
-        notice={null}
-      />
-    )
-    expect(markup).not.toContain('aria-label')
-    expect(markup).not.toContain('composer-status__error-prefix')
-    expect(markup).not.toContain(COMPOSER_ERROR_CHIP_PREFIX_COPY.trim())
-  })
-
-  // The button wears the shared small-button base class plus its Error variant — the treatment the
-  // question panel's three buttons wear too. A static render is the only place the class pair is
-  // observable, and the variant is what carries the fill, so a base class alone would ship an unstyled
-  // transparent button that every other assertion here would still pass.
-  it('wears the shared small-button base class and its error variant (AC3)', () => {
-    const markup = renderToStaticMarkup(
-      <ComposerErrorSlot onReconnect={() => {}}
-        status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
-        notice={null}
-      />
-    )
-    expect(markup).toContain('button-small')
-    expect(markup).toContain('button-small--error')
-    // A real <button>, not a div wearing a click handler — the accessible name, the focus ring AC3
-    // requires and keyboard activation all come from the element, not from the class.
-    expect(markup).toContain('<button')
-    expect(markup).toContain('type="button"')
-  })
-
-  // #1321's AC4 — the precedence, proven with a SENTINEL rather than with a real notice, so this block
-  // asserts the slot's ordering and nothing about the notice's own markup (which its own describe owns).
-  // Every arm is written in BOTH directions, the #963 rule above: a slot that rendered both occupants
-  // would pass a one-directional check.
-  // #1604 moved the usage reading itself to the Top overlay; the `notice` prop still carries the settings
-  // error and the stopping banner, so its precedence is pinned here unchanged.
-  describe('the notice is a low-priority occupant (#1321 AC4)', () => {
-    const sentinel = <p>USAGE_NOTICE_SENTINEL</p>
-
-    it('yields to the actionable-error button on a terminal, non-retryable error', () => {
-      const markup = renderToStaticMarkup(
-        <ComposerErrorSlot onReconnect={() => {}}
-          status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
-          notice={sentinel}
-        />
-      )
-      expect(markup).toContain(COMPOSER_RECONNECT_BUTTON_COPY)
-      expect(markup).not.toContain('USAGE_NOTICE_SENTINEL')
-    })
-
-    it('yields to the connection-error chip on a retryable daemon error', () => {
-      const markup = renderToStaticMarkup(
-        <ComposerErrorSlot onReconnect={() => {}}
-          status={{
-            type: 'error',
-            error: { code: 'server.binary_offline', message: 'offline', retryable: true }
-          }}
-          notice={sentinel}
-        />
-      )
-      expect(markup).toContain(COMPOSER_ERROR_CHIP_COPY)
-      expect(markup).not.toContain('USAGE_NOTICE_SENTINEL')
-    })
-
-    // The notice fills the slot only while the connection is HEALTHY. `disconnected` and `connecting`
-    // are stricter than AC4 asks for and deliberately so: #279's banner is up on both, and a quota
-    // claim beside it would contradict the more urgent fact.
-    it.each([
-      ['disconnected', { type: 'disconnected' } as ConnectionStatus],
-      ['connecting', { type: 'connecting' } as ConnectionStatus]
-    ])('renders nothing at all while %s — not the notice, not an empty element', (_label, status) => {
-      expect(
-        renderToStaticMarkup(
-          <ComposerErrorSlot onReconnect={() => {}} status={status} notice={sentinel} />
-        )
-      ).toBe('')
-    })
-
-    it('renders the notice, and only the notice, while connected', () => {
-      const markup = renderToStaticMarkup(
-        <ComposerErrorSlot onReconnect={() => {}} status={{ type: 'connected', ack }} notice={sentinel} />
-      )
-      expect(markup).toBe('<p>USAGE_NOTICE_SENTINEL</p>')
-    })
-
-    // The empty half: a connected slot with no reading renders nothing at all, which is what keeps the
-    // row's geometry identical to its pre-#1321 shape in the overwhelmingly common case.
-    it('renders nothing at all while connected with no notice to draw', () => {
-      expect(
-        renderToStaticMarkup(
-          <ComposerErrorSlot onReconnect={() => {}} status={{ type: 'connected', ack }} notice={null} />
-        )
-      ).toBe('')
-    })
-  })
-
-  // #1435's AC3 — the task count is the slot's LAST reading, so every occupant above outranks it. A
-  // SENTINEL pill element, the #1321 technique one describe up: this block asserts the ordering and
-  // nothing about the pill's own markup, which the ComposerTaskCount describe below owns. Every arm is
-  // written in BOTH directions, the #963 rule this describe opens with — a slot that rendered two
-  // occupants would pass a one-directional check.
-  describe('the task count is the lowest-priority occupant (#1435 AC3)', () => {
-    const pill = <p>TASK_COUNT_SENTINEL</p>
-    const above = <p>HIGHER_READING_SENTINEL</p>
-
-    it('yields to the actionable-error button on a terminal, non-retryable error', () => {
-      const markup = renderToStaticMarkup(
-        <ComposerErrorSlot onReconnect={() => {}}
-          status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
-          notice={null}
-          taskCount={pill}
-        />
-      )
-      expect(markup).toContain(COMPOSER_RECONNECT_BUTTON_COPY)
-      expect(markup).not.toContain('TASK_COUNT_SENTINEL')
-    })
-
-    it('yields to the connection-error chip on a retryable daemon error', () => {
-      const markup = renderToStaticMarkup(
-        <ComposerErrorSlot onReconnect={() => {}}
-          status={{
-            type: 'error',
-            error: { code: 'server.binary_offline', message: 'offline', retryable: true }
-          }}
-          notice={null}
-          taskCount={pill}
-        />
-      )
-      expect(markup).toContain(COMPOSER_ERROR_CHIP_COPY)
-      expect(markup).not.toContain('TASK_COUNT_SENTINEL')
-    })
-
-    // The four connected-arm readings, each proven to outrank the pill on its own. Driven off the prop
-    // NAME so a future reordering of the `??` chain reddens here rather than silently demoting one of
-    // them past the count.
-    it.each([['recovery'], ['refusal'], ['notice'], ['history']] as const)(
-      'yields to the %s reading while connected',
-      (slot) => {
-        const markup = renderToStaticMarkup(
-          <ComposerErrorSlot onReconnect={() => {}}
-            status={{ type: 'connected', ack }}
-            notice={slot === 'notice' ? above : null}
-            recovery={slot === 'recovery' ? above : null}
-            refusal={slot === 'refusal' ? above : null}
-            history={slot === 'history' ? above : null}
-            taskCount={pill}
-          />
-        )
-        expect(markup).toContain('HIGHER_READING_SENTINEL')
-        expect(markup).not.toContain('TASK_COUNT_SENTINEL')
-      }
-    )
-
-    it('fills the slot while connected with every reading above it absent (AC1)', () => {
-      const markup = renderToStaticMarkup(
-        <ComposerErrorSlot onReconnect={() => {}}
-          status={{ type: 'connected', ack }}
-          notice={null}
-          taskCount={pill}
-        />
-      )
-      expect(markup).toBe('<p>TASK_COUNT_SENTINEL</p>')
-    })
-
-    // AC2's connection half, in the strict exact-empty form: the count says nothing about a link that is
-    // down, and #279's banner is up on both arms saying so.
-    it.each([
-      ['disconnected', { type: 'disconnected' } as ConnectionStatus],
-      ['connecting', { type: 'connecting' } as ConnectionStatus]
-    ])('renders nothing at all while %s — not the pill, not an empty element', (_label, status) => {
-      expect(
-        renderToStaticMarkup(
-          <ComposerErrorSlot onReconnect={() => {}} status={status} notice={null} taskCount={pill} />
-        )
-      ).toBe('')
-    })
-
-    // The prop is OPTIONAL, matching `recovery` / `refusal` / `history` — omitting it must leave the
-    // pre-#1435 render byte-identical, which is what let every existing call site in this file stand
-    // unchanged. The exact empty string is the assertion, since a `?? null` that had become `?? <></>`
-    // would pass a not.toContain.
-    it('renders nothing at all while connected with the prop omitted entirely', () => {
-      expect(
-        renderToStaticMarkup(
-          <ComposerErrorSlot onReconnect={() => {}} status={{ type: 'connected', ack }} notice={null} />
-        )
-      ).toBe('')
-    })
+  it('keeps connected-only occupant priority', () => {
+    const entries = Object.entries(occupants)
+    for (let index = 0; index < entries.length; index++) {
+      const props = Object.fromEntries(entries.slice(index))
+      const markup = renderToStaticMarkup(<ComposerErrorSlot status={connected} notice={null} {...props} />)
+      expect(markup).toBe(renderToStaticMarkup(entries[index][1]))
+    }
+    expect(renderToStaticMarkup(<ComposerErrorSlot status={connected} notice={null} />)).toBe('')
   })
 })
 
-// #1435: the task count's own pure view. An injected count, the ComposerUsageLimitNotice discipline and
-// for its reason — zustand v5's useStore reads getInitialState() under renderToStaticMarkup, so a
-// store-bound container test can reach exactly one arm, and the count's arms are only assertable if the
-// number is a prop.
 describe('ComposerTaskCount — the background-task reading in the status row (#1435)', () => {
   it('reads "n tasks running" for a count above one (AC1)', () => {
     const markup = renderToStaticMarkup(<ComposerTaskCount count={6} onToggle={() => {}} />)
@@ -3433,154 +3136,6 @@ describe('ComposerTaskCount — the background-task reading in the status row (#
     expect(markup).toContain('type="button"')
     expect(markup).not.toContain('aria-label')
     expect(markup).not.toContain('composer-status__error-prefix')
-  })
-})
-
-// #279: the prominent, disconnected-only connection banner. ConnectionBanner is the pure, exported
-// view (the RepairPrompt pattern) — server-render it directly with each `status` prop to prove the
-// present/absent matrix without touching the store. The store-bound ConnectionBannerControl container
-// reads the same slice; its disconnected branch IS server-render-reachable (getInitialState =
-// disconnected is a VISIBLE branch here, unlike RepairControl), so the mounted-visible case is proven
-// in the ConversationScreen container block below.
-describe('ConnectionBanner — the disconnected-only connection band', () => {
-  const ack = {
-    protocol_version: '1',
-    server_id: 's',
-    conn_id: 'c',
-    capabilities: []
-  }
-
-  it('renders the client-owned copy while disconnected (AC1)', () => {
-    const markup = renderToStaticMarkup(<ConnectionBanner status={{ type: 'disconnected' }} />)
-    expect(markup).toContain('conversation__banner')
-    expect(markup).toContain(CONNECTION_BANNER_COPY)
-  })
-
-  it('renders the client-owned copy while connecting (AC1)', () => {
-    const markup = renderToStaticMarkup(<ConnectionBanner status={{ type: 'connecting' }} />)
-    expect(markup).toContain(CONNECTION_BANNER_COPY)
-  })
-
-  it('renders the client-owned copy while in a connection error (AC1)', () => {
-    const markup = renderToStaticMarkup(
-      <ConnectionBanner
-        status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
-      />
-    )
-    expect(markup).toContain(CONNECTION_BANNER_COPY)
-  })
-
-  it('renders nothing when connected (AC2)', () => {
-    const markup = renderToStaticMarkup(<ConnectionBanner status={{ type: 'connected', ack }} />)
-    expect(markup).toBe('')
-  })
-
-  // AC3: the banner text is the client-owned constant only — never a daemon-supplied string. Given an
-  // error status carrying a secret in ConnectionError.message, the rendered band contains the copy and
-  // NOT the message, so no daemon string can reach the banner (a structural guarantee — the view
-  // renders CONNECTION_BANNER_COPY, nothing derived from `status`).
-  it('never renders ConnectionError.message — only the client-owned copy (AC3)', () => {
-    const markup = renderToStaticMarkup(
-      <ConnectionBanner
-        status={{
-          type: 'error',
-          error: { code: 'x', message: 'DAEMON_SECRET_DETAIL', retryable: false }
-        }}
-      />
-    )
-    expect(markup).toContain(CONNECTION_BANNER_COPY)
-    expect(markup).not.toContain('DAEMON_SECRET_DETAIL')
-  })
-})
-
-// #797: the connection-error chip in the composer status row — the FOURTH read of the ConnectionStatus
-// slice (beside the composer gate, the re-pair prompt and the banner), and the narrowest: it reads the
-// discriminant to decide whether to show and nothing out of the `error` arm at all. ComposerErrorChip is
-// the pure, exported view (the ConnectionBanner pattern), so the whole four-arm matrix is proven by
-// server-rendering it with an injected `status` and no store. The mounted, store-bound path is proven in
-// the ConversationScreen container block below, which is the only place the `trailing` wiring is visible.
-describe('ComposerErrorChip — the connection-error chip in the status row (#797)', () => {
-  const ack = {
-    protocol_version: '1',
-    server_id: 's',
-    conn_id: 'c',
-    capabilities: []
-  }
-
-  it('renders the client-owned copy in the error arm (AC1)', () => {
-    const markup = renderToStaticMarkup(
-      <ComposerErrorChip
-        status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
-      />
-    )
-    expect(markup).toContain('composer-status__error')
-    expect(markup).toContain(COMPOSER_ERROR_CHIP_COPY)
-  })
-
-  // AC1's absent half, in the STRICT form: an exact-empty markup, not a not.toContain. That is what
-  // proves "nothing is rendered in that slot — not an empty element", which a substring assertion would
-  // pass on a rendered-but-empty wrapper.
-  it('renders nothing at all while disconnected — not an empty element (AC1)', () => {
-    expect(renderToStaticMarkup(<ComposerErrorChip status={{ type: 'disconnected' }} />)).toBe('')
-  })
-
-  it('renders nothing at all while connecting — not an empty element (AC1)', () => {
-    expect(renderToStaticMarkup(<ComposerErrorChip status={{ type: 'connecting' }} />)).toBe('')
-  })
-
-  it('renders nothing at all while connected — not an empty element (AC1)', () => {
-    expect(renderToStaticMarkup(<ComposerErrorChip status={{ type: 'connected', ack }} />)).toBe('')
-  })
-
-  // AC2: the chip's text is the client-owned constant only. TWO sentinels, not the banner test's one —
-  // the AC names `message` AND `code`, and neither may reach the DOM as text, in an attribute, or in a
-  // title. A structural guarantee, not a convention: the view narrows on `status.type` and never
-  // destructures `status.error`, so there is no rendering path for either field.
-  it('never renders ConnectionError.message or .code — only the client-owned copy (AC2)', () => {
-    const markup = renderToStaticMarkup(
-      <ComposerErrorChip
-        status={{
-          type: 'error',
-          error: { code: 'DAEMON_SECRET_CODE', message: 'DAEMON_SECRET_DETAIL', retryable: false }
-        }}
-      />
-    )
-    expect(markup).toContain(COMPOSER_ERROR_CHIP_COPY)
-    expect(markup).not.toContain('DAEMON_SECRET_DETAIL')
-    expect(markup).not.toContain('DAEMON_SECRET_CODE')
-  })
-
-  // AC4: colour is not the only signal. The marking is hidden TEXT, not an aria-label — a bare <div>/
-  // <span> maps to role="generic", which ARIA 1.2 puts on the name-prohibited list, so an aria-label
-  // would assert green here and be dropped by a real screen reader. Ordering matters: the prefix run
-  // precedes the visible copy, so the two concatenate into "Error: Host connection down!".
-  it('marks the chip as an error with hidden text ahead of the copy (AC4)', () => {
-    const markup = renderToStaticMarkup(
-      <ComposerErrorChip
-        status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
-      />
-    )
-    expect(markup).toContain('composer-status__error-prefix')
-    expect(markup).toContain(COMPOSER_ERROR_CHIP_PREFIX_COPY.trim())
-    // The index idiom (WelcomeScreen.test.tsx:36-41) — a static markup string carries no tree to query.
-    const prefixAt = markup.indexOf('composer-status__error-prefix')
-    const copyAt = markup.indexOf(COMPOSER_ERROR_CHIP_COPY)
-    expect(prefixAt).toBeGreaterThanOrEqual(0)
-    expect(copyAt).toBeGreaterThan(prefixAt)
-  })
-
-  // The chip is NOT a live region. shouldShowBanner is true on the `error` arm, so a connected → error
-  // transition mounts the banner and this chip in the same commit; a second polite region here would
-  // announce one fact twice — the ConnectionStatusIndicator ruling, restated one component over.
-  it('is not a live region — the banner already announces the disconnect', () => {
-    const markup = renderToStaticMarkup(
-      <ComposerErrorChip
-        status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
-      />
-    )
-    expect(markup).not.toContain('aria-live')
-    expect(markup).not.toContain('role="status"')
-    expect(markup).not.toContain('role="alert"')
   })
 })
 
@@ -4176,48 +3731,17 @@ describe('ConversationScreen — store binding', () => {
     expect(markup).not.toContain('composer-status__label')
   })
 
-  // #797: the chip's absent arm through the mounted container. The beforeEach leaves the session store
-  // `disconnected`, which is NOT the error arm, so the reserved slot stays empty in the shipped tree.
-  it('mounts the status row with no error chip while disconnected (AC1)', () => {
-    const markup = renderToStaticMarkup(<ConversationScreen />)
-    expect(markup).toContain('class="composer-status"')
-    expect(markup).not.toContain('composer-status__error')
-    expect(markup).not.toContain(COMPOSER_ERROR_CHIP_COPY)
-  })
-
-  // #797: the chip's PRESENT arm through the mounted container — the only test that proves the
-  // `trailing` prop at the ComposerStatusArea mount actually reached the row. Without it an unwired prop
-  // passes every pure-view assertion above.
-  //
-  // A getInitialState SPY, not setState. This file's standing note applies here — zustand v5's useStore
-  // reads getInitialState() under renderToStaticMarkup, never getState() — so the block's beforeEach
-  // cannot stage a non-initial arm, and this branch would otherwise be unreachable (the spec assumed the
-  // beforeEach was enough; it is not, measured 2026-08-27). Spying the store's initial snapshot is the
-  // narrowest seam that reaches it: one store, one render, no production code touched, restored
-  // immediately since this config sets no restoreMocks.
-  //
-  // #963 REPOINTED THE STAGED STATUS, and the test would otherwise have gone red rather than vacuous. It
-  // staged `code: 'transport', retryable: false` — which is precisely the arm shouldOfferRepair admits, so
-  // the slot now fills it with the actionable button and the chip is correctly absent. The chip's own
-  // mounted arm is a RETRYABLE daemon error (#167's AC4: transient, not a broken pairing), so that is what
-  // this stages now. The claim is unchanged — the `trailing` prop reaches the row with the chip in it —
-  // and the button's mounted arm is proven by its own test below.
-  it('mounts the error chip in the status row once the session is in a retryable error arm (AC1)', () => {
-    const restore = stageOpenConnection({
-        type: 'error',
-        error: { code: 'server.binary_offline', message: 'offline', retryable: true }
-      })
+  it('puts retryable connection feedback only in the overlay', () => {
+    const restore = stageOpenConnection({ type: 'error',
+      error: { code: 'server.binary_offline', message: 'SECRET', retryable: true } })
     try {
       const markup = renderToStaticMarkup(<ConversationScreen />)
-      expect(markup).toContain('composer-status__error')
-      expect(markup).toContain(COMPOSER_ERROR_CHIP_COPY)
-      // In the ROW, not loose in the region: the chip trails .composer-status in the shipped tree.
-      expect(markup.indexOf('composer-status__error')).toBeGreaterThan(
-        markup.indexOf('class="composer-status"')
-      )
-    } finally {
-      restore()
-    }
+      expect(markup).toContain(CONNECTION_BANNER_COPY)
+      expect(markup).toContain('conversation__top-overlay')
+      expect(markup).not.toContain('conversation__banner')
+      expect(markup).not.toContain('composer-status__error')
+      expect(markup).not.toContain('SECRET')
+    } finally { restore() }
   })
 
   // #1604: pairing rejection through the mounted container. Re-pair is a pill in the Top overlay pinned
@@ -4227,7 +3751,7 @@ describe('ConversationScreen — store binding', () => {
   // The same getInitialState SPY as the chip test above, and for the same reason: zustand v5's useStore
   // reads getInitialState() under renderToStaticMarkup, never getState(), so the block's beforeEach
   // cannot stage this arm.
-  it('mounts Re-pair in the Top overlay and the chip in the status row once the pairing is rejected (#1604)', () => {
+  it('mounts Re-pair in the Top overlay with no composer connection occupant', () => {
     const restore = stageOpenConnection({ type: 'error', error: { code: 'pairing-rejected', message: 'gave up', retryable: false } })
     try {
       const markup = renderToStaticMarkup(<ConversationScreen />)
@@ -4237,8 +3761,8 @@ describe('ConversationScreen — store binding', () => {
       expect(repair).toBeGreaterThan(overlay)
       expect(repair).toBeLessThan(markup.indexOf('class="composer-status"'))
       expect(markup.split(COMPOSER_REPAIR_BUTTON_COPY)).toHaveLength(2)
-      // The row's slot holds the chip, after the row opens.
-      expect(markup.indexOf(COMPOSER_ERROR_CHIP_COPY)).toBeGreaterThan(markup.indexOf('class="composer-status"'))
+      expect(markup).not.toContain('composer-status__error')
+      expect(markup).not.toContain(COMPOSER_RECONNECT_BUTTON_COPY)
       // The retired #167 block stays gone.
       expect(markup).not.toContain('composer__repair')
     } finally {
@@ -4723,7 +4247,7 @@ describe('ConversationScreen — store binding', () => {
     expect(markup).not.toContain(COMPOSER_REPAIR_BUTTON_COPY)
     expect(markup).not.toContain('composer__repair')
     // #1604: with no pill to show, the Top overlay renders no element at all.
-    expect(markup).not.toContain('conversation__top-overlay')
+    expect(markup).toContain('conversation__top-overlay')
   })
 
   // #31: while not connected the send control is disabled. (It also used to show an inline "why" caption
@@ -4755,9 +4279,10 @@ describe('ConversationScreen — store binding', () => {
   // daemon string reaches it (there is none at the initial disconnected status). Since #968 it is the
   // ONLY thing said about the connection in this arm, which is why its presence here matters more than
   // it did when the composer's caption said it a second time.
-  it('renders the connection banner while disconnected (AC1/AC4)', () => {
+  it('renders the connection pill without a header band while disconnected', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
-    expect(markup).toContain('conversation__banner')
+    expect(markup).not.toContain('conversation__banner')
+    expect(markup).toContain('top-overlay-pill--error" role="status"')
     expect(markup).toContain(CONNECTION_BANNER_COPY)
   })
 
@@ -4887,7 +4412,7 @@ describe('model rejection in the mounted status row', () => {
 
   it.each([
     [connected, true, null],
-    [{ type: 'error', error: { code: 'transport', message: 'untrusted', retryable: true } }, false, COMPOSER_ERROR_CHIP_COPY],
+    [{ type: 'error', error: { code: 'transport', message: 'untrusted', retryable: true } }, false, null],
     [{ type: 'error', error: { code: 'transport', message: 'untrusted', retryable: false } }, false, COMPOSER_RECONNECT_BUTTON_COPY],
     [{ type: 'disconnected' }, false, null]
   ] as const)('arbitrates connection priority for %j', (status, visible, higherPriorityCopy) => {
@@ -4910,16 +4435,6 @@ describe('model rejection in the mounted status row', () => {
 it('disables the held running-turn interrupt when sending is unavailable', () => {
   const markup = renderToStaticMarkup(<ComposerSendButton isRunning canSend={false} onSend={() => {}} onInterrupt={() => {}} />)
   expect(markup).toContain('disabled=""')
-})
-
-describe('saved timeline notices', () => {
-  it('distinguishes local failure, pending and offline saved results', () => {
-    const render = (status: 'loading' | 'loaded' | 'failed') =>
-      renderToStaticMarkup(<SavedTimelineNotice status={status} />)
-    expect(render('failed')).toContain('Could not read saved messages on this device.')
-    expect(render('loading')).toContain('Loading saved messages…')
-    expect(render('loaded')).toContain('Offline. Showing saved messages.')
-  })
 })
 
 // #1621: a file the ASSISTANT sent (`attachment_offered`) draws as the same file row — or the same image

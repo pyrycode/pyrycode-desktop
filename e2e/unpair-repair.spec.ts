@@ -78,24 +78,27 @@ test('re-pair: a sealed pairing rejection opens a recovery modal', async ({
   daemon.pushFrame(rejection())
 
   // #1604: Re-pair is a pill in the conversation's Top overlay, pinned over the message area, and the
-  // status row's slot falls through to the existing connection chip.
+  // status row no longer carries connection feedback.
   const repair = page.locator('.conversation__top-overlay')
     .getByRole('button', { name: COMPOSER_REPAIR_BUTTON_COPY, exact: true })
   await expect(repair).toBeVisible()
   await expect(page.locator('.composer-status').getByRole('button', { name: COMPOSER_REPAIR_BUTTON_COPY }))
     .toHaveCount(0)
-  await expect(page.locator('.composer-status__error')).toHaveCount(1)
+  await expect(page.locator('.composer-status__error')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: COMPOSER_RECONNECT_BUTTON_COPY, exact: true })).toHaveCount(0)
 
   // The row keeps its 24px at-rest geometry: the chip wears the row's own box, so moving Re-pair out of it
   // is what retires #963's 32px growth on this transition.
   const withChip = await readStatusRowGeometry(page)
   expect(withChip).toEqual(atRest)
 
-  // Rejection notices count toward occupied header height, including an empty offline thread.
+  // Rejection notices float below the header, including an empty offline thread.
+  const explanation = page.locator('.conversation__top-overlay [role="status"]')
+  await expect(explanation).toContainText('Your pairing has expired')
   await expect.poll(() => repair.evaluate(el => {
     const header = document.querySelector('.conversation__top-chrome')!.getBoundingClientRect()
     const pane = document.querySelector('.conversation__message-area')!.getBoundingClientRect()
-    const pill = el.getBoundingClientRect()
+    const pill = document.querySelector('.conversation__top-overlay')!.getBoundingClientRect()
     return { belowHeader: Math.round(pill.top - header.bottom), rightInset: Math.round(pane.right - pill.right) }
   })).toEqual({ belowHeader: 12, rightInset: 20 })
 
@@ -210,13 +213,14 @@ for (const closeCode of [4421, 4401]) {
     await observeRecovery(app)
 
     serverA.forwarder.closeClientLeg(closeCode)
-    const reconnect = page.getByRole('button', { name: COMPOSER_RECONNECT_BUTTON_COPY, exact: true })
+    const reconnect = page.locator('.conversation__top-overlay').getByRole('button', { name: COMPOSER_RECONNECT_BUTTON_COPY, exact: true })
     await expect(reconnect).toBeVisible()
     await expect(page.getByRole('button', { name: COMPOSER_REPAIR_BUTTON_COPY, exact: true })).toHaveCount(0)
     await expect(page.locator('.composer-status__error')).toHaveCount(0)
     const withButton = await readStatusRowGeometry(page)
-    expect(withButton).toEqual({ rowHeight: 32, groupFromBottom: 0, iconFromBottom: atRest.iconFromBottom })
-    if (closeCode === 4421) await page.screenshot({ path: '/tmp/builder-1510-reconnect-800.png' })
+    expect(withButton).toEqual(atRest)
+    await expect(page.locator('.composer-status button', { hasText: COMPOSER_RECONNECT_BUTTON_COPY })).toHaveCount(0)
+    await expect(reconnect).toHaveClass('top-overlay-pill top-overlay-pill--error')
     await reconnect.click()
     await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
     await expect.poll(() => recoveryCounts(app)).toEqual({

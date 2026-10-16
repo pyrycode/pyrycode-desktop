@@ -817,10 +817,18 @@ test('a fresh offline app draws its protected authoritative saved history', asyn
   }, SEEDED_ROW.id)).toBe(20)
   await first.app.close()
   await first.forwarder.close()
-  const second = await launchPairedApp({ threadMode: 'native',}, { reuseUserDataDir: first.userDataDir })
+  const second = await launchPairedApp({ threadMode: 'native',}, { reuseUserDataDir: first.userDataDir,
+    onLaunched: app => installHeldThreadRead(app).then(() => {}) })
   await second.page.getByText(SEEDED_ROW.name!, { exact: true }).first().click()
+  const feedback = second.page.locator('.conversation__top-overlay [role="status"]')
+  await expect(feedback).toContainText('Loading saved messages…')
+  await expect.poll(() => second.app.evaluate(() => (globalThis as any).heldThreadReads)).toBe(1)
+  await second.app.evaluate(({ ipcMain }) => ipcMain.emit('test:release-thread-read'))
   await expect(second.page.getByText('Protected offline authoritative answer', { exact: true })).toBeVisible()
   await expect(second.page.getByText('Offline. Showing saved messages.', { exact: true })).toBeVisible()
+  await expect(feedback).toHaveCount(1)
+  await expect(feedback).not.toContainText('Loading saved messages…')
+  await expect(second.page.locator('.conversation__banner')).toHaveCount(0)
 })
 
 const DAEMON_UPDATE_COPY = 'The Pyrycode daemon on this host needs an update. Update pyry on the host to reconnect.'

@@ -52,6 +52,18 @@ void app.whenReady().then(async () => {
     if (reopened.status !== 'stored' || !isDeepStrictEqual(reopened.snapshot, parseChatHistorySnapshot(snapshot))) throw new Error('reopen')
     const reopenedThread = await next.execute({ operation: 'readThread', serverId: 'smoke', conversationId: 'chat' })
     if (reopenedThread.status !== 'stored' || !isDeepStrictEqual(reopenedThread.snapshot, parseChatHistorySnapshot(thread))) throw new Error('thread')
+    evidence.stage = 'owned-update'
+    const { items: ignoredItems, ranges: ignoredRanges, ...metadata } = thread.thread
+    void ignoredItems; void ignoredRanges
+    const updatedItem = { ...thread.thread.items[0], rev: 2, content: { text: 'NATIVE-OWNED-2044' } }
+    const updated = await next.execute({ operation: 'mutateThread', serverId: 'smoke', conversationId: 'chat', change: {
+      metadata, acceptEpoch: false, items: [updatedItem], removeIds: [], ranges: []
+    } })
+    if (updated.status !== 'ok') throw new Error('owned-update')
+    database.close()
+    const owned = await fresh().execute({ operation: 'readThread', serverId: 'smoke', conversationId: 'chat' })
+    if (owned.status !== 'stored' || !isDeepStrictEqual(owned.snapshot,
+      parseChatHistorySnapshot({ ...thread, thread: { ...thread.thread, items: [updatedItem], arrivalOrder: [1] } }))) throw new Error('owned-reopen')
     // A saturated full replacement decrypts old memberships and protects every new record.
     // Report completion and duration rather than assuming a short renderer polling deadline.
     evidence.stage = 'saturated-replacement'
@@ -68,7 +80,7 @@ void app.whenReady().then(async () => {
     const directory = join(app.getPath('userData'), 'history')
     for (const name of readdirSync(directory)) {
       const bytes = readFileSync(join(directory, name))
-      if (['NATIVE-CONTENT-1979', 'NATIVE-ATTACHMENT-1979', 'NATIVE-CURSOR-1979', 'NATIVE-THREAD-1975'].some(s => bytes.includes(Buffer.from(s)))) throw new Error('plaintext')
+      if (['NATIVE-CONTENT-1979', 'NATIVE-ATTACHMENT-1979', 'NATIVE-CURSOR-1979', 'NATIVE-THREAD-1975', 'NATIVE-OWNED-2044'].some(s => bytes.includes(Buffer.from(s)))) throw new Error('plaintext')
     }
     evidence.passed = 1; evidence.stage = 'complete'
   } catch { evidence.failed = 1 }

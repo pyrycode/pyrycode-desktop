@@ -108,6 +108,7 @@ describe('supplied thread query coordination', () => {
     const reset: ThreadReply = { type: 'thread_reset', payload: { conversation_id: 'c', epoch: 'e', version: 999 } }
     f.reply(1, reset)
     expect(f.snapshot()).toMatchObject({ items: [], checkpoint: 0, version: 0, ranges: [], repair: null })
+    expect(f.store.getState().hosts.get('h')?.get('c')?.owned).toMatchObject({ acceptEpoch: true, resetId: expect.any(String) })
     expect(f.store.getState().snapshot('h', 'neighbor')).toBe(neighbor)
     expect(f.commands[2].query.payload).toEqual({ conversation_id: 'c', epoch: 'e', version: 0 })
     f.reply(1, reset); expect(f.commands).toHaveLength(3)

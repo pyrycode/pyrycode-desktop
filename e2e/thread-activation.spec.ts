@@ -21,6 +21,33 @@ const windowFrames = (request: Envelope, chat: string, text: string, epoch = 'ep
       : { lower_order: 0, upper_order: 30, continuation: 0, older_exists: false }) }, request.id)
 ]
 
+test('initial thread loading and Retry stay below the header and recover on click', async ({ launchPairedApp }) => {
+  const requests: Envelope[] = []
+  const { page, daemon } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
+    const request = decodeEnvelope(bytes); requests.push(request)
+    if (request.type === 'list_conversations') return [seedConversationsFrame(SEEDED_ROW)]
+    return request.type === 'thread_catch_up' && requests.filter(r => r.type === 'thread_catch_up').length > 1
+      ? windowFrames(request, SEEDED_ROW.id, 'Recovered idle history') : []
+  } })
+  const loading = page.getByText('Loading messages…', { exact: true })
+  await expect(loading).toBeVisible()
+  const header = await page.locator('.conversation__top-chrome').boundingBox()
+  expect(header).not.toBeNull()
+  expect((await loading.boundingBox())!.y).toBeGreaterThanOrEqual(header!.y + header!.height)
+  const pending = requests.find(r => r.type === 'thread_catch_up')!
+  daemon.pushFrame(frame('error', { code: 'thread.query_failed', message: 'Thread unavailable' }, pending.id))
+  const retry = page.getByRole('button', { name: 'Retry', exact: true })
+  await expect(retry).toBeVisible()
+  expect((await retry.boundingBox())!.y).toBeGreaterThanOrEqual(header!.y + header!.height)
+  expect(await retry.evaluate(button => {
+    const bounds = button.getBoundingClientRect()
+    return button.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2))
+  })).toBe(true)
+  await retry.click()
+  await expect(page.getByText('Recovered idle history', { exact: true })).toBeVisible()
+  await expect(retry).toHaveCount(0)
+})
+
 test('creating a fresh thread opens catch-up and sends without a sidebar reopen', async ({ launchPairedApp }) => {
   const requests: Envelope[] = []
   const created = { ...SEEDED_ROW, id: 'new-thread', name: null, current_session_id: 'session' }

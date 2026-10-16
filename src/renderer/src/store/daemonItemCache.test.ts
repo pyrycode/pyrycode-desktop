@@ -30,7 +30,7 @@ function harness(write = async (_request: ChatHistoryRequest): Promise<ChatHisto
   const writer = createChatHistoryWriter({ threads, lists, write: save, log,
     receipt: () => ({ type: 'assistantDelta', serverId: 'a' }),
     subscribeEvents: on => { listener = on; return () => { listener = () => {} } }, schedule: () => () => {} })
-  const writes = () => save.mock.calls.map(([r]) => r).filter(r => r.operation === 'replaceThread')
+  const writes = () => save.mock.calls.map(([r]) => r).filter(r => r.operation === 'mutateThread')
   return { threads, writer, save, log, writes, event: (event: StampedDaemonEvent) => listener(event) }
 }
 const read = (threads: ReturnType<typeof createThreadItemStore>, response: Promise<ChatHistoryResult>) =>
@@ -144,7 +144,7 @@ describe('daemon item cache ownership', () => {
     live(h.threads); const flushing = h.writer.flush(); await started.promise
     live(h.threads, 20); live(h.threads, 5, 'a', 'new'); live(h.threads, 30, 'b')
     wait.resolve({ status: 'ok' }); await flushing
-    expect(h.writes().map(r => [r.serverId, r.snapshot.thread.epoch, r.snapshot.thread.version])).toEqual([
+    expect(h.writes().map(r => [r.serverId, r.change.metadata.epoch, r.change.metadata.version])).toEqual([
       ['a', 'e', 10], ['a', 'new', 5], ['b', 'e', 30] ])
     await h.writer.stop(); live(h.threads, 40)
     expect(h.writes()).toHaveLength(3)
@@ -160,7 +160,7 @@ describe('daemon item cache ownership', () => {
     live(h.threads, 40)
     wait.resolve({ status: 'ok' }); await flushing
     expect(h.writes().filter(r => r.serverId === 'a')).toHaveLength(1)
-    expect(h.save.mock.calls.map(([r]) => r.operation)).toEqual(['replaceThread', 'replaceThread', 'removeConversation'])
+    expect(h.save.mock.calls.map(([r]) => r.operation)).toEqual(['mutateThread', 'mutateThread', 'removeConversation'])
     expect(h.threads.getState().snapshot('b', 'c')?.version).toBe(30)
     await h.writer.stop()
   })
@@ -188,7 +188,7 @@ describe('daemon item cache ownership', () => {
     await h.writer.flush()
     expect(h.threads.getState().snapshot('a', 'offscreen') === null).toBe(removed)
     expect(h.threads.getState().snapshot('a', 'unread') === null).toBe(removed)
-    if (removed) { live(h.threads, 5); await h.writer.flush(); expect(h.writes().at(-1)?.snapshot.thread.version).toBe(5) }
+    if (removed) { live(h.threads, 5); await h.writer.flush(); expect(h.writes().at(-1)?.change.metadata.version).toBe(5) }
     expect(h.threads.getState().snapshot('b', 'c')?.version).toBe(20)
     await h.writer.stop()
   })

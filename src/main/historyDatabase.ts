@@ -14,7 +14,7 @@ export function createHistoryDatabase({ userDataPath }: { userDataPath: string }
     const db = new Database(path)
     try {
       const version = db.pragma('user_version', { simple: true })
-      if (version !== 6 && version !== 5) {
+      if (version !== 7 && version !== 6 && version !== 5) {
         if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4) throw UNSUPPORTED_CHAT_HISTORY_VERSION
       }
       // The protected schema-5 to 6 conversion runs in indexedThreadHistory's

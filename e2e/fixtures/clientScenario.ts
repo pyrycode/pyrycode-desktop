@@ -1,6 +1,6 @@
 import { test as base, type ElectronApplication, type Page } from '@playwright/test'
 import { readFileSync, writeFileSync } from 'node:fs'
-import { basename, join, resolve } from 'node:path'
+import { basename, join, resolve, relative } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { test as live, withIsolatedElectronApp, type RealDaemonOptions, type RealDaemonFixtures } from './realDaemon'
@@ -103,7 +103,6 @@ const capture = live.extend<{ _clientCapture: void }>({
     try {
       await use()
       if (failure) throw failure
-      if (info.status !== 'passed' || info.errors.length) return
       assertCleanSource()
       const answerNonces = wire.filter(e => e.direction === 'client' && e.message.type === 'modal_answer')
         .map(e => (e.message.payload as Record<string, unknown>).answer_token)
@@ -123,6 +122,17 @@ const capture = live.extend<{ _clientCapture: void }>({
       const encoded = JSON.stringify(recording, null, 2) + '\n'
       for (const key of ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'PYRY_LIVE_CLAUDE_TOKEN'])
         if (process.env[key] && encoded.includes(process.env[key]!)) throw new Error('Invalid recording: credential present')
+      if (info.status !== 'passed' || info.errors.length) {
+        // Failed runs are private diagnostics, never eligible replay fixtures.
+        const diagnostics = process.env.PYRY_CLIENT_DIAGNOSTICS_DIR
+        if (diagnostics) {
+          if (!relative(process.cwd(), resolve(diagnostics)).startsWith('..')) throw new Error('Diagnostic directory must be outside the checkout')
+          writeFileSync(join(diagnostics, `${id}.failed.json`), JSON.stringify({
+            format: 'pyrycode.failed-capture', status: info.status, recording
+          }, null, 2), { flag: 'wx', mode: 0o600 })
+        }
+        return
+      }
       parseRecording(encoded)
       writeFileSync(join(output, `${id}.json`), encoded, { flag: 'wx', mode: 0o600 })
       await info.attach('capture-provenance', { contentType: 'application/json', body: Buffer.from(JSON.stringify({

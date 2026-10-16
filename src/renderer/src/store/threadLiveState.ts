@@ -78,6 +78,9 @@ export function createThreadLiveState(deps: ThreadLiveDeps) {
     const report = (code: string) => deps.log?.event({ event: 'thread-live-state', code })
     function owned(event: DaemonEvent, family: SessionStateFamily, binding: Binding): boolean {
       if ('conversationId' in event) return event.conversationId !== '' && event.conversationId === binding.conversationId
+      // An unsolicited withdrawal names the whole family, rather than the
+      // event identity it replaces. The exact host/session guards run first.
+      if (event.type === 'sessionStateCleared' && get().readings.has(family)) return true
       const held = get().readings.get(family)?.get(identity(event))
       if ((event.type === 'modalDismissed' || event.type === 'questionDismissed') && held !== undefined) return true
       const request = event.inReplyTo === undefined ? undefined : requests.get(event.inReplyTo)
@@ -142,6 +145,7 @@ export function createThreadLiveState(deps: ThreadLiveDeps) {
         if (typeof event.envelopeSessionId !== 'string' || event.envelopeSessionId === '' || event.envelopeSessionId !== binding.sessionId) { report('provenance-refused'); return }
         if (!owned(event, family, binding)) { report('ownership-refused'); return }
         if (event.type === 'sessionStateCleared') {
+          if (family === 'resetting') settingsBlocked = false
           if (family === 'modal_shown') modals.getState().dispatch({ type: 'reset' })
           if (family === 'question_shown') questions.getState().dispatch({ type: 'reconnected' })
           remove(family); report('family-cleared'); return

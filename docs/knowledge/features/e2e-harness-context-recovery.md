@@ -34,15 +34,15 @@ a second unguarded read. A one-shot injected context-loss error must recover thr
 a real Electron read; listener installation, clicks and pushed events are never replayed.
 
 `real-daemon-history-on-open.spec.ts` keeps recovery in its local
-`asks(): Promise<string[]>` reader. A five-second poll returns only when
-`readMainProcess` yields an actual cursor array, retaining that successful value
-for its caller. The unavailable sentinel never becomes an empty array, a count,
+`mainRead` reader, using the scoped synchronous adapter described below.
+A five-second poll returns only when inspection yields an actual value, retaining
+that successful value for its caller. The unavailable sentinel never becomes an empty array, a count,
 or a successful assertion. Opening-cursor, per-key and settlement checks all use
 this reader; listener installation, 205 posts, protected relaunch and native input
 remain single actions. Polling availability does not wait for a desired count or
 replace the caller's original count assertion.
 
-The shared client scenarios retain that read-only contract in `mainRead`. Isolation
+The shared client scenarios retain that read-only contract. Isolation
 read-back also retries only the exact transient error, for five seconds; it still
 requires the actual switches, an existing window and hidden state when configured.
 The indexed-history lifecycle check uses `readMainProcess` only for the post-close
@@ -63,6 +63,36 @@ while Electron was running; the repaired observer recovered and passed every
 original assertion. That proves read recovery without replay, but neither the
 upstream Electron/Playwright trigger nor the absent original gate report's
 assertion. Changing focus or scroll readiness would address an unproven cause.
+
+### Persistent awaited-inspector loss
+
+`readReplayMainProcess` in `e2e/fixtures/replayNativeStorage.ts` handles a stronger
+failure than one lost acknowledgement: Playwright's public main-process
+`evaluate` and `evaluateHandle` force `awaitPromise`, which can repeatedly lose
+even synchronous results after relaunch. More polling on that path cannot
+restore inspection. The [controlled diagnosis and counted Linux evidence](development-verification.md#replay-inspection-after-profile-relaunch)
+retain the original failures and same-process awaited/synchronous comparison.
+
+Only the replay SQLite prerequisite and history's `mainRead` use this adapter.
+It sends `Runtime.evaluate` through the current ElectronApplication's local
+inspector session with `includeCommandLineAPI: true`, `returnByValue: true` and
+`awaitPromise: false`. It serializes a client-owned synchronous callback called
+with `require('electron')`; daemon-supplied source and scenario mutations must
+never enter this path. The SQLite probe owns only a fresh in-memory database.
+No session is cached across profile relaunch. Playwright upgrades must preserve
+coverage of this internal session access and both relaunch scenarios.
+
+Recognized destroyed-context or collected-promise protocol errors yield
+`NOT_YET_AVAILABLE`; unrelated errors propagate unchanged. Valid `false`, `0`,
+`null`, `undefined` and `[]` remain values. Callback exceptions and promise results
+fail with the static `Replay main-process inspection failed` diagnostic.
+History polls availability for five seconds without changing its original value
+assertions. The native prerequisite polls unavailable reads every 100ms for five
+seconds, then fails `Replay main-process inspection unavailable`; an observed
+false probe still produces the existing Electron SQLite rebuild diagnostic.
+Observer installation continues to confirm the exact listener identity through
+its existing guarded path: recovery neither duplicates listeners nor resets
+collected requests. Input, posts and database setup are never blindly replayed.
 
 **Confirmed control resends.** Recovery needs evidence about the mutation's actual effect;
 an inconclusive read cannot authorize a resend. For renderer event delivery, watch the

@@ -86,6 +86,16 @@ describe('recorded daemon exchange', () => {
     expect(() => replay.assertComplete()).toThrow('Recorded exchange incomplete: 2 requests remain')
     expect(() => send(replay, 91, 'send_message', {})).toThrow('duplicate request ID')
   })
+  it('treats additional captured commands as exact action barriers rather than reorderable queries', () => {
+    const recording = fixture()
+    recording.wire.splice(2, 0,
+      { direction: 'client', message: message(6, 'mark_conversation_read', { conversation_id: 'chat', up_to: 13 }) },
+      { direction: 'daemon', message: message(14, 'ack', {}, 6) })
+    const replay = new RecordedExchange(recording)
+    const chat = (send(replay, 91, 'list_conversations', {})[0].payload as any).conversations[0].id
+    expect(send(replay, 92, 'mark_conversation_read', { conversation_id: chat, up_to: 13 })[0].in_reply_to).toBe(92)
+    expect(() => send(replay, 93, 'mark_conversation_read', { conversation_id: chat, up_to: 99 })).toThrow('step 3')
+  })
   it('requires a supported successful capture with correlated replies and no handshake or fragments', () => {
     for (const change of [
       (r: any) => { r.version = 2 },

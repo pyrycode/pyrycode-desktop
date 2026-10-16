@@ -1,4 +1,5 @@
-const controls = new Set(['create_conversation', 'send_message', 'modal_answer'])
+const queriesAllowed = new Set(['list_conversations', 'thread_catch_up', 'thread_page', 'request_session_settings',
+  'request_context_usage', 'request_model_list', 'request_system_prompt'])
 const identities = new Set(['conversation_id', 'session_id', 'modal_id', 'message_id', 'device_id', 'answer_token', 'epoch'])
 
 /** Compare the UI's real request contract, ignoring only fresh opaque identities and query order. */
@@ -21,8 +22,8 @@ export function requestContract(recording) {
     if (entry.direction !== 'client') continue
     const message = entry.message
     const signature = JSON.stringify({ type: message.type, payload: normalize(message.payload) })
-    if (controls.has(message.type)) { flush(); steps.push(signature) }
-    else queries.push(signature)
+    if (queriesAllowed.has(message.type)) queries.push(signature)
+    else { flush(); steps.push(signature) }
   }
   flush()
   return JSON.stringify({ scenario: recording.scenario.id, historyRetry: recording.scenario.historyRetry, steps })

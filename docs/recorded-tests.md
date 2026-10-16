@@ -41,8 +41,10 @@ and wait for every earlier request. Missing, duplicate, extra or changed request
 fail the test, including failures after the final visible assertion. Diagnostics
 contain counts and provenance, never request payloads.
 
-Version 1 admits the requests needed by this scenario. Unknown client commands,
-handshake frames, rekey controls and multipart payloads are rejected. Replay does
+Only the named read-only queries may reorder. Every other captured command is an
+exact action barrier, including background read-mark publication. Commands absent
+from the recording fail. Handshake frames, rekey controls and multipart payloads
+are rejected. Replay does
 not simulate elapsed network time or establish timing, rekey or reconnect coverage.
 Extending those behaviours requires explicit format support and new real captures.
 

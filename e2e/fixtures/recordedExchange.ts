@@ -16,9 +16,9 @@ const object = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value)
 const nonempty = (value: unknown): value is string => typeof value === 'string' && value.length > 0
 const forbidden = new Set(['hello', 'hello_ack', 'rekey_request', 'multipart', 'fragment'])
-const controls = new Set(['create_conversation', 'send_message', 'modal_answer'])
 const queries = new Set(['list_conversations', 'thread_catch_up', 'thread_page', 'request_session_settings',
   'request_context_usage', 'request_model_list', 'request_system_prompt'])
+const isAction = (type: string): boolean => !queries.has(type)
 const secretKeys = /^(?:token|access_?token|refresh_?token|private_?key|secret|authorization)$/i
 const credential = /sk-ant-|gh[pousr]_|-----BEGIN .*PRIVATE KEY-----/
 
@@ -57,7 +57,6 @@ export function parseRecording(text: string): Recording {
     if (!Number.isSafeInteger(m.id) || Number(m.id) < 0 || !nonempty(m.type) || forbidden.has(m.type) ||
         !nonempty(m.ts) || !object(m.payload) ||
         entry.atMs !== undefined && (typeof entry.atMs !== 'number' || !Number.isFinite(entry.atMs) || entry.atMs < 0)) return invalid()
-    if (entry.direction === 'client' && !controls.has(m.type) && !queries.has(m.type)) return invalid()
     const ids = entry.direction === 'client' ? clientIds : daemonIds
     if (ids.has(m.id as number)) return invalid()
     ids.add(m.id as number)
@@ -129,14 +128,14 @@ export class RecordedExchange {
     const eligible: Envelope[] = []
     for (const entry of this.recording.wire.slice(this.index)) {
       if (entry.direction !== 'client' || this.consumed.has(entry.message)) continue
-      if (controls.has(entry.message.type)) {
+      if (isAction(entry.message.type)) {
         if (eligible.length === 0) eligible.push(entry.message)
         break
       }
       eligible.push(entry.message)
     }
     const expected = eligible.find(message => message.type === actual.type &&
-      (controls.has(actual.type) || stable(this.mapped(message.payload)) === stable(actual.payload)))
+      (isAction(actual.type) || stable(this.mapped(message.payload)) === stable(actual.payload)))
     if (!expected) return this.fail(mismatch)
     const before = new Map(this.identities)
     const payload = expected.payload as Record<string, unknown>

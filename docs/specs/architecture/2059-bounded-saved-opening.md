@@ -78,3 +78,9 @@ None. Reuse weighted authenticated selection rather than filtering held pages; r
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-16
+
+## Revisions
+
+2026-10-16: The first instrumented cold read repeated verified structural paths (about 35,000 row reads for 200 base items). Cache authenticated nodes by their complete proof inside each transaction-local index instance, returning detached node containers to mutation. Cache selected evidence decoding too. This preserves verification and bounds unrelated growth while avoiding repeated SQL/JSON work. Full replacement invalidates selection indexes atomically with its retained representation; the next addressed opening converts that representation once, separately from ordinary cold-opening measurements. Owned mutation maintains indexes directly.
+
+Written-work recount remains below 800 lines, with one moved shared page abstraction, no new renderer component/store or simultaneous constructor migration, five acceptance behaviors and existing classified reject paths.

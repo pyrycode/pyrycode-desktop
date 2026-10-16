@@ -44,18 +44,18 @@ describe('installHeldThreadRead', () => {
     expect(await installHeldThreadRead(h.app)).toEqual({ installationAttempts: 1, inspectionAttempts: 1, contextLosses: 0 })
     const handler = h.handlers.get(channel)!
     expect(await handler('event', { operation: 'readList' })).toEqual({ status: 'stored' })
-    const pending = handler('held', { operation: 'readThread' })
+    const pending = handler('held', { operation: 'openThreadPage' })
     await Promise.resolve()
     expect(state.heldThreadReads).toBe(1)
     expect(h.electron.ipcMain.listenerCount(release)).toBe(1)
     // A concurrent read delegates, rather than installing a second release listener.
-    expect(await handler('next', { operation: 'readThread' })).toEqual({ status: 'stored' })
+    expect(await handler('next', { operation: 'openThreadPage' })).toEqual({ status: 'stored' })
     expect(state.heldThreadReads).toBe(1)
     h.electron.ipcMain.emit(release)
     expect(await pending).toEqual({ status: 'stored' })
     expect(h.handlers.get(channel)).toBe(h.original)
     expect(h.electron.ipcMain.listenerCount(release)).toBe(0)
-    expect(h.calls).toEqual([['event', { operation: 'readList' }], ['held', { operation: 'readThread' }], ['next', { operation: 'readThread' }]])
+    expect(h.calls).toEqual([['event', { operation: 'readList' }], ['held', { operation: 'openThreadPage' }], ['next', { operation: 'openThreadPage' }]])
   })
 
   it('confirms absence before retrying loss before effect', async () => {
@@ -101,7 +101,7 @@ describe('installHeldThreadRead', () => {
     const h = harness(['before'])
     await installHeldThreadRead(h.app)
     const wrapper = h.handlers.get(channel)!
-    const pending = wrapper({}, { operation: 'readThread' })
+    const pending = wrapper({}, { operation: 'openThreadPage' })
     await Promise.resolve()
     await h.callbacks[0](h.electron)
     expect(h.handlers.get(channel)).toBe(wrapper)

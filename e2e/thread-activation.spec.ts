@@ -437,9 +437,13 @@ test('restore overlapping live content retains complete progress across an inter
     const result = await window.pyry.chatHistory({ operation: 'readThread', serverId: 'fake-daemon', conversationId: id })
     if (result.status !== 'stored' || result.snapshot.kind !== 'daemon-items') throw Error('expected saved thread')
     const thread = result.snapshot.thread
+    const older = Array.from({ length: 220 }, (_, n) => ({ id: n + 1000, rev: 1, kind: 'future', shown: true, order: -1, content: {} }))
+    const hidden = Array.from({ length: 500 }, (_, n) => ({ id: n + 2000, rev: 1, kind: 'future', shown: false, content: {} }))
+    const active = { id: 3000, rev: 1, kind: 'future', shown: false, active: true, content: {} }
+    const items = [...older, extra, ...thread.items, ...hidden, active]
     const saved = await window.pyry.chatHistory({ operation: 'replaceThread', serverId: 'fake-daemon', conversationId: id,
       snapshot: { ...result.snapshot, thread: { ...thread, version: 25, uncommittedVersion: 25,
-        items: [extra, ...thread.items], arrivalOrder: [extra.id, ...thread.arrivalOrder ?? thread.items.map(i => i.id)] } } })
+        items, arrivalOrder: items.map(i => i.id) } } })
     if (saved.status !== 'ok') throw Error('expected saved fixture')
   }, { id: SEEDED_ROW.id, extra: item(9, 'Saved-only row during held catch-up') })
   await app.close()
@@ -469,6 +473,13 @@ test('restore overlapping live content retains complete progress across an inter
   await expect(page.getByText('Saved-only row during held catch-up', { exact: true })).toBeVisible()
   await expect(page.getByText('New live revision during restore', { exact: true })).toBeVisible()
   await expect.poll(() => requests.filter(r => r.type === 'thread_catch_up').length).toBe(2)
+  const opening = await page.evaluate(id => window.pyry.chatHistory({ operation: 'openThreadPage', serverId: 'fake-daemon', conversationId: id, limit: 200 }), SEEDED_ROW.id)
+  expect(opening.status).toBe('page')
+  if (opening.status !== 'page') throw Error('expected bounded opening')
+  expect(opening.page.items.filter(i => i.shown === true)).toHaveLength(200)
+  expect(opening.page.items.find(i => i.id === 3000)).toMatchObject({ shown: false, active: true })
+  expect(opening.page.items.some(i => i.id === 1000)).toBe(false)
+  await page.screenshot({ path: testInfo.outputPath('bounded-opening-held-reply.png') })
   expect(requests.filter(r => r.type === 'thread_catch_up').at(-1)?.payload).toMatchObject({ epoch: 'epoch', version: 20 })
   const heldReply = requests.filter(r => r.type === 'thread_catch_up').at(-1)!
   daemon.pushFrame(frame('thread_items', { conversation_id: SEEDED_ROW.id, epoch: 'epoch', version: 25,

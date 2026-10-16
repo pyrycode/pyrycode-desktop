@@ -34,11 +34,33 @@ function harness(write = async (_request: ChatHistoryRequest): Promise<ChatHisto
   return { threads, writer, save, log, writes, event: (event: StampedDaemonEvent) => listener(event) }
 }
 const read = (threads: ReturnType<typeof createThreadItemStore>, response: Promise<ChatHistoryResult>) =>
-  readSavedTimeline({ threads, read: () => response, log: () => {} }, 'a', 'c')
+  readSavedTimeline({ threads, read: () => response.then(project), log: () => {} }, 'a', 'c')
+function project(result: ChatHistoryResult): ChatHistoryResult {
+  if (result.status !== 'stored' || result.snapshot.kind !== 'daemon-items') return result
+  const { items, ranges, arrivalOrder, ...metadata } = result.snapshot.thread
+  return { status: 'page', page: { partial: true, metadata: { ...metadata, hostId: result.snapshot.serverId, conversationId: result.snapshot.conversationId }, items, ranges, continuation: null,
+    ...(arrivalOrder === undefined ? {} : { arrivalPositions: items.map(i => arrivalOrder.indexOf(i.id)) }) } }
+}
+
+it('partial opening preserves omitted availability ownership and sparse arrival positions', async () => {
+  const target = createThreadItemStore(), api = target.getState()
+  const page = { partial: true as const, metadata: { hostId: 'a', conversationId: 'c', epoch: 'e',
+    version: 20, checkpoint: 20, repair: null, olderAvailable: false },
+    items: [{ ...item(10), id: 2 }, item(10)], ranges: [{ start: 900, end: 910 }],
+    arrivalPositions: [800, 20], availabilityStart: 1, continuation: null }
+  const handle = api.beginLocalRead('a', 'c')!
+  live(target, 40)
+  api.beginBatch('a', 'c', 'e')!.commit({ fromVersion: 0, version: 40,
+    ranges: [{ start: 100, end: 110 }], olderAvailable: true })
+  handle.complete(page)
+  api.beginBatch('a', 'c', 'e')!.commit({ fromVersion: 40, version: 50,
+    ranges: [{ start: 50, end: 60 }], olderAvailable: true })
+  expect(api.snapshot('a', 'c')).toMatchObject({ olderAvailable: false, arrivalOrder: [1, 2] })
+})
 
 describe('daemon item cache ownership', () => {
   it.each(['matching', 'missing', 'error', 'reject', 'host', 'conversation', 'timeline', 'list', 'ok'] as const)(
-    'requests only readThread and admits matching daemon items: %s', async outcome => {
+    'requests bounded opening and admits matching daemon items: %s', async outcome => {
       const source = createThreadItemStore(), target = createThreadItemStore()
       live(source)
       const snapshot = saved(source.getState().snapshot('a', 'c')!)
@@ -52,10 +74,10 @@ describe('daemon item cache ownership', () => {
           : outcome === 'list' ? { version: 1, kind: 'list', serverId: 'a', conversations: [] } : snapshot }
       const log = vi.fn(), read = vi.fn(async () => {
         if (outcome === 'reject') throw Error('private detail')
-        return response
+        return project(response)
       })
       await readSavedTimeline({ threads: target, read, log }, 'a', 'c').done
-      expect(read.mock.calls).toEqual([[{ operation: 'readThread', serverId: 'a', conversationId: 'c' }]])
+      expect(read.mock.calls).toEqual([[{ operation: 'openThreadPage', serverId: 'a', conversationId: 'c', limit: 200 }]])
       expect(target.getState().snapshot('a', 'c')).toEqual(outcome === 'matching' ? snapshot.thread : null)
       if (outcome === 'matching') {
         await readSavedTimeline({ threads: target, read, log }, 'a', 'c').done
@@ -245,7 +267,7 @@ describe('daemon item cache ownership', () => {
   })
   it.each([true, false])('unpair invalidates old work and preserves another host: success=%s', async removed => {
     const h = harness(); live(h.threads); live(h.threads, 10, 'a', 'e', 'offscreen'); live(h.threads, 20, 'b')
-    const wait = held<ChatHistoryResult>(), task = readSavedTimeline({ threads: h.threads, read: () => wait.promise, log: () => {} }, 'a', 'unread')
+    const wait = held<ChatHistoryResult>(), task = readSavedTimeline({ threads: h.threads, read: () => wait.promise.then(project), log: () => {} }, 'a', 'unread')
     const settle = beginChatHistoryRemoval('a')
     await h.writer.flush(); expect(h.writes().map(r => r.serverId)).toEqual(['b'])
     live(h.threads, 15, 'a', 'e', 'unread')

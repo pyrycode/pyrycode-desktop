@@ -23,7 +23,9 @@ type DriveWindow = typeof window & { permissionProof: Proof }
 
 test('operator bypass stays confirmed through a no-op write, then the menu returns to bypass and Manual approval enforces Read', async ({ relay, daemon }, testInfo) => {
   test.setTimeout(360_000)
-  const revision = scenarioDaemonRevision()
+  const revision = scenarioMode === 'live'
+    ? daemonIdentity((await promisify(execFile)(process.env.PYRY_BIN ?? 'pyry', ['version'], { encoding: 'utf8', timeout: 10_000 })).stdout)
+    : scenarioDaemonRevision()
   testInfo.annotations.push({ type: 'daemon-revision', description: revision })
   await testInfo.attach('daemon-revision', { body: Buffer.from(revision), contentType: 'text/plain' })
   // sessions.settingsFromEntry normalizes absent permission_mode + false/absent yolo to default.

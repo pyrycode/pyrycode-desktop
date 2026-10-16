@@ -7,7 +7,8 @@ const harness = vi.hoisted(() => ({
   version: vi.fn()
 }))
 
-vi.mock('./fixtures/realDaemon', () => ({
+vi.mock('./fixtures/clientScenario', () => ({
+  scenarioMode: 'live',
   test: Object.assign(harness.register, { use: vi.fn(), setTimeout: vi.fn() }),
   expect: vi.fn(),
   encodePairingPayload: vi.fn(),

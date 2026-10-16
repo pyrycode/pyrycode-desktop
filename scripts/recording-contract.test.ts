@@ -10,6 +10,17 @@ const fixture = (conversation = 'recorded-chat') => ({ scenario: { id: 'permissi
     { direction: 'client', message: { type: 'modal_answer', payload: { modal_id: 'fresh-modal', option_id: 'allow_once', answer_token: 'fresh-answer' } } }
   ] })
 describe('recording request contract verification', () => {
+  it('binds upload IDs to the same attachment list while detecting a substituted attachment', () => {
+    const make = (id: string, sent = id) => ({ scenario: { id: 'attachment' }, wire: [
+      { direction: 'client', message: { type: 'attachment_chunk', payload: { attachment_id: id, data: 'actual-bytes' } } },
+      { direction: 'client', message: { type: 'send_message', payload: { attachment_ids: [sent], text: 'describe it' } } }
+    ] })
+    expect(requestContract(make('fresh-upload'))).toBe(requestContract(make('recorded-upload')))
+    expect(requestContract(make('fresh-upload', 'different-upload'))).not.toBe(requestContract(make('recorded-upload')))
+    const altered = make('fresh-upload')
+    altered.wire[0].message.payload.data = 'different-bytes'
+    expect(requestContract(altered)).not.toBe(requestContract(make('recorded-upload')))
+  })
   it('accepts fresh opaque IDs and query reordering within the same action', () => {
     const fresh = fixture('another-chat')
     ;[fresh.wire[1], fresh.wire[2]] = [fresh.wire[2], fresh.wire[1]]

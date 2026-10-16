@@ -15,7 +15,7 @@ export function requestContract(recording) {
       return aliases.get(value)
     }
     if (typeof value === 'string') return inputText(value)
-    if (Array.isArray(value)) return value.map(child => normalize(child))
+    if (Array.isArray(value)) return value.map(child => normalize(child, key === 'attachment_ids' ? 'attachment_id' : ''))
     if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value)
       .sort(([a], [b]) => a.localeCompare(b)).map(([key, child]) => [key, normalize(child, key)]))
     return value

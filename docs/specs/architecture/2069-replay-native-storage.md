@@ -44,6 +44,18 @@ Native load/open/query failure returns false from Electron, then throws the same
 None. Actual-versus-recorded divergence and dependency-only A/B reproduction are established before implementation.
 
 ## Documentation handoff
-Pending documentation stage: `docs/recorded-tests.md`, replay prerequisites: explain `npm run rebuild:electron` before replay after installation or rebuilding SQLite for Node tests, and the startup diagnostic. Preserve Linux-only evidence scope.
+Pending documentation stage: `docs/recorded-tests.md`, § Replay contract: explain `npm run rebuild:electron` before replay after installation or rebuilding SQLite for Node tests, and the startup diagnostic. Preserve Linux-only evidence scope.
 
 Sizing: approximately 200 written lines including plan, helper and tests; at most 2 exported functions, 1 updated consumer, 3 observable acceptance criteria, and 1 classified prerequisite failure. All limits hold.
+
+## Validation evidence
+Linux x64, Node 25.8.0, Electron 33.4.11; final main merge contains `be2afa3ffc3c`. No production files changed. The capture, original effort-default spec and `RecordedExchange` are byte-for-byte unchanged against main.
+
+- Before implementation, the diagnostic main archive failed at request 41: connection 2, actual `thread_catch_up` epoch `""` / version 0, eligible recorded request nonempty epoch / version 14. Worker exited with code 7. Retained logs: `/tmp/builder-2069/baseline-native.log` and `/tmp/builder-2069/historical-main-recorded.log` (copy of the original #2068 main evidence).
+- Rebuilding SQLite for Electron made the same archived app/capture pass: 1 executed, 1 passed, 0 failed/skipped; `/tmp/builder-2069/native-ready.log`.
+- Test-first prerequisite regressions: 3 failed, 1 passed against the no-op scaffold; `/tmp/builder-2069/native-regression-red.log`. Final five regressions all pass, including load/open failure, repeated probes, cleanup and success.
+- Controlled actual wrong-ABI run after `npm run rebuild:node`: 1 executed, 1 expected failure, 0 skipped. It reports the static SQLite prerequisite error before consuming any of the 96 requests, with a normal Playwright failure and zero forbidden launches; `/tmp/builder-2069/wrong-abi.log`.
+- Final pre-verify: all 5 checks passed; 401 unit files, 9,245 passed, 0 failed, 3 existing skips; `/tmp/builder-2069/pre-verify.log`. Client-test typecheck and docs guard also passed.
+- After restoring Electron SQLite, `npm run e2e:recorded` built successfully and ran every active scenario: 29 executed/passed, 0 failed, 1 existing system-prompt-reset fixme, 0 retries, 0 forbidden launches. All 29 exchange attachments report zero remaining requests. Effort-default matched 96 requests and emitted 396 recorded frames. Reports: `/tmp/builder-2069/recorded-final.log` and `/tmp/builder-2069/recorded-final.json`.
+
+The effort capture retains Desktop source `00ec821f9380b00cf2dfc0dd4817ee15584106a5`, daemon `58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`, and Claude 2.1.280 provenance. These runs prove offline captured behavior; no provider/live or macOS acceptance is claimed.

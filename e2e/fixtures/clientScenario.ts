@@ -10,6 +10,7 @@ import { RecordedExchange, parseRecording, type Recording, type RecordedEntry } 
 import { clientAppLifecycle } from './clientAppLifecycle'
 import { daemonIdentity } from './daemonVersion'
 import type { ExchangeCapture } from './exchangeCapture'
+import { assertReplayNativeStorage } from './replayNativeStorage'
 
 export { expect } from '@playwright/test'
 export type { SpawnedDaemon } from './realDaemon'
@@ -203,7 +204,8 @@ const replay = base.extend<ReplayFixtures>({
   _clientReplay: [async ({ daemon, exchange, recording }, use) => {
     void daemon
     let first = true
-    clientAppLifecycle.opened = async (_, page) => {
+    clientAppLifecycle.opened = async (app, page) => {
+      await assertReplayNativeStorage(app)
       const identity = await page.evaluate(() => window.pyry.deviceIdentity())
       if (!identity.ok) throw new Error('Replay device identity unavailable')
       if (first) { exchange.setDeviceId(identity.deviceId); first = false }

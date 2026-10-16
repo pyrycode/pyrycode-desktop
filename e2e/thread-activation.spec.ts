@@ -21,7 +21,7 @@ const windowFrames = (request: Envelope, chat: string, text: string, epoch = 'ep
       : { lower_order: 0, upper_order: 30, continuation: 0, older_exists: false }) }, request.id)
 ]
 
-for (const offline of [false, true]) test(`unchanged saved traversal scrolls independently ${offline ? 'offline' : 'while server reply is held'}`, async ({ launchPairedApp }, testInfo) => {
+for (const invalidation of [false, true]) for (const offline of [false, true]) test(`${invalidation ? 'invalidated' : 'unchanged'} saved traversal scrolls independently ${offline ? 'offline' : 'while server reply is held'}`, async ({ launchPairedApp }, testInfo) => {
   const requests: Envelope[] = []
   let hold = false
   const first = await launchPairedApp({ threadMode: 'native', buildReplyFrames: bytes => {
@@ -70,7 +70,16 @@ for (const offline of [false, true]) test(`unchanged saved traversal scrolls ind
     await scroller.press('ArrowUp')
     await expect.poll(() => resumed.app.evaluate(() => (globalThis as any).savedReads)).toBe(n + 2)
   }
-  const anchor = page.locator('[data-read-row="50"]')
+  if (invalidation) await page.evaluate(async id => {
+    const saved = await window.pyry.chatHistory({ operation: 'readThread', serverId: 'fake-daemon', conversationId: id })
+    if (saved.status !== 'stored' || saved.snapshot.kind !== 'daemon-items') throw Error('missing saved thread')
+    const { items, ranges, arrivalOrder, ...metadata } = saved.snapshot.thread
+    void items; void ranges; void arrivalOrder
+    const changed = await window.pyry.chatHistory({ operation: 'mutateThread', serverId: 'fake-daemon', conversationId: id,
+      change: { metadata, acceptEpoch: false, items: [], removeIds: [50], ranges: [] } })
+    if (changed.status !== 'ok') throw Error('invalidation failed')
+  }, SEEDED_ROW.id)
+  const anchor = page.locator(`[data-read-row="${invalidation ? 51 : 50}"]`)
   await anchor.evaluate(el => el.scrollIntoView({ block: 'start' }))
   await scroller.hover(); await page.mouse.wheel(0, -1)
   await expect.poll(() => resumed.app.evaluate(() => (globalThis as any).heldThreadReads)).toBe(1)

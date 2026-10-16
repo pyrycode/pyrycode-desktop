@@ -158,10 +158,10 @@ The [legacy browser/liveness discussion](chat-history-testing.md#history-continu
 does not establish daemon-item live acceptance. Production opening admits bounded
 partial indexed pages and saves only owned changes; hydration emits no save or new
 progress/completeness/read receipt. Explicit Retry repeats a failed bounded demand;
-invalidated tokens retain classified failure and valid content without recovery.
-Automatic recovery after mutations/replacements remains #2064. See
-[counted bounded-opening evidence](chat-history-testing-native.md#counted-bounded-opening-validation)
-and [unchanged traversal evidence](#counted-unchanged-saved-traversal-validation).
+main can rebase invalidated held traversal only with its paired authenticated
+recovery capability. Generic failures retain valid content for explicit Retry.
+See [counted recovery evidence](#counted-saved-traversal-recovery-validation) and
+[bounded-opening evidence](chat-history-testing-native.md#counted-bounded-opening-validation).
 
 `savedThreadTraversal.test.ts` extends the existing runtime/store fixtures for held
 admission. It exercises newest traversal despite null opening continuation,
@@ -172,15 +172,23 @@ success/failure after cancellation/navigation, epoch replacement, same-epoch res
 delete, unpair and global clear with reused strings. Protection/storage/token and
 IPC failure classifications retain facts without loops or private diagnostic text.
 Disjoint saved ranges `[100,200)` / `[900,1000)` leave the next network page at 900.
+`echoes only the traversal recovery capability and retries classified failures
+without spinning` supplies a different opening capability, proving the first newest
+demand ignores it. A failed before-demand retains the traversal pair for one explicit
+Retry. Existing delayed success/error cleanup tables still fence recovery admission
+and presentation through navigation, epoch/reset, deletion, unpair and teardown.
 
 `fresh protected traversal reaches every fragmented saved identity including opening
-omissions without writes` in the existing Node integration fixture saves 650 identities:
+omissions without writes (invalidation %s)` in the existing Node integration fixture
+runs both unchanged and metadata-invalidated saved traversal over 650 identities:
 250 shown and 400 hidden, including unordered content and an old active dependency.
 A fresh runtime opens 201 selected facts, then traverses newest/before held windows
-and compares the exact complete snapshot and 650 unique ids. All operations are
-reads and the result is marked restored. A token survives another fresh owner while
-unchanged, then returns `unreadable` after replacement; the displayed snapshot stays
-intact. Overlapping opening facts must not skip omitted saved content.
+and compares the exact complete snapshot and 650 unique ids. All runtime storage
+requests are reads and the result is marked restored. A token survives another fresh owner while
+unchanged, then an ordinary request without recovery returns `unreadable` after
+replacement; the displayed snapshot stays intact. The invalidation variant commits
+metadata at depth, then continues the exact snapshot comparison without hydration
+writes. Overlapping opening facts must not skip omitted saved content.
 
 The mounted `unchanged saved traversal scrolls independently while server reply is
 held` and `unchanged saved traversal scrolls independently offline` cases reuse that
@@ -192,6 +200,22 @@ final insertion and prove repeated wheel input coalesces. All 250 shown rows ren
 without additional network pages or read acknowledgements; saved unread evidence
 does not become acknowledged by hydration. Captures at 1100×773 preserve the existing
 sidebar, conversation pane, footer and notices.
+
+Their `invalidated saved traversal ...` variants remove saved boundary identity 50
+before the next held read, anchor surviving visible row 51 and assert its
+viewport offset across recovery. Both offline and positively held-reply variants
+retain coalescing, saved unread evidence and zero extra network-page/read-ack
+assertions. Measuring row count alone would miss a jump to newest or an identity
+omitted when its order moved across the old boundary.
+
+Protected `indexedThreadHistory.test.ts` adds metadata, revision/order movement,
+boundary removal and same-epoch replacement cases with exact remaining content
+comparison after fresh reopen. It separately checks repeated invalidation with one
+bounded window per demand and complete identity traversal once writes settle.
+Capability substitution/wrong-scope tests cover epoch-string round trips, explicit
+same-epoch reset, deletion and unpair recreation. Ordinary stale-token rejection
+remains asserted even when the matching recovery capability exists. See
+[work and packaged measurements](chat-history-testing-native.md#counted-saved-traversal-recovery-validation).
 
 The direct legacy `beginLocalTimelineRead` admission, newest-demand and exclusive
 bridge/frame tests were removed with the renderer holder/producers in #2030.
@@ -246,6 +270,53 @@ The fake skips are two macOS badge cases and the macOS window-reopen case. macOS
 is outside this Linux ticket's verification scope. No live-Claude run was required
 or claimed. These are recorded builder/verifier results, not documentation-stage
 test reruns.
+
+### Counted saved traversal recovery validation
+
+The [recovery verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/2067#issuecomment-6218610544)
+and dispatcher report record Linux x64 on 2026-10-16 at
+`5e84fc20d0ef7f175f7d3b2f1d1ce0e488b51340`:
+
+| Run or included case | Executed | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| Full units, 400 passing files | 9,240 | 9,240 | 0 | 3 |
+| Complete configured Playwright suite, verifier gate 8 | 468 | 468 | 0 | 4 |
+| `invalidated saved traversal scrolls independently offline`, included above | 1 | 1 | 0 | 0 |
+| `invalidated saved traversal scrolls independently while server reply is held`, included above | 1 | 1 | 0 | 0 |
+| Packaged production-encryption check, included above | 1 | 1 | 0 | 0 |
+
+Both named invalidated cases are explicitly present and passed in the dispatcher
+report. The verifier also confirms both unchanged traversal cases passed, preserving
+four-case coverage. The complete gate ran clipboard/parallel projects with two
+workers, no filters, zero retries/flaky results and no top-level errors in 777.3 s.
+Captured clients contributed **28 executed/passed, 0 failed, 1 existing reset fixme
+skipped**, included in the totals. Remaining fake skips are three macOS-only cases;
+unit skips are existing opt-in checks. Install, pre-verify `--no-suite`, docs guard,
+Node/Electron adapter preparation, units and build passed. The unit counts come
+from the verifier's counted unit report, not the pre-verify exit code.
+
+Both current-head 1100×773 `saved-traversal-held.png` captures were inspected by the
+verifier. Boundary-removal offset and zero extra network-page/read-ack assertions
+precede capture; sidebar, conversation, footer and notices retain their presentation.
+The 650-identity protected restart compares exact content, uniqueness, opening
+omissions and fragmented ranges, with no hydration save.
+
+The [plan evidence](../../specs/architecture/2064-saved-traversal-recovery.md#validation-evidence)
+retains the builder's independent full pass at implementation `823b6dd2`:
+9,240 units executed/passed, 0 failed, 3 skipped; 468 fake/client cases executed/passed,
+0 failed, 4 skipped in 855.8 s. All four traversal cases and the single packaged
+case are explicitly recorded as passed there too. The initial pre-verify capture
+`/tmp/builder-2064/pre-verify.log` remains failed: six schema migration assertions
+exposed replacement-header inspection running during schema-5 conversion. Header
+inspection now requires a validated previous snapshot. The final full pass is a
+separate run; initial sandbox installation's esbuild permission failure is also
+retained in the plan, followed by approved installation.
+
+See [native/work evidence](chat-history-testing-native.md#counted-saved-traversal-recovery-validation)
+for separate selected, structural, conversion and timing measurements. macOS is
+outside this Linux ticket's verification scope. Controlled fake transport suffices;
+no real-Claude run was required or claimed. These are recorded results;
+documentation runs only the docs guard.
 
 ### Counted unchanged saved traversal validation
 

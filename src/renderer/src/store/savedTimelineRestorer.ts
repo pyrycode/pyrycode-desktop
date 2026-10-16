@@ -9,7 +9,7 @@ export function readSavedTimeline(deps: {
   read: (request: ChatHistoryRequest) => Promise<ChatHistoryResult>
   log: (event: RendererDiagnosticEvent) => void
 }, serverId: string, conversationId: string,
-  demand?: { operation: 'newestThreadPage' } | { operation: 'beforeThreadPage'; continuation: string }
+  demand?: { operation: 'newestThreadPage' } | { operation: 'beforeThreadPage'; continuation: string; recovery?: string }
 ): { done: Promise<string | undefined>; cancel: () => void } {
   const handle = deps.threads.getState().beginLocalRead(serverId, conversationId, demand !== undefined)
   const report = (code: string): void => deps.log({ event: 'history-timeline-restore', code })

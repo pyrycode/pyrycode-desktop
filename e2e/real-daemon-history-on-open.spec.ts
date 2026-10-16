@@ -1,3 +1,4 @@
+import type { ElectronApplication } from '@playwright/test'
 import { scenarioNonce, scenarioDaemonRevision, liveProof, scenarioEffect } from './fixtures/clientScenario'
 import { execFile } from 'node:child_process'
 import { dirname, join } from 'node:path'
@@ -8,6 +9,17 @@ import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 import { NOT_YET_AVAILABLE, readMainProcess } from './fixtures/mainProcessRead'
 
 import { watchPhaseReconnect, readPhaseReconnect } from './fixtures/phaseReconnectEvidence'
+
+// Retry only an inspection read when Electron loses its CDP promise. Never retry
+// the handler installation, input, daemon post, or any other mutation.
+async function mainRead<T>(app: ElectronApplication, read: (electron: typeof import('electron')) => T): Promise<T> {
+  let observed: T | typeof NOT_YET_AVAILABLE = NOT_YET_AVAILABLE
+  await expect.poll(async () => {
+    observed = await readMainProcess(app, read)
+    return observed !== NOT_YET_AVAILABLE
+  }, { timeout: 5_000 }).toBe(true)
+  return observed as T
+}
 
 // Channel posts append daemon-owned assistant entries without starting a Claude turn.
 // This acceptance uses real daemon storage and a fully exited, protected desktop profile.
@@ -91,7 +103,7 @@ test('a real daemon lazily fills a served gap after more than 200 entries writte
       const thread = fresh.page.locator('.conversation__thread')
       await expect(thread).toContainText(closedPosts.at(-1)!, { timeout: 45_000 })
       await expect(thread).toContainText(baseline)
-      const asks = await fresh.app.evaluate(() => (globalThis as any).__threadHistoryAsks as { type: string; version?: number }[])
+      const asks = await mainRead(fresh.app, () => (globalThis as any).__threadHistoryAsks as { type: string; version?: number }[])
       expect(asks[0]).toEqual({ type: 'thread_catch_up', version: savedCheckpoint })
       expect(asks.some(ask => ask.type === 'legacy')).toBe(false)
       // A separately authenticated fresh profile has no saved checkpoint and must page the newest window.
@@ -113,7 +125,7 @@ test('a real daemon lazily fills a served gap after more than 200 entries writte
         const history = clean.locator('.conversation__thread')
         await expect(history).toContainText(closedPosts.at(-1)!, { timeout: 45_000 })
         await history.press('Home')
-        await expect.poll(() => cleanApp.evaluate(() => (globalThis as any).__threadPageAsks.includes('thread_page'))).toBe(true)
+        await expect.poll(() => mainRead(cleanApp, () => (globalThis as any).__threadPageAsks.includes('thread_page'))).toBe(true)
         await expect(history.getByRole('status').filter({ hasText: 'Loading messages…' })).toHaveCount(0)
         const coverage = () => clean.evaluate(async ({ serverId, conversationId }) => {
           const result = await window.pyry.chatHistory({ operation: 'readThread', serverId, conversationId })
@@ -127,10 +139,10 @@ test('a real daemon lazily fills a served gap after more than 200 entries writte
         for (let step = 0; step < 12 && await history.getByText(baseline, { exact: true }).count() === 0; step++) {
           const before = await coverage()
           const beforeCount = await history.locator('.bubble').count()
-          const asks = await cleanApp.evaluate(() => (globalThis as any).__threadPageAsks.filter((type: string) => type === 'thread_page').length)
+          const asks = await mainRead(cleanApp, () => (globalThis as any).__threadPageAsks.filter((type: string) => type === 'thread_page').length)
           await history.evaluate(el => { el.scrollTop = 0 })
           await history.press('ArrowUp')
-          await expect.poll(() => cleanApp.evaluate(() => (globalThis as any).__threadPageAsks.filter((type: string) => type === 'thread_page').length)).toBe(asks + 1)
+          await expect.poll(() => mainRead(cleanApp, () => (globalThis as any).__threadPageAsks.filter((type: string) => type === 'thread_page').length)).toBe(asks + 1)
           await expect.poll(coverage).toBeLessThan(before!)
           await expect.poll(() => history.locator('.bubble').count()).toBeGreaterThan(beforeCount)
         }
@@ -143,7 +155,7 @@ test('a real daemon lazily fills a served gap after more than 200 entries writte
           expect(transcript.indexOf(text, position + text.length)).toBe(-1)
           previous = position
         }
-        expect(await cleanApp.evaluate(() => (globalThis as any).__threadPageAsks.includes('legacy'))).toBe(false)
+        expect(await mainRead(cleanApp, () => (globalThis as any).__threadPageAsks.includes('legacy'))).toBe(false)
       })
       await testInfo.attach('thread-saved-history-evidence', { contentType: 'application/json',
         body: Buffer.from(JSON.stringify({ daemonRevision: revision, savedCheckpoint, resumed: true, legacyRequests: 0 })) })

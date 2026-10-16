@@ -118,7 +118,7 @@ never executes or claims the filesystem/OS proof.
 
 Observed push-overload closes are recorded at the exact application-message prefix with their actual WebSocket code. Replay forwards every preceding encrypted frame before reproducing that local close; explicit application reconnects and profile relaunches still come from the shared scenario. Capture adapters remain separate build inputs.
 
-The evidence observers also retain native identity semantics: queue markers include an ordered same-revision suffix, and a completed permission turn is counted once even when reconnect returns its item again. These repairs preserve every original matcher and strengthen the meaning of completion. An AST audit retains all 1,028 original expect expressions, plus all 1,036 from merged baseline `aebee62f`.
+The evidence observers also retain native identity semantics: queue markers include an ordered same-revision suffix, and a completed permission turn is counted once even when reconnect returns its item again. These repairs preserve every original matcher and strengthen the meaning of completion. An AST audit retains all 1,028 original expect expressions, plus all 1,036 from merged baseline `aebee62f`, normalizing only type assertions and the equivalent read-only inspection wrapper. The wrapper retries the existing transient CDP read failure without retrying input or handler installation. All matchers and expected values remain unchanged.
 
 
 The queue-drop scenario positively observes its native turn completion and rendered

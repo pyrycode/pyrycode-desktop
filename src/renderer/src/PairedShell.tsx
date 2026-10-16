@@ -20,11 +20,7 @@ import { useActiveConversationReseed } from './store/activeConversationReseedBri
 import { useNotificationActivatedNav } from './store/notificationActivatedBridge'
 import { createNotificationTargets, notificationRowFor, usePushNotify } from './store/pushNotifyBridge'
 import { useAppBadge } from './store/appBadgeBridge'
-import {
-  conversationLastReadDeps,
-  stampLastReadFor,
-  useConversationLastRead
-} from './store/conversationLastReadBridge'
+import { useConversationLastRead } from './store/conversationLastReadBridge'
 import { activateConversation, type ActivateConversationDeps } from './activateConversation'
 import { applyPairingChange, type PairingChangeDeps } from './applyPairingChange'
 import {
@@ -61,7 +57,6 @@ import { serverInfoStore, useServerInfoStore, selectServers } from './store/serv
 import { useHostLabelStore, selectHostLabelFor } from './store/hostLabelStore'
 import { loadServerInfo } from './store/serverInfoLoader'
 import { slashCommandListStore } from './store/slashCommandListStore'
-import { timelineStore } from './store/timelineStore'
 import { usageLimitStore } from './store/usageLimitStore'
 import { reportedContextStore } from './store/reportedContextStore'
 import { confirmConversationDeleted } from './confirmConversationDeleted'
@@ -82,7 +77,6 @@ const activateDeps: ActivateConversationDeps = {
   getActiveConversation: () => activeConversationStore.getState().activeConversation,
   setActiveConversation: (conversation) =>
     activeConversationStore.getState().setActiveConversation(conversation),
-  dispatchTimeline: (event) => timelineStore.getState().dispatch(event),
   clearSessionId: () => sessionIdStore.getState().clearSessionId(),
   // #1167: the departing conversation's run configuration, all halves dropped as one act — the held
   // daemon snapshot, the write machine's pending / confirmed / rejected state, since #1231 the held
@@ -109,17 +103,6 @@ const activateDeps: ActivateConversationDeps = {
     systemPromptStore.getState().clearReading()
     systemPromptWriteStore.getState().dispatch({ type: 'conversationSwitched' })
   },
-  // #777: restore point 1 of "the open conversation's mark equals its own held item count" — the stamp
-  // for the conversation being opened. It reaches its two singletons through the bridge's own production
-  // wiring object rather than a fourth `getState()` arrow here, so the sampling branch lives in one
-  // tested place; `stampLastReadFor` never consults the open conversation, so the id below is the whole
-  // input. Restore point 2 is `useConversationLastRead` in the container.
-  stampLastRead: (conversationId) => stampLastReadFor(conversationLastReadDeps, conversationId),
-  // #786: the view stamp that ranks the opened conversation last in the retained timelines' eviction
-  // order — the write path that arms the ten-slice bound. Unlike `stampLastRead` above it reaches its
-  // store DIRECTLY, the `clearTimelineFor` / `clearAllTimelines` shape below: there is no sampling branch
-  // to keep in one tested place, because the store method takes the id and nothing else.
-  markViewed: (conversationId) => conversationTimelineStore.getState().markViewed(conversationId),
   // Refresh the connected chat's settings, context reading, model list and reply-only system prompt
   // on every activation, including reopening it. Each sender refuses falsy ids and sends once;
   // app-lifetime subscribers receive their replies. Read window.pyry only at activation time.
@@ -161,8 +144,6 @@ const activateDeps: ActivateConversationDeps = {
  */
 const exitConversationDeps: Omit<ExitActiveConversationDeps, 'navigateToList'> = {
   getActiveConversation: () => activeConversationStore.getState().activeConversation,
-  dispatchTimeline: (event) => timelineStore.getState().dispatch(event),
-  clearTimelineFor: (id) => conversationTimelineStore.getState().clearTimelineFor(id),
   clearActiveConversation: () => activeConversationStore.getState().clearActiveConversation(),
   clearSessionId: () => sessionIdStore.getState().clearSessionId(),
   // #1167: the same one act as in `activateDeps` above, and the two bodies are deliberately identical —
@@ -178,8 +159,6 @@ const exitConversationDeps: Omit<ExitActiveConversationDeps, 'navigateToList'> =
 }
 
 const clearPairingDeps: ClearPairingScopedStateDeps = {
-  dispatchTimeline: (event) => timelineStore.getState().dispatch(event),
-  clearAllTimelines: () => conversationTimelineStore.getState().clearAllTimelines(),
   clearActiveConversation: () => activeConversationStore.getState().clearActiveConversation(),
   clearSessionId: () => sessionIdStore.getState().clearSessionId(),
   clearAnnouncedModel: () => announcedModelStore.getState().clearAnnouncedModel(),
@@ -219,7 +198,7 @@ const clearPairingDeps: ClearPairingScopedStateDeps = {
   // #1140: every outstanding permission prompt, its suppression bookkeeping and its rejection banners,
   // dropped as one — and the THIRD member whose store the `connected` edge also clears. It reaches its
   // store through `dispatch` rather than a `clearAll*` setter because that is `modalStore`'s only write
-  // path, the `dispatchTimeline` / `dispatchSession` shape above and below; the action is payload-free,
+  // path, the `dispatchSession` shape below; the action is payload-free,
   // so the nullary property the six setters carry holds here too. Scoping the edge to the reconnecting
   // server (which is what #1140 does) is what stopped a re-pairing's first `connected` from clearing the
   // store on its way past, and the daemon's reconcile re-sends only the NEW server's prompts, so without
@@ -259,12 +238,7 @@ const clearPairingDeps: ClearPairingScopedStateDeps = {
   // makes the unpair path below drop it; the call site needed no edit.
   clearAllReportedContext: () => reportedContextStore.getState().clearAllReportedContext(),
   dispatchSession: (action) => sessionStore.getState().dispatch(action),
-  // #779: how far the operator read on the ended pairing's server — cleared in memory AND on disk, since
-  // #776 persists the marks. It reaches its store DIRECTLY rather than through
-  // `conversationLastReadDeps`, the `markViewed` argument above: the bridge's deps object exists so the
-  // SAMPLING branch lives in one tested place, and there is no sampling branch here — the store method
-  // takes nothing at all. Widening `ConversationLastReadDeps` with a member the stamp path never uses
-  // would put an unused effect on a tested interface.
+  // Retain local read-mark cleanup until its remaining consumers retire.
   clearAllLastRead: () => conversationLastReadStore.getState().clearAllLastRead()
 }
 
@@ -522,9 +496,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   }
   // The created-event → list→thread nav. #278: also record the created payload (its `cwd` feeds the
   // empty-thread workspace chip) — the callback already receives this payload and previously dropped it.
-  // #530: recording now goes through activateConversation, which first clears the previous
-  // conversation's timeline rows and daemon session id when the id actually changes — so a newly
-  // created discussion opens on an empty thread instead of the last one's history.
+  // Activation clears the previous session/configuration when the conversation ID changes.
   // #670: the FAB's create is a conversation switch too when a thread is already open — `open` is
   // absolute, so the route does not move and the pane would otherwise keep the previous discussion's
   // transient controls. Re-key it on the creating host and minted id.
@@ -537,7 +509,6 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
     const owned = serverId === undefined ? created : { ...created, serverId }
     activateConversation(activateDeps, owned)
     if (serverId !== undefined) {
-      conversationTimelineStore.getState().initializeCreatedTimeline(serverId, created.id)
       localRead.current = threadRuntime.open(serverId, created.id)
     }
     cancelCreatedInitialization.current = initializeCreatedConversationAfterList(
@@ -549,8 +520,8 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // #652: the delete confirmation → thread exit. Symmetric with the created-event nav above and driven
   // by the same rule — navigate on the DAEMON's confirmation, not on the click — so a delete the daemon
   // never confirms leaves the operator in the thread (AC5) rather than stranding them on a list that
-  // still shows the row. Confirmed deletion also removes an explicitly owned off-screen timeline;
-  // exitActiveConversation keeps the active-id gate, so another open thread stays intact.
+  // still shows the row. Confirmed deletion retains the owning-host and active-ID gates,
+  // so another open thread stays intact.
   // The per-render object allocation is free: the hook holds this inline arrow in a ref and re-reads it
   // on each delivery, so nothing needs memoizing and the subscription never re-establishes.
   useConversationDeletedExit((conversationId, serverId) =>
@@ -646,16 +617,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
   // beside the push trigger for the same lifetime: unpairing the last host unmounts this shell, and the
   // bridge's teardown is what clears the badge.
   useAppBadge()
-  // #777: restore point 2 — keep the OPEN conversation's last-read mark level with its own held item
-  // count as content lands, so a chat the operator is looking at never accrues an unread mark against
-  // itself. It observes conversationTimelineStore rather than the daemon-event channel: the composer's
-  // optimistic echo writes that store with no IPC arm behind it, and a second `onDaemonEvent` listener
-  // would sample the count before or after the timeline fan-out depending on registration order.
-  // Deliberately mounted HERE and not app-level beside the eight headless leaves in App: those exist for
-  // conversations the operator has NEVER opened, whereas this one only ever writes the OPEN conversation
-  // — a concept that exists only inside the paired shell. Every path that unmounts this shell clears the
-  // active conversation first, so there is no state in which a conversation is open and this is not
-  // listening. This hook subscribes for its effect only; recovery owns the render subscriptions.
+  // Authoritative publication retains its paired-shell lifetime.
   useConversationLastRead()
   // #1141: the pairing-change wiring, and the ONE dep object in this file that cannot live at module
   // scope — three of its four members close over per-render values (`onUnpaired`, `dispatch`). That

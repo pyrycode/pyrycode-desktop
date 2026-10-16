@@ -197,7 +197,7 @@ test('real Claude conversation hands over to GPT-6 Luna at Low effort and Luna a
       await expect(footer).not.toHaveText('Default')
       const events = (await proof.snapshot()).events
       expect(events.filter(event => event.type === 'switchAgent')).toEqual([{
-        type: 'switchAgent', payload: { conversation_id: conversationId, agent: 'codex', model: luna.value, effort: 'low' }
+        type: 'switchAgent', serverId, payload: { conversation_id: conversationId, agent: 'codex', model: luna.value, effort: 'low' }
       }])
       expect(events.filter(event => event.type === 'conversationCreated')).toHaveLength(0)
       await testInfo.attach('handover-answer', { contentType: 'application/json',

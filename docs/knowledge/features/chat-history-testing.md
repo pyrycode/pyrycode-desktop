@@ -181,8 +181,10 @@ validation, serialization and protected record work stay bounded as unrelated
 history grows` compares 10/1,000 items: each revision has three decrypts, three
 encrypts and equal item-serialization counts, with fewer than 40 extra reads/writes
 for logarithmic sequence work. `coalesces shared protected paths into one write per
-path in an owned batch` uses 400 items: each final path is written once. Rewriting
-shared paths per item previously stalled the visible-tail browser setup.
+path in an owned batch` checks one write per final path for 400 items. See the
+[focus classification](development-verification-layout-and-input.md#visible-tail-focus-reliability):
+batching resolved the observed timeout even in isolation; native-focus scheduling
+remains unproven. Keep this regression and the read spec.
 
 `e2e/daemon-item-cache.test.ts` compares separate, coalesced and held-failure saves
 through protected disk/reopen. It covers saved/pending repair and unfinished fences,

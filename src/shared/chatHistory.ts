@@ -119,7 +119,17 @@ export type OwnedThreadChanges = ThreadProgress & {
   removeIds: readonly number[]
   ranges: ThreadSnapshot['ranges']
 }
+export type ThreadHistoryPage = {
+  partial: true
+  metadata: Omit<ThreadSnapshot, 'items' | 'ranges' | 'arrivalOrder'>
+  items: ThreadSnapshot['items']; ranges: ThreadSnapshot['ranges']
+  arrivalPositions?: readonly number[]
+  availabilityStart?: number
+  continuation: string | null
+}
 export type ChatHistoryRequest = { serverId: string } & (
+  | { operation: 'openThreadPage' | 'newestThreadPage'; conversationId: string; limit: number }
+  | { operation: 'beforeThreadPage'; conversationId: string; limit: number; continuation: string }
   | { operation: 'mutateThread'; conversationId: string; change: OwnedThreadChanges }
   | { operation: 'readList' }
   | { operation: 'removeServer' }
@@ -131,6 +141,7 @@ export type ChatHistoryRequest = { serverId: string } & (
   | { operation: 'replaceThread'; conversationId: string; snapshot: Extract<ChatHistorySnapshot, { kind: 'daemon-items' }> }
 )
 export type ChatHistoryResult =
+  | { status: 'page'; page: ThreadHistoryPage }
   | { status: 'missing' }
   | { status: 'stored'; snapshot: ChatHistorySnapshot }
   | { status: 'ok' }
@@ -329,6 +340,17 @@ function retainedMetadata(value: unknown, hostId: string, conversationId: string
 }
 /** Selected facts share admission with full snapshots, without claiming complete membership. */
 export const threadHistoryCodec = { items: retainedItems, ranges: retainedRanges, metadata: retainedMetadata,
+  page(value: unknown, hostId: string, conversationId: string): ThreadHistoryPage {
+    const v = record(value), items = retainedItems(v.items), ranges = retainedRanges(v.ranges)
+    const arrivalPositions = optional(v.arrivalPositions, value => array(value, readId))
+    const continuation = v.continuation === null ? null : string(v.continuation)
+    if (v.partial !== true || new Set(items.map(i => i.id)).size !== items.length ||
+        arrivalPositions !== undefined && (arrivalPositions.length !== items.length || new Set(arrivalPositions).size !== items.length) ||
+        continuation !== null && (continuation.length === 0 || continuation.length > 65536 || !/^[A-Za-z0-9_-]+$/.test(continuation))) return invalid()
+    return { partial: true, metadata: retainedMetadata(v.metadata, hostId, conversationId), items, ranges,
+      ...(arrivalPositions === undefined ? {} : { arrivalPositions }),
+      ...(v.availabilityStart === undefined ? {} : { availabilityStart: readId(v.availabilityStart) }), continuation }
+  },
   nodes(value: unknown): number {
     if (typeof value !== 'object' || value === null) return 1
     return 1 + Object.values(value).reduce<number>((n, child) => n + threadHistoryCodec.nodes(child), 0)
@@ -510,6 +532,15 @@ export function parseChatHistorySnapshot(value: unknown): ChatHistorySnapshot {
 export function parseChatHistoryRequest(value: unknown): ChatHistoryRequest {
   const v = record(value)
   const serverId = id(v.serverId)
+  if (v.operation === 'openThreadPage' || v.operation === 'newestThreadPage' || v.operation === 'beforeThreadPage') {
+    const limit = readId(v.limit), conversationId = id(v.conversationId), before = v.operation === 'beforeThreadPage'
+    if (limit < 1 || limit > 200 || Object.keys(v).some(k =>
+      !['operation', 'serverId', 'conversationId', 'limit', ...(before ? ['continuation'] : [])].includes(k))) return invalid()
+    if (v.operation !== 'beforeThreadPage') return { operation: v.operation, serverId, conversationId, limit }
+    const continuation = string(v.continuation)
+    if (continuation.length === 0 || continuation.length > 65536 || !/^[A-Za-z0-9_-]+$/.test(continuation)) return invalid()
+    return { operation: 'beforeThreadPage', serverId, conversationId, limit, continuation }
+  }
   if (v.operation === 'mutateThread') {
     if (Object.keys(v).some(k => !['operation', 'serverId', 'conversationId', 'change'].includes(k))) return invalid()
     const conversationId = id(v.conversationId), c = record(v.change)

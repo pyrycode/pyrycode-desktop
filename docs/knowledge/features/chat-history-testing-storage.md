@@ -2,6 +2,39 @@
 
 Part of [protected history testing](chat-history-testing.md).
 
+## Bounded opening selection and work
+
+The protected-disk `indexedThreadHistory.test.ts` fixtures extend the existing
+backend/fresh-owner harness:
+
+- `bounded opening selects shown, active and recorded dependencies after fresh reopen`
+  puts 240 shown messages after a shown parent, a hidden ancestor and attributed
+  hidden ending, followed by 1,000 hidden items including one active item. Opening
+  retains the last 200 shown messages, both recorded ancestors, the ending and the
+  active item, excluding an unrelated descendant. Reversed first-arrival metadata
+  and misleading timestamps cannot change held selection. Exact agent fields retain
+  ending/marker placement; hidden dependencies keep `shown: false`.
+- `opening indexes follow owned revisions and removal without reviving old dependencies`
+  changes shown/active flags, removes an item and reopens a fresh owner. Selection
+  follows committed revisions/removal instead of stale index membership.
+- `cold opening payload work stays bounded as unrelated older, hidden and range history grows`
+  compares 262/1,242 items with additional unrelated ranges. It pays retained
+  replacement conversion before close/reopen, then instruments structural rows,
+  protected records, direct payload lookup and decrypts independently. Both opens
+  select 200 base items, one active item, one parent dependency and three intact
+  evidence ranges. Each requires 206 protected record reads, 202 payload reads and
+  408 decrypts; structural traversal is allowed logarithmic growth. See
+  [counted measurements and timings](chat-history-testing-native.md#counted-bounded-opening-validation).
+
+Filtering existing held pages would scan long hidden tails. Counting only decrypts
+would also miss repeated authenticated structural traversal: the first capture
+performed about 35,000 structural reads for 200 base items. Transaction-local caches
+keyed by complete authenticated proofs reduce repeated SQL/JSON work while retaining
+root verification, detached mutation containers and selected evidence caching.
+One-time collection import/retirement and addressed conversion can scale with data;
+measure them outside ordinary cold opening. A full replacement invalidates indexes
+atomically and requires conversion once again, while owned writes maintain them.
+
 ## Owned mutation regressions and counted validation
 
 The same protected-disk `indexedThreadHistory.test.ts` fixtures cover subset and
@@ -115,5 +148,7 @@ records 10,319 unit tests executed/passed, 0 failed and 3 skipped, including all
 26 backend cases, on `de25c375f42755f5da20a4c4003c790e9525522a`. Its fake-transport
 gate recorded 428 executed/passed, 0 failed and 3 skipped. These callable
 main-process operations require no real-Claude or visual acceptance. Full indexed
-storage is now active; page IPC, renderer consumers and partial writes remain #1931.
+storage is now active. These legacy page methods remain main-only; authoritative
+opening uses the shared authorized page bridge and owned writes preserve unloaded
+history. User-driven older saved traversal remains #2042.
 

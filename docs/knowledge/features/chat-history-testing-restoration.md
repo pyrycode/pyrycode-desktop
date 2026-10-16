@@ -78,11 +78,12 @@ the packaged run records elapsed replacement time.
 
 ## Restoration
 
-Restoration requires `readSavedTimeline({ threads, ... })` and requests only
-`readThread`. The authoritative cache harness checks the exact request and admits
-only daemon-item snapshots at the requested host/conversation; timeline, list,
-wrong-coordinate and unexpected-status results fail without importing data.
-`daemonItemCache.test.ts` holds full saved reads through initial live admission.
+Restoration requires `readSavedTimeline({ threads, ... })` and requests
+`openThreadPage` with limit 200. The authoritative cache harness checks that exact
+request and admits only explicitly partial pages at the requested host/conversation;
+full stored snapshots, timeline/list results, wrong coordinates and unexpected
+statuses fail without importing data. `daemonItemCache.test.ts` adapts its retained
+full fixtures into partial projections and holds reads through initial live admission.
 `merges delayed restoration with admitted revisions and original arrival ties`
 checks lower/equal/higher overlapping revisions, saved-only/live-only ids, explicit
 arrival metadata and the older supplied-order fallback; timestamps cannot break
@@ -104,8 +105,11 @@ live version with saved repair/unfinished work and admitted completion or abando
 An absent obligation in live scalar metadata cannot erase one loaded from disk. The
 incomplete/repair fixture restores checkpoint 100, applied version 300 and unfinished
 version 250: a certificate through 200 clears repair but leaves later live success
-fenced until certification covers 250. A completed snapshot's restoration retains
-its exact ranges and older availability without adding coverage.
+fenced until certification covers 250. Partial restoration retains selected intact
+ranges and older availability without adding coverage. `partial opening preserves omitted availability ownership and sparse
+arrival positions` uses positions 800/20 and saved boundary 1 outside selected
+900–910 evidence. Later certified boundaries at 100 then 50 cannot reopen the saved
+exhaustion; the slice retains the sparse map independently of resident arrival order.
 
 [`daemon-item-cache.test.ts`](../../../e2e/daemon-item-cache.test.ts) is a Node Vitest
 integration test, despite its directory. It connects the real writer to protected
@@ -139,17 +143,24 @@ These supplied-state tests cover cache preparation and local hydration.
 `e2e/thread-activation.spec.ts` exercises the production runtime's saved restore,
 reconnect, interrupted recovery, epoch replacement and cleanup. The overlap case
 holds the server reply through local-read release and saved/live visibility assertions.
-It seeds a saved-only row plus unfinished version 25/checkpoint 20, admits a higher
-live revision and a live-only row, then requires the released catch-up to use the
-admitted epoch and checkpoint 20. Allowing the server reply first could refetch a
+It seeds 220 older shown identities, 500 hidden identities, one hidden active item
+and a saved-only row plus unfinished version 25/checkpoint 20. Setup pays retained
+replacement conversion before closing the owner; reopening must return exactly 200
+shown items plus the hidden active item and exclude the oldest shown identity. It
+admits a higher live revision and a live-only row, then requires the released
+catch-up to use the admitted epoch and checkpoint 20. Allowing the server reply first could refetch a
 lost row and conceal broken restoration. Reconnect waits for completion 25 to be
 persisted, rather than merely dispatched. The retained prompt and queued cleanup
 cases check authority during pending/failed recovery and confirmed deletion/unpair.
 See [counted validation](#counted-savedlive-restoration-validation) and the earlier
 [activation inventory](../../specs/architecture/1908-thread-activation.md#manual-completion-shared-fake-migration-and-client-regressions).
 The [legacy browser/liveness discussion](chat-history-testing.md#history-continuity-and-overlap)
-does not establish daemon-item live acceptance. Production reads complete indexed snapshots and saves owned changes;
-bounded pages remain main-only pending #2041/#2042 reader activation.
+does not establish daemon-item live acceptance. Production opening admits bounded
+partial indexed pages and saves only owned changes; hydration emits no save or new
+progress/completeness/read receipt. Invalidated reads retry the bounded operation.
+User-driven older saved-page traversal remains #2042. See
+[counted bounded-opening evidence](chat-history-testing-native.md#counted-bounded-opening-validation)
+for the inspected mounted held-reply and protected opening/reopen cases.
 
 The direct legacy `beginLocalTimelineRead` admission, newest-demand and exclusive
 bridge/frame tests were removed with the renderer holder/producers in #2030.

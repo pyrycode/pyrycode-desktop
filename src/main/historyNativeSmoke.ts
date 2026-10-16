@@ -16,7 +16,9 @@ void app.whenReady().then(async () => {
     node: process.versions.node, adapter: '12.4.1', packaged: app.isPackaged,
     backend: process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : 'os-keychain',
     asar: __filename.includes('app.asar/'), unpacked: false, stage: 'runtime', executed: 1, passed: 0, failed: 0, skipped: 0,
-    saturatedMemberships: 100_000, saturatedReplacementMs: 0 }
+    saturatedMemberships: 100_000, saturatedReplacementMs: 0,
+    openingFixtureItems: 801, openingSelected: 200, openingActive: 1, openingDependencies: 0, openingEvidence: 2,
+    openingConversionMs: 0, coldOpeningMs: 0 }
   const database = createHistoryDatabase({ userDataPath: app.getPath('userData') })
   try {
     const require = createRequire(__filename)
@@ -76,6 +78,26 @@ void app.whenReady().then(async () => {
     database.close()
     const saved = await fresh().execute({ operation: 'readTimeline', serverId: 'smoke', conversationId: 'chat' })
     if (saved.status !== 'stored' || !isDeepStrictEqual(saved.snapshot, parseChatHistorySnapshot(repeated))) throw new Error('saturation-reopen')
+    evidence.stage = 'bounded-opening'
+    const openingItems = [
+      ...Array.from({ length: 300 }, (_, id) => ({ id, rev: 1, kind: 'future', shown: true, order: id })),
+      ...Array.from({ length: 500 }, (_, n) => ({ id: n + 1000, rev: 1, kind: 'future', shown: false })),
+      { id: 2000, rev: 1, kind: 'future', shown: false, active: true }]
+    const opening = { ...thread, conversationId: 'opening', thread: { ...thread.thread, conversationId: 'opening',
+      items: openingItems, arrivalOrder: openingItems.map(i => i.id), ranges: [{ start: 0, end: 300 }, { start: 900, end: 901 }] } }
+    const openingStore = fresh()
+    if ((await openingStore.execute({ operation: 'replaceThread', serverId: 'smoke', conversationId: 'opening', snapshot: opening })).status !== 'ok') throw Error('opening-write')
+    const request = { operation: 'openThreadPage', serverId: 'smoke', conversationId: 'opening', limit: 200 }
+    const conversion = performance.now(), converted = await openingStore.execute(request)
+    evidence.openingConversionMs = Math.round(performance.now() - conversion)
+    if (converted.status !== 'page') throw Error('opening-conversion')
+    database.close()
+    const cold = performance.now(), opened = await fresh().execute(request)
+    evidence.coldOpeningMs = Math.round(performance.now() - cold)
+    if (opened.status !== 'page' || !isDeepStrictEqual({ ...opened.page, continuation: null }, { ...converted.page, continuation: null }) ||
+      typeof opened.page.continuation !== 'string' ||
+      !isDeepStrictEqual(opened.page.items.map(i => i.id), [...Array.from({ length: 200 }, (_, n) => n + 100), 2000]) ||
+      opened.page.ranges.length !== 2 || opened.page.metadata.checkpoint !== 1) throw Error('opening-reopen')
     evidence.stage = 'protected-bytes'
     const directory = join(app.getPath('userData'), 'history')
     for (const name of readdirSync(directory)) {

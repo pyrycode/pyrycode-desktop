@@ -15,11 +15,11 @@ export function readSavedTimeline(deps: {
     if (handle === null) return
     report('started')
     try {
-      const result = await deps.read({ operation: 'readThread', serverId, conversationId })
+      const result = await deps.read({ operation: 'openThreadPage', serverId, conversationId, limit: 200 })
       if (result.status === 'missing') { handle.complete(null); report('missing') }
-      else if (result.status === 'stored' && result.snapshot.kind === 'daemon-items' &&
-          result.snapshot.serverId === serverId && result.snapshot.conversationId === conversationId) {
-        handle.complete(result.snapshot.thread); report('stored')
+      else if (result.status === 'page' && result.page.metadata.hostId === serverId &&
+          result.page.metadata.conversationId === conversationId) {
+        handle.complete(result.page); report('stored')
       } else { handle.fail(); report(result.status === 'error' ? result.code : 'invalid-result') }
     } catch { handle.fail(); report('ipc-failed') }
   }

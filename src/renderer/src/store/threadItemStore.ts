@@ -1,6 +1,6 @@
 import { createStore } from 'zustand/vanilla'
 import type { ThreadItem, ThreadUpdate } from '../../../shared/wire/thread'
-import { parseChatHistorySnapshot, type ThreadSnapshot, type OwnedThreadChanges } from '../../../shared/chatHistory'
+import { parseChatHistorySnapshot, threadHistoryCodec, type ThreadHistoryPage, type ThreadSnapshot, type OwnedThreadChanges } from '../../../shared/chatHistory'
 export type { ThreadSnapshot } from '../../../shared/chatHistory'
 
 type HeldItem = Readonly<Pick<ThreadItem, 'id' | 'kind' | 'rev'> & Record<string, unknown>>
@@ -17,7 +17,8 @@ export type ThreadApplyResult =
   | { type: 'applied' | 'ignored' | 'stale' }
   | { type: 'repair'; hostId: string; conversationId: string; epoch: string; throughVersion: number;
       reason: 'missing' | 'base' | 'incompatible' | 'kind' | 'coverage' }
-type Slice = { snapshot: ThreadSnapshot; restored?: ThreadSnapshot; owned?: OwnedThreadChanges; generation: symbol; uncommittedVersion: number; byId: ReadonlyMap<number, HeldItem> }
+type Slice = { snapshot: ThreadSnapshot; restored?: ThreadSnapshot; owned?: OwnedThreadChanges; generation: symbol; uncommittedVersion: number; byId: ReadonlyMap<number, HeldItem>;
+  availabilityStart?: number; residency?: { continuation: string | null; arrivalPositions: ReadonlyMap<number, number> } }
 type Batch = {
   applyItems: (items: readonly ThreadItem[], version: number) => readonly ThreadApplyResult[]
   commit: (certificate: ThreadBatchCertificate) => ThreadApplyResult
@@ -27,7 +28,7 @@ export interface ThreadItemStore {
   hosts: ReadonlyMap<string, ReadonlyMap<string, Slice>>
   snapshot: (hostId: string, conversationId: string) => ThreadSnapshot | null
   beginLocalRead: (hostId: string, conversationId: string) => {
-    complete: (snapshot: ThreadSnapshot | null) => void
+    complete: (snapshot: ThreadSnapshot | ThreadHistoryPage | null) => void
     fail: () => void
     cancel: () => void
   } | null
@@ -68,8 +69,8 @@ function rangesUnion(ranges: readonly Range[]): readonly Range[] {
 }
 
 /** Replay received progress against saved obligations, as the owned writer does on disk. */
-function restoredProgress(saved: ThreadSnapshot, progress: readonly RestoreProgress[]): ThreadSnapshot {
-  let old = saved, oldest = saved.ranges[0]?.start ?? Infinity
+function restoredProgress(saved: ThreadSnapshot, progress: readonly RestoreProgress[], boundary?: number) {
+  let old = saved, oldest = boundary ?? saved.ranges[0]?.start ?? Infinity
   for (const p of progress) {
     const next = p.metadata, completion = p.completion
     const certified = completion !== undefined && completion.fromVersion <= old.checkpoint
@@ -95,7 +96,7 @@ function restoredProgress(saved: ThreadSnapshot, progress: readonly RestoreProgr
     old = { ...old, version: Math.max(old.version, next.version), checkpoint, repair, uncommittedVersion,
       olderAvailable, ranges: rangesUnion([...old.ranges, ...p.ranges]) }
   }
-  return old
+  return { snapshot: old, availabilityStart: Number.isFinite(oldest) ? oldest : undefined }
 }
 
 /** No production singleton or subscriptions: callers explicitly own epochs and completed replies. */
@@ -171,10 +172,15 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
             if (!current()) return
             end()
             if (value === null) return
+            const page = 'partial' in value ? threadHistoryCodec.page(value, host, conversation) : undefined
+            const arrivals = page?.arrivalPositions
             const parsed = parseChatHistorySnapshot({ version: 1, kind: 'daemon-items', serverId: host,
-              conversationId: conversation, thread: value })
+              conversationId: conversation, thread: page ? { ...page.metadata, items: page.items, ranges: page.ranges,
+                ...(arrivals === undefined ? {} : { arrivalOrder: page.items.map((item, index) => ({ id: item.id, at: arrivals[index] }))
+                  .sort((a, b) => a.at - b.at).map(item => item.id) }) } : value })
             if (parsed.kind !== 'daemon-items') return
             let snapshot = detach(parsed.thread)
+            let availabilityStart: number | undefined = page?.availabilityStart ?? snapshot.ranges[0]?.start
             const admitted = read(host, conversation)
             if (admitted && admitted.snapshot.epoch !== snapshot.epoch) return
             const items = new Map(snapshot.items.map(item => [item.id, item])), byId = new Map<number, HeldItem>()
@@ -190,14 +196,17 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
                 if (stored && stored.kind !== item.kind) incompatible = true
                 if (!stored || stored.kind !== item.kind || item.rev >= stored.rev) byId.set(id, item)
               }
-              snapshot = restoredProgress(snapshot, token.progress)
+              const progress = restoredProgress(snapshot, token.progress, availabilityStart)
+              snapshot = progress.snapshot; availabilityStart = progress.availabilityStart
               snapshot = detach({ ...snapshot, items: ordered(byId), arrivalOrder: [...byId.keys()],
                 ...(incompatible ? { repair: { fromVersion: snapshot.checkpoint,
                   throughVersion: Math.max(snapshot.version, snapshot.repair?.throughVersion ?? 0) } } : {}) })
               if (incompatible) log?.event({ event: 'thread-items-repair', code: 'kind' })
             }
             publish(host, conversation, { snapshot, restored: snapshot, generation: admitted?.generation ?? Symbol(),
-              uncommittedVersion: snapshot.uncommittedVersion ?? 0, byId })
+              uncommittedVersion: snapshot.uncommittedVersion ?? 0, byId, availabilityStart,
+              ...(page ? { residency: { continuation: page.continuation,
+                arrivalPositions: new Map(page.items.map((item, index) => [item.id, arrivals?.[index] ?? index])) } } : {}) })
             log?.event({ event: 'thread-items-restored', code: 'stored' })
           },
           fail: end, cancel: end
@@ -284,11 +293,13 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
                 throughVersion: s.repair?.throughVersion ?? s.checkpoint, reason: 'coverage' }
             }
             const ranges = rangesUnion([...s.ranges, ...c.ranges])
-            const oldest = s.ranges[0]?.start ?? Infinity, suppliedOldest = Math.min(...c.ranges.map(r => r.start))
+            const oldest = slice.availabilityStart ?? s.ranges[0]?.start ?? Infinity, suppliedOldest = Math.min(...c.ranges.map(r => r.start))
             const olderAvailable = c.olderAvailable !== undefined &&
               (suppliedOldest < oldest || (suppliedOldest === oldest && s.olderAvailable !== false))
               ? c.olderAvailable : s.olderAvailable
             publish(host, conversation, { ...slice,
+              availabilityStart: c.olderAvailable !== undefined && suppliedOldest <= oldest && Number.isFinite(suppliedOldest)
+                ? suppliedOldest : slice.availabilityStart,
               uncommittedVersion: c.version >= slice.uncommittedVersion ? 0 : slice.uncommittedVersion,
               snapshot: Object.freeze({ ...s, ranges, olderAvailable,
               uncommittedVersion: c.version >= slice.uncommittedVersion ? 0 : slice.uncommittedVersion,

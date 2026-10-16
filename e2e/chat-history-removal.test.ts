@@ -153,7 +153,7 @@ describe('history removal across process stores', () => {
     await h.writer.flush()
     expect(await read()).toMatchObject({ status: 'stored' })
     fail = failRemoval
-    if (fail) database.transaction(db => db.exec("CREATE TRIGGER fail_remove BEFORE DELETE ON legacy_scopes BEGIN SELECT RAISE(ABORT, 'private'); END"))
+    if (fail) database.transaction(db => db.exec("CREATE TRIGGER fail_remove BEFORE DELETE ON thread_scopes BEGIN SELECT RAISE(ABORT, 'private'); END"))
     h.deleted('chat')
     await h.writer.flush()
     if (failRemoval) {

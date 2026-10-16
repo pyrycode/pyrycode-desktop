@@ -109,7 +109,7 @@ folding follows received observations. One-time conversion and retained full ope
 remain proportional to saved history. Fresh-owner regression fixtures cover successive
 additions, unchanged placement bytes, movement/removal, replay, aggregate overflow,
 conversion/commit rollback, subset saves, reset retries and ordered progress folding.
-See [testing and counted Linux evidence](../features/chat-history-testing.md#owned-mutation-regressions-and-counted-validation).
+See [testing and counted Linux evidence](../features/chat-history-testing-storage.md#owned-mutation-regressions-and-counted-validation).
 
 Failed writer work rejoins newer pending ownership and waits for a later flush/event;
 it does not spin. Deletion/unpair suppression and graceful shutdown draining remain

@@ -44,7 +44,7 @@ reopen. A completion flag combined with later metadata can erase saved/pending f
 carry exact version intervals and certified availability boundaries instead. Include
 same-epoch explicit resets, memory-only holder recreation and lost acknowledgements.
 Individually admitted JSON additions must still fit full-reader aggregate bounds.
-See [owned regression assertions and counted Linux/package validation](chat-history-testing.md#owned-mutation-regressions-and-counted-validation)
+See [owned regression assertions and counted Linux/package validation](chat-history-testing-storage.md#owned-mutation-regressions-and-counted-validation)
 for the final #2044 verifier evidence: 9,103 units executed/passed, 0 failed, 3 skipped;
 435 configured fake cases executed/passed, 0 failed, 3 skipped; packaged owned-update
 reopen present/passed, 1 executed, 0 failed/skipped. These are recorded results on

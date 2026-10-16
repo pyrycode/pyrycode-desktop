@@ -411,11 +411,12 @@ test('current thread prompts remain answerable during pending and failed initial
 
 test('restore overlapping live content retains complete progress across an interrupted catch-up and epoch replacement', async ({ launchPairedApp }, testInfo) => {
   const requests: Envelope[] = []
-  let interrupt = false, reset = false, overlapped = false
+  let interrupt = false, reset = false, overlapped = false, holdReply = false
   let { page, app, daemon, forwarder, userDataDir } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
     const request = decodeEnvelope(bytes); requests.push(request)
     if (request.type === 'list_conversations') return [seedConversationsFrame({ ...SEEDED_ROW, current_session_id: 'session' })]
     if (request.type !== 'thread_catch_up') return []
+    if (holdReply) return []
     if (reset && request.payload.epoch !== 'replacement') return [frame('thread_reset', { conversation_id: SEEDED_ROW.id,
       epoch: 'replacement', version: 2 }, request.id)]
     if (reset) return windowFrames(request, SEEDED_ROW.id, 'Replacement epoch committed', 'replacement', 2)
@@ -431,7 +432,18 @@ test('restore overlapping live content retains complete progress across an inter
     const result = await window.pyry.chatHistory({ operation: 'readThread', serverId: 'fake-daemon', conversationId: id })
     return result.status === 'stored' && result.snapshot.kind === 'daemon-items' ? result.snapshot.thread.checkpoint : null
   }, SEEDED_ROW.id)).toBe(20)
+  // A saved-only row and unfinished progress must survive without a server refetch.
+  await page.evaluate(async ({ id, extra }) => {
+    const result = await window.pyry.chatHistory({ operation: 'readThread', serverId: 'fake-daemon', conversationId: id })
+    if (result.status !== 'stored' || result.snapshot.kind !== 'daemon-items') throw Error('expected saved thread')
+    const thread = result.snapshot.thread
+    const saved = await window.pyry.chatHistory({ operation: 'replaceThread', serverId: 'fake-daemon', conversationId: id,
+      snapshot: { ...result.snapshot, thread: { ...thread, version: 25, uncommittedVersion: 25,
+        items: [extra, ...thread.items], arrivalOrder: [extra.id, ...thread.arrivalOrder ?? thread.items.map(i => i.id)] } } })
+    if (saved.status !== 'ok') throw Error('expected saved fixture')
+  }, { id: SEEDED_ROW.id, extra: item(9, 'Saved-only row during held catch-up') })
   await app.close()
+  holdReply = true
   const resumed = await launchPairedApp({ threadMode: 'native' }, { reuseUserDataDir: userDataDir, onLaunched: async app => {
     const evidence = await installHeldThreadRead(app)
     await testInfo.attach('held-thread-read-setup', { body: JSON.stringify(evidence), contentType: 'application/json' })
@@ -446,27 +458,43 @@ test('restore overlapping live content retains complete progress across an inter
   }) })
   overlapped = true
   daemon.pushFrame(frame('thread_item_added', { conversation_id: SEEDED_ROW.id, epoch: 'epoch', version: 21,
+    item: { ...item(10, 'New live revision during restore'), rev: 2 } }))
+  daemon.pushFrame(frame('thread_item_added', { conversation_id: SEEDED_ROW.id, epoch: 'epoch', version: 21,
     item: item(11, 'Live content during protected restore') }))
   await expect.poll(() => page.evaluate(() => (globalThis as any).overlapReceived)).toBe(true)
+  await expect(page.getByText('New live revision during restore', { exact: true })).toBeVisible()
+  await expect(page.getByText('Live content during protected restore', { exact: true })).toBeVisible()
   await app.evaluate(({ ipcMain }) => ipcMain.emit('test:release-thread-read'))
   await expect(page.getByText('Live content during protected restore', { exact: true })).toBeVisible()
+  await expect(page.getByText('Saved-only row during held catch-up', { exact: true })).toBeVisible()
+  await expect(page.getByText('New live revision during restore', { exact: true })).toBeVisible()
+  await expect.poll(() => requests.filter(r => r.type === 'thread_catch_up').length).toBe(2)
   expect(requests.filter(r => r.type === 'thread_catch_up').at(-1)?.payload).toMatchObject({ epoch: 'epoch', version: 20 })
+  const heldReply = requests.filter(r => r.type === 'thread_catch_up').at(-1)!
+  daemon.pushFrame(frame('thread_items', { conversation_id: SEEDED_ROW.id, epoch: 'epoch', version: 25,
+    items: [], final: true, from_version: 20 }, heldReply.id))
+  // Reconnect is ordered after the completion is persisted, not merely dispatched.
+  await expect.poll(() => page.evaluate(async id => {
+    const result = await window.pyry.chatHistory({ operation: 'readThread', serverId: 'fake-daemon', conversationId: id })
+    return result.status === 'stored' && result.snapshot.kind === 'daemon-items' ? result.snapshot.thread.checkpoint : null
+  }, SEEDED_ROW.id)).toBe(25)
+  holdReply = false
   interrupt = true; forwarder.dropClientLeg()
   await expect(page.getByText('Unfinished catch-up content', { exact: true })).toBeVisible()
   const unfinished = requests.filter(r => r.type === 'thread_catch_up').at(-1)!
-  expect(unfinished.payload).toMatchObject({ epoch: 'epoch', version: 21 })
+  expect(unfinished.payload).toMatchObject({ epoch: 'epoch', version: 25 })
   await expect(page.getByText('Live content during protected restore', { exact: true })).toHaveCount(1)
   const count = requests.filter(r => r.type === 'thread_catch_up').length
   forwarder.dropClientLeg()
   await expect.poll(() => requests.filter(r => r.type === 'thread_catch_up').length).toBeGreaterThan(count)
   await expect.poll(() => page.evaluate(() => (globalThis as any).unfinishedReceipts)).toBe(2)
-  expect(requests.filter(r => r.type === 'thread_catch_up').at(-1)?.payload).toMatchObject({ epoch: 'epoch', version: 21 })
+  expect(requests.filter(r => r.type === 'thread_catch_up').at(-1)?.payload).toMatchObject({ epoch: 'epoch', version: 25 })
   reset = true
   forwarder.dropClientLeg()
   await expect(page.getByText('Replacement epoch committed', { exact: true })).toBeVisible({ timeout: 15_000 })
   // A late terminal reply and old-epoch text cannot restore retired content.
   daemon.pushFrame(frame('thread_items', { conversation_id: SEEDED_ROW.id, epoch: 'epoch', version: 30,
-    items: [], final: true, from_version: 21 }, unfinished.id))
+    items: [], final: true, from_version: 25 }, unfinished.id))
   daemon.pushFrame(frame('assistant_delta', { conversation_id: SEEDED_ROW.id, turn_id: 'old', seq: 0, text: 'Legacy recovery duplicate' }))
   daemon.pushFrame(frame('thread_item_added', { conversation_id: SEEDED_ROW.id, epoch: 'replacement', version: 3,
     item: item(13, 'Replacement receipt barrier') }))

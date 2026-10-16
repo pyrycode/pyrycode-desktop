@@ -110,7 +110,7 @@ marker between the actual top/input chrome. Settle that movement, then assert
 focused intersection and unchanged request count before one ArrowUp. Keep these
 helpers local; readiness uses measured animation-frame stability without extra
 trusted keys, sleeps, test retries or larger timeouts. See
-[the gap testing contract](chat-history-testing.md#demand-and-snapshot-contracts)
+[the gap testing contract](chat-history-testing-contracts.md#demand-and-snapshot-contracts)
 and [controlled failure evidence](development-verification-history.md#known-gap-recovery-verification).
 
 Retry focus can also reset the thread to scrollTop 0 after a marker was parked.
@@ -434,7 +434,7 @@ trigger: #2044's batching repair coalesces writes within the transaction, and
 complete compositions subsequently passed with focus/display code unchanged.
 The reports measure neither main-loop latency nor native-window/webContents focus,
 so the exact path from storage work to delayed page focus remains uncertain.
-Keep the [400-item coalescing regression](chat-history-testing.md#owned-mutation-regressions-and-counted-validation)
+Keep the [400-item coalescing regression](chat-history-testing-storage.md#owned-mutation-regressions-and-counted-validation)
 and existing read spec; no residual setup defect or duplicate regression is justified.
 The helper shows/focuses the native window, removes any document focus override,
 and positively polls genuine `document.hasFocus()` before its focus notification.

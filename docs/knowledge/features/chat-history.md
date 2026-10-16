@@ -361,7 +361,7 @@ selection uses the nearest receipt whose first membership is at or after its
 not collect every cursor from intersecting spans. Anchor ids alone never become
 selected served ids or receipt memberships, and their start flags certify no
 additional completeness. See [selected-record validation and protection](chat-history-results.md#bounded-page-results)
-and [bounded-work fixtures](chat-history-testing.md#bounded-legacy-page-regressions).
+and [bounded-work fixtures](chat-history-testing-storage.md#bounded-legacy-page-regressions).
 
 ### Received-state admission and ownership
 
@@ -418,9 +418,14 @@ records complete it with null. There is no `readTimeline` fallback.
 `beginLocalRead(host, conversation)` handle and returns `{ done, cancel }`.
 Held scopes prevent duplicate reads.
 Process-local tokens fence delayed completion and failure after cancellation,
-replacement reads, live admission, epoch replacement or conversation/host/global
-clear, even if coordinate or epoch strings are reused. Hydration certifies no new
-progress. Restoration creates no transport request or raw event; opening, reconnect,
+replacement reads, explicit reset, epoch replacement or conversation/host/global
+clear, even if coordinate or epoch strings are reused. Initial epoch admission and
+same-owner live publication preserve the read. Full validated restoration merges
+saved-only items with admitted revisions and arrival ties while retaining saved
+repair/unfinished obligations; only exact completed coverage can release their
+checkpoint fences. See [store hydration](thread-item-store.md#snapshots-and-completed-batches).
+Hydration emits no owned save and certifies no new progress or read acknowledgement.
+Restoration creates no transport request or raw event; opening, reconnect,
 older demand and Retry use the [thread coordinator](thread-runtime.md#restore-recovery-and-cleanup)
 and introduce no legacy content request.
 
@@ -535,7 +540,7 @@ and reviewed structural columns are detailed in
 
 The adapter is pinned to `better-sqlite3` 12.4.1. Host Node and Electron require
 separate native rebuilds; packaging rebuilds for the target ABI and unpacks the
-adapter from asar. See [runtime preparation and counted native proof](chat-history-testing.md#native-runtime-and-packaged-proof).
+adapter from asar. See [runtime preparation and counted native proof](chat-history-testing-native.md#native-runtime-and-packaged-proof).
 Windows NSIS x64/arm64 targets remain configured; these smokes add no Linux/macOS
 release channel. Bounded legacy and authoritative pages remain callable main-only.
 Ordinary owned writes preserve unloaded history. Partial restoration/navigation

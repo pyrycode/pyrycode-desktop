@@ -222,6 +222,46 @@ it('same-epoch holder recreation saves only owned facts and metadata without era
   expect(saved.snapshot.thread.repair?.throughVersion).toBe(30)
 })
 
+it('fresh protected restoration merges live ownership without saving hydration', async () => {
+  const { fresh, api, writer } = await cache()
+  try {
+    api.acceptEpoch('a', 'c', 'e')
+    const batch = api.beginBatch('a', 'c', 'e')!
+    const item = (id: number, rev = 1) => ({ id, rev, order: id, kind: 'assistant_message', active: false,
+      shown: true, status: 'done', summary: '', content: { text: String(id) } })
+    batch.applyItems([item(1), item(2), item(3)], 100)
+    batch.commit({ fromVersion: 0, version: 100, ranges: [{ start: 1, end: 4 }], olderAvailable: false })
+    api.requireRepair('a', 'c', 'e', 150)
+    api.beginBatch('a', 'c', 'e')!.applyItems([item(3, 2)], 250)
+    await writer.stop()
+    const storage = fresh(), target = createThreadItemStore(), writes: ChatHistoryRequest[] = []
+    const targetWriter = createChatHistoryWriter({ threads: target, lists: createConversationListStore(), receipt: () => null,
+      log: () => {}, schedule: () => () => {}, write: request => { writes.push(request); return storage.execute(request) } })
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const restoring = readSavedTimeline({ threads: target, read: async request => {
+      const result = await storage.execute(request); await gate; return result
+    }, log: () => {} }, 'a', 'c')
+    target.getState().applyUpdate('a', { type: 'thread_item_added', payload: { conversation_id: 'c', epoch: 'e',
+      version: 400, item: item(2, 3) } })
+    target.getState().acceptEpoch('b', 'c', 'e')
+    target.getState().applyUpdate('b', { type: 'thread_item_added', payload: { conversation_id: 'c', epoch: 'e', version: 7, item: item(1, 7) } })
+    await targetWriter.flush(); const count = writes.length
+    release(); await restoring.done; await targetWriter.flush()
+    expect(writes).toHaveLength(count)
+    expect(target.getState().snapshot('a', 'c')).toMatchObject({ checkpoint: 100, version: 400, uncommittedVersion: 250,
+      repair: { fromVersion: 100, throughVersion: 150 }, olderAvailable: false,
+      items: [item(1), item(2, 3), item(3, 2)], arrivalOrder: [1, 2, 3], ranges: [{ start: 1, end: 4 }] })
+    target.getState().applyUpdate('a', { type: 'thread_text_append', payload: { conversation_id: 'c', epoch: 'e',
+      version: 500, item_id: 2, base_rev: 3, rev: 4, text: '!' } })
+    await targetWriter.stop()
+    const reopened = createThreadItemStore(), nextStorage = fresh()
+    await readSavedTimeline({ threads: reopened, read: request => nextStorage.execute(request), log: () => {} }, 'a', 'c').done
+    expect(reopened.getState().snapshot('a', 'c')).toEqual(target.getState().snapshot('a', 'c'))
+    expect(target.getState().snapshot('b', 'c')?.items).toEqual([item(1, 7)])
+  } finally { await writer.stop() }
+})
+
 it.each([false, true])('protected writer-to-offline-store restart retains completion=%s', async complete => {
   const { fresh, api, writer } = await cache()
   try {

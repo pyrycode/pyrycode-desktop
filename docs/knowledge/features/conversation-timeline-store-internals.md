@@ -242,7 +242,7 @@ next animation frame; waiting for rendered delta text while the clock is paused
 deadlocks. Keep the history writer's 200ms save buffered when testing removal.
 Protected-snapshot seeding must follow the opening page's buffered save or
 shutdown can overwrite it. Authoritative shutdown/restart coverage belongs to
-the [history cache tests](chat-history-testing.md#recording-and-removal).
+the [history cache tests](chat-history-testing-restoration.md#recording-and-removal).
 
 The mounted burst case counts rendered Timeline fibers from before twelve
 separate-task deliveries with increasing durable ids: zero commits before release,

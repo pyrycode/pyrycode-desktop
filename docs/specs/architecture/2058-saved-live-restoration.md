@@ -81,3 +81,14 @@ None. A cleaner shared progress-fold extraction would change the main persistenc
 ## Revisions
 
 2026-10-16: The private pending-read token is an object carrying metadata/range/certificate observations, compared by identity, rather than a separate Symbol plus observation table. It retains no item payload history. Batch generations remain Symbols. The implementation fits entirely in `threadItemStore`; the reader and runtime already provide the required full validation, cancellation and coordinator settlement contracts. The mounted overlap fixture now holds the server reply and seeds a saved-only row plus unfinished version 25/checkpoint 20, proving that visible rows and the resumed version cannot come from the reply or applied version.
+
+## Validation evidence
+
+Linux x86_64, 2026-10-16, implementation revision `dfcc48214c073c3ec111c29e3c5c716c4d85088a`, after merging main `aebee62f3c45`:
+
+- Test-first cache run: 30 executed, 26 passed, 4 failed for missing live admission and lost saved progress; final targeted cache/restart run: 59 executed, 59 passed, 0 failed/skipped.
+- `python3 "$AGENTS_REPO_PATH/bin/pre-verify-check"`: PASS, all five checks. Full units: 9,133 executed/passed, 0 failed, 3 skipped, 392 passing files. `npm run build`: PASS after that main merge.
+- The initial focused Electron attempt failed at the existing initial-save barrier before overlap assertions (1 executed, 0 passed, 1 failed). The adapter was built for host Node 25.8.0. Following the documented `npm run rebuild:electron` preparation for Electron 33.4.11, the unchanged mounted spec passed: 1 executed, 1 passed, 0 failed/skipped.
+- Complete `playwright.config.ts` suite: **436 executed, 436 passed, 0 failed, 3 skipped, 0 flaky**, four workers, clipboard/parallel projects, zero retries. Configuration SHA256 `7097078cf6aaa5b94888a26af30c0f6bb000e6be66ff78891630f2a19a32795b`. The skips are two macOS icon-badge cases and the macOS window-reopen case; macOS is outside scope.
+- The delayed restore/live overlap, current prompts during pending/failed recovery, and queued recovery/unpair/deletion scenarios are present and passed. No report-level errors or fake-daemon-setup attachments were emitted. No live-Claude tests changed or were required.
+- Raw reports: `/tmp/builder-2058/fake-suite.json`, `/tmp/builder-2058/fake-suite.log`, `/tmp/builder-2058/fake-artifacts/`, `/tmp/builder-2058-preverify.log`, `/tmp/builder-2058-build.log`.

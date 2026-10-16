@@ -391,8 +391,6 @@ export function translateTimelineEvent(
       // Not a timeline event (#491). Present only because the assertNever guard makes a new arm a
       // compile error.
       return null
-    case 'historyPageReceived':
-    case 'historyRequestFailed':
       // Not timeline events YET, and the reason is scope rather than kind (#1222). A page's entries ARE
       // timeline items — that is the whole point of a history entry carrying a stored frame's `type` and
       // `payload`, so a client can re-reduce a loaded page oldest-first through THIS reducer — but the

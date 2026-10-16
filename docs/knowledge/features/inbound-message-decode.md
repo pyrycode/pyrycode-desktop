@@ -149,11 +149,9 @@ Availability and metadata provenance are separate concerns in the
 
 `inboundMessage.test.ts` covers old missing-id rows, empty/exact strings, supplied
 non-string rejection and unknown-key filtering. The roster id is a live placement
-hint; [background Agent history](request-history-send.md#background-agent-placement-events)
-separately decodes started/updated frames with the existing live payload parsers.
-History IPC carries placement fields only, skips malformed payloads individually and
-continues excluding roster/progress/modal/question frames. Live lifecycle envelope
-timestamps reach the bounded overlap join. The saved timeline format is unchanged.
+hint. Exclusive history-page lifecycle decoding and its IPC retired in #2025;
+[shared fixture/storage declarations](request-history-send.md#retained-boundaries)
+remain. Authoritative linked daemon items now supply production Agent placement.
 
 ### Optional permission context
 

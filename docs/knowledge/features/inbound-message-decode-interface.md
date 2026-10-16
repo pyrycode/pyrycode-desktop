@@ -62,21 +62,37 @@ export type InboundDaemonMessage =
 //  • throws WireDecodeError — oversized / malformed / unparseable / mistyped payload (fail-closed)
 export function parseInboundMessage(
   plaintext: Uint8Array,
-  diagnosticLog?: DiagnosticLog       // #130 — optional injected content-free logger; absent ⇒ silent
+  diagnosticLog?: DiagnosticLog,      // optional injected content-free logger; absent ⇒ silent
+  observeEnvelope?: (envelope: Envelope) => void // admitted live metadata, before payload narrowing
 ): InboundDaemonMessage | null
 ```
 
 ## Complete live thread updates
 
 `thread_item_added`, `thread_item_changed` and `thread_text_append` return a
-`thread-frame` carrying the decoded envelope after the existing replay `event_id`
+`thread-frame` carrying the decoded envelope after admitted-envelope live metadata
 observation. This internal arm can contain continuation data and is never an IPC
 event. The connection-owned `createThreadUpdateReceiver` detects a supplied
 `continuation` before ordinary DTO validation, then delivers only complete
 `ThreadUpdate` values. See [wire shapes and bounded assembly](inbound-message-decode-limits.md#complete-live-thread-validation)
 and [connection lifetime](daemon-connection.md#thread-receiver-lifetime).
 
-Replay admission remains independent of fragment progress: an incomplete or
-rejected update can advance the observed envelope replay cursor without emitting
-a completed logical version or item revision. The receiver holds no item store
-and does not deduplicate repeated logical updates.
+Envelope admission does not certify a complete logical version or item revision.
+The receiver holds no item store and does not deduplicate repeated logical updates.
+Its buffers and timers remain host-local and reset on reconnect, including an
+incomplete fragment; equal conversation/update IDs on another host stay independent.
+Production hellos carry no replay fields.
+
+## Retired legacy page decoding
+
+`history_page` and `resync` return `null` through the ordinary unmodeled-type path
+(#2025). Their payload shape cannot create a renderer event or recovery request.
+Exclusive `parseHistoryPagePayload`, entry/page decoding and history-refusal
+narrowing are deleted; generic daemon errors and live payload parsers remain.
+The size, UTF-8 and envelope guards still precede dispatch. `observeEnvelope`
+retains admitted live-session metadata even when later payload narrowing fails;
+removing it with replay tracking would lose live readings/clear attribution.
+Shared daemon wire declarations, saved-format declarations and fake translation
+remain supported; [saved-format retirement](thread-runtime.md#navigation-boundaries)
+is separate work.
+

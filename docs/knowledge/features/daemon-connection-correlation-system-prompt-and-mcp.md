@@ -89,7 +89,7 @@ for the full design, including the outbound builder, the fail-closed decode, and
 
 # System-prompt write correlation (#1249)
 
-A ninth correlation store, the `pendingConfigRequests`/`pendingHistoryRequests` shape exactly:
+A ninth correlation store, the `pendingConfigRequests` shape exactly:
 `pendingSystemPromptWrites: Map<number, string>`, mapping a sent `set_system_prompt`'s `envelopeId` to
 the conversation id that write named. Unlike its eight siblings, this store's reply is a record this
 file had **never correlated before**: `conversation_updated`, which every earlier conversation-keyed
@@ -120,8 +120,8 @@ shape for the ack half — see below.
   consume-and-return shape — doing so would stop the requester's own write from refreshing their own
   conversation row, the trap the ticket names explicitly, and a mutation check that made the ack arm
   consume the frame on a match reddened five tests.
-- **Reject match — the fifth member of the `daemon-error` precedence tier**, checked alongside
-  `pendingSettings`/`pendingCreateFolders`/`transferForEnvelope`/`pendingHistoryRequests`. A hit
+- **Reject match — a member of the `daemon-error` precedence tier**, checked alongside
+  `pendingSettings`/`pendingCreateFolders`/`transferForEnvelope`. A hit
   `delete`s the entry and emits `systemPromptWriteRejected{conversationId, reason}`, where `reason` is
   `inbound.systemPromptReject ?? 'unclassified'` off the sibling narrower documented in [Daemon error
   outcome](daemon-error-outcome.md), then consumes the frame and `return`s — the tier's standing
@@ -212,8 +212,8 @@ guaranteed outcome of any answered request, every time. So the cap is not deferr
 evicted ask can only arrive after 32 newer asks have already been sent, and dropping it is harmless: no
 stored report is touched and nothing retries.
 
-- **Reject match — the sixth member of the `daemon-error` precedence tier**, checked alongside
-  `pendingSettings`/`pendingCreateFolders`/`transferForEnvelope`/`pendingHistoryRequests`/
+- **Reject match — a member of the `daemon-error` precedence tier**, checked alongside
+  `pendingSettings`/`pendingCreateFolders`/`transferForEnvelope`/
   `pendingSystemPromptWrites`. A hit `delete`s the entry, logs `mcp-status-request-rejected` with
   `code: reason`, and emits `mcpStatusRequestRejected { conversationId, reason }` — `conversationId`
   read from the map's value (the conversation *this app* asked about), never from the error payload, so
@@ -403,8 +403,8 @@ and rejects that attempt directly.
   `delete`s the entry and emits `conversationMuteResult { attemptId, outcome: 'confirmed' }` — content-free,
   carrying neither the conversation id nor the daemon's `is_muted` value. A consumer that wants the
   stored value reads it off the list refresh the broadcast already triggered, not off this event.
-- **Reject match — a ninth member of the `daemon-error` precedence tier**, checked alongside
-  `pendingSettings`/`pendingCreateFolders`/`transferForEnvelope`/`pendingHistoryRequests`/
+- **Reject match — a member of the `daemon-error` precedence tier**, checked alongside
+  `pendingSettings`/`pendingCreateFolders`/`transferForEnvelope`/
   `pendingSystemPromptWrites`/`pendingMcpStatusRequests`/`pendingMcpReconnects`/`pendingMcpToggles`. A
   hit `delete`s the entry and emits `conversationMuteResult { attemptId, outcome: 'rejected' }`, then
   consumes the frame and `return`s, on the tier's standing precedent. The daemon's error code is not

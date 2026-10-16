@@ -886,19 +886,6 @@ app.whenReady().then(() => {
       case 'queryThread':
         dispatchThreadQuery(command, serverId => servers.route(serverId), live.sink)
         return
-      case 'requestHistory':
-        // ROUTED BY CONVERSATION, mirroring the two cases above — a conversation's history belongs to
-        // the server that hosts it, so the frame goes there or to no wire at all (#1222). The WHOLE
-        // payload is forwarded rather than unwrapped into scalars, unlike its neighbours: this verb
-        // carries three fields, and the connection method hands them to a builder that rebuilds a
-        // fresh literal, so no renderer-supplied key reaches the wire either way. No `?.` on `payload`:
-        // it is required, and `isRequestHistoryPayload` has already proven all three fields at the
-        // boundary. The `conversation_id` is read once, as the routing key — the same object the
-        // builder then reads it from, so the id routed by and the id sent cannot diverge. Direct to
-        // the connection method: an on-demand page ask has no orchestrator and no consumer, and no
-        // retry — the reply is one `history_page` the inbound path correlates back to this ask.
-        routeConversation(command.payload.conversation_id, command.serverId)?.requestHistory(command.payload)
-        return
       case 'requestHostSystemPrompt':
       case 'setHostSystemPrompt': {
         const connection = servers.route(command.serverId)

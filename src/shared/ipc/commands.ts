@@ -41,7 +41,6 @@ import type {
   MCPTogglePayload,
   StopBackgroundTaskPayload,
   RequestSystemPromptPayload,
-  RequestHistoryPayload,
   InterruptPayload,
   NewSessionPayload,
   SwitchAgentPayload,
@@ -274,14 +273,6 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * neighbour above: that verb answers an unnamed request with a zero-valued reply, so a bare send there
  * was silently useless rather than impossible; here an unnamed request has nothing to ask about at all.
  * It has NO renderer sender in the slice that declares it — #1166 adds the trigger.
- * And `requestHistory` (#1222), which reuses the wire RequestHistoryPayload (a `conversation_id`, an
- * opaque `cursor` and a `limit`) to ask for one backward step of a scroll-back walk over the daemon's
- * on-disk log. Payload-REQUIRED, like the two above: a request with no conversation to name has
- * nothing to ask about. It is the FIRST member carrying a value this app did not mint — the `cursor`
- * is daemon-minted, round-tripping out through the window and back, and it stays opaque the whole way:
- * never parsed, never rewritten, and never treated as a secret or a capability (it is deliberately
- * unsigned; authorization is pairing, at the Noise handshake). It has NO renderer sender in the slice
- * that declares it — #1224 adds the trigger.
  * And `requestSystemPrompt` (#1230), which reuses the wire RequestSystemPromptPayload (a single
  * REQUIRED `conversation_id` string — a routing id, not a secret) to ask what system prompt a
  * conversation holds and whether the running session was started with a different one. Payload-REQUIRED
@@ -359,7 +350,6 @@ export type RendererCommand = (
   | { type: 'reconnectMcpServer'; payload: MCPReconnectPayload }
   | { type: 'toggleMcpServer'; payload: MCPTogglePayload }
   | { type: 'stopBackgroundTask'; payload: StopBackgroundTaskPayload; serverId?: string }
-  | { type: 'requestHistory'; payload: RequestHistoryPayload }
   | { type: 'requestSystemPrompt'; payload: RequestSystemPromptPayload }
   | { type: 'requestConversations'; serverId?: string }
   | { type: 'requestRecentWorkspaces'; serverId?: string }
@@ -566,10 +556,6 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       return 'payload' in value && isMCPTogglePayload(value.payload)
     case 'stopBackgroundTask':
       return hasValidThreadHost(value) && 'payload' in value && isStopBackgroundTaskPayload(value.payload)
-    case 'requestHistory':
-      // Payload-required (#1222) — the neighbour's idiom verbatim, including why the
-      // explicitly-`undefined` case is refused by the payload guard and not by the `in` check.
-      return 'payload' in value && isRequestHistoryPayload(value.payload)
     case 'requestHostSystemPrompt':
     case 'setHostSystemPrompt':
       return 'serverId' in value && 'requestId' in value && typeof value.serverId === 'string' && value.serverId.length > 0 && value.serverId.length <= 1024 &&
@@ -1187,43 +1173,6 @@ function isSetConversationMutedPayload(value: unknown): value is SetConversation
   if (keys.length !== 2 || !('conversation_id' in value) || !('muted' in value)) return false
   if (typeof value.conversation_id !== 'string' || value.conversation_id.length === 0) return false
   return value.muted === true || value.muted === false
-}
-
-/** The untrusted renderer→main boundary guard for the requestHistory payload (#1222). The guard above
- *  scaled from one field to the three the daemon publishes, all three present-and-typed, so a missing
- *  key, a literal `null` and a mistyped value are each rejected. All three are checked because all
- *  three are ALWAYS on the wire — the daemon declares no `omitempty` — so an absent one here is a
- *  caller bug rather than a shorthand.
- *
- *  CHECKS TYPE, NOT EMPTINESS, and here that is load-bearing on two fields rather than one. `''` is not
- *  merely tolerated for `cursor` — it is the NORMAL OPENING VALUE of every walk ("start at the
- *  newest"), so a non-empty clause would refuse the first ask of every scroll-back. For
- *  `conversation_id` it is the siblings' rule unchanged: an id the daemon cannot resolve draws
- *  `conversation.not_found`, which is the daemon's call rather than a bound this client duplicates.
- *  `newSession`'s emptiness clause is the one NOT to copy — that verb reads an empty id as "whichever
- *  conversation the daemon's process-wide cursor points at", and this one has no such fallback.
- *
- *  `limit` is checked for TYPE ONLY — no range, no integrality. A negative one is a documented reject
- *  (`history.invalid_page_size`) that `buildRequestHistory` normalises away before the wire anyway, and
- *  an upper bound here would be a second ceiling to keep in agreement with the daemon's own clamp.
- *
- *  The cursor is the one value on this channel this app did not mint — daemon-minted, round-tripping
- *  back out — and it is OPAQUE: never parsed here or anywhere, never a log line, path, attribute or
- *  cache key, and never treated as proving anything (it is deliberately unsigned; authorization is
- *  pairing). Past this guard the three reach exactly two sinks: `conversationRouter.route`, a read-only
- *  `Map` lookup on the id, and `buildRequestHistory`, which rebuilds a fresh three-key literal.
- *  Structural minimum: an extra field is not rejected here and cannot reach the wire, because that
- *  rebuild bounds the frame. Pure; never throws. */
-function isRequestHistoryPayload(value: unknown): value is RequestHistoryPayload {
-  if (typeof value !== 'object' || value === null) return false
-  return (
-    'conversation_id' in value &&
-    typeof value.conversation_id === 'string' &&
-    'cursor' in value &&
-    typeof value.cursor === 'string' &&
-    'limit' in value &&
-    typeof value.limit === 'number'
-  )
 }
 
 /** The untrusted renderer→main boundary guard for the newSession payload (#1217). The

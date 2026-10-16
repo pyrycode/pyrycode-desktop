@@ -113,3 +113,23 @@ describe('recorded daemon exchange', () => {
     expect(parseRecording(JSON.stringify(fixture()))).toEqual(fixture())
   })
 })
+
+it('checks complete outgoing envelope metadata in addition to the full payload', () => {
+  const replay = new RecordedExchange(fixture())
+  expect(() => replay.reply(encodeEnvelope({ ...message(90, 'list_conversations', {}), session_id: 'unexpected' })))
+    .toThrow('Recorded exchange request mismatch at step 1')
+})
+it('binds an upload identity once across all chunks', () => {
+  const recording = fixture()
+  recording.wire = [0, 1].map(index => ({ direction: 'client', message: message(index + 1, 'attachment_chunk', {
+    attachment_id: 'recorded-upload', index, data: 'same-test-bytes'
+  }) }))
+  const replay = new RecordedExchange(recording)
+  send(replay, 90, 'attachment_chunk', { attachment_id: 'fresh-upload', index: 0, data: 'same-test-bytes' })
+  expect(() => send(replay, 91, 'attachment_chunk', { attachment_id: 'different-upload', index: 1, data: 'same-test-bytes' })).toThrow('step 2')
+})
+it('validates retained optional envelope fields instead of dropping them', () => {
+  const recording = fixture()
+  Object.assign(recording.wire[1].message, { conversation_id: null })
+  expect(() => parseRecording(JSON.stringify(recording))).toThrow('Invalid daemon recording')
+})

@@ -240,3 +240,18 @@ it('applies an unsolicited family clear only to a held reading in the same authe
     yolo: false, permissionMode: 'default', used_tokens: 0, window_tokens: 100, serverId: 'one', envelopeSessionId: 'A' })
   expect(f.inputs().runConfig?.model).toBe('model-A')
 })
+
+it.each([undefined, null, 'bootstrap'])('routes supplied vocabulary and withdrawals by conversation with producer %s', producer => {
+  const f = fixture()
+  const supplied = { serverId: 'one', envelopeConversationId: 'chat', ...(producer === undefined ? {} : { envelopeSessionId: producer }) }
+  const list = { type: 'modelList' as const, conversationId: 'chat', models: [], droppedModels: 0, ...supplied }
+  f.emit({ ...list, envelopeConversationId: 'other' })
+  f.emit({ ...list, serverId: 'two' })
+  f.emit({ ...list, conversationId: 'other' })
+  expect(f.inputs().modelList).toBeNull()
+  f.emit(list)
+  expect(f.inputs().modelList).toBe(list)
+  f.emit({ type: 'sessionStateCleared', family: 'model_list', correlation: { id: 8, ts: '' }, ...supplied })
+  expect(f.inputs().modelList).toBeNull()
+  expect(f.inputs().sessionId).toBe('A')
+})

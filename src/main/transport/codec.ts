@@ -140,6 +140,17 @@ export function decodeEnvelope(bytes: Uint8Array): Envelope {
     }
     envelope.history_entry_id = obj.history_entry_id
   }
+  if ('conversation_id' in obj) {
+    if (typeof obj.conversation_id !== 'string' || obj.conversation_id === '') {
+      throw new WireDecodeError('invalid envelope conversation route')
+    }
+    const payload = obj.payload
+    if (payload !== null && typeof payload === 'object' && !Array.isArray(payload) &&
+        'conversation_id' in payload && payload.conversation_id !== obj.conversation_id) {
+      throw new WireDecodeError('conflicting conversation route')
+    }
+    envelope.conversation_id = obj.conversation_id
+  }
   if ('session_id' in obj) {
     if (obj.session_id !== null && (typeof obj.session_id !== 'string' || obj.session_id === '')) {
       throw new WireDecodeError('invalid envelope session tag')

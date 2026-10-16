@@ -80,3 +80,22 @@ sequential lifetime. Question fixtures explicitly enable the daemon's stdio
 permission/question bridge; the original answer, cancel and model assertions
 remain. Channel section counting selects Channels and Chats, since Apps is a
 separate section now.
+
+The production capture also exposed dropped top-level conversation routes in
+Desktop's decoder. Supplied live-state session tags describe the producing
+source, including the daemon-wide model vocabulary source; they do not identify
+the destination conversation. Desktop now validates the supplied route, rejects
+conflicting payload routes, preserves it across the real preload, and isolates
+readings and clears by host plus conversation. Envelopes without that newer
+route retain the prior bound-session checks. Live-state tests retain their
+original scope/provenance assertions and add the current protocol cases.
+
+Capture retains the complete decrypted JSON envelope after validation, including
+forward-compatible metadata. Replay compares every outgoing envelope field
+except fresh request identity and timestamp, and rebinds client upload/message
+identities once. It never regenerates missing daemon metadata. Earlier
+exploratory recordings must be replaced by new captures after these fixes.
+
+The independently merged core PR #3505 (`4871e083`) superseded the parallel
+prerequisite PR #3507; live two-turn and history acceptance pass on the merged
+implementation. Final captures use its isolated, clean, source-stamped binary.

@@ -82,9 +82,7 @@ export function parseRecording(text: string): Recording {
     if (ids.has(m.id as number)) return invalid()
     ids.add(m.id as number)
     if (m.in_reply_to !== undefined && (entry.direction !== 'daemon' || !clientIds.has(m.in_reply_to as number))) return invalid()
-    const frame: Envelope = { id: m.id as number, type: m.type, ts: m.ts, payload: m.payload,
-      ...(m.in_reply_to === undefined ? {} : { in_reply_to: m.in_reply_to as number }) }
-    try { decodeEnvelope(encodeEnvelope(frame)) } catch { return invalid() }
+    try { decodeEnvelope(encodeEnvelope(m as unknown as Envelope)) } catch { return invalid() }
   }
   if (value.version === 2 && (value.devices as unknown[]).length !== connection) return invalid()
   return value as Recording
@@ -106,6 +104,7 @@ export class RecordedExchange {
   private identities = new Map<string, string>()
   private requestIds = new Map<number, number>()
   private actualIds = new Set<number>()
+  private boundClientIdentities = new Set<string>()
   private consumed = new Set<Envelope>()
   private index = 0
   private matched = 0
@@ -126,7 +125,10 @@ export class RecordedExchange {
         collect(child, key)
       }
     }
-    for (const entry of this.recording.wire) collect(entry.message.payload, '', conversationTypes.has(entry.message.type))
+    for (const entry of this.recording.wire) {
+      collect(entry.message.payload, '', conversationTypes.has(entry.message.type))
+      collect({ conversation_id: entry.message.conversation_id, session_id: entry.message.session_id })
+    }
   }
   setDeviceId(value: string): void {
     if (this.index !== 0 || !nonempty(value)) throw new Error('Recorded exchange identity must be bound before replay')
@@ -189,7 +191,10 @@ export class RecordedExchange {
   reply(bytes: Uint8Array): Uint8Array[] {
     if (this.failure) throw this.failure
     let actual: Envelope
-    try { actual = decodeEnvelope(bytes) } catch { return this.fail('Recorded exchange malformed request') }
+    try {
+      decodeEnvelope(bytes)
+      actual = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+    } catch { return this.fail('Recorded exchange malformed request') }
     if (this.actualIds.has(actual.id)) return this.fail('Recorded exchange duplicate request ID')
     const mismatch = `Recorded exchange request mismatch at step ${this.matched + 1}`
     if (!object(actual.payload)) return this.fail(mismatch)
@@ -212,13 +217,17 @@ export class RecordedExchange {
     const payload = expected.payload as Record<string, unknown>
     // Only these client-owned opaque identities vary. Choices, text, cursors and routes must match exactly.
     const bindings = actual.type === 'send_message' ? ['message_id'] : actual.type === 'modal_answer' ? ['answer_token'] : actual.type === 'attachment_chunk' ? ['attachment_id'] : []
-    for (const key of bindings) if (nonempty(payload[key]) && nonempty(actual.payload[key])) {
+    const newlyBound: string[] = []
+    for (const key of bindings) if (nonempty(payload[key]) && nonempty(actual.payload[key]) && !this.boundClientIdentities.has(payload[key])) {
       this.identities.set(payload[key], actual.payload[key])
+      newlyBound.push(payload[key])
     }
-    if (stable(this.mapped(payload)) !== stable(actual.payload) || actual.in_reply_to !== undefined) {
+    const contract = ({ id: _id, ts: _ts, ...rest }: Envelope) => rest
+    if (stable(contract(this.mapped(expected) as Envelope)) !== stable(contract(actual))) {
       this.identities = before
       return this.fail(mismatch)
     }
+    newlyBound.forEach(id => this.boundClientIdentities.add(id))
     this.actualIds.add(actual.id)
     this.requestIds.set(expected.id, actual.id)
     this.consumed.add(expected)

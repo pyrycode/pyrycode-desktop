@@ -46,7 +46,7 @@ const countReport = file => {
 const expectedFiles = readdirSync('e2e').filter(name => /^real-[^/]*\.spec\.ts$/.test(name)).sort()
 const names = (directory) => readdirSync(directory).filter(name => name.endsWith('.json')).sort()
 const baseline = names('e2e/recordings')
-let failure, live, permission
+let failure, live, permission, keepEvidence = false
 try {
   try {
     // The recorder's fixture rejects dirty source at setup and publication too.
@@ -93,9 +93,10 @@ try {
     if (drift.length) throw new Error('Fresh capture changed a recorded request contract; review a replacement')
   } else process.stdout.write(JSON.stringify({ captured: live.executed + permission.executed, output }) + '\n')
 } catch (error) {
+  keepEvidence = true
   // Fresh evidence remains private and reviewable when drift or a check fails.
   process.stderr.write(JSON.stringify({ captureCandidates: output, reports: reportDirectory }) + '\n')
   throw error
 } finally {
-  if (!process.exitCode && mode === 'capture') rmSync(temporary, { recursive: true, force: true })
+  if (!keepEvidence && mode === 'capture') rmSync(temporary, { recursive: true, force: true })
 }

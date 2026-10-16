@@ -742,6 +742,7 @@ interface FrameTimestamp {
  * catch-all, so the stream stops here until claimed.
  */
 export type InboundDaemonMessage = InboundPayload & {
+  envelopeConversationId?: string
   /** Envelope provenance is independent of payload session fields. */
   envelopeSessionId?: string | null
   inReplyTo?: number
@@ -3594,6 +3595,7 @@ export function parseInboundMessage(
   observeEnvelope?.(envelope)
   const family = sessionStateFamily(envelope.type)
   const metadata = {
+    ...('conversation_id' in envelope ? { envelopeConversationId: envelope.conversation_id } : {}),
     ...('session_id' in envelope ? { envelopeSessionId: envelope.session_id } : {}),
     ...('in_reply_to' in envelope ? { inReplyTo: envelope.in_reply_to } : {})
   }
@@ -3602,7 +3604,7 @@ export function parseInboundMessage(
       diagnosticLog?.event({ event: 'inbound-rejected', code: 'session-clear-invalid' })
       throw new WireDecodeError('invalid session state clear')
     }
-    const { payload, type, ...correlation } = envelope
+    const { payload, type, conversation_id: _route, ...correlation } = envelope
     diagnosticLog?.event({ event: 'inbound-decoded', code: 'session-state-cleared', bytes: plaintext.length })
     return { kind: 'session-state-cleared', family, correlation, ...metadata }
   }

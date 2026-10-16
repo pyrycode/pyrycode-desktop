@@ -77,6 +77,8 @@ export function createThreadLiveState(deps: ThreadLiveDeps) {
     let disposed = false, settingsBlocked = false
     const report = (code: string) => deps.log?.event({ event: 'thread-live-state', code })
     function owned(event: DaemonEvent, family: SessionStateFamily, binding: Binding): boolean {
+      if (event.envelopeConversationId !== undefined) return event.envelopeConversationId === binding.conversationId &&
+        (!('conversationId' in event) || event.conversationId === binding.conversationId)
       if ('conversationId' in event) return event.conversationId !== '' && event.conversationId === binding.conversationId
       // Reset completion is an unsolicited withdrawal of the held operation,
       // without a request ID. Exact host/session guards run before this check.
@@ -142,8 +144,13 @@ export function createThreadLiveState(deps: ThreadLiveDeps) {
         }
         const family = threadLiveFamily(event)
         if (family === null) return
-        if (!binding || !binding.sessionId || !('serverId' in event) || event.serverId !== binding.serverId) { report('scope-refused'); return }
-        if (typeof event.envelopeSessionId !== 'string' || event.envelopeSessionId === '' || event.envelopeSessionId !== binding.sessionId) { report('provenance-refused'); return }
+        if (!binding || !('serverId' in event) || event.serverId !== binding.serverId) { report('scope-refused'); return }
+        // Current supplied delivery routes by conversation. Its producer can be
+        // the daemon's vocabulary source, a different session, null or omitted.
+        // Older envelopes retain the strict bound-session admission contract.
+        if (event.envelopeConversationId === undefined && (!binding.sessionId ||
+            typeof event.envelopeSessionId !== 'string' || event.envelopeSessionId === '' ||
+            event.envelopeSessionId !== binding.sessionId)) { report('provenance-refused'); return }
         if (!owned(event, family, binding)) { report('ownership-refused'); return }
         if (event.type === 'sessionStateCleared') {
           if (family === 'resetting') settingsBlocked = false

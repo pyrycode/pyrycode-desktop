@@ -27,7 +27,10 @@ export function createExchangeCapture(limits = { maxBytes: 2_000_000 }) {
       size += bytes.byteLength
       if (size > limits.maxBytes || entries.length >= 5000) { entries = []; failure = 'Exchange capture exceeded its limit'; return }
       try {
-        const message = decodeEnvelope(bytes)
+        // Validate the admitted envelope, then retain the actual decrypted JSON.
+        // Decoder projections intentionally omit unknown forward-compatible keys.
+        decodeEnvelope(bytes)
+        const message = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
         if (['hello', 'hello_ack', 'rekey_request', 'multipart', 'fragment'].includes(message.type)) throw new Error()
         entries.push({ direction, atMs: Date.now() - started, message, ...(id ? { connection: id } : {}) })
       } catch { entries = []; failure = 'Exchange capture rejected a frame' }

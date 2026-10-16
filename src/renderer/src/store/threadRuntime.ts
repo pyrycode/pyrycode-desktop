@@ -165,6 +165,8 @@ export function createThreadRuntime(deps: {
       if (!selected || event.serverId !== selected.host) return false
       const binding = lives.get(key(selected.host, selected.chat))?.getState().binding
       // Each contextBridge listener receives its own clone; object identity cannot prove admission.
+      if (binding && event.envelopeConversationId !== undefined) return event.envelopeConversationId === binding.conversationId &&
+        (!('conversationId' in event) || event.conversationId === binding.conversationId)
       if (!binding?.sessionId || event.envelopeSessionId !== binding.sessionId) return false
       return 'conversationId' in event ? event.conversationId === binding.conversationId
         : event.type === 'sessionSettingsUpdated' && event.sessionId === binding.sessionId

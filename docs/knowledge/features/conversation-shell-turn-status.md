@@ -7,6 +7,47 @@ Part of [Conversation shell](conversation-shell.md).
 - [Timeline render and stopped-turn records](conversation-shell-timeline-render.md)
 - [Thinking and working indicator](conversation-shell-working-indicator.md)
 
+## Session-scoped live presentation
+
+The production `threadLiveInputs` projection supplies existing views from
+[summary-bound live state](session-id-store.md#summary-authority-in-the-thread-runtime).
+Live readings remain independent of durable daemon items: turn/stall/retry/compaction,
+thinking/tool/task progress, resetting/rate limits, model/context, session facts/settings,
+MCP/slash/model inventories, suggestions, errors and outstanding permission/question
+prompts remain available even without content rows. Existing translators produce
+the run-config, announced-model and prompt shapes; settings payload `sessionId`
+remains reported data and cannot replace the summary binding.
+
+`workingIndicatorStateWithLocalSend` preserves the existing resetting → retrying →
+compacting → stalled → thinking/working ranking and the caller's local-send input.
+Activity booleans and eligible outstanding prompts supply attention inputs.
+Lifecycle retirement happens after admission, atomically with the new reading:
+
+| Admitted input | Retired live readings |
+| --- | --- |
+| Any `turnState`, including idle | Onset-only stall |
+| Non-thinking `turnState` | Thinking estimate |
+| Non-idle `turnState` | Session error |
+| `sessionError` | Turn phase, stall, retry, compaction and thinking estimate |
+
+Repeated thinking retains its estimate; after responding/idle, the next thinking
+phase starts without the previous estimate. Idle preserves a session error, while
+thinking/responding clears it. An error makes the derived phase idle but preserves
+other families, outstanding prompts and caller-owned pending/queued inputs.
+Rejected old-session activity/errors change nothing. Retry and compaction normally
+survive turn-state updates and owning-host reconnect until current supplied values
+replace them, including `active: false`.
+
+Canonical-clear checks alone miss these lifecycle rules: a fixture that assumes
+every family coexists can bless a stale retry indicator after an error or a stale
+thinking estimate in the next phase. The supplied-input specs in
+`threadLiveState.test.ts` and `threadLiveInputs.test.tsx` cover A→B replacement,
+delayed A readings, family clears, reused host/prompt IDs and atomic status/attention/error
+transitions. Static renders exercise existing view inputs. Mounted production
+coverage also checks errors, session replacement and settings refresh through the
+[thread runtime](thread-runtime.md#validation-boundaries). Credentialed live proof
+remains separately pending.
+
 ## Model refusal records
 
 `ModelRefusalRow` renders both refusal variants as retained `modelRefusal` timeline

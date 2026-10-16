@@ -4,7 +4,8 @@ import { describe, expect, it } from 'vitest'
 import type { ThreadItem } from '../../../../shared/wire/thread'
 import { createThreadItemStore } from '../../store/threadItemStore'
 import { ThreadItemsTimeline, ToolRow } from './ConversationScreen'
-import { threadItemPresentations } from './threadItemPresentation'
+import { actOnThreadQueue, threadItemPresentations, type ThreadSendInputs } from './threadItemPresentation'
+import { createThreadSendStore } from '../../store/threadSendStore'
 
 const item = (id: number, kind: string, content: unknown = {}, fields: Partial<ThreadItem> = {}): ThreadItem => ({
   id, rev: id, kind, order: id, status: 'done', active: false, shown: true, summary: `summary ${id}`,
@@ -23,6 +24,71 @@ function render(items: ThreadItem[], foldTools = false) {
 }
 
 describe('daemon item presentation', () => {
+  it('places unordered user items at the tail in first-arrival order and retains daemon content', () => {
+    const s = snapshot([item(100, 'user_message', { text: 'daemon accepted', attachments: [] },
+      { order: 0, active: true, status: 'queued' }), item(20, 'assistant_message', { text: 'agent response' }),
+      item(7, 'user_message', { text: 'later accepted' }, { order: 0, active: true, status: 'queued' })])
+    const html = renderToStaticMarkup(createElement(ThreadItemsTimeline, { snapshot: s }))
+    expect(html.indexOf('agent response')).toBeLessThan(html.indexOf('daemon accepted'))
+    expect(html.indexOf('daemon accepted')).toBeLessThan(html.indexOf('later accepted'))
+  })
+
+  it('offers queue actions only for connected scoped active user items with exact usable handles', () => {
+    const inputs = { connection: { hostId: 'host', status: { type: 'connected' as const,
+      ack: { server_id: 'host', conn_id: 'conn', protocol_version: '2', capabilities: [] } } },
+      onAction: () => {} }
+    const make = (handle: unknown, fields: Partial<ThreadItem> = {}, content = {}) => snapshot([
+      item(100, 'user_message', { text: 'accepted', queued_msg_id: handle, ...content },
+        { status: 'queued', active: true, ...fields })])
+    const view = (s: ReturnType<typeof snapshot>, sendInputs: ThreadSendInputs = inputs) =>
+      renderToStaticMarkup(createElement(ThreadItemsTimeline, { snapshot: s, sendInputs }))
+    expect(view(make(7))).toContain('aria-label="Drop queued message"')
+    expect(view(make(7))).toContain('aria-label="Send queued message now"')
+    for (const value of [undefined, null, 0, -1, 1.5, '7', Number.MAX_SAFE_INTEGER + 1]) {
+      expect(view(make(value))).not.toContain('Drop queued message')
+      expect(view(make(value))).toContain('data-thread-role="queued"')
+    }
+    for (const fields of [{ status: 'delivered' }, { status: 'lost' }, { status: 'dropped' },
+      { shown: false }, { active: false }]) expect(view(make(7, fields))).not.toContain('Drop queued message')
+    for (const marker of ['truncated_fields', 'dropped_fields']) {
+      expect(view(make(7, {}, { [marker]: ['queued_msg_id'] }))).not.toContain('Drop queued message')
+    }
+    expect(view(make(7), { ...inputs, connection: { ...inputs.connection, hostId: 'peer' } })).not.toContain('Drop queued message')
+    expect(view(make(7, { status: 'lost', active: false }))).toContain('Not delivered')
+    expect(view(make(7), { ...inputs, onAction: undefined })).not.toContain('Drop queued message')
+    expect(view(make(7), { ...inputs, connection: { hostId: 'host', status: { type: 'disconnected' } } })).not.toContain('Drop queued message')
+  })
+
+  it('replaces local text and attachment display with daemon facts and ignores mismatched local scope', () => {
+    const sends = createThreadSendStore().getState()
+    sends.retain('host', 'chat', 'device', { type: 'userText', text: 'local path', messageId: 'm',
+      attachments: [{ attachmentId: 'local-file', filename: 'local.pdf' }] })
+    const s = snapshot([item(100, 'user_message', { text: 'daemon truth', device_id: 'device', message_id: 'm',
+      attachments: [{ attachment_id: 'daemon-file', filename: 'daemon.pdf' }] }, { status: 'delivered' })])
+    const view = (hostId = 'host') => renderToStaticMarkup(createElement(ThreadItemsTimeline, {
+      snapshot: s, sendInputs: { local: { ...sends.select('host', 'chat'), hostId, conversationId: 'chat' } }
+    }))
+    expect(view()).toContain('local.pdf'); expect(view('peer')).not.toContain('local.pdf')
+    sends.settle(s)
+    expect(view()).toContain('daemon.pdf'); expect(view()).toContain('daemon truth')
+    expect(view()).not.toContain('local.pdf'); expect(view()).not.toContain('local path')
+  })
+
+  it('targets the host and genuine queue handle while preserving facts on bridge failure', () => {
+    const s = snapshot([item(100, 'user_message', { text: 'retained truth', queued_msg_id: 7 },
+      { status: 'queued', active: true })])
+    const commands: unknown[] = [], logs: unknown[] = []
+    const inputs = { connection: { hostId: 'host', status: { type: 'connected' as const,
+      ack: { server_id: 'host', conn_id: 'conn', protocol_version: '2', capabilities: [] } } },
+      onAction: (host: string, command: unknown) => { commands.push([host, command]); throw new Error('bridge') },
+      log: (event: unknown) => logs.push(event) }
+    actOnThreadQueue(s, s.items[0], inputs, 'drop'); actOnThreadQueue(s, s.items[0], inputs, 'send-now')
+    expect(commands).toEqual(['dequeueMessage', 'sendQueuedNow'].map(type => ['host', { type,
+      payload: { conversation_id: 'chat', queued_msg_id: 7 } }]))
+    expect(logs).toEqual(Array(2).fill({ event: 'thread-queue-action', code: 'bridge-failed' }))
+    expect(s.items[0].shown).toBe(true); expect(s.items[0].status).toBe('queued')
+  })
+
   it('draws supplied kinds in order, including shown info notices and normal endings', () => {
     const html = render([
       item(1, 'user_message', { text: 'user supplied' }, { status: 'delivered' }),
@@ -38,6 +104,17 @@ describe('daemon item presentation', () => {
     expect(html.indexOf('user supplied')).toBeLessThan(html.indexOf('assistant supplied'))
     expect(html.indexOf('tool supplied')).toBeLessThan(html.indexOf('Session reset'))
     expect(html.indexOf('summary 6')).toBeLessThan(html.indexOf('info supplied'))
+  })
+
+  it('renders raw daemon reset causes as exactly one session delimiter and preserves unknown summaries', () => {
+    const html = render([item(1, 'session_divider', { cause: 'operator_reset', occurred_at: '2026-10-16T00:00:00Z' },
+      { summary: 'Session changed: operator_reset' })])
+    expect(html.match(/class="session-delimiter"/g)).toHaveLength(1)
+    expect(html).toContain('Session reset')
+    expect(render([item(1, 'session_divider', { cause: 'future' }, { summary: 'supplied summary' })]))
+      .not.toContain('class="session-delimiter"')
+    expect(render([item(1, 'session_divider', { cause: 'future' }, { summary: 'supplied summary' })]))
+      .toContain('supplied summary')
   })
 
   it('keeps hidden items held and uses escaped inert summaries for unsupported facts', () => {
@@ -114,6 +191,21 @@ const rosterLinked = (id: number) => ({ task_id: `task-${id}`, task_link: { task
 ] } })
 
 describe('supplied agents', () => {
+  it('shows the structured task description on launch markers instead of the raw JSON summary', () => {
+    const description = 'Wait 60 minutes then close'
+    const raw = JSON.stringify({ description, model: 'haiku', run_in_background: true })
+    for (const fields of [{ status: 'running', active: true }, { status: 'finished', active: false }]) {
+      const html = render([agent(10, fields, {
+        ...linked(10), input_summary: raw, input: { description, model: 'haiku' }
+      })])
+      expect(html).toContain(`<span class="agent-start-marker__description">${description}</span>`)
+      expect(html).not.toContain('&quot;run_in_background&quot;')
+      expect(html).toContain('Go to agent')
+    }
+    expect(render([agent(10, {}, { ...linked(10), input_summary: description })]))
+      .toContain(`<span class="agent-start-marker__description">${description}</span>`)
+  })
+
   it('supplied ancestry repairs missing parents, caps depth and counts only distinct shown tools', () => {
     const input = [agent(10), agent(20, { parent: 10 }), agent(30, { parent: 20 }),
       item(40, 'tool_call', { name: 'Read', tool_use_id: 'same' }, { parent: 30 }),
@@ -269,4 +361,14 @@ it('keeps main reply usage independent of child traffic sharing a turn', () => {
   ]))
   expect(rows.find(r => r.source.id === 20)?.stats).toBe('42 out')
   expect(rows.find(r => r.source.id === 30)?.stats).toBeUndefined()
+})
+
+it('shows written input once as a user row without offering queue actions', () => {
+  const html = render([item(7, 'user_message', { text: 'written before consumption', queued_msg_id: 2 },
+    { status: 'written', active: true, order: 0 })])
+  expect(html).toContain('data-thread-role="user"')
+  expect(html).toContain('written before consumption')
+  expect(html).not.toContain('data-thread-role="queued"')
+  expect(html).not.toContain('Drop queued message')
+  expect(html).not.toContain('Send queued message now')
 })

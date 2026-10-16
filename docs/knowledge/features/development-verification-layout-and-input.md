@@ -17,8 +17,56 @@ Hover and focus can resize rows before a wheel, checkbox or content-anchor asser
 Settle the intended pointer/focus state before recording its baseline: move the pointer
 away where hover is irrelevant, focus the checkbox before its Space baseline, and wait
 for native motion to settle before measuring wheel displacement. Two animation frames
-flush queued events; held-reader checks additionally need stable offset, content height
-and viewport height after the corresponding rendered effect.
+allow queued events to run; they do not acknowledge a particular scroll handler.
+Held-reader checks additionally need stable offset, content height and viewport height
+after the corresponding rendered effect.
+
+For streaming message copy, settle the attached send's completed assistant reply
+before injecting an independent delta. Locate the intended source explicitly and
+assert its exact committed text and cursor; a cursor on a dynamic last row can
+belong to another turn. Transfer focus before pressing, then hover and require
+identical button bounds and thread scroll offset/content height across consecutive
+animation frames with focus and hover held. A trusted pointer-down is insufficient:
+metadata reflow during the press can move Copy so release hits Reply and click
+lands on their common container. Require a trusted click on Copy itself, followed
+by exact OS clipboard readback. First verify a different value from an earlier
+ordinary activation so a stale matching clipboard cannot satisfy the assertion.
+Keep ordinary activation, clipboard serialization and desktop isolation intact.
+See [streaming copy readiness and counted evidence](conversation-shell-message-bubble-testing.md#streaming-copy-input-readiness)
+for the controlled 28px movement and distinction from the unrecorded historical
+schedule. Retain readiness samples even when polling or activation fails; the
+current side-actions spec attaches them only after activation reaches its
+receipt/readback `try/finally`, a nonblocking diagnostic limitation noted by review.
+
+The supplied-agent regression in [`thread-items.spec.ts`](../../../e2e/thread-items.spec.ts)
+registers its target scroll listener after React's listener, so its count and offset
+acknowledge processing after `rememberTop`. Settle native Home before parking row 100;
+then require a newer processed event at the parked offset and 20 unchanged frame
+samples of offset, content/viewport dimensions, row position and processing state.
+Keep the probe local to the spec and remove its listener after preservation checks.
+An aligned row by itself cannot prove that the hook remembers it.
+
+The fixture's `commitUpdate` wraps the ordinary typed update in React `flushSync`.
+Only the agent regression uses it, committing immediately after readiness in the same
+renderer task so an incidental Playwright/protocol delay cannot hide missing readiness.
+Positive agent child counts certify reparent commit; rendered older row 5 certifies
+insertion before settling and comparing with the immutable baseline. Removing only
+park readiness deterministically fails both widths at the original position assertion.
+The [controlled diagnosis and counted runs](conversation-shell-scroll-pin.md#supplied-snapshot-anchor-restoration)
+distinguish this setup race from a settled-reader defect without claiming the
+unavailable original failure trace. Production behavior remains unchanged.
+
+An earlier successful bottom/spacing poll cannot certify a later newest-row read:
+hover or action focus can reveal metadata between them. The
+[composer status-spacing regression](conversation-shell-composer-status-row.md#composer-status-row-796)
+observes chrome geometry, input height, overflow and scroll endpoint together on
+consecutive animation frames. Require identical snapshots and every expected value;
+stable but incorrect geometry must still fail. Retain both snapshots from each poll
+attempt, including dimensions, scroll metrics and hover/focus, even on failure.
+Exercise late action focus and prove it remains held after zero bottom clearance
+settles. Keep this observation local to the scenario, with the existing numeric
+assertions, timeouts, retries and parallelism. Two frames by themselves do not prove
+settlement when their measurements disagree. See [counted proof](#composer-status-spacing-verification).
 
 Stability alone can preserve a bottom baseline overwritten by resize-driven pinning.
 A programmatic park during metadata reflow does not release following through the
@@ -33,6 +81,26 @@ intent from seeded delivery and Cancel focus. See
 for the controlled counts, 20 focused Linux/Xvfb passes with 3 workers and zero retries,
 and the named test's full-gate result separately from an unrelated failure.
 
+For metadata wheel checks, completed row delivery and stable geometry are necessary
+but do not establish native input/layout ordering. The retained
+[`turn-stats-hover` regression](conversation-shell-message-bubble-testing.md#metadata-wheel-ordering-verification)
+confirms all 42 rows and more than 1500px overflow before wheel navigation. It samples
+offset/content/viewport over 20 consecutive stable frames after pointer/focus changes
+and native input. Held setup uses trusted upward motion, proves positive displacement
+and distance from bottom, then checks a short downward nudge does not snap to bottom.
+Assert that the focus target is actually above the viewport and its details visibly
+reveal/collapse before comparing the same immutable reference through both effects.
+Never reset scroll or replace the reference after the action to obtain clearance.
+
+A read-only geometry listener can flush layout and change the ordering it observes.
+Here one `scrollHeight` read in a one-shot native wheel listener forces layout before
+scroll delivery, reproducing an equal-height metadata exchange that leaves the reader
+28px short. Treat such traces as controlled interventions, distinguishing them from
+passive observations of an original gate. Twenty uninstrumented passes on unchanged
+production missed this gap; the layout-read control failed 3/3 before repair and
+passed 3/3 after it. The linked evidence records counts, both widths and the repaired
+test's focused/full-gate results without claiming the original unrecorded schedule.
+
 Known-gap demand measures marker intersection before native key scrolling, so
 older-end proximity and an earlier screenshot do not prove eligibility. Pending
 tool layout can overwrite a programmatic park while following. At both fresh-input
@@ -42,8 +110,18 @@ marker between the actual top/input chrome. Settle that movement, then assert
 focused intersection and unchanged request count before one ArrowUp. Keep these
 helpers local; readiness uses measured animation-frame stability without extra
 trusted keys, sleeps, test retries or larger timeouts. See
-[the gap testing contract](chat-history-testing.md#demand-and-snapshot-contracts)
+[the gap testing contract](chat-history-testing-contracts.md#demand-and-snapshot-contracts)
 and [controlled failure evidence](development-verification-history.md#known-gap-recovery-verification).
+
+Retry focus can also reset the thread to scrollTop 0 after a marker was parked.
+Re-park the loading marker after retry focus/layout settles, then take the
+immutable anchor baseline. Otherwise a named row below the viewport's top can
+move when older rows arrive while the actual visible top anchor correctly stays
+put. Retain exact cursor/request counts and the <2px preservation assertion. The
+[native-view recovery plan](../../specs/architecture/1991-native-hosted-view.md#revisions)
+records controlled focus-time movement and retry geometry; the
+[counted full-suite evidence](daemon-connection-hosted-resource-views.md#native-viewer-verification)
+does not establish the cause of the separate unrecovered history-walk failure.
 
 Protected-restoration joins need an explicit pre-input history-demand position. After
 restored tool expansion and settled focus/hover, park at half the measured
@@ -169,6 +247,41 @@ Retain keyboard activation, focus, Escape and outside-click checks. Inject exter
 and save failures at the IPC handler seam so layout proof invokes neither OS apps nor
 Downloads writes. Draft/thread-position checks and an upload completing while the reader
 is open distinguish a hidden covered conversation from one accidentally unmounted.
+
+Reader reopen input needs geometry stability after focus changes, too. Playwright's
+pre-click stability check can precede hover revealing `.bubble__meta--details`;
+bottom pinning then moves the link before pointer delivery. In
+[`markdown-reader-menu.spec.ts`](../../../e2e/markdown-reader-menu.spec.ts),
+`settledThreadPosition` requires 20 consecutive equal frame comparisons of thread
+offset, content/viewport height and link x/y/width/height, rejecting after 120 sampled
+frames. Focus Back before the first preservation baseline and focus the link before
+the final pointer click. Keep the exact Back position assertion before this new
+focus/settlement so preparation cannot overwrite the preservation proof. Retain
+fresh-content and request-count assertions, diagnostic attachments and keyboard Back;
+there is no click retry, fixed sleep or timeout increase. The
+[controlled failure and repaired input](development-verification-layout-evidence.md#reader-reopen-input-verification)
+establish the setup race; unchanged green repetitions alone cannot establish its cause.
+
+Covered-thread preservation has a separate boundary: native resize can clamp a
+released thread even after its positive baseline settled. The reader cases retain
+a trusted upward wheel before ordinary opening and prove it moved, then normalize
+Back focus before taking the immutable baseline. Settle measured thread geometry
+at every native size/zoom phase, keeping native size/zoom and renderer reflow as
+separate observations. Compare exact position and draft after pointer Back at the
+original dimensions/zoom, before resizing or focusing the reopen link. Reopening
+at the alternate size and making another resize round trip checks that keyboard
+Back preserves the new open's own record. Keep full-pane, notice clearance,
+final-content/menu bounds and pointer/keyboard/request-correlation assertions.
+
+Local `thread-scroll-phases` diagnostics record thread offset, content/viewport
+dimensions, link bounds, native outer/content size, zoom and focus at baseline,
+resize/zoom and Back, alongside timestamped scroll/resize samples. A test-wide
+`finally` removes the probe listeners and attaches evidence even if an assertion
+fails before reopen. The [controlled failure and Linux validation](development-verification-layout-evidence.md#reader-resize-scroll-preservation)
+show persistent settled-state loss despite later phase settlement; they do not
+recover the historical 1300→1020 schedule. Stable bottom geometry does not prove
+following intent, and a readiness-only change cannot restore an already-clamped
+held offset. See [the production contract](conversation-shell-scroll-pin.md#covered-reader-resize-preservation).
 
 Stacking levels are relative to ancestor contexts. The message area's level 0
 contains rows, pills and drawer; sharp top/input chrome at level 1 keeps controls
@@ -302,6 +415,55 @@ Use the Electron window's native paste operation for this case.
 Seed the clipboard before the first paste and distinguish rejection branches in
 the fake responses.
 
+### Visible-tail focus reliability
+
+In [`visible-tail-read.spec.ts`](../../../e2e/visible-tail-read.spec.ts), a timeout
+at `document.hasFocus()` does not establish concurrent-window focus theft. The
+[classification and retained evidence](../../specs/architecture/2051-visible-tail-focus-reliability.md)
+record two independent Linux complete-suite failures on `b3291233`, each
+**435 executed, 434 passed, 1 failed, 3 skipped**, four actual workers, both
+projects and zero retries. Each completed `read-work-30`, installed the second
+document probe, then failed the five-second genuine-focus poll before
+`read-work-400`; both apps remained running at outcome and exited cleanly.
+The isolated baseline/candidate/batched comparison was pass/fail/pass, each
+**1 executed, 0 skipped**, zero retries and one actual worker. Concurrent test
+windows were therefore unnecessary to reproduce the failure.
+
+Repeated synchronous protected-path writes are the supported storage-related
+trigger: #2044's batching repair coalesces writes within the transaction, and
+complete compositions subsequently passed with focus/display code unchanged.
+The reports measure neither main-loop latency nor native-window/webContents focus,
+so the exact path from storage work to delayed page focus remains uncertain.
+Keep the [400-item coalescing regression](chat-history-testing-storage.md#owned-mutation-regressions-and-counted-validation)
+and existing read spec; no residual setup defect or duplicate regression is justified.
+The helper shows/focuses the native window, removes any document focus override,
+and positively polls genuine `document.hasFocus()` before its focus notification.
+Preserve that predicate, processing/React-commit barriers, observer lifecycle and
+read-work assertions at both 30 and 400 rows. A synthetic event alone cannot supply
+the positive barrier; longer timeouts, retries, skips or serialization would weaken
+the existing proof.
+
+The [verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/2057#issuecomment-6213507072)
+records final-head acceptance on `a0200f81b4fea6d186b1eceb2bb77edd4450c704`,
+2026-10-16, Linux x64. `npx playwright test --reporter=json` ran **436 executed,
+436 passed, 0 failed, 3 skipped, 0 flaky**, four actual workers, clipboard
+**30 passed** and parallel **406 passed/3 skipped**, zero retries and no filters.
+Shown Linux windows and the shared run-owned Xvfb display remain unchanged.
+The named `read setup is reused across committed same-row deltas on short and long threads`
+case was present and passed: **1 executed/passed, 0 failed/skipped**, retry 0.
+Both `read-work-30` and `read-work-400` report zero constructors/discovery/listeners/
+subscriptions, complete documents and clean two-app launch fate. There were no
+top-level errors or fake-daemon setup-failure attachments; stderr contains only
+the existing Vite CJS warning. Skips are two macOS badge cases and macOS window
+reopen; macOS and live-Claude are outside this ticket's scope.
+
+The plan separates the dependency's 435-case pass, builder's 435-case pass on
+`42b94d17`, documentation-only evidence commit `25fc4fec`, and this later
+436-case gate after main's initial-thread-loading/Retry regression merged.
+Inspect retained reports before requesting another run: a stale refinement
+summary can omit subsequently available complete-suite evidence. A targeted pass
+alone does not prove full-composition reliability or erase the historical failures.
+
 ### Composer native setup verification
 
 The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1838#issuecomment-6030292632)
@@ -334,8 +496,54 @@ none counts as proof. Global retry/worker settings and menu assertions are
 unchanged. This is fake-transport evidence; no live Claude or upstream-trigger
 reproduction is claimed. See [diagnosis and deterministic fault coverage](e2e-harness-context-recovery.md#tolerating-a-transient-inspection-context-loss-on-reads).
 
+### Composer status-spacing verification
+
+The [diagnosis](https://github.com/pyrycode/pyrycode-desktop/issues/1953#issuecomment-6175600713)
+and [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1954#issuecomment-6175788661)
+record a controlled observation race and its repair, reviewed at revision `3bba3878`
+on 2026-10-14.
+The two original failure/rerun logs from the earlier gate were not recovered;
+their assertion, values and cause remain unknown. Green unchanged runs do not
+establish that occurrence's cause.
+
+At native width 1280 with an empty draft, late newest-action focus after successful
+bottom/spacing polls changed content height from 1613 to 1641 at scrollTop 880 and
+viewport height 733. The one-shot `chrome.top - newestRow.bottom` assertion returned
+−28px instead of 0. After frame processing it returned 0 with action focus retained.
+Ordinary hover also produced content growth from 1585 to 1613 at offset 852, transient
+−28px clearance, then offset 880 and clearance 0. The comparison distinguishes a
+transient observation boundary from a persistent product geometry defect; it does
+not identify the unrecovered original failure. No production or native-resize
+correction shipped.
+
+Retained reports under `/tmp/builder-1953/` record `controlled.json`: 1 executed,
+1 intentional failure, 0 skipped; `repaired-control.json`: the same input,
+1 executed/passed, 0 failed/skipped. Persistent CSS controls each executed 1 and
+failed 1, with 0 skipped: `status-mutation.json` observed stable 17px upper spacing
+instead of 16px; `padding-mutation.json` observed stable 1px padding/clearance error
+instead of 0. All used zero retries. Commands, diagnostic patches and measurements
+are linked from the diagnosis; raw failure artifacts and patches were retained in
+`/tmp/builder-1953/retained-proof.tar.gz`. Temporary control hooks are absent from
+the shipping spec.
+
+The exact named test, `status spacing and measured input clearance hold with a
+warning and five-line draft`, was present and passed all 20 focused executions:
+20 executed/passed, 0 failed, 0 skipped, 0 flaky, every retry 0, with 4 workers.
+The recorded command was:
+
+```sh
+xvfb-run -a npx playwright test e2e/composer-status-spacing.spec.ts --grep 'status spacing and measured input clearance hold with a warning and five-line draft' --repeat-each=20 --retries=0 --reporter=json --output=/tmp/builder-1953/final-results > /tmp/builder-1953/final.json
+```
+
+Dispatcher verifier gate 6, `npx playwright test --reporter=json`, used 4 workers:
+395 executed, 394 passed, 1 unrelated failed, 3 skipped, all retry 0. The supplied
+gate report confirms the exact composer test was present and passed; the verdict
+records its 1 executed/passed, 0 failed/skipped result. The verdict separately
+records the unrelated hover-test rerun as 1 executed/passed, 0 failed/skipped.
+The supplied report contains no full verifier-gate pass; that rerun does not
+replace or enlarge the composer evidence. Both proofs use fake transport.
+
 ### Inline question verification
 
 Inline-question interaction, live continuation and reviewed captures are recorded in
 [the test-tier reference](development-verification-test-tiers.md#inline-question-verification).
-

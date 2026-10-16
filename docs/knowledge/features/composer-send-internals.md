@@ -95,7 +95,7 @@ placement without inventing a daemon `queued_msg_id` or showing queue controls.
 Not sent preserves the failed message. Written clears only the transport label:
 a socket write is not daemon acknowledgement, and main never retries a written
 message merely because its receipt has not arrived. The main-memory hold and
-unchanged-pairing Reconnect rules live in [connection lifecycle](daemon-connection-lifecycle.md#disconnected-composer-message-delivery);
+unchanged-pairing Reconnect rules live in [connection lifecycle](daemon-connection-disconnected-delivery.md#disconnected-composer-message-delivery);
 holds end on pairing replacement/removal, disposal or app shutdown and do not survive restart.
 
 `timelineTargetFor` routes delivery events to their own conversation. The mounted
@@ -176,7 +176,7 @@ history persistence.
 
 The send control is gated on the live connection status: while the session is not
 `connected`, sending is disabled. Accepted submissions that encounter a main-process
-disconnect or handshake gap use the [bounded transport hold](daemon-connection-lifecycle.md#disconnected-composer-message-delivery)
+disconnect or handshake gap use the [bounded transport hold](daemon-connection-disconnected-delivery.md#disconnected-composer-message-delivery)
 and visible delivery status; the offline Send gate is unchanged.
 
 The decision lives in `composerSend.ts` as a pure, React-free predicate — a *total* mapping over the store's `ConnectionStatus` (from [session store](session-store.md)):
@@ -408,7 +408,7 @@ host ID. Both typed submissions and picked Actions-menu commands reach this help
 submission, ordered IDs on the command, and a throwing bridge that rolls back,
 retains echo attachments and returns false. `localMessageDelivery.test.ts` exercises
 synchronous status reporting after both echo writes and inactive-host isolation.
-See [delivery verification](daemon-connection-lifecycle.md#delivery-verification) for
+See [delivery verification](daemon-connection-disconnected-delivery.md#delivery-verification) for
 recorded mounted fake-daemon evidence; no new real-Claude acceptance is required.
 
 **No canonical-shape check on the ids here, by deliberate omission.** Upstream (`pyrycode#2038`) mandates

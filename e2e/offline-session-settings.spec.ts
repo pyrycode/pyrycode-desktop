@@ -1,7 +1,10 @@
-import { test, expect, FIRST_SERVER_ID, SECOND_SERVER_ID, SEEDED_ROW, SECOND_SEEDED_ROW, type PairedApp } from './fixtures/launchPairedApp'
+import { test, expect, FIRST_SERVER_ID, SECOND_SERVER_ID, SEEDED_ROW as BASE_ROW, SECOND_SEEDED_ROW as SECOND_BASE_ROW, type PairedApp } from './fixtures/launchPairedApp'
 import { DAEMON_EVENT_CHANNEL } from '../src/shared/ipc/events'
 import type { RendererCommand } from '../src/shared/ipc/commands'
 import { conversationStateFake } from './fixtures/conversationStateFake'
+
+const SEEDED_ROW = { ...BASE_ROW, current_session_id: 'settings-session' }
+const SECOND_SEEDED_ROW = { ...SECOND_BASE_ROW, current_session_id: 'second-session' }
 
 const MODELS = ['opus', 'sonnet'].map(value => ({
   value, display_name: value, resolved_model: value, effort_levels: ['low', 'high'],
@@ -11,22 +14,25 @@ const MODELS = ['opus', 'sonnet'].map(value => ({
 async function event(app: PairedApp, value: object): Promise<void> {
   await app.app.evaluate(({ BrowserWindow }, { channel, value }) => {
     BrowserWindow.getAllWindows()[0].webContents.send(channel, value)
-  }, { channel: DAEMON_EVENT_CHANNEL, value })
+  }, { channel: DAEMON_EVENT_CHANNEL, value: { envelopeSessionId: 'settings-session', ...value, ...('conversations' in value && Array.isArray(value.conversations)
+    ? { conversations: value.conversations.map(row => ({ current_session_id: 'settings-session', ...row })) } : {}) } })
   // Drain React's render and passive effects before a closing absence assertion.
   await app.page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
 }
 
 async function connection(app: PairedApp, type: string, serverId = FIRST_SERVER_ID): Promise<void> {
-  await event(app, { type, serverId, ack: { protocol_version: '1', server_id: 'test-server', conn_id: 'test-connection', capabilities: [] },
+  await event(app, { type, serverId, ack: { protocol_version: '1', server_id: 'test-server', conn_id: 'test-connection', capabilities: ['thread'] },
     error: { code: 'transport', message: 'Offline', retryable: true } })
 }
 
 async function settings(app: PairedApp, effort = 'low', conversationId = SEEDED_ROW.id,
-  sessionId = 'settings-session', serverId = FIRST_SERVER_ID): Promise<void> {
+  sessionId = 'settings-session', serverId = FIRST_SERVER_ID, declareOwner = true): Promise<void> {
+  if (declareOwner) await event(app, { type: 'conversationsReceived', serverId, conversations: [{
+    ...(serverId === FIRST_SERVER_ID ? SEEDED_ROW : SECOND_SEEDED_ROW), id: conversationId, current_session_id: sessionId }] })
   await event(app, { type: 'runConfigReceived', serverId, conversationId,
-    sessionId, model: 'opus', effort, effectiveEffort: effort, yolo: false, permissionMode: 'default',
+    envelopeSessionId: sessionId, sessionId, model: 'opus', effort, effectiveEffort: effort, yolo: false, permissionMode: 'default',
     used_tokens: 100, window_tokens: 1000 })
-  await event(app, { type: 'modelList', serverId, conversationId, models: MODELS, droppedModels: 0 })
+  await event(app, { type: 'modelList', serverId, conversationId, envelopeSessionId: sessionId, models: MODELS, droppedModels: 0 })
 }
 
 async function observeCommands(app: PairedApp) {
@@ -49,7 +55,7 @@ async function openSheet(app: PairedApp): Promise<void> {
 }
 
 test('pre-opened composer menus discard mouse and keyboard choices offline, then reconnect', async ({ launchPairedApp }) => {
-  const app = await launchPairedApp({ buildReplyFrames: conversationStateFake() })
+  const app = await launchPairedApp({ buildReplyFrames: conversationStateFake({ conversations: [SEEDED_ROW] }) })
   const read = await observeCommands(app)
   const { page } = app
   const cases = [
@@ -74,7 +80,7 @@ test('pre-opened composer menus discard mouse and keyboard choices offline, then
     await connection(app, 'connected')
     // Reconnect invalidates permission confirmation until the owning host reports again.
     await expect(page.locator('.composer__permission-label')).toHaveCount(0)
-    if (trigger !== '.composer__permission') await expect(page.locator(trigger)).toBeVisible()
+    await expect(page.locator(trigger)).toHaveCount(0)
     await settings(app)
     await expect(page.locator('.composer__permission-label')).toHaveText('Manual approval')
     await expect(page.locator(trigger)).toBeVisible()
@@ -121,7 +127,7 @@ test('an open sheet retains values but cannot write any field offline; another h
   await page.getByRole('button', { name: SECOND_SEEDED_ROW.name!, exact: true }).click()
   await expect(page.locator('.composer__permission-label')).toHaveCount(0)
   // A report naming the open chat still cannot establish confirmation from the wrong host.
-  await settings(app, 'low', SECOND_SEEDED_ROW.id, 'second-session', FIRST_SERVER_ID)
+  await settings(app, 'low', SECOND_SEEDED_ROW.id, 'second-session', FIRST_SERVER_ID, false)
   await expect(page.locator('.composer__permission-label')).toHaveCount(0)
   await settings(app, 'low', SECOND_SEEDED_ROW.id, 'second-session', SECOND_SERVER_ID)
   await expect(page.locator('.composer__permission-label')).toHaveText('Manual approval')
@@ -146,7 +152,7 @@ test('an open sheet retains values but cannot write any field offline; another h
 })
 
 test('missing ownership/status and every non-connected status fail closed, preserving session and capability gates', async ({ launchPairedApp }) => {
-  const app = await launchPairedApp({ buildReplyFrames: conversationStateFake() })
+  const app = await launchPairedApp({ buildReplyFrames: conversationStateFake({ conversations: [SEEDED_ROW] }) })
   const read = await observeCommands(app)
   const { page } = app
   await settings(app)
@@ -183,37 +189,27 @@ test('missing ownership/status and every non-connected status fail closed, prese
 })
 
 test('remembered effort waits offline without consuming its attempt, and reconnect cannot retry an attempt', async ({ launchPairedApp }) => {
-  let stateFake = conversationStateFake()
-  const app = await launchPairedApp({ buildReplyFrames: frame => stateFake(frame) })
+  const fresh = { ...SEEDED_ROW, id: 'fresh-effort', name: 'Fresh effort', current_session_id: 'fresh-session' }
+  const changed = { ...fresh, id: 'changed-effort', name: 'Changed effort', current_session_id: 'changed-session' }
+  let rows = [SEEDED_ROW]
+  const app = await launchPairedApp({ buildReplyFrames: bytes => conversationStateFake({ conversations: rows })(bytes) })
   const read = await observeCommands(app)
   const { page } = app
   await settings(app)
   await page.locator('.composer__effort').click()
   await page.getByRole('menuitem', { name: 'high', exact: true }).click()
   await expect.poll(async () => (await read()).length).toBe(1)
-  await event(app, { type: 'sessionSettingsUpdated', changeId: (await read())[0].changeId })
-  await connection(app, 'connecting')
-  await settings(app, '')
-  // An unavailable applied reading keeps the saved choice visible.
-  await expect(page.locator('.composer__effort-label')).toHaveText('high')
-  // Reconnect clears the prior confirmed overlay, so the empty snapshot becomes eligible.
-  // While unavailable, a fresh conversation has no attempt or overlay to hide a bad apply.
-  const fresh = { ...SEEDED_ROW, id: 'fresh-effort', name: 'Fresh effort' }
-  stateFake = conversationStateFake({ conversations: [SEEDED_ROW, fresh] })
-  await event(app, { type: 'conversationsReceived', serverId: FIRST_SERVER_ID, conversations: [SEEDED_ROW, fresh] })
+  await event(app, { type: 'sessionSettingsUpdated', serverId: FIRST_SERVER_ID, sessionId: 'settings-session',
+    envelopeSessionId: 'settings-session', changeId: (await read())[0].changeId })
+  await connection(app, 'disconnected')
+  rows = [SEEDED_ROW, fresh, changed]
+  await event(app, { type: 'conversationsReceived', serverId: FIRST_SERVER_ID, conversations: rows })
   await page.getByRole('button', { name: fresh.name, exact: true }).click()
   await settings(app, '', fresh.id, 'fresh-session')
-  await expect(page.locator('.composer__model-label')).toHaveText('Opus')
   expect(await read()).toHaveLength(1)
-  await event(app, { type: 'conversationsReceived', serverId: FIRST_SERVER_ID, conversations: [SEEDED_ROW] })
-  await settings(app, '', fresh.id, 'fresh-session')
-  expect(await read()).toHaveLength(1)
-  await event(app, { type: 'conversationsReceived', serverId: 'missing-status', conversations: [fresh] })
-  await settings(app, '', fresh.id, 'fresh-session')
-  expect(await read()).toHaveLength(1)
-  await event(app, { type: 'conversationsReceived', serverId: 'missing-status', conversations: [] })
-  await event(app, { type: 'conversationsReceived', serverId: FIRST_SERVER_ID, conversations: [SEEDED_ROW, fresh] })
   await connection(app, 'connected')
+  // Current readings must be reasserted after reconnect before a saved choice can apply.
+  await settings(app, '', fresh.id, 'fresh-session')
   await expect.poll(async () => (await read()).length).toBe(2)
   expect((await read())[1]).toMatchObject({ payload: { session_id: 'fresh-session', effort: 'high' } })
   await event(app, { type: 'sessionSettingsRejected', changeId: (await read())[1].changeId })
@@ -221,17 +217,12 @@ test('remembered effort waits offline without consuming its attempt, and reconne
   await connection(app, 'connected')
   await settings(app, '', fresh.id, 'fresh-session')
   expect(await read()).toHaveLength(2)
-
-  // An unattempted chat gains its own effort before reconnect: eligibility must be checked again.
   await connection(app, 'disconnected')
-  const changed = { ...fresh, id: 'changed-effort', name: 'Changed effort' }
-  stateFake = conversationStateFake({ conversations: [SEEDED_ROW, fresh, changed] })
-  await event(app, { type: 'conversationsReceived', serverId: FIRST_SERVER_ID, conversations: [SEEDED_ROW, fresh, changed] })
+  await event(app, { type: 'conversationsReceived', serverId: FIRST_SERVER_ID, conversations: rows })
   await page.getByRole('button', { name: changed.name, exact: true }).click()
-  await settings(app, '', changed.id, 'changed-session')
   expect(await read()).toHaveLength(2)
-  await settings(app, 'low', changed.id, 'changed-session')
   await connection(app, 'connected')
-  await expect(page.locator('.composer__effort')).toHaveText('low')
+  await settings(app, 'low', changed.id, 'changed-session')
+  await expect(page.locator('.composer__effort-label')).toHaveText('low')
   expect(await read()).toHaveLength(2)
 })

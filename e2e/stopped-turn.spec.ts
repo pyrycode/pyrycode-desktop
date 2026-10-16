@@ -5,8 +5,9 @@ import { DAEMON_EVENT_CHANNEL } from '../src/shared/ipc/events'
 
 const other = { ...SEEDED_ROW, id: 'other-chat', name: 'Other discussion' }
 const frame = (type: EnvelopeType, payload: unknown) => encodeEnvelope({ id: 1, type, ts: '2026-09-11T12:00:00Z', payload })
+let stopSequence = 0
 const stop = (terminal_reason: string, extra = {}, conversation_id = SEEDED_ROW.id) => frame('turn_end', {
-  conversation_id, turn_id: terminal_reason, stop_reason: 'end_turn', outcome: 'success', is_error: true, terminal_reason, ...extra
+  conversation_id, turn_id: `${terminal_reason}-${++stopSequence}`, stop_reason: 'end_turn', outcome: 'success', is_error: true, terminal_reason, ...extra
 })
 const commands = (available: boolean) => frame('slash_command_list', {
   conversation_id: SEEDED_ROW.id, dropped_commands: 0,

@@ -3,6 +3,9 @@ import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
 import { encodeEnvelope, decodeEnvelope } from '../src/main/transport/codec'
 import type { BackgroundTask, ConversationSummary, EnvelopeType } from '../src/shared/wire/types'
 
+// Scripted history is published as thread catch-up/pages by the shared fake daemon.
+test.use({ scriptedHistory: true })
+
 // #1640: a running background task shows what it is doing and how far it has got. The store and panel
 // unit tests prove the join, the formatting and the escaping; this spec is the proof that a
 // `background_task_progress` frame survives the whole path — the real transport's decode (#1638), the

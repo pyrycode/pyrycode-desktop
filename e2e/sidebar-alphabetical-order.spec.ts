@@ -97,7 +97,7 @@ test('rename reorders the open chat while its status, pen, save action and host 
       const before = host.requests.length
       const other = hostIndex === 0 ? second : first
       const otherBefore = other.requests.length
-      await sections.nth(hostIndex * 2 + sectionIndex).getByRole('button', { name: label, exact: true }).click()
+      await sections.nth(hostIndex * 3 + sectionIndex).getByRole('button', { name: label, exact: true }).click()
       const dialog = page.getByRole('dialog', { name: label, exact: true })
       if (sectionIndex === 0) await dialog.getByRole('textbox', { name: 'Channel name:', exact: true }).fill('New channel')
       await dialog.getByRole('button', { name: 'OK', exact: true }).click()

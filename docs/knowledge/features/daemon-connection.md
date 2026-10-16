@@ -56,7 +56,11 @@ work intact. Resetting only when replacing a driver would miss automatic
 re-handshake: it reuses the same driver/connection object. Existing generation
 fences reject replaced-driver callbacks, while receiver reset prevents old
 fragments or timers from completing in the successor session. Production hello
-capability requests are unchanged; activation/live proof belong to #1908.
+advertises `thread` alongside `interactive`. Each accepted handshake must include
+`thread`; otherwise only that host emits daemon update-required and no connected
+event. Its parked driver retains reconnect supervision while content and outbound
+requests remain blocked. A later accepted thread handshake restores the host.
+See [runtime capability routing](thread-runtime.md#accepted-capability-and-host-routing).
 
 ### Pairing rejection lifetime
 
@@ -81,8 +85,8 @@ A daemon whose release sets a desktop minimum answers an older build's `hello` w
 The spec makes this terminal for that host only, with a manual `reconnect()` allowed. `4412` also joined
 `DEFAULT_FATAL_CLOSE_CODES` in [relaySupervisor](relay-supervisor.md), but the connection does not lean on
 that: the halt happens on the sealed error itself, inside the `daemon-error` arm of `onDriverEvent`,
-**before** the close arrives. It runs the four teardown nets (`failBundleStream`,
-`failAttachmentTransfers`, `failAttachmentRetrievals`, `abandonHistoryRequests`), bumps `generation`, nulls
+**before** the close arrives. It runs the three teardown nets (`failBundleStream`,
+`failAttachmentTransfers`, `failAttachmentRetrievals`), bumps `generation`, nulls
 and stops the driver, then `emitFailed('update-required', …)`. The bumped generation is [`dial()`'s own
 fence](daemon-connection-lifecycle.md#the-generation-fence): the stopped driver's `terminal` and the
 relay's following `4412` both carry the superseded generation and are dropped before `onDriverEvent`, so
@@ -113,7 +117,7 @@ that isolates a reconnect from a superseded dial is per-connection, so another p
 
 ### Tool-denial delivery
 
-`tool_denied` uses one payload parser for live frames and stored history. All seven
+`tool_denied` retains its live payload parser; exclusive stored-page decoding is removed. All seven
 string fields are required, with empty strings valid; `truncated_fields` and
 `dropped_fields` each require a string array or `null`. Missing or mistyped fields
 fail decoding. Null, empty arrays and unknown report names retain their original meaning.
@@ -130,10 +134,8 @@ The live `turn-end` arm copies `outcome`, `is_error`, `terminal_reason` and
 `error_category` by name to `outcome`, `isError`, `terminalReason` and `errorCategory`
 on `turnEnd`, alongside `turnId`, `stopReason`, `conversationId` and `daemonTs`.
 It preserves `undefined`, empty strings and `false`; it does not classify a stop
-or turn it into a connection failure. The [shared live/history parser](inbound-message-decode.md#optional-stopped-turn-reports)
-owns compatibility and byte bounds. History carries the same camel-case metadata
-inside `historyPageReceived.entries`, under the existing request-correlated
-conversation id. The [timeline bridge](conversation-timeline-store-internals.md#the-translator--binding-srcrenderersrcstoretimelinebridgets)
+or turn it into a connection failure. The [live parser](inbound-message-decode.md#optional-stopped-turn-reports)
+owns compatibility and byte bounds. The [timeline bridge](conversation-timeline-store-internals.md#the-translator--binding-srcrenderersrcstoretimelinebridgets)
 forwards the four fields into the retained boundary. Report values never enter logs.
 
 ### Refusal delivery
@@ -141,8 +143,8 @@ forwards the four fields into the retained boundary. Report values never enter l
 The `model-refusal-fallback` and `model-refusal-no-fallback` arms copy validated
 payload fields into `modelRefusalFallback`/`modelRefusalNoFallback` IPC, including
 `conversationId` and envelope `daemonTs`. They emit no turn or settings change.
-History uses the same [required-field parsers](inbound-message-decode.md#required-model-refusal-reports)
-under the page's request-correlated identity. The [timeline](conversation-timeline-store.md#refusal-records-and-routing)
+Exclusive history-page reuse of the
+[required-field parsers](inbound-message-decode.md#required-model-refusal-reports) is retired. The [timeline](conversation-timeline-store.md#refusal-records-and-routing)
 owns retention and recovery; successful decode logs only type, byte count and hash.
 
 ### Public surface
@@ -172,12 +174,8 @@ for empty/omitted settings semantics, lifecycle drops and failure containment.
   frame, builder, and command path (#1217): kills claude in the named conversation and spawns a fresh
   one, distinct from a typed `/clear`, which clears context in place. The Actions menu's Reset session
   row dispatches this frame directly as of #1496 (folded from a separate `/clear`-sending row).
-- [Request history send](request-history-send.md) / [#1222](https://github.com/pyrycode/pyrycode-desktop/issues/1222) —
-  the `requestHistory(payload)` method added to this factory (a `requestModelList` send-mechanics twin
-  that takes the whole three-field payload rather than a scalar), the `pendingHistoryRequests`
-  envelope-id → conversation-id correlation map + `dial()` reset it added, and the `history-page` /
-  history leg of `daemon-error` inbound arms — the transport-only slice of conversation scroll-back,
-  shipped dormant with all four exhaustive bridges nulling `historyPageReceived`/`historyRequestFailed`.
+- [Retired request history](request-history-send.md) — deleted Desktop command, encoder,
+  correlation, page/failure IPC and page decoding; shared storage/wire/fake declarations remain.
 - [System prompt send](system-prompt-send.md) / #1230 — the `requestSystemPrompt(conversationId)`
   method added to this factory (a `requestModelList` send-mechanics twin: required scalar id, no
   retry, ever), the `pendingSystemPromptRequests` envelope-id → conversation-id correlation map + the

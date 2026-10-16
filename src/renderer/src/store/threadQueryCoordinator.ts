@@ -19,6 +19,7 @@ export interface ThreadQueryDeps {
   /** Fresh across attempts and coordinator lifetimes, e.g. the caller's UUID factory. */
   requestId: () => string
   onState: (serverId: string, conversationId: string, state: ThreadQueryState) => void
+  onComplete?: (serverId: string, conversationId: string, epoch: string, version: number) => void
   log?: { event: (fields: { event: string; code: string }) => void }
 }
 type Scope = { id: string; restorePending: boolean; catchUp: boolean; older: boolean; recovery: boolean; resetRecovery: boolean;
@@ -109,8 +110,7 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
     if (reply.type === 'thread_reset') {
       deps.log?.event({ event: 'thread-query-reset', code: 'reset' })
       release(h, p)
-      store().deleteConversation(host, s.id)
-      store().acceptEpoch(host, s.id, value.epoch)
+      store().acceptEpoch(host, s.id, value.epoch, true)
       s.catchUp = true; s.ready = false; s.exhausted = false
       if (p.resetRecovery) {
         present(host, s, { type: 'failed', purpose: 'catch-up', reason: 'recovery', retryable: true })
@@ -155,6 +155,7 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
     release(h, p)
     deps.log?.event({ event: 'thread-query-completed', code: p.query.type })
     if (p.query.type === 'thread_catch_up') { s.catchUp = false; s.ready = true; s.recovery = false; s.resetRecovery = false }
+    if (p.query.type === 'thread_catch_up') deps.onComplete?.(host, s.id, v.epoch, v.version)
     if ('older_exists' in v) s.exhausted = !v.older_exists
     present(host, s, { type: 'idle' }); pump(host, h)
   }
@@ -195,7 +196,12 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
       if (e.type === 'threadReply' || e.type === 'threadQueryFailed') receive(e, h)
       else if (e.type === 'threadUpdate') {
         if (e.conversationId !== e.update.payload.conversation_id) return
-        if (store().applyUpdate(e.serverId, e.update).type === 'repair') repair(e.serverId, h, e.conversationId)
+        const applied = store().applyUpdate(e.serverId, e.update)
+        if (applied.type === 'repair') repair(e.serverId, h, e.conversationId)
+        else if (applied.type === 'applied' && h.scope?.id === e.conversationId && h.scope.ready) {
+          const snapshot = store().snapshot(e.serverId, e.conversationId)
+          if (snapshot && !snapshot.repair) deps.onComplete?.(e.serverId, e.conversationId, snapshot.epoch, snapshot.checkpoint)
+        }
       } else {
         const snapshot = store().snapshot(e.serverId, e.conversationId)
         if (snapshot) {

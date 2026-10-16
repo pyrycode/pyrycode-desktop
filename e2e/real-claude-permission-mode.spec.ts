@@ -1,10 +1,13 @@
+import { chooseConnectedMenuItem } from './fixtures/chooseConnectedMenuItem'
+import { installPermissionModeEvidence } from './fixtures/permissionModeEvidence'
+import { scenarioDaemonRevision, scenarioInput, liveProof, scenarioMode } from './fixtures/clientScenario'
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { promisify } from 'node:util'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { DaemonEvent } from '../src/shared/ipc/events'
-import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/realDaemon'
+import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/clientScenario'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 import { daemonIdentity } from './fixtures/daemonVersion'
 
@@ -22,38 +25,24 @@ type DriveWindow = typeof window & { permissionProof: Proof }
 
 test('operator bypass stays confirmed through a no-op write, then the menu returns to bypass and Manual approval enforces Read', async ({ relay, daemon }, testInfo) => {
   test.setTimeout(360_000)
-  const { stdout } = await promisify(execFile)(process.env.PYRY_BIN || 'pyry', ['version'], { timeout: 10_000 })
-  const revision = daemonIdentity(stdout)
+  const revision = scenarioMode === 'live'
+    ? daemonIdentity((await promisify(execFile)(process.env.PYRY_BIN ?? 'pyry', ['version'], { encoding: 'utf8', timeout: 10_000 })).stdout)
+    : scenarioDaemonRevision()
   testInfo.annotations.push({ type: 'daemon-revision', description: revision })
   await testInfo.attach('daemon-revision', { body: Buffer.from(revision), contentType: 'text/plain' })
   // sessions.settingsFromEntry normalizes absent permission_mode + false/absent yolo to default.
-  const registry = JSON.parse(await readFile(join(dirname(daemon.workdir), '.pyry/test/sessions.json'), 'utf8'))
-  expect(registry.sessions[0].yolo ?? false).toBe(false)
-  expect(registry.sessions[0].permission_mode || 'default').toBe('default')
   const noteDir = join(dirname(daemon.workdir), '.pyry/test/handoff-notes')
-  await mkdir(noteDir, { recursive: true, mode: 0o700 })
   const note = join(noteDir, 'permission-probe.txt')
-  const witness = randomUUID()
-  await writeFile(note, `${witness}\n`, { mode: 0o600 })
+  const witness = scenarioInput('witness', randomUUID)
+  await liveProof(async () => {
+    const registry = JSON.parse(await readFile(join(dirname(daemon.workdir), '.pyry/test/sessions.json'), 'utf8'))
+    expect(registry.sessions[0].yolo ?? false).toBe(false)
+    expect(registry.sessions[0].permission_mode || 'default').toBe('default')
+    await mkdir(noteDir, { recursive: true, mode: 0o700 })
+    await writeFile(note, `${witness}\n`, { mode: 0o600 })
+  })
   await withIsolatedElectronApp(async ({ page }) => {
-    await page.evaluate(() => {
-      const proof: Proof = { readings: [], acks: [], turns: [], modals: [], tools: [], off: () => {} }
-      proof.off = window.pyry.onDaemonEvent(event => {
-        if (event.type === 'runConfigReceived') {
-          const { conversationId, sessionId, permissionMode } = event
-          proof.readings.push({ conversationId, sessionId, permissionMode, ackCount: proof.acks.length })
-        }
-        if (event.type === 'sessionSettingsUpdated') proof.acks.push(event.sessionId)
-        if (event.type === 'turnEnd') proof.turns.push(event.conversationId)
-        if (event.type === 'modalShown' && event.class === 'permission') proof.modals.push({
-          // The daemon's title is "Permission required"; its prompt carries the tool name.
-          conversationId: event.conversationId, read: event.prompt === 'Read',
-          allow: event.options.find(option => option.id === 'allow_once')?.label ?? null
-        })
-        if (event.type === 'toolUse') proof.tools.push({ conversationId: event.conversationId, read: event.name === 'Read' })
-      })
-      ;(window as DriveWindow).permissionProof = proof
-    })
+    await page.evaluate(installPermissionModeEvidence)
     const proof = () => page.evaluate(() => {
       const { off: _off, ...value } = (window as DriveWindow).permissionProof
       return value
@@ -80,9 +69,7 @@ test('operator bypass stays confirmed through a no-op write, then the menu retur
         const before = await proof()
         const deadline = Date.now() + ROUNDTRIP
         const timeout = () => Math.max(1, deadline - Date.now())
-        await page.locator('.composer__permission').click()
-        await page.getByRole('menu', { name: 'Permission mode', exact: true })
-          .getByRole('menuitem', { name, exact: true }).click()
+        await chooseConnectedMenuItem(page, page.locator('.composer__permission'), 'Permission mode', name, timeout())
         await expect.poll(async () => (await proof()).acks.length, { timeout: timeout() }).toBe(before.acks.length + 1)
         expect((await proof()).acks.at(-1) === initial.sessionId).toBe(true)
         await expect.poll(async () => (await proof()).readings.slice(before.readings.length).some(r =>

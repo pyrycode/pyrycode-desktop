@@ -1,3 +1,4 @@
+import { sendConversationCommand } from './conversationActionAvailability'
 import { useEffect, useId, useState } from 'react'
 import type { RendererCommand } from '@shared/ipc/commands'
 import {
@@ -224,13 +225,13 @@ export function McpServersSection({ conversationId }: { conversationId: string }
       toggleRefused={toggleRefused}
       onShowBuiltInChange={setShowBuiltIn}
       onReconnect={(serverName) => reconnectMcpServer(
-        window.pyry.sendCommand,
+        sendConversationCommand,
         mcpStatusStore.getState().beginMcpReconnect,
         conversationId,
         serverName
       )}
       onToggle={(serverName, enabled) => toggleMcpServer(
-        window.pyry.sendCommand,
+        sendConversationCommand,
         mcpStatusStore.getState().beginMcpToggle,
         conversationId,
         serverName,

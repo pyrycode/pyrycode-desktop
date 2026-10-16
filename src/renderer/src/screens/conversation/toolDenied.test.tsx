@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { ToolRow, openToolName } from './ConversationScreen'
-import { initialTimelineState, reduceTimeline, type ThreadEvent, type ThreadItem } from '../../store/threadTimeline'
-import { translateTimelineEvent, timelineTargetFor } from '../../store/timelineBridge'
+import { type ThreadEvent, type ThreadItem } from '../../store/threadTimeline'
+import { translateTimelineEvent } from '../../store/timelineBridge'
 import { translateDaemonEvent } from '../../store/daemonEventBridge'
 import { translateModalEvent } from '../../store/modalBridge'
 import { translateQuestionEvent } from '../../store/questionBridge'
@@ -20,43 +20,19 @@ function deniedEvent(value = marker): ThreadEvent {
   return event
 }
 function row(events: ThreadEvent[]): Extract<ThreadItem, { kind: 'toolCall' }> {
-  const state = events.reduce(reduceTimeline, initialTimelineState)
-  const item = state.items.find((entry) => entry.kind === 'toolCall')
-  if (!item || item.kind !== 'toolCall') throw new Error('missing call')
-  return item
+  const use = events.find((event): event is Extract<ThreadEvent, { type: 'toolUse' }> => event.type === 'toolUse')
+  const denial = events.find((event): event is Extract<ThreadEvent, { type: 'toolDenied' }> => event.type === 'toolDenied')
+  const result = events.find((event): event is Extract<ThreadEvent, { type: 'toolResult' }> => event.type === 'toolResult')
+  if (!use) throw new Error('missing supplied tool fixture')
+  return { kind: 'toolCall', ...use, denial: denial?.denial, result: result && { ...result } || null }
+
 }
 
 describe('tool denial correlation and presentation', () => {
-  it('routes only to the explicit conversation', () => {
-    expect(timelineTargetFor(marker)).toBe('c1')
-    expect(timelineTargetFor({ ...marker, conversationId: '' })).toBeNull()
-    expect(translateTimelineEvent({ ...marker, conversationId: '' })).toBeNull()
-  })
   it('is explicitly ignored by non-owning bridges', () => {
     expect(translateDaemonEvent(marker)).toBeNull()
     expect(translateModalEvent(marker, () => new Set())).toBeNull()
     expect(translateQuestionEvent(marker)).toBeNull()
-  })
-  it('commutes with the result, retaining both records', () => {
-    const early = row([call, deniedEvent(), result])
-    expect(row([call, result, deniedEvent()])).toEqual(early)
-    expect(early.result?.resultSummary).toBe('Actual result')
-    expect(early.denial).toMatchObject({ decisionReasonType: 'classifier', truncatedFields: ['message'], droppedFields: null })
-  })
-  it('ignores duplicate, unmatched and empty joins without changing state', () => {
-    const state = [call, deniedEvent()].reduce(reduceTimeline, initialTimelineState)
-    expect(reduceTimeline(state, deniedEvent())).toBe(state)
-    expect(reduceTimeline(state, deniedEvent({ ...marker, decisionReason: 'Replacement' }))).toBe(state)
-    for (const update of [{ turnId: 'other' }, { toolUseId: 'other' }, { turnId: '' }, { toolUseId: '' }]) {
-      const pending = reduceTimeline(initialTimelineState, call)
-      expect(reduceTimeline(pending, deniedEvent({ ...marker, ...update }))).toBe(pending)
-    }
-  })
-  it('selects the matching turn when tool-use ids repeat', () => {
-    const state = [call, { ...call, turnId: 't2' }, deniedEvent()].reduce(reduceTimeline, initialTimelineState)
-    const [first, second] = state.items
-    expect(first.kind === 'toolCall' && first.denial).toBeDefined()
-    expect(second.kind === 'toolCall' && second.denial).toBeUndefined()
   })
   it.each([
     ['classifier', 'the auto classifier'], ['rule', 'a permission rule'],

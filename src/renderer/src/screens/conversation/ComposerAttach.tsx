@@ -5,8 +5,7 @@ import { AttachmentFileIcon } from './AttachmentFileIcon'
 import { ComposerAttachmentImage } from './ComposerAttachmentImage'
 import { isImageAttachmentName } from './attachmentIsImage'
 import { attachmentUploadOutcomeCopy } from './attachmentUploadCopy'
-import { conversationListStore, selectConversations } from '../../store/conversationListStore'
-import { serverIdForOpenConversation } from './unpairAction'
+import { conversationHostNow } from './conversationActionAvailability'
 // #1055: the take's shape is declared with its CONSUMER (composerSend's `takeAttachments` dep), so the
 // pure send helper never names this React module. See PendingAttachmentTake's own docblock.
 import type { PendingAttachmentTake } from './composerSend'
@@ -722,7 +721,8 @@ export function drainPendingAttachments(holder: {
  * second host is paired — the composer rendered it as "Not connected" for an operator connected to
  * both, and #1129 had deferred the wiring to a composer surface #1086 never built.
  *
- * `serverIdForOpenConversation` answers null when the list does not hold the chat, or holds it twice,
+ * Selected coordinates win; absent selection, unique list ownership supplies the host.
+ * Unknown ownership answers null,
  * and the ask then OMITS THE KEY rather than carrying `serverId: undefined`: structured clone preserves
  * an undefined own property and the guard admits one, but the bare ask is the documented unnamed shape
  * and the one the router's fallback is written for. Not `connectedConversationHostNow`, deliberately:
@@ -735,10 +735,7 @@ export function attachmentAskTarget(conversationId: string): {
   conversationId: string
   serverId?: string
 } {
-  const serverId = serverIdForOpenConversation(
-    selectConversations(conversationListStore.getState()),
-    conversationId
-  )
+  const serverId = conversationHostNow(conversationId)
   return serverId === null ? { conversationId } : { conversationId, serverId }
 }
 

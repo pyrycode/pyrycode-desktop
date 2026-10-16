@@ -1,3 +1,4 @@
+import { clientAppLifecycle } from './clientAppLifecycle'
 import {
   test as base,
   expect,
@@ -17,7 +18,7 @@ import {
   type FakeRoutingRelay
 } from '../../src/main/transport/fakeRoutingRelay'
 import { decideCapabilityGate, readDaemonCapabilities } from './daemonCapabilityGate'
-import { e2eShowsWindow, expectDesktopIsolated, RENDERER_THROTTLING_SWITCHES } from './desktopIsolation'
+import { appWindow, e2eShowsWindow, expectDesktopIsolated, RENDERER_THROTTLING_SWITCHES } from './desktopIsolation'
 import { HIDDEN_WINDOW_ENV_FLAG } from '../../src/main/windowPresentation'
 import { LOOPBACK_RELAY_ENV_FLAG } from '../../src/main/relayPolicy'
 import { TEST_SECRET_BACKEND_ENV_FLAG } from '../../src/main/secretBackend'
@@ -97,6 +98,7 @@ const BOOTSTRAP_UUID = '77777777-7777-4777-8777-777777777777'
 const BOUND_CONVERSATION_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
 
 export interface SpawnedDaemon {
+  mintPairing: () => Promise<Pick<QrPayload, 'server' | 'token' | 'server_static_pubkey'>>
   // Only the three credential fields decoded from `pyry pair` stdout. The QrPayload's `relay` is assembled
   // test-side from the #251 relay's /v1/client leg, never from pyry's output (which points at prod).
   pairFields: Pick<QrPayload, 'server' | 'token' | 'server_static_pubkey'>
@@ -520,7 +522,8 @@ export const test = base.extend<RealDaemonOptions & RealDaemonFixtures>({
         if (decision.skip) testInfo.skip(true, decision.reason)
       }
 
-      await use({ pairFields, workdir })
+      await use({ pairFields, workdir, mintPairing: async () => decodePairFields(
+        await runPyryPair(pyryBin, daemonEnv, allowRemotePermissions, 'realclaude-e2e')) })
     } finally {
       await cleanup()
     }
@@ -538,6 +541,7 @@ export type IsolatedElectronApp = {
   app: ElectronApplication
   userDataDir: string
   relaunch(whileClosed?: () => Promise<void>): Promise<IsolatedElectronApp>
+  close(): Promise<void>
 }
 
 /**
@@ -577,21 +581,32 @@ export async function withIsolatedElectronApp(
   let relaunching = false
   const close = async (app: ElectronApplication): Promise<void> => {
     const child = app.process()
-    await app.close()
-    await expect.poll(() => child.exitCode !== null || child.signalCode !== null, {
-      message: 'Electron process exited before relaunch', timeout: 15_000
-    }).toBe(true)
+    try {
+      await clientAppLifecycle.closing?.(app)
+    } finally {
+      await app.close()
+      await expect.poll(() => child.exitCode !== null || child.signalCode !== null, {
+        message: 'Electron process exited before relaunch', timeout: 15_000
+      }).toBe(true)
+    }
   }
   const launch = async (): Promise<IsolatedElectronApp> => {
     const app = await electron.launch({
       args: ['.', `--user-data-dir=${userDataDir}`, ...RENDERER_THROTTLING_SWITCHES.map((name) => `--${name}`)],
-      env
+      env: Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined))
     })
     current = app
-    const page = await app.firstWindow()
+    // The window once its app document has loaded, as the default tier's launch waits (see `appWindow`).
+    const page = await appWindow(app)
     await expectDesktopIsolated(app)
+    await clientAppLifecycle.opened?.(app, page)
     return {
       app, page, userDataDir,
+      async close() {
+        if (current !== app || relaunching) throw new Error('close fixture: stale app handle')
+        await close(app)
+        current = null
+      },
       async relaunch(whileClosed) {
         if (current !== app || relaunching) throw new Error('restart fixture: stale app handle')
         relaunching = true

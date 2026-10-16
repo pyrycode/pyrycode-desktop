@@ -111,7 +111,11 @@ coverage continues to assert log-free build/parse behavior.
 ## Edge cases and limitations
 
 - **Capability policy belongs to the caller.** This helper defaults to `[]`; `daemonConnection` explicitly advertises `interactive`, `multi_agent` and `stop_background_task`. The fixed feature report is present even when the caller supplies no capabilities.
-- **Replay uses `lastEventId`, not the timestamp.** `last_event_id` requests the bounded retained tail after a daemon-wide event position for the daemon's current conversation. An expired or unknown position yields `resync`; desktop clears that host's cursor without automatically loading history. `lastSeenTs` remains a compatibility pass-through to `last_seen_ts`, which has no daemon consumer. Cursor validation and pairing lifetime belong to [daemon connection](daemon-connection-lifecycle.md#replay-cursor-lifetime), not this pure builder.
+- **Production omits replay fields.** The pure builder/codec retain `lastEventId` and
+  `lastSeenTs` compatibility inputs, but the Desktop connection passes neither on
+  initial or reconnect hellos (#2025). Legacy `resync` is inert; content recovery
+  uses thread queries/checkpoints. Held sends retain a separate
+  [`sendPairing` lifetime](daemon-connection-lifecycle.md#hello-and-held-send-pairing-lifetime).
 - **Over-cap encode is not defended.** `encodeEnvelope` can throw `WireEncodeError` on an over-cap envelope, but a hello is a few hundred bytes — orders of magnitude under `MAX_PLAINTEXT_BYTES` (65519). This is not a live failure mode (evidence-based — no observed failure); it would simply propagate if it ever occurred.
 - **Input to `parseHelloAck` is bounded upstream.** A v2 Noise transport message is ≤ 65535 bytes and the codec's `MAX_PLAINTEXT_BYTES` caps the decrypted envelope before it reaches `decodeEnvelope`, so there is no memory-amplification vector and the `capabilities`-array validation loop is bounded by that same cap.
 

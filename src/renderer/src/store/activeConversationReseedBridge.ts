@@ -95,6 +95,7 @@ export function reseededActiveConversation(
     name: row.name,
     last_used_at: row.last_used_at,
     workspace_label: row.workspace_label,
+    ...('serverId' in active && typeof active.serverId === 'string' ? { serverId: active.serverId } : {}),
     ...(row.agent === undefined ? {} : { agent: row.agent })
   }
 }
@@ -147,7 +148,10 @@ export function subscribeActiveConversationReseed(
   return onDaemonEvent((event) => {
     const conversations = translateConversationsEvent(event)
     if (conversations === null) return
-    const reseeded = reseededActiveConversation(conversations, getActiveConversation())
+    const active = getActiveConversation()
+    if (active && 'serverId' in active && typeof active.serverId === 'string' &&
+        (!('serverId' in event) || event.serverId !== active.serverId)) return
+    const reseeded = reseededActiveConversation(conversations, active)
     if (reseeded !== null) setActiveConversation(reseeded)
   })
 }

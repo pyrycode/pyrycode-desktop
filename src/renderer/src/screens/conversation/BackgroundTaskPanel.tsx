@@ -1,87 +1,16 @@
-import { useCallback, useEffect, useMemo } from 'react'
+import { useEffect } from 'react'
 import { CAPABILITY_STOP_BACKGROUND_TASK, type WireAgent } from '@shared/wire/types'
-import { sessionStore, useSessionStore, selectStatusFor, type ConnectionStatus } from '../../store/sessionStore'
+import { type ConnectionStatus } from '../../store/sessionStore'
 import { shouldInterruptOnKeyDown, type ComposerKeyEvent } from './composerSend'
 import {
-  backgroundTaskRosterStore,
-  useBackgroundTaskRosterStore,
-  selectPendingTaskStopsFor,
-  selectRosterFor,
-  selectFinishedTasksFor,
-  type BackgroundTaskRosterEntry,
   type HeldBackgroundTask,
   type HeldBackgroundTaskProgress
 } from '../../store/backgroundTaskRosterStore'
-
-// #581: the background-task panel — the first reader of backgroundTaskRosterStore (#573), which has been
-// shipped and unread since it landed. An openable surface listing the tasks the daemon holds alive for the
-// open conversation, so work that outlives a turn has a home WITHOUT filling the chat with status rows:
-// nothing here renders into the thread timeline, and nothing may (these frames carry no turn_id and
-// deliberately never enter the timeline reducer).
-//
-// #581 shipped the shell: chrome, the three-way reading branch, and one row per task showing
-// `description` + `taskType`. #582 added the two bounds the daemon reports and that shell showed neither
-// of — the roster's cap (`entry.droppedTasks`) and each task's own cut fields (`task.truncatedFields`),
-// so a bounded report no longer reads as a complete one. #583 added the last unread field — the held
-// `latestUpdate` pair, the latest change claude reported about a task — so a long-running task shows
-// progress rather than sitting there as a name. All three were already reachable on the `entry` prop,
-// which is `selectRosterFor`'s return type exactly, so none needed a prop, type or store change.
-//
-// The update's cut report is a SECOND list, never merged with the task's own: it names a DIFFERENT
-// vocabulary (`task_id` / `patch`) from the task's (`task_id` / `task_type` / `description`), which is
-// why the store keeps them apart, and it is what keeps every list attributable back to the field it
-// describes. Reading one for the other compiles, type-checks — both are `readonly string[] | null` — and
-// never matches, which is the silent mis-wiring the crossover tests pin.
-//
-// It mounts NO data path. Unlike WorkspacePickerSheet (which mounts RecentWorkspacesData inside itself),
-// the roster bridge is already app-wide — <BackgroundTaskRosterData /> is the seventh headless leaf in
-// App.tsx — so a mount here would be a second, wrong write path. The app listener also settles stop
-// waits; the separate button sends only its routing ids.
-//
-// #1634: the chrome is #580's drawing (Figma 565:2966): a NON-modal drawer on the right of the message
-// area, with no scrim, so the thread scrolls and the composer takes input while it is open. It replaced
-// the interim `.status-sheet__*` bottom sheet. Only the outermost wrapper is chrome — the rows and the
-// branch copy carry their own `background-task-panel__*` classes and no positional CSS, so the list's own
-// redraw can land without touching the wrapper, as this swap landed without touching the list.
-//
-// SECURITY: every `description` rendered here is, for `taskType: local_bash`, the literal command line
-// claude ran — untrusted, model-influenced text the daemon bounds but does not sanitize. It is rendered as
-// auto-escaped React children and NOTHING else: never dangerouslySetInnerHTML, never into an attribute
-// (not even `title=`), never an `href`/`src`, never a React key, never parsed, never executed or re-shelled.
-// The rows stay non-interactive list items. Only the separate Stop task button sends the two routing
-// ids; task ids never reach a log, attribute or key beyond the existing row key. And the LIST shape is not an
-// invitation: `entry.tasks` is iterated once into `<li>` children, and the only thing derived from it is
-// #1635's Running / Finished partition by id — no join, no clipboard, no export, no `data-*` attribute
-// carrying a task field (the obligation the store's own header names this ticket as inheriting).
-//
-// #583: `latestUpdate.patch` is the SAME class of untrusted text under a structured-looking shape, and is
-// rendered under every rule above — and "never parsed" is load-bearing for it specifically. The wire
-// states that rule in the patch's own section rather than delegating it to the sibling's
-// (types.ts:479-485) precisely because a patch LOOKS like something to parse, which makes it the more
-// tempting thing to feed somewhere structured. It is also not guaranteed to be valid JSON (the daemon
-// truncates it at construction, so a cut object no longer parses), and any future parse must sit behind
-// an error branch falling back to this inert text and must enumerate no closed key set — a mapping
-// listing the keys it knew would silently discard every key claude ships next. Rendering it as plain text
-// answers the ticket in full and avoids the hazard entirely.
 
 // Client-owned copy — no daemon string reaches these. Every literal is apostrophe-free:
 // renderToStaticMarkup escapes ' → &#x27; (the standing desktop lesson), which would break the
 // server-render assertions.
 const BACKGROUND_TASK_PANEL_TITLE = 'Background tasks'
-// The two non-populated readings read as DIFFERENT sentences, not one sentence in two places: half of
-// "must not collapse into one another" is the copy, the other half is the distinct class below.
-const BACKGROUND_TASK_PANEL_UNOBSERVED_COPY = 'No background-task report yet'
-const BACKGROUND_TASK_PANEL_EMPTY_COPY = 'No background tasks'
-// #1635: each reading's support line, drawn under its heading (Figma 565:2341 and 565:2327). A sibling of
-// the heading, never inside it, so the heading element still holds the heading copy alone.
-const BACKGROUND_TASK_PANEL_UNOBSERVED_SUPPORT =
-  'The daemon has not reported on this conversation since the app connected.'
-// #1656: the observed-empty line names the conversation's agent, selected by it and never interpolated.
-const BACKGROUND_TASK_PANEL_EMPTY_SUPPORT =
-  'Claude has nothing running in the background for this conversation.'
-const BACKGROUND_TASK_PANEL_EMPTY_SUPPORT_CODEX =
-  'Codex has nothing running in the background for this conversation.'
-
 // #1635: the two group headers. Running is also the tag of a task no status word has reached (#1639).
 const BACKGROUND_TASK_PANEL_RUNNING_LABEL = 'Running'
 const BACKGROUND_TASK_PANEL_FINISHED_LABEL = 'Finished'
@@ -119,20 +48,6 @@ const BACKGROUND_TASK_PANEL_NO_CHANGE_COPY = 'No change reported'
 // Distinct from STATUS_SHEET_TITLE_ID / CHANNEL_INFO_SHEET_TITLE_ID / WORKSPACE_PICKER_SHEET_TITLE_ID so
 // all four surfaces can coexist without duplicate ids.
 const BACKGROUND_TASK_PANEL_TITLE_ID = 'background-task-panel-title'
-
-/** #582: the partial-list notice, built from the entry's dropped count. The parenthesised-count shape is
- *  `tabCountLabel`'s idiom (archiveViewModel.ts:47-49) and is chosen to DODGE PLURALISATION: "1 not shown"
- *  and "3 not shown" both read correctly, so there is no singular/plural branch and the repo gains no
- *  pluralisation machinery it does not already have. Apostrophe-free, like every literal in this file.
- *
- *  `droppedTasks` is a number, so this renders no untrusted string — it is the only daemon-derived VALUE
- *  the panel shows, and numbers are inert.
- *
- *  Deliberately does NOT print the true roster size (`tasks.size + droppedTasks`): the reader can see the
- *  rows, and a derived total is a second number to keep honest for no stated need. */
-function partialListCopy(droppedTasks: number): string {
-  return `Partial list (${droppedTasks} not shown)`
-}
 
 // #582: THE WIRE NAMES, not the held property names — the trap this slice exists to defuse. A
 // `truncatedFields` list's CONTENTS cross IPC unconverted: only the field itself was camelCased
@@ -199,32 +114,6 @@ function wasCut(truncatedFields: readonly string[] | null, wireFieldName: string
   return truncatedFields !== null && truncatedFields.includes(wireFieldName)
 }
 
-// #581: the pure background-task panel view — props-in / markup-out, server-renderable, no store / no
-// effects / no window.pyry (the WorkspacePickerSheetView posture). Every acceptance criterion binds here.
-//
-// `entry` is EXACTLY `selectRosterFor`'s return type, and that is the point: the nullable return forces the
-// branch at the view, where a test can reach it. The branch is on TWO different things and in this order —
-//
-//   1. entry === null           no background-task frame has ever arrived for this conversation
-//   2. entry.tasks.size === 0   observed: the daemon says nothing is alive (the pyrycode#1240 payoff)
-//   3. otherwise                one row per held task
-//
-// — because the failure mode to design against is a reader that reaches for the tasks BEFORE branching and
-// collapses (1) into (2). `[...(entry?.tasks.values() ?? [])].length === 0`, `(entry?.tasks.size ?? 0) === 0`
-// and `entry?.tasks ?? new Map()` all compile, break no other test, and quietly undo the distinction
-// `selectRosterFor` keeps with `?? null`. Each reading renders its OWN element with its OWN class and copy —
-// not one shared "empty" element with different text, and not null. This deliberately diverges from
-// WorkspacePickerSheetView, whose not-loaded branch renders null (WorkspacePickerSheet.tsx:139): there the
-// sheet has other content, here the branch IS the whole body, so an empty panel would read as broken.
-//
-// Neither non-populated reading is an ERROR state, and neither is styled or worded as one. Nothing is
-// logged on any branch either: a "no roster for conversation X" line is exactly where daemon-influenced
-// content starts leaking into a file (the content-free diagnostics rule, #126) — which is why the store's
-// own setters are silent about their misses.
-//
-// #1635: `finishedTaskIds` is `selectFinishedTasksFor`'s return type. It only splits the populated arm into
-// a Running and a Finished group, so the three-way branch above is unchanged. Optional, with `null`
-// meaning "nothing finished", the same reading the pill's count takes when the key is absent.
 export interface SuppliedBackgroundTask extends HeldBackgroundTask {
   rowKey: string
   active: boolean
@@ -234,21 +123,12 @@ export interface SuppliedBackgroundTask extends HeldBackgroundTask {
 }
 
 export function BackgroundTaskPanelView({
-  entry,
   suppliedTasks,
-  finishedTaskIds = null,
-  agent = 'claude',
-  pendingTaskIds = null,
   onStopTask,
   turnRunning = false,
   onClose
 }: {
-  entry: BackgroundTaskRosterEntry | null
-  suppliedTasks?: readonly SuppliedBackgroundTask[]
-  finishedTaskIds?: ReadonlySet<string> | null
-  /** #1656 — the conversation's agent; absent reads Claude. */
-  agent?: WireAgent
-  pendingTaskIds?: ReadonlySet<string> | null
+  suppliedTasks: readonly SuppliedBackgroundTask[]
   onStopTask?: (taskId: string) => void
   turnRunning?: boolean
   onClose: () => void
@@ -292,31 +172,6 @@ export function BackgroundTaskPanelView({
       </div>
       <div className="background-task-drawer__rule" aria-hidden="true" />
       <div className="background-task-drawer__body">
-          {/* #582: the partial-list notice, a SIBLING of the branch below rather than a child of any of
-              its arms. That placement is the acceptance criterion, not a style choice: the count belongs
-              to the ENTRY, not to the list, so a present entry reporting dropped tasks must show it
-              whichever branch the list itself takes. A present entry with dropped tasks and zero carried
-              tasks takes the MIDDLE arm, where a notice written inside the populated arm would be
-              invisible — the daemon cannot currently produce that combination (the cap drops only beyond
-              8 carried rows), but the view is a pure function of its prop and a test constructs it
-              directly, so "unreachable daemon-side" is not an answer.
-
-              A boolean comparison, never `{entry.droppedTasks && …}`: React renders the number `0` as a
-              text node, so the truthiness form would print a bare `0` into the panel on every
-              non-truncated roster. `0` is a value here, never consulted for truthiness
-              (backgroundTaskRosterStore.ts:164-165). And `> 0` rather than `!== 0`, because
-              `requireNumber` upstream does not range-check: a nonsense negative count degrades to "no
-              notice" rather than to "Partial list (-1 not shown)". That is a comparison choice, not a
-              validation branch — nothing has been observed producing one, so none is added. */}
-          {entry !== null && entry.droppedTasks > 0 && (
-            // #1635: the drawn notice — a filled chip with a dot, at the top of the body, before either
-            // group. The dot is decoration, so the notice still reads as its one sentence.
-            <p className="background-task-panel__partial">
-              <span className="background-task-panel__partial-dot" aria-hidden="true" />
-              {partialListCopy(entry.droppedTasks)}
-            </p>
-          )}
-          {suppliedTasks !== undefined ? (
             <div className="background-task-panel__groups">
               {[true, false].map(active => {
                 const tasks = suppliedTasks.filter(task => task.active === active)
@@ -329,93 +184,7 @@ export function BackgroundTaskPanelView({
                 </section>
               })}
             </div>
-          ) : entry === null ? (
-            // #1635: each reading is the drawn centred column — ring, heading, support line — and they
-            // stay apart in copy, class AND ring: dashed for never reported, solid for observed empty.
-            <div className="background-task-panel__reading">
-              <ReadingRing variant="dashed" />
-              <p className="background-task-panel__unobserved">
-                {BACKGROUND_TASK_PANEL_UNOBSERVED_COPY}
-              </p>
-              <p className="background-task-panel__reading-support">
-                {BACKGROUND_TASK_PANEL_UNOBSERVED_SUPPORT}
-              </p>
-            </div>
-          ) : entry.tasks.size === 0 ? (
-            <div className="background-task-panel__reading">
-              <ReadingRing variant="solid" />
-              <p className="background-task-panel__empty">{BACKGROUND_TASK_PANEL_EMPTY_COPY}</p>
-              <p className="background-task-panel__reading-support">
-                {agent === 'codex' ? BACKGROUND_TASK_PANEL_EMPTY_SUPPORT_CODEX : BACKGROUND_TASK_PANEL_EMPTY_SUPPORT}
-              </p>
-            </div>
-          ) : (
-            <TaskGroups tasks={[...entry.tasks.values()]} finishedTaskIds={finishedTaskIds}
-              pendingTaskIds={pendingTaskIds} onStopTask={agent === 'claude' ? onStopTask : undefined} />
-          )}
       </div>
-    </section>
-  )
-}
-
-/** #1635: the populated arm — a Running group, then a Finished group, each in roster order. A row is
- *  finished when its id is in the conversation's finished set. The partition is the only thing derived
- *  from the list: no task field is read to make it, and each count is the number of rows drawn, so a
- *  dropped task (which has no row) is counted by the partial-list notice alone. An empty group renders
- *  nothing, header included. */
-function TaskGroups({
-  tasks,
-  finishedTaskIds,
-  pendingTaskIds,
-  onStopTask
-}: {
-  tasks: readonly HeldBackgroundTask[]
-  finishedTaskIds: ReadonlySet<string> | null
-  pendingTaskIds: ReadonlySet<string> | null
-  onStopTask?: (taskId: string) => void
-}): JSX.Element {
-  const isFinished = (task: HeldBackgroundTask): boolean => finishedTaskIds?.has(task.taskId) === true
-  const running = tasks.filter((task) => !isFinished(task))
-  const finished = tasks.filter(isFinished)
-  return (
-    <div className="background-task-panel__groups">
-      {running.length > 0 && (
-        <TaskGroup label={BACKGROUND_TASK_PANEL_RUNNING_LABEL} tasks={running} finished={false}
-          pendingTaskIds={pendingTaskIds} onStopTask={onStopTask} />
-      )}
-      {finished.length > 0 && (
-        <TaskGroup label={BACKGROUND_TASK_PANEL_FINISHED_LABEL} tasks={finished} finished={true} pendingTaskIds={null} />
-      )}
-    </div>
-  )
-}
-
-function TaskGroup({
-  label,
-  tasks,
-  finished,
-  pendingTaskIds,
-  onStopTask
-}: {
-  label: string
-  tasks: readonly HeldBackgroundTask[]
-  finished: boolean
-  pendingTaskIds: ReadonlySet<string> | null
-  onStopTask?: (taskId: string) => void
-}): JSX.Element {
-  return (
-    <section className="background-task-panel__group">
-      <h3 className="background-task-panel__group-header">{`${label} · ${tasks.length}`}</h3>
-      {/* A <ul>/<li>, the honest semantics for "one entry per task" — and NOT interactive rows: only the
-          separate button can ask for a stop. */}
-      <ul className="background-task-panel__list">
-        {tasks.map((task) => (
-          // key = taskId: unique by map-key construction. The description is never a key — a key is not
-          // a place for untrusted text.
-          <TaskRow key={task.taskId} task={task} finished={finished}
-            pending={pendingTaskIds?.has(task.taskId) === true} onStopTask={onStopTask} />
-        ))}
-      </ul>
     </section>
   )
 }
@@ -432,12 +201,11 @@ function formatTaskType(taskType: string): string {
  *  auto-escaped child of its own element. */
 function TaskRow({ task, finished, pending, onStopTask, suppliedOutcome }: {
   task: HeldBackgroundTask
-  suppliedOutcome?: string
+  suppliedOutcome: string
   finished: boolean
   pending: boolean
   onStopTask?: (taskId: string) => void
 }): JSX.Element {
-  const trimmedDescription = task.description.trim()
   const descriptionClass =
     task.taskType === TASK_TYPE_SHELL
       ? 'background-task-panel__description background-task-panel__description--mono'
@@ -456,7 +224,7 @@ function TaskRow({ task, finished, pending, onStopTask, suppliedOutcome }: {
         <span className="background-task-panel__type">{formatTaskType(task.taskType)}</span>
         <TaskStatusTag status={task.status} label={suppliedOutcome} />
       </div>
-      {suppliedOutcome !== undefined && wasCut(task.truncatedFields, 'ending.cause') && (
+      {wasCut(task.truncatedFields, 'ending.cause') && (
         <span className="background-task-panel__cut-type background-task-panel__cut-outcome">{BACKGROUND_TASK_PANEL_CUT_COPY}</span>
       )}
       {wasCut(task.truncatedFields, CUT_FIELD_TASK_TYPE) && (
@@ -466,12 +234,8 @@ function TaskRow({ task, finished, pending, onStopTask, suppliedOutcome }: {
       {wasCut(task.truncatedFields, CUT_FIELD_DESCRIPTION) && (
         <span className="background-task-panel__cut-description">{BACKGROUND_TASK_PANEL_CUT_COPY}</span>
       )}
-      {/* #1639: the summary claude sent with the terminal status, on a finished row only — the group,
-          not the held record, decides that, so a running row never shows one. An empty summary draws
-          no line, and its cut chip follows it straight after, reading the SUMMARY's own list.
-          Summaries repeating a non-empty description hide both the line and its chip. */}
-      {(finished || suppliedOutcome !== undefined) && task.summary !== null && task.summary.text !== '' &&
-        (suppliedOutcome !== undefined || trimmedDescription === '' || !task.summary.text.trim().includes(trimmedDescription)) && (
+      {/* Supplied reports remain visible independently of activity or repeated description text. */}
+      {task.summary !== null && task.summary.text !== '' && (
         <>
           <span className="background-task-panel__summary">{task.summary.text}</span>
           {wasCut(task.summary.truncatedFields, CUT_FIELD_SUMMARY) && (
@@ -554,80 +318,16 @@ function TaskProgress({ progress }: { progress: HeldBackgroundTaskProgress }): J
 /** #1635: the drawn Task status tag (Figma 563:1054), mapped from the held status word (#1639). No word
  *  yet reads Running; `completed` / `failed` / `stopped` read their own client label and style; any other
  *  non-empty word reads as itself, an auto-escaped child, in the Stopped style. The class is always one
- *  of the four constants above, so the word never reaches an attribute. It chooses the tag only: which
- *  group a row sits in is `finishedTaskIds`'s call, so an unknown word stays in Running. */
-function TaskStatusTag({ status, label }: { status: string | null; label?: string }): JSX.Element {
+ *  of the four constants above, so the word never reaches an attribute. It chooses the tag only: group membership comes from the supplied task's activity. */
+function TaskStatusTag({ status, label }: { status: string | null; label: string }): JSX.Element {
   const known = status === null ? undefined : TASK_STATUS_TAGS.get(status)
   const className = status === null ? TASK_TAG_RUNNING_CLASS : (known?.className ?? TASK_TAG_UNKNOWN_CLASS)
   return (
     <span className={className}>
       <span className="background-task-panel__tag-dot" aria-hidden="true" />
-      {label ?? (status === null ? BACKGROUND_TASK_PANEL_RUNNING_LABEL : (known?.label ?? status))}
+      {label}
     </span>
   )
-}
-
-/** #1635: the empty readings' 28px ring, drawn inline like the close glyph so the markup carries no
- *  `<img>`. The stroke and its dashes come from the stylesheet. */
-function ReadingRing({ variant }: { variant: 'dashed' | 'solid' }): JSX.Element {
-  return (
-    <svg
-      className={`background-task-panel__ring background-task-panel__ring--${variant}`}
-      viewBox="0 0 28 28"
-      width="28"
-      height="28"
-      aria-hidden="true"
-    >
-      <circle cx="14" cy="14" r="11" />
-    </svg>
-  )
-}
-
-// #581: the panel's thin interaction container (the WorkspacePickerSheet container idiom minus its bridge
-// mount; the app listener owns stop settlement). It reads the roster
-// store for one conversation and attaches an Escape document-listener. In-file, exported at the foot.
-//
-// `conversationId` rather than the whole ConversationCreatedPayload: the id is all this needs. The `''`
-// sentinel for no active conversation matches no key, so `selectRosterFor` returns null = "never observed",
-// which is the correct reading and needs no extra branch (the idiom `ConversationScreen`'s own queued-backlog
-// read carries, since #1009 retired the control this used to name).
-function BackgroundTaskPanel({
-  conversationId,
-  serverId,
-  turnRunning,
-  agent,
-  onClose
-}: {
-  conversationId: string | null
-  serverId: string | null
-  turnRunning: boolean
-  agent?: WireAgent
-  onClose: () => void
-}): JSX.Element {
-  // A useMemo-stable selector per id (`ConversationScreen`'s `selectOpenBacklog`) so a fresh closure per render does not
-  // churn the subscription. The selector returns the HELD ENTRY ITSELF, never a fresh object, so a write for
-  // a DIFFERENT conversation leaves this entry Object.is-identical → no re-render. Nothing here wraps,
-  // copies, or derives from the result, which is what keeps that true.
-  const selectRoster = useMemo(() => selectRosterFor(conversationId ?? ''), [conversationId])
-  const entry = useBackgroundTaskRosterStore(selectRoster)
-  // #1635: the finished ids that split the list into groups — the held set or null, so it too leaves
-  // this component alone on a write for another conversation.
-  const selectFinished = useMemo(() => selectFinishedTasksFor(conversationId ?? ''), [conversationId])
-  const finishedTaskIds = useBackgroundTaskRosterStore(selectFinished)
-  const selectPending = useMemo(() => selectPendingTaskStopsFor(conversationId ?? ''), [conversationId])
-  const pendingTaskIds = useBackgroundTaskRosterStore(selectPending)
-  const supported = useSessionStore(state => serverId !== null &&
-    backgroundTaskStopSupported(selectStatusFor(serverId)(state), agent ?? 'claude'))
-  const onStopTask = useCallback((taskId: string): void => {
-    if (conversationId === null || serverId === null ||
-        !backgroundTaskStopSupported(selectStatusFor(serverId)(sessionStore.getState()), agent ?? 'claude')) return
-    if (!backgroundTaskRosterStore.getState().beginTaskStop(conversationId, taskId)) return
-    window.pyry.sendCommand({ type: 'stopBackgroundTask', payload: {
-      conversation_id: conversationId, task_id: taskId
-    } })
-  }, [conversationId, serverId, agent])
-  return <BackgroundTaskPanelView entry={entry} finishedTaskIds={finishedTaskIds} agent={agent} turnRunning={turnRunning}
-    pendingTaskIds={pendingTaskIds} onStopTask={supported ? onStopTask : undefined} onClose={onClose} />
 }
 
 // #1634: the two elements that carry #1072's Escape-stops-the-turn binding — the message box and the
@@ -647,8 +347,6 @@ export function drawerClosesOnKeyDown(
   if (keystroke.key !== 'Escape' || keystroke.isComposing) return false
   return !(focus.inComposerStop && shouldInterruptOnKeyDown(keystroke, focus.turnRunning))
 }
-
-export { BackgroundTaskPanel }
 
 /** Capability belongs to the owning connection ack, never another host's last-written status. */
 export function backgroundTaskStopSupported(status: ConnectionStatus | undefined, agent: WireAgent): boolean {

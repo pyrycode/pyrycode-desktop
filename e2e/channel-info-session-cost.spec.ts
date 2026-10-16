@@ -70,7 +70,7 @@ test("shows the session's latest running cost as Claude's estimate, and no row b
   await expect(sheet.getByText(/est\.$/)).toHaveCount(0)
   await sheet.getByRole('button', { name: 'Close', exact: true }).click()
 
-  const assistantBubbles = page.locator('.bubble[data-thread-role="assistant"]')
+  const assistantBubbles = page.locator('[data-thread-role="assistant"]')
   const composer = page.getByPlaceholder('Message…')
   for (const [i, text] of Object.keys(COST_BY_TEXT).entries()) {
     await composer.fill(text)

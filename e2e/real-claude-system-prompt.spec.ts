@@ -1,5 +1,7 @@
+import { scenarioNonce } from './fixtures/clientScenario'
+import { installTurnCompletionEvidence } from './fixtures/turnCompletionEvidence'
 import { type Page } from '@playwright/test'
-import { test, expect, encodePairingPayload, type SpawnedDaemon } from './fixtures/realDaemon'
+import { test, expect, encodePairingPayload, type SpawnedDaemon } from './fixtures/clientScenario'
 import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
@@ -259,6 +261,10 @@ async function saveStoredPrompt(page: Page, prompt: string): Promise<void> {
  * it is the quiesce signal — capturing replies before it would race a still-streaming row.
  */
 async function takeTurn(page: Page, message: string, baseline: number): Promise<string[]> {
+  const completed = () => page.evaluate(() => (window as typeof window & {
+    turnCompletionEvidence: { count: () => number }
+  }).turnCompletionEvidence.count())
+  const completedBefore = await completed()
   const sendButton = page.getByRole('button', { name: 'Send' })
   await expect(sendButton).toBeEnabled({ timeout: TURN_TIMEOUT_MS })
   await page.getByPlaceholder('Message…').fill(message)
@@ -268,6 +274,7 @@ async function takeTurn(page: Page, message: string, baseline: number): Promise<
     .poll(() => nonEmptyAssistantCount(page), { timeout: TURN_TIMEOUT_MS })
     .toBeGreaterThan(baseline)
   await expect(page.locator(CURSOR_SELECTOR)).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
+  await expect.poll(completed, { timeout: TURN_TIMEOUT_MS }).toBe(completedBefore + 1)
   return assistantTexts(page)
 }
 
@@ -297,6 +304,7 @@ async function pairAndConnect(
   relay: { url: string },
   pairFields: SpawnedDaemon['pairFields']
 ): Promise<void> {
+  await page.evaluate(installTurnCompletionEvidence)
   const payload = encodePairingPayload({
     server: pairFields.server,
     relay: `${relay.url}/v1/client`,
@@ -319,7 +327,7 @@ test('real claude applies a stored system prompt at a spawn, and a save never re
   // Per-run nonces defeat reply caching, and here they do one thing more: the MARKER carries one, so no
   // row from an earlier turn or an earlier RUN can satisfy the positive assertion. Distinct message
   // prompts so a stale row cannot be mistaken for a later turn's.
-  const runNonce = Date.now()
+  const runNonce = scenarioNonce()
   const marker = `${MARKER_STEM}${runNonce}`
   // A spec-authored non-secret literal. It is saved into the prompt editor and NEVER sent as a message.
   // The second sentence is load-bearing: without it a model reads a terse question as licence to answer
@@ -397,7 +405,7 @@ test.fixme(
   async ({ relay, daemon, page }) => {
     test.setTimeout(SPEC_TIMEOUT_MS)
 
-    const runNonce = Date.now()
+    const runNonce = scenarioNonce()
     const marker = `${MARKER_STEM}${runNonce}`
     const storedPrompt =
       `Begin every reply with the exact token ${marker} before any other text. ` +

@@ -7277,7 +7277,8 @@ button.top-overlay-pill:hover,
   z-index: 0;
 }
 
-.conversation__message-area > .conversation__thread {
+.conversation__message-area > .conversation__thread,
+.conversation__thread-area > .conversation__thread {
   box-sizing: border-box;
   margin-left: 0;
   padding: calc(var(--thread-header-height) + var(--space-3)) var(--space-5)
@@ -7385,7 +7386,8 @@ button.top-overlay-pill:hover,
   width: min(360px, calc(100% - var(--space-5)));
 }
 
-.conversation__message-area > .conversation__thread {
+.conversation__message-area > .conversation__thread,
+.conversation__thread-area > .conversation__thread {
   position: relative;
   z-index: 0;
 }
@@ -7475,4 +7477,13 @@ button.top-overlay-pill:hover,
 .agent-switch__copy {
   margin: 0;
   text-align: center;
+}
+
+/* The authoritative item view shares the message area's full scroll surface. */
+.conversation__thread-area {
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }

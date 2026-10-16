@@ -97,10 +97,11 @@ export function AnnouncedModelData(): null {
     // Subscribe on mount; the returned off handle is the effect cleanup, so a StrictMode double-mount
     // nets exactly one live listener (the sessionIdBridge idiom). Each modelAnnounced writes its
     // announcement into the app-singleton store via its setter.
-    return subscribeAnnouncedModel(window.pyry.onDaemonEvent, (announced) =>
+    return subscribeAnnouncedModel(onCurrentSessionEvent, (announced) =>
       announcedModelStore.getState().setAnnouncedModel(announced)
     )
   }, [])
 
   return null
 }
+import { onCurrentSessionEvent } from './threadRuntime'

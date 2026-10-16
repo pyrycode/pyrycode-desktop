@@ -1,4 +1,5 @@
 import { AgentSwitchData } from './store/AgentSwitchData'
+import { useThreadRuntime } from './store/threadRuntime'
 import { AgentSwitchDialog } from './screens/conversation/AgentSwitchDialog'
 import { appUpdateStore } from './store/appUpdateStore'
 import { useEffect, useState } from 'react'
@@ -6,18 +7,14 @@ import { PairedShell } from './PairedShell'
 import { PairingScreen } from './screens/pairing/PairingScreen'
 import { WelcomeScreen } from './screens/welcome/WelcomeScreen'
 import { useDaemonEventBridge } from './store/daemonEventBridge'
-import { useTimelineBridge } from './store/timelineBridge'
 import { useModalBridge } from './store/modalBridge'
 import { useQuestionBridge } from './store/questionBridge'
-import { useHistoryPageBridge } from './store/historyPageBridge'
 import { useChatHistoryWriter } from './store/chatHistoryWriter'
 import { ConversationListData } from './store/conversationListBridge'
 import { ReplySuggestionData } from './store/replySuggestionBridge'
 import { SessionIdData } from './store/sessionIdBridge'
 import { RunSettingsWriteData } from './store/runSettingsWriteBridge'
-import { QueueData } from './store/queueBridge'
 import { RelayLinkData } from './store/relayLinkBridge'
-import { BackgroundTaskRosterData } from './store/backgroundTaskRosterBridge'
 import { SessionFactsData } from './store/sessionFactsBridge'
 import { McpStatusData } from './store/mcpStatusBridge'
 import { AnnouncedModelData } from './store/announcedModelBridge'
@@ -29,43 +26,11 @@ import { SystemPromptWriteData } from './store/systemPromptWriteBridge'
 import { UsageLimitData } from './store/usageLimitBridge'
 import { ReportedContextData } from './store/reportedContextBridge'
 import { RunConfigLiveData } from './screens/conversation/runConfigLive'
-import { activeConversationStore, selectActiveConversation } from './store/activeConversationStore'
 import { routeForStatus, type AppRoute } from './appRoute'
 
 /** Compile-time exhaustiveness guard: a new AppRoute member without a case is a type error. */
 function assertNever(route: never): never {
   throw new Error(`Unhandled app route: ${JSON.stringify(route)}`)
-}
-
-/**
- * The conversation on screen, for the two timeline arms that carry no id of their own (#785). Read
- * through `getState()` at DISPATCH time and never captured: one app-lifetime listener outlives any
- * number of chat switches, so a value read once at subscribe time would file a session boundary into a
- * conversation the operator has already left.
- *
- * MODULE-LEVEL, not an inline arrow at the call site: it is the bridge effect's only dependency, so a
- * fresh identity per render would resubscribe the daemon-event listener on every `App` render. Stable
- * identity keeps exactly one subscribe for the app's lifetime, matching today.
- *
- * Written as an explicit `null` test rather than `open?.id ?? null`, which compiles identically: the
- * explicit form is what makes "no `??` anywhere on this path" literally true end to end, including here.
- * It also keeps an empty-string id an ordinary key instead of collapsing it into "nothing open" the way
- * a truthiness test would.
- *
- * This is NOT the `?? activeConversation` fallback the `unrecognizedMessage` arm in `events.ts` bans.
- * That ban is about an arm that HAS a routing key being made optional so a consumer can paper over a
- * missing one. Neither of these two arms is attributed by `conversationIdOf`, and `timelineWriteTarget`
- * enumerates them BY NAME — an attributed arm never reaches this read at all. The enumeration is what
- * makes that safe, and #1192 is why it has to be: `sessionTransition` now carries a routing key on the
- * wire, this bridge still does not read it, and a name-by-name list says so deliberately where a
- * "carries no key" rationale would just have gone quietly false.
- *
- * Injected as a parameter rather than imported by the bridge, which keeps that module's grep-checkable
- * import ban (`timelineBridge.ts`, on `timelineTargetFor`) literally true.
- */
-const openConversationId = (): string | null => {
-  const open = selectActiveConversation(activeConversationStore.getState())
-  return open === null ? null : open.id
 }
 
 /**
@@ -114,20 +79,10 @@ export function AppView(props: {
  * — one stable app-lifetime listener with no subscribe/unsubscribe churn as the route flips.
  */
 function App(): JSX.Element {
+  useThreadRuntime()
   useEffect(() => window.pyry.onAppUpdate(state => appUpdateStore.setState(state, true)), [])
   useChatHistoryWriter()
   useDaemonEventBridge()
-  // #203: the timeline bridge is useDaemonEventBridge's twin — a second independent subscriber on the
-  // one daemon-event channel (#202), folding the v2 structured stream into timelineStore. App-lifetime
-  // and unconditional, matching the coarse bridge; both deref window.pyry only inside their effect, so
-  // the <App/> server-render test stays ''. Inert until #179 flips `interactive` (no stream arrives).
-  // #785 injects the open-conversation read, so the two timeline arms this bridge does not attribute
-  // from the event — the session boundary and the reconnect chrome reconcile — file into the thread on
-  // screen instead of being dropped from the keyed store. Since #1192 the boundary's wire payload does
-  // carry a conversation id; routing the delimiter by it is a separate deliverable, so this read still
-  // covers both. The module-level constant above is what keeps this one
-  // subscribe for the app's lifetime; passing an inline arrow here would resubscribe every render.
-  useTimelineBridge(openConversationId)
   // #224: the modal bridge is the third independent subscriber on the one daemon-event channel (#202),
   // folding the two modal arms into modalStore so the outstanding permission/trust prompt becomes live
   // renderer state. App-lifetime and unconditional like its twins; it derefs window.pyry only inside its
@@ -151,7 +106,6 @@ function App(): JSX.Element {
   // `conversationId` is required and client-owned, so there is nothing to fall back to and nothing to
   // resolve. It derefs window.pyry only inside its effect, so the <App/> server-render test stays ''.
   // Live and idle until #1224 asks for a page.
-  useHistoryPageBridge()
   const [route, setRoute] = useState<AppRoute>('pending')
 
   useEffect(() => {
@@ -197,17 +151,6 @@ function App(): JSX.Element {
   // sessionSettingsUpdated / sessionSettingsRejected replies into the write store, on the same
   // App-level always-listening rationale — a confirm/reject reply can arrive after the Run config
   // sheet (#257) closes, so the listener must outlive the sheet.
-  // QueueData (#293) is a fourth sibling headless leaf: it lands each unsolicited `queueState`
-  // snapshot into the keyed queue store for the render slice (#294), on the same App-level
-  // always-listening rationale — a snapshot can arrive before #294 is ever mounted, and (per daemon
-  // #878/#879) several for different conversations can arrive back-to-back. Reactive-only, no gate.
-  // BackgroundTaskRosterData (#573) is the SIXTH headless leaf (count the JSX below, not these
-  // comments — RelayLinkData landed without one): it lands each unsolicited `backgroundTaskRoster`
-  // snapshot into the keyed roster store for the panel slice (#568), on the same App-level
-  // always-listening rationale — a roster can arrive before #568 is ever mounted and for a
-  // conversation the user is not looking at. Reactive-only, no gate. Ships dormant. Its `connected`
-  // branch is the sole enforcement of AC5 (no previous pairing's tasks survive a re-handshake), which
-  // is why this store is deliberately absent from clearPairingScopedState.
   // AnnouncedModelData (#588) is the SEVENTH headless leaf: it lands each unsolicited `modelAnnounced`
   // announcement into the announced-model store for the run-configuration sheet (#560), on the same
   // App-level always-listening rationale — the announcement rides the turn's init line, so it can
@@ -323,9 +266,7 @@ function App(): JSX.Element {
       <SessionIdData />
       <ReplySuggestionData />
       <RunSettingsWriteData />
-      <QueueData />
       <RelayLinkData />
-      <BackgroundTaskRosterData />
       <AnnouncedModelData />
       <SessionFactsData />
       <McpStatusData />

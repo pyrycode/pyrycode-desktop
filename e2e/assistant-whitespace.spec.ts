@@ -29,7 +29,7 @@ import type {
 // through `locator.evaluate()` in the thread-scroll-pin.spec.ts:179-184 idiom.
 //
 // A separate file rather than an extension of send-and-stream.spec.ts: that spec asserts against a bare
-// `.bubble[data-thread-role="assistant"]` locator, so adding turns to its stream would break it on
+// `[data-thread-role="assistant"]` locator, so adding turns to its stream would break it on
 // strict-mode multiplicity. #601 set the precedent of shipping the liveness proof as its own spec.
 //
 // EVERY PUSHED FRAME IS ONE A REAL DAEMON PRODUCES (the standing fake-tier rule): an `assistant_delta`
@@ -303,7 +303,7 @@ const buildReplyFrames = (inbound: Uint8Array): Uint8Array[] => {
 }
 
 const assistantBubble = (page: Page, index: number): Locator =>
-  page.locator('.bubble[data-thread-role="assistant"]').nth(index)
+  page.locator('[data-thread-role="assistant"]').nth(index)
 
 interface BubbleMetrics {
   whiteSpace: string
@@ -958,7 +958,7 @@ const readThreadWidths = (page: Page): Promise<{ scrollWidth: number; clientWidt
  * wait silently vacuous. The bubble count then covers the open tail, which carries no turn_end to wait on.
  */
 async function streamTheReplies(page: Page): Promise<void> {
-  const assistantBubbles = page.locator('.bubble[data-thread-role="assistant"]')
+  const assistantBubbles = page.locator('[data-thread-role="assistant"]')
 
   await page.getByPlaceholder('Message…').fill(PROMPT_TEXT)
   await page.getByRole('button', { name: 'Send' }).click()

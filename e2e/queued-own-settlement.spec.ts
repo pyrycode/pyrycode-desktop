@@ -1,64 +1,9 @@
 import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { SendMessagePayload } from '../src/shared/wire/types'
+import { expectDesktopIsolated } from './fixtures/desktopIsolation'
 
-for (const historyFirst of [false, true]) {
-  test(`restored tool identities survive live output and history prepends: history-first=${historyFirst}`, async ({ launchPairedApp }) => {
-    let historyRequest: number | undefined
-    const { page, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
-      const frame = decodeEnvelope(bytes)
-      if (frame.type === 'list_conversations') return [seedConversationsFrame()]
-      if (frame.type === 'request_history') historyRequest = frame.id
-      return []
-    } }, { onLaunched: async app => {
-      await app.evaluate(({ ipcMain }) => {
-        const previous = (ipcMain as any)._invokeHandlers.get('pyry:chat-history')
-        ipcMain.removeHandler('pyry:chat-history')
-        ipcMain.handle('pyry:chat-history', (event, request) => request.operation !== 'readTimeline' ? previous(event, request) : {
-          status: 'stored', snapshot: { version: 1, kind: 'timeline', serverId: request.serverId,
-            conversationId: request.conversationId, prependedRows: 1,
-            coverage: { status: 'received', cursor: 'older', atStart: false }, items: [
-              { kind: 'userText', text: 'Earlier restored message' },
-              { kind: 'toolCall', turnId: 'saved', toolUseId: 'parent', name: 'Agent', inputSummary: 'Restored agent', result: null },
-              { kind: 'toolCall', turnId: 'saved', toolUseId: 'child', parentToolUseId: 'parent', name: 'Read', inputSummary: 'Restored file', result: { isError: false, resultSummary: 'Restored child result' } },
-              { kind: 'toolCall', turnId: 'saved', toolUseId: 'other', name: 'Read', inputSummary: 'Other restored file', result: null },
-              { kind: 'assistantText', turnId: 'saved', text: 'Saved answer' },
-              { kind: 'turnBoundary', turnId: 'saved', stopReason: 'end_turn' }
-            ] }
-        })
-      })
-    } })
-    const run = page.getByRole('button', { name: 'Using tools: 2', exact: false })
-    const parent = page.locator('.tool-row__chip--toggle', { hasText: 'Restored agent' })
-    const child = page.locator('.tool-row__chip--toggle', { hasText: 'Restored file' })
-    await run.click()
-    await parent.click()
-    await child.click()
-    await expect(page.getByText('Restored child result', { exact: true })).toBeVisible()
-    const handles = await Promise.all([run, parent, child].map(row => row.elementHandle()))
-    const push = (type: string, payload: Record<string, unknown>, in_reply_to?: number) => daemon.pushFrame(encodeEnvelope({
-      id: 77, type, ts: '2026-10-05T12:00:00Z', in_reply_to, payload: { conversation_id: SEEDED_ROW.id, ...payload }
-    }))
-    const live = async () => {
-      push('assistant_delta', { turn_id: 'live', seq: 0, text: 'Live update receipt barrier' })
-      await expect(page.getByText('Live update receipt barrier', { exact: false })).toBeVisible()
-    }
-    const prepend = async () => {
-      await page.locator('.conversation__thread').focus()
-      await page.keyboard.press('Home')
-      await expect.poll(() => historyRequest).toBeDefined()
-      push('history_page', { cursor: '', at_start: true, entries: [{ id: 1, type: 'message', ts: '2026-10-04T12:00:00Z',
-        payload: { conversation_id: SEEDED_ROW.id, message_id: 'older-message', role: 'user', text: 'Older history prepend' } }] }, historyRequest)
-      await expect(page.getByText('Older history prepend', { exact: true })).toBeVisible()
-    }
-    for (const update of historyFirst ? [prepend, live] : [live, prepend]) {
-      await update()
-      for (const row of [run, parent, child]) await expect(row).toHaveAttribute('aria-expanded', 'true')
-      for (const handle of handles) expect(await handle?.evaluate(node => node.isConnected)).toBe(true)
-      await expect(page.getByText('Restored child result', { exact: true })).toBeVisible()
-    }
-  })
-}
+// Scripted history is published as thread catch-up/pages by the shared fake daemon.
 
 for (const order of ['removal-first', 'receipt-first', 'sent-now', 'mixed-removal-first', 'mixed-receipt-first'] as const) {
   test(`queued own rows settle in stream order: ${order}`, async ({ launchPairedApp }) => {
@@ -89,7 +34,7 @@ for (const order of ['removal-first', 'receipt-first', 'sent-now', 'mixed-remova
       await expect.poll(() => sends.length).toBe(text.endsWith('one') ? 1 : 2)
     }
     const entries = sends.map((s, i) => ({ queued_msg_id: i + 7, message_id: s.message_id, text: s.text, ts: '' }))
-    const foreign = { queued_msg_id: 99, message_id: entries[0].message_id, text: 'Foreign queued collision', ts: '' }
+    const foreign = { queued_msg_id: 99, device_id: 'synthetic-phone', message_id: entries[0].message_id, text: 'Foreign queued collision', ts: '' }
     push('queue_state', { queued: [...entries, foreign] })
     delta('first', 'First reply continues after queue')
     push('tool_use', { turn_id: 'first', tool_use_id: 'agent', name: 'Agent', input_summary: 'queue test agent' })
@@ -123,7 +68,8 @@ for (const order of ['removal-first', 'receipt-first', 'sent-now', 'mixed-remova
     delta('answer', 'Answer to first follow-up')
     await expect(thread.getByText('Answer to first follow-up', { exact: false })).toBeVisible()
     if (!removalFirst) {
-      await expect(own).toHaveCount(1)
+      // Canonical delivery changes the row immediately, before queue reconciliation.
+      await expect(own).toHaveCount(0)
       push('queue_state', { queued: entries.slice(1) })
     }
     await expect(page.locator('.message-row--user:not(.message-row--queued)', { hasText: 'Own follow-up one' })).toHaveCount(1)

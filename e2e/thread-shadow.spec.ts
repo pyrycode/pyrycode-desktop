@@ -154,8 +154,8 @@ test('every element of the message area casts the design shadow: both bubbles, t
 }) => {
   const { page, daemon } = await launchPairedApp({ buildReplyFrames })
 
-  const userBubble = '.bubble[data-thread-role="user"]'
-  const assistantBubble = '.bubble[data-thread-role="assistant"]'
+  const userBubble = '[data-thread-role="user"]'
+  const assistantBubble = '[data-thread-role="assistant"]'
 
   // The two bubbles, through a real send: the optimistic user echo and the scripted assistant reply.
   await page.getByPlaceholder('Message…').fill(PROMPT_TEXT)

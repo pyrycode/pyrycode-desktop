@@ -18,11 +18,8 @@ import type { EnvelopeType } from '../shared/wire/types'
 import type { AttachmentRetrievalFailure } from '../shared/ipc/attachmentRetrieval'
 import type {
   DaemonEvent,
-  StampedDaemonEvent,
-  HistoryTimelineEntry,
-  HistoryTimelineEvent
+  StampedDaemonEvent
 } from '../shared/ipc/events'
-import type { DecodedHistoryEvent } from './transport/inboundMessage'
 import type { DaemonEventSink } from './emitDaemonEvent'
 import type { DeviceKeyPair, DeviceKeypairStore } from './deviceKeypair'
 import type {
@@ -207,7 +204,8 @@ function validHelloAck(): Uint8Array {
     id: 2,
     type: 'hello_ack',
     ts: FIXED_TS,
-    payload: { protocol_version: 'v2', server_id: 'srv-1', conn_id: 'conn-1' }
+    // The app requires the daemon-built thread (#1908); a handshake without it is update-required.
+    payload: { protocol_version: 'v2', server_id: 'srv-1', conn_id: 'conn-1', capabilities: ['thread'] }
   })
 }
 
@@ -374,6 +372,204 @@ function build(
 
 /** Flush the microtask chain the async bootstrap runs on (fakes resolve immediately). */
 const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
+it('discovers each host independently and fences reconnect readiness', async () => {
+  const a = build({ serverId: 'a' }), b = build({ serverId: 'b' })
+  const app = '22222222-2222-4222-8222-222222222222'
+  const row = { app_id: app, title: 'App', desired: 'available', state: 'running', active_release: '1.0.0', pending_release: null, last_error: null, revision: 1 }
+  const ack = (host: string, supported = true) => encodeEnvelope({ id: 1, ts: FIXED_TS, type: 'hello_ack',
+    payload: { server_id: host, conn_id: host, protocol_version: 'v2', capabilities: supported ? ['thread', 'hosted_apps_v1'] : ['thread'] } })
+  a.connection.start(); b.connection.start(); await tick()
+  const da = a.drivers[0], db = b.drivers[0]
+  const material = await da.config.loadDialConfig!()
+  expect(material).not.toBeNull()
+  expect(decodeEnvelope(material!.session.hello).payload).toMatchObject({ capabilities: expect.arrayContaining(['hosted_apps_v1']) })
+  da.emit({ type: 'handshake-complete', helloAck: ack('a') })
+  db.emit({ type: 'handshake-complete', helloAck: ack('b', false) })
+  expect(db.sent).toHaveLength(0)
+  expect(b.connection.hostedApps.read().type).toBe('unsupported')
+  const first = decodeEnvelope(da.sent.at(-1)!).id
+  a.connection.requestContextUsage('chat')
+  da.emit({ type: 'message', plaintext: encodeEnvelope({ id: 90, ts: FIXED_TS, type: 'message',
+    payload: { conversation_id: 'chat', message_id: 'barrier', role: 'assistant', text: 'processed' } }) })
+  expect(emitted(a.sink).some(e => e.type === 'messageReceived')).toBe(true)
+  const page = (d: FakeDriver, request: number) => d.emit({ type: 'message', plaintext: encodeEnvelope({ id: 100,
+    ts: FIXED_TS, type: 'apps', in_reply_to: request, payload: { revision: 1, items: [row], next_cursor: null } }) })
+  page(da, first)
+  const binding = a.connection.hostedApps.openView(app)
+  if (!binding.ok) throw new Error('expected binding')
+  const pending = binding.view.request({ type: 'app_asset_request', payload: { path: '/', navigation: true } })
+  db.emit({ type: 'handshake-complete', helloAck: ack('b') }); page(db, decodeEnvelope(db.sent.at(-1)!).id)
+  expect(b.connection.hostedApps.openView(app).ok).toBe(true)
+  da.emit({ type: 'relay-link-down', code: 1006 })
+  expect(await pending).toMatchObject({ error: 'retired' })
+  expect(a.connection.hostedApps.read().type).toBe('unavailable')
+  expect(b.connection.hostedApps.read().type).toBe('ready')
+  da.emit({ type: 'handshake-complete', helloAck: ack('a') })
+  page(da, first); expect(a.connection.hostedApps.openView(app).ok).toBe(false)
+  const latest = decodeEnvelope(da.sent.at(-1)!).id
+  page(da, latest); expect(a.connection.hostedApps.openView(app).ok).toBe(true)
+  expect(await binding.view.request({ type: 'app_asset_request', payload: { path: '/', navigation: true } })).toMatchObject({ error: 'retired' })
+  da.emit({ type: 'handshake-complete', helloAck: ack('a', false) })
+  expect(a.connection.hostedApps.read().type).toBe('unsupported')
+  a.connection.stop(); b.connection.stop()
+})
+
+it('fences hosted work across connection lifecycle and keeps unrelated traffic runnable', async () => {
+  const ctx = build({ serverId: 'host-a' })
+  ctx.connection.start(); await tick()
+  const driver = ctx.drivers[0]
+  const ack = { ...decodeEnvelope(validHelloAck()), payload: { protocol_version: 'v2', server_id: 'srv-1', conn_id: 'conn-1', capabilities: ['thread', 'hosted_apps_v1'] } }
+  driver.emit({ type: 'handshake-complete', helloAck: encodeEnvelope(ack) })
+  const view = ctx.connection.hostedResources.openView('22222222-2222-4222-8222-222222222222', '1.0.0')
+  const result = view.request({ type: 'app_asset_request', payload: { path: '/', navigation: true } })
+  const request = decodeEnvelope(driver.sent.at(-1)!)
+  driver.observations.at(-1)!({ type: 'sent', connectionId: 'conn-1' })
+  driver.emit({ type: 'message', plaintext: encodeEnvelope({ id: 901, ts: FIXED_TS, type: 'app_response', in_reply_to: request.id,
+    payload: { app_id: '22222222-2222-4222-8222-222222222222', release_version: '1.0.0', status: 200, headers: {}, size_bytes: 2, total_chunks: 2,
+      sha256: 'a12871fee210fb8619291eaea194581cbd2531e4b23759d225f6806923f63222' } }) })
+  ctx.connection.requestContextUsage('chat')
+  expect(decodeEnvelope(driver.sent.at(-1)!).type).toBe('request_context_usage')
+  driver.emit({ type: 'message', plaintext: encodeEnvelope({ id: 900, ts: FIXED_TS, type: 'message',
+    payload: { conversation_id: 'chat', message_id: 'message', role: 'assistant', text: 'barrier' } }) })
+  expect(emitted(ctx.sink).some(event => event.type === 'messageReceived')).toBe(true)
+  driver.emit({ type: 'handshake-complete', helloAck: encodeEnvelope(ack) })
+  expect(await result).toMatchObject({ ok: false, error: 'retired' })
+  expect(await view.request({ type: 'app_asset_request', payload: { path: '/', navigation: true } })).toMatchObject({ error: 'retired' })
+  const successor = ctx.connection.hostedResources.openView('22222222-2222-4222-8222-222222222222', '1.0.0')
+  const next = successor.request({ type: 'app_asset_request', payload: { path: '/', navigation: true } })
+  expect(decodeEnvelope(driver.sent.at(-1)!).id).toBeGreaterThan(request.id)
+  driver.emit({ type: 'message', plaintext: encodeEnvelope({ id: 902, ts: FIXED_TS, type: 'app_response_chunk', in_reply_to: request.id,
+    payload: { app_id: '22222222-2222-4222-8222-222222222222', index: 0, data: 'AQ==' } }) })
+  driver.emit({ type: 'relay-link-down', code: 1006 })
+  expect(await next).toMatchObject({ error: 'retired' })
+  ctx.connection.stop()
+})
+
+it.each([
+  ['app_response', 'session_id', 123],
+  ['app_response', 'history_entry_id', null],
+  ['app_response', 'session_state_cleared', null],
+  ['app_response_chunk', 'session_id', 123],
+  ['app_response_chunk', 'history_entry_id', null],
+  ['app_response_chunk', 'session_state_cleared', null],
+  ['error', 'session_id', 123],
+  ['error', 'history_entry_id', null],
+  ['error', 'session_state_cleared', null]
+] as const)('retires hosted %s with malformed %s before generic admission', async (type, field, value) => {
+  const ctx = build({ serverId: 'host-a' })
+  try {
+    ctx.connection.start(); await tick()
+    vi.useFakeTimers()
+    const driver = ctx.drivers[0], ack = decodeEnvelope(validHelloAck())
+    driver.emit({ type: 'handshake-complete', helloAck: encodeEnvelope({ ...ack,
+      payload: { ...ack.payload as object, capabilities: ['thread', 'hosted_apps_v1'] } }) })
+    const app = '22222222-2222-4222-8222-222222222222'
+    const view = ctx.connection.hostedResources.openView(app, '1.0.0')
+    const input = { type: 'app_asset_request' as const, payload: { path: '/', navigation: true } }
+    const results = Array.from({ length: 16 }, () => view.request(input))
+    const settled = vi.fn()
+    void results[0].then(settled)
+    const requests = () => driver.sent.map(decodeEnvelope).filter(frame => frame.type === 'app_asset_request')
+    expect(requests()).toHaveLength(8)
+    driver.observations.forEach(observe => observe({ type: 'sent', connectionId: 'conn-1' }))
+    const target = requests()[0].id, other = requests()[1].id
+    const data = Buffer.alloc(32768), body = Buffer.alloc(8388608)
+    const metadata = (id: number) => ({ id: 901, ts: FIXED_TS, type: 'app_response', in_reply_to: id,
+      payload: { app_id: app, release_version: '1.0.0', status: 200, headers: {}, size_bytes: body.length,
+        total_chunks: 256, sha256: createHash('sha256').update(body).digest('hex') } })
+    const chunk = (id: number, index: number) => ({ id: 902, ts: FIXED_TS, type: 'app_response_chunk', in_reply_to: id,
+      payload: { app_id: app, index, data: data.toString('base64') } })
+    const push = (frame: object) => driver.emit({ type: 'message', plaintext: Buffer.from(JSON.stringify(frame)) })
+    push(metadata(target)); push(metadata(other)) // Exhaust the connection's assembly reservation.
+    push(chunk(target, 0))
+    driver.observations.at(-1)!({ type: 'sent', connectionId: 'conn-1' })
+    const frame = type === 'error' ? { id: 904, ts: FIXED_TS, type, in_reply_to: target,
+      payload: { code: 'app.busy', message: 'private diagnostic', retryable: true } }
+      : type === 'app_response' ? metadata(target) : chunk(target, 1)
+    const malformed = { ...frame, [field]: value }
+    expect(() => decodeEnvelope(Buffer.from(JSON.stringify(malformed)))).toThrow()
+    push(malformed)
+    await Promise.resolve()
+    expect(settled).toHaveBeenCalledTimes(1)
+    expect(settled).toHaveBeenCalledWith({ ok: false, error: 'corrupt', uncertain: false })
+    expect(requests()).toHaveLength(9) // The retired active slot immediately promotes queued work.
+    results.push(view.request(input)) // Its view admission slot is reusable too.
+    expect(await view.request(input)).toMatchObject({ error: 'limit' })
+    const promoted = requests()[8].id
+    driver.observations.at(-1)!({ type: 'sent', connectionId: 'conn-1' })
+    push(metadata(promoted)); push(chunk(promoted, 0))
+    expect(decodeEnvelope(driver.sent.at(-1)!)).toMatchObject({ type: 'app_response_credit',
+      payload: { request_id: promoted, next_index: 1 } }) // The retired 8 MiB reservation was released.
+    const sent = driver.sent.length
+    push(metadata(target))
+    for (let index = 1; index < 256; index++) push(chunk(target, index))
+    await Promise.resolve()
+    expect(driver.sent).toHaveLength(sent)
+    expect(settled).toHaveBeenCalledTimes(1)
+    ctx.connection.requestContextUsage('chat')
+    expect(decodeEnvelope(driver.sent.at(-1)!).type).toBe('request_context_usage')
+    push({ id: 903, ts: FIXED_TS, type: 'message', payload: {
+      conversation_id: 'chat', message_id: 'barrier', role: 'assistant', text: 'barrier' } })
+    expect(emitted(ctx.sink).some(event => event.type === 'messageReceived')).toBe(true)
+    ctx.connection.stop()
+    await Promise.all(results)
+    expect(vi.getTimerCount()).toBe(0)
+  } finally { ctx.connection.stop(); vi.useRealTimers() }
+})
+
+it.each(['reconnect', 'stop', 'terminal', 'error', 'auth', 'update-required', 'bad-ack', 'unsupported'] as const)('retires all hosted work on %s', async reason => {
+  const ctx = build({ serverId: 'srv-1' })
+  ctx.connection.start(); await tick()
+  const driver = ctx.drivers[0], ack = decodeEnvelope(validHelloAck())
+  driver.emit({ type: 'handshake-complete', helloAck: encodeEnvelope({ ...ack,
+    payload: { ...ack.payload as object, capabilities: ['thread', 'hosted_apps_v1'] } }) })
+  expect(ctx.connection.hostedApps.read().type).toBe('loading')
+  const first = ctx.connection.hostedResources.openView('22222222-2222-4222-8222-222222222222', '1.0.0')
+  const second = ctx.connection.hostedResources.openView('33333333-3333-4333-8333-333333333333', '2.0.0')
+  const input = { type: 'app_api_request' as const, payload: { path: '/api/data', method: 'POST' as const, headers: {}, body: '' } }
+  const a = first.request(input), request = decodeEnvelope(driver.sent.at(-1)!), b = second.request(input)
+  switch (reason) {
+    case 'reconnect': ctx.connection.reconnect(); await tick(); break
+    case 'stop': ctx.connection.stop(); break
+    case 'terminal': driver.emit({ type: 'terminal', code: 4401, reason: 'closed' }); break
+    case 'error': driver.emit({ type: 'error', reason: 'session-load-failed' }); break
+    case 'auth': driver.emit({ type: 'message', plaintext: encodeEnvelope({ id: 100, ts: FIXED_TS, type: 'error', in_reply_to: request.id,
+      payload: { code: 'auth.invalid_token', message: 'rejected', retryable: false } }) }); break
+    case 'update-required': driver.emit({ type: 'message', plaintext: encodeEnvelope({ id: 100, ts: FIXED_TS, type: 'error', in_reply_to: request.id,
+      payload: { code: 'client.update_required', message: 'rejected', retryable: false, min_client_version: '1.0.0' } }) }); break
+    case 'bad-ack': driver.emit({ type: 'handshake-complete', helloAck: Buffer.from('{}') }); break
+    case 'unsupported': driver.emit({ type: 'handshake-complete', helloAck: validHelloAck() }); break
+  }
+  expect(await a).toMatchObject({ ok: false, uncertain: true })
+  expect(await b).toMatchObject({ ok: false, uncertain: true })
+  expect(ctx.connection.hostedApps.read().type).toBe(reason === 'unsupported' ? 'unsupported' : 'unavailable')
+  const count = driver.sent.length
+  expect(await first.request(input)).toMatchObject({ error: 'retired', uncertain: false })
+  expect(driver.sent).toHaveLength(count)
+  ctx.connection.stop()
+})
+
+it('retires an incomplete walk on automatic re-handshake and rejects foreign host acknowledgement', async () => {
+  const ctx = build({ serverId: 'srv-1' })
+  ctx.connection.start(); await tick()
+  const driver = ctx.drivers[0], ack = decodeEnvelope(validHelloAck())
+  const supported = encodeEnvelope({ ...ack, payload: { ...ack.payload as object, capabilities: ['thread', 'hosted_apps_v1'] } })
+  driver.emit({ type: 'handshake-complete', helloAck: supported })
+  const old = decodeEnvelope(driver.sent.at(-1)!).id
+  driver.emit({ type: 'handshake-complete', helloAck: supported })
+  const current = decodeEnvelope(driver.sent.at(-1)!).id
+  expect(current).toBeGreaterThan(old)
+  driver.emit({ type: 'message', plaintext: encodeEnvelope({ id: 300, ts: FIXED_TS, type: 'apps', in_reply_to: old,
+    payload: { revision: 0, items: [], next_cursor: null } }) })
+  expect(ctx.connection.hostedApps.read().type).toBe('loading')
+  driver.emit({ type: 'relay-link-down', code: 1006 })
+  expect(ctx.connection.hostedApps.read().type).toBe('unavailable')
+  driver.emit({ type: 'handshake-complete', helloAck: encodeEnvelope({ ...ack,
+    payload: { ...ack.payload as object, server_id: 'foreign', capabilities: ['thread', 'hosted_apps_v1'] } }) })
+  expect(ctx.connection.hostedApps.read().type).toBe('unsupported')
+  ctx.connection.stop()
+})
 
 /** Reach the connected window: start, resolve the bootstrap, complete the handshake. */
 async function reachConnected(): Promise<ReturnType<typeof build>> {
@@ -698,7 +894,7 @@ describe('createDaemonConnection', () => {
       { type: 'connecting' },
       {
         type: 'connected',
-        ack: { protocol_version: 'v2', server_id: 'srv-1', conn_id: 'conn-1', capabilities: [] }
+        ack: { protocol_version: 'v2', server_id: 'srv-1', conn_id: 'conn-1', capabilities: ['thread'] }
       }
     ])
   })
@@ -721,7 +917,7 @@ describe('createDaemonConnection', () => {
           protocol_version: 'v2',
           server_id: 'srv-1',
           conn_id: 'conn-1',
-          capabilities: ['interactive']
+          capabilities: ['interactive', 'thread']
         }
       })
     })
@@ -733,7 +929,7 @@ describe('createDaemonConnection', () => {
         protocol_version: 'v2',
         server_id: 'srv-1',
         conn_id: 'conn-1',
-        capabilities: ['interactive']
+        capabilities: ['interactive', 'thread']
       }
     })
   })
@@ -800,7 +996,7 @@ describe('createDaemonConnection', () => {
     const assertHello = (hello: Uint8Array): void => {
       expect(decodeEnvelope(hello).payload).toMatchObject({
         client_features: expected,
-        capabilities: ['interactive', 'multi_agent', 'stop_background_task']
+        capabilities: ['interactive', 'thread', 'multi_agent', 'stop_background_task', 'hosted_apps_v1']
       })
     }
     assertHello(drivers[0].config.session.hello)
@@ -823,7 +1019,7 @@ describe('createDaemonConnection', () => {
     // buildClientHello in isolation, so this pins the production wiring, not the codec default.
     const envelope = decodeEnvelope(drivers[0].config.session.hello)
     const payload = envelope.payload as Record<string, unknown>
-    expect(payload.capabilities).toEqual(['interactive', 'multi_agent', 'stop_background_task'])
+    expect(payload.capabilities).toEqual(['interactive', 'thread', 'multi_agent', 'stop_background_task', 'hosted_apps_v1'])
   })
 
   it('decodes server_static_pubkey to the raw 32-byte key', async () => {
@@ -11360,400 +11556,6 @@ describe('daemonConnection — server origin (#1068)', () => {
   })
 })
 
-// A COMPILE-TIME drift guard between the two mirrored history-event unions (#1227), not a runtime test.
-// `DecodedHistoryEvent` (src/main/transport/inboundMessage.ts) and `HistoryTimelineEvent`
-// (src/shared/ipc/events.ts) are declared separately because the transport directory is IPC-free by
-// construction, so nothing but structural assignability keeps them in agreement. The emit in
-// daemonConnection.ts already checks one direction; this checks the OTHER, so an arm or a required field
-// added on either side alone is a typecheck failure (`npm run typecheck` covers src/main/**, this file
-// included) rather than a silent divergence. Residual gap, stated rather than papered over: an added
-// OPTIONAL field on one side alone still passes both.
-type MirrorsIpcEvent = HistoryTimelineEvent extends DecodedHistoryEvent ? true : never
-type MirrorsTransportEvent = DecodedHistoryEvent extends HistoryTimelineEvent ? true : never
-const _historyEventMirrorsBothWays: [MirrorsIpcEvent, MirrorsTransportEvent] = [true, true]
-void _historyEventMirrorsBothWays
-
-describe('createDaemonConnection — requestHistory (history page request/reply, #1222)', () => {
-  /** The conversation the request names, and therefore the one the reply describes. */
-  const CONV = 'conv-hist'
-  /** A daemon-minted opaque cursor — the committed example, kept intact so a "tidying" rewrite shows. */
-  const CURSOR = 'MS4zZjhiMWMwNC05ZDI3LTRlNWEtYjZjMS0yZTlmNzBkOGE0MTMuNy40MDk2'
-
-  /** One stored entry, as served. Its payload carries `conversation_id` since #1227 — every live-lane
-   *  parser requires it, so an entry without one is skipped at the decode and this fixture would stand
-   *  for an empty page. The value is deliberately NOT `CONV`: it is daemon-asserted, and pinning a
-   *  DIFFERENT id here is what proves it never reaches the event beside the correlation-resolved one. */
-  const ENTRY = {
-    id: 412,
-    type: 'assistant_delta',
-    payload: {
-      conversation_id: 'a-different-conversation',
-      turn_id: 't1',
-      seq: 3,
-      text: 'stored assistant text'
-    },
-    ts: FIXED_TS
-  }
-  /** What ENTRY decodes to (#1227): the entry's own id and ts, the typed event, no conversation id. */
-  const DECODED_ENTRY: HistoryTimelineEntry = {
-    id: 412,
-    ts: FIXED_TS,
-    event: { type: 'assistantDelta', turnId: 't1', seq: 3, text: 'stored assistant text' }
-  }
-  const PAGE = { entries: [ENTRY], cursor: CURSOR, at_start: false }
-
-  /** A `history_page` envelope's plaintext. Correlation-gated like its session_settings sibling, so
-   *  `inReplyTo` is spelled `number | undefined` rather than optional — omitting it is the deliberate
-   *  no-correlation branch and should read as a choice at the call site. */
-  function historyPagePlaintext(payload: unknown, inReplyTo: number | undefined): Uint8Array {
-    return encodeEnvelope({ id: 812, type: 'history_page', ts: FIXED_TS, in_reply_to: inReplyTo, payload })
-  }
-
-  /** An `error` envelope's plaintext carrying one reject code. */
-  function rejectPlaintext(code: string, inReplyTo: number | undefined): Uint8Array {
-    return encodeEnvelope({
-      id: 900,
-      type: 'error',
-      ts: FIXED_TS,
-      in_reply_to: inReplyTo,
-      payload: { code, message: 'static daemon text that must never cross', retryable: true }
-    })
-  }
-
-  async function connected(): Promise<ReturnType<typeof build>> {
-    const ctx = build()
-    ctx.connection.start()
-    await tick()
-    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
-    return ctx
-  }
-
-  /** The envelope id of the LAST request_history this connection put on the wire. */
-  function lastRequestId(ctx: ReturnType<typeof build>): number {
-    const requests = ctx.drivers[0].sent
-      .map((bytes) => decodeEnvelope(bytes))
-      .filter((e) => e.type === 'request_history')
-    return requests[requests.length - 1].id
-  }
-
-  /**
-   * Connected, with one outstanding request_history naming `conversationId` — the correlation every
-   * reply below must match. Its envelope id is read off the frame ACTUALLY SENT rather than assumed,
-   * so a change to the client's numbering cannot silently make every reply here
-   * uncorrelatable-and-therefore-dropped while the assertions still read as if the gate were exercised.
-   */
-  async function requested(
-    conversationId: string = CONV
-  ): Promise<ReturnType<typeof build> & { replyTo: number }> {
-    const ctx = await connected()
-    ctx.connection.requestHistory({ conversation_id: conversationId, cursor: '', limit: 50 })
-    return { ...ctx, replyTo: lastRequestId(ctx) }
-  }
-
-  it('is a no-op before start(): no driver, nothing forwarded, no throw (the send twin)', () => {
-    const { connection, drivers } = build()
-    expect(() =>
-      connection.requestHistory({ conversation_id: CONV, cursor: '', limit: 50 })
-    ).not.toThrow()
-    expect(drivers).toHaveLength(0)
-  })
-
-  it('sends a request_history frame carrying all three fields', async () => {
-    const { connection, drivers } = await connected()
-
-    connection.requestHistory({ conversation_id: CONV, cursor: CURSOR, limit: 50 })
-
-    const request = drivers[0].sent
-      .map((bytes) => decodeEnvelope(bytes))
-      .find((e) => e.type === 'request_history')
-    // Asserted as an exact payload against values distinct from every other string on the envelope, so
-    // forwarding the wrong field cannot pass — and the cursor crosses byte for byte.
-    expect(request?.payload).toEqual({ conversation_id: CONV, cursor: CURSOR, limit: 50 })
-  })
-
-  it('shares the one envelope-id counter with send (no second counter)', async () => {
-    const { connection, drivers } = await connected()
-
-    connection.send({ conversation_id: 'c1', message_id: 'm1', text: 'hi' })
-    connection.requestHistory({ conversation_id: CONV, cursor: '', limit: 0 })
-
-    expect(decodeEnvelope(drivers[0].sent[0]).id).toBe(2)
-    expect(decodeEnvelope(drivers[0].sent[1]).id).toBe(3)
-  })
-
-  it('forwards a stored assistant parent hint through correlated history IPC', async () => {
-    const { sink, drivers, replyTo } = await requested()
-    drivers[0].emit({ type: 'message', plaintext: historyPagePlaintext({ ...PAGE, entries: [
-      { ...ENTRY, payload: { ...ENTRY.payload, parent_tool_use_id: 'historical-agent' } }
-    ] }, replyTo) })
-    expect(emitted(sink).filter(event => event.type === 'historyPageReceived')).toMatchObject([
-      { conversationId: CONV, entries: [{ event: { parentToolUseId: 'historical-agent' } }] }
-    ])
-  })
-
-  it('decodes a correlated history_page into historyPageReceived, attributed to the ASKED conversation', async () => {
-    // The page names no conversation. What crosses is the id THIS CLIENT put in its own outbound
-    // frame, resolved from the envelope the page answers — the only place that fact exists.
-    const { sink, drivers, replyTo } = await requested()
-
-    drivers[0].emit({ type: 'message', plaintext: historyPagePlaintext(PAGE, replyTo) })
-
-    expect(emitted(sink).filter((e) => e.type === 'historyPageReceived')).toEqual([
-      {
-        type: 'historyPageReceived',
-        conversationId: CONV,
-        entries: [DECODED_ENTRY],
-        servedIds: [ENTRY.id],
-        cursor: CURSOR,
-        atStart: false
-      }
-    ])
-  })
-
-  it('lets no entry carry the payload conversation_id beside the correlated one (#1227)', async () => {
-    // The one value that could contradict the correlation. ENTRY's payload names a DIFFERENT
-    // conversation, so a consumer handed both would have a routing decision it must never be given —
-    // and the whole point of #1222's correlation is that there is only one id to route by.
-    const { sink, drivers, replyTo } = await requested()
-
-    drivers[0].emit({ type: 'message', plaintext: historyPagePlaintext(PAGE, replyTo) })
-
-    const event = emitted(sink).find((e) => e.type === 'historyPageReceived')
-    expect(JSON.stringify(event)).not.toContain('a-different-conversation')
-    expect(JSON.stringify(event)).not.toContain('conversation_id')
-  })
-
-  it('settles the ask with an EMPTY page when every entry was skipped (#1227)', async () => {
-    // A page of undrawn and malformed entries still emits. Dropping it would stall #1224's walk with
-    // no terminal and no way to step past the entries this client cannot draw, so `cursor`/`atStart`
-    // must arrive as served even when nothing survived the decode.
-    const { sink, drivers, replyTo } = await requested()
-
-    drivers[0].emit({
-      type: 'message',
-      plaintext: historyPagePlaintext(
-        {
-          entries: [
-            { id: 1, type: 'model_announced', payload: { conversation_id: CONV }, ts: FIXED_TS },
-            { id: 2, type: 'assistant_delta', payload: {}, ts: FIXED_TS }
-          ],
-          cursor: CURSOR,
-          at_start: false
-        },
-        replyTo
-      )
-    })
-
-    expect(emitted(sink).filter((e) => e.type === 'historyPageReceived')).toEqual([
-      { type: 'historyPageReceived', conversationId: CONV, entries: [], servedIds: [1, 2], cursor: CURSOR, atStart: false }
-    ])
-  })
-
-  it('carries at_start across as camelCase atStart, and no snake key', async () => {
-    // Asserting the ABSENCE of the snake key is what proves the emit is a named copy rather than a
-    // spread of the decoded payload — a spread would carry both spellings.
-    const { sink, drivers, replyTo } = await requested()
-
-    drivers[0].emit({
-      type: 'message',
-      plaintext: historyPagePlaintext({ entries: [], cursor: '', at_start: true }, replyTo)
-    })
-
-    const event = emitted(sink).find((e) => e.type === 'historyPageReceived')
-    expect(event).toBeDefined()
-    expect(event).not.toHaveProperty('at_start')
-    expect(event && 'atStart' in event && event.atStart).toBe(true)
-  })
-
-  it('never places the wire routing id on the event', async () => {
-    // The window receives the id it supplied, never the numeric in_reply_to the match was made on.
-    const { sink, drivers, replyTo } = await requested()
-
-    drivers[0].emit({ type: 'message', plaintext: historyPagePlaintext(PAGE, replyTo) })
-
-    const event = emitted(sink).find((e) => e.type === 'historyPageReceived')
-    expect(event).not.toHaveProperty('inReplyTo')
-    expect(event).not.toHaveProperty('in_reply_to')
-  })
-
-  it('carries a terminal page as sent, normalising nothing into an end-of-log flag', async () => {
-    // at_start is the ONLY termination signal, and a short or empty page says nothing on its own. A
-    // decoder or consumer that inferred one from the other would break the walk exactly at the
-    // boundary it exists to find.
-    const { sink, drivers, replyTo } = await requested()
-
-    drivers[0].emit({
-      type: 'message',
-      plaintext: historyPagePlaintext({ entries: [ENTRY], cursor: '', at_start: true }, replyTo)
-    })
-
-    expect(emitted(sink).filter((e) => e.type === 'historyPageReceived')).toEqual([
-      {
-        type: 'historyPageReceived',
-        conversationId: CONV,
-        entries: [DECODED_ENTRY],
-        servedIds: [ENTRY.id],
-        cursor: '',
-        atStart: true
-      }
-    ])
-  })
-
-  it('drops a page whose in_reply_to matches no outstanding ask', async () => {
-    // A stale reply from a cleared connection, a duplicate, or a hostile daemon forging a page for a
-    // request this client never sent. The drop is TOTAL rather than "emit without the id": the window
-    // would otherwise have to guess a conversation, and a guess writes someone else's transcript into
-    // the open one.
-    const { sink, drivers, replyTo } = await requested()
-
-    drivers[0].emit({ type: 'message', plaintext: historyPagePlaintext(PAGE, replyTo + 999) })
-
-    expect(emitted(sink).filter((e) => e.type === 'historyPageReceived')).toEqual([])
-  })
-
-  it('drops a page carrying no in_reply_to at all', async () => {
-    const { sink, drivers } = await requested()
-
-    drivers[0].emit({ type: 'message', plaintext: historyPagePlaintext(PAGE, undefined) })
-
-    expect(emitted(sink).filter((e) => e.type === 'historyPageReceived')).toEqual([])
-  })
-
-  it('drops a SECOND page replayed under an id already matched', async () => {
-    // The entry is deleted on the match, so a replayed page has nothing to correlate against. This is
-    // the assertion that would redden if the delete were dropped.
-    const { sink, drivers, replyTo } = await requested()
-
-    drivers[0].emit({ type: 'message', plaintext: historyPagePlaintext(PAGE, replyTo) })
-    drivers[0].emit({ type: 'message', plaintext: historyPagePlaintext(PAGE, replyTo) })
-
-    expect(emitted(sink).filter((e) => e.type === 'historyPageReceived')).toHaveLength(1)
-  })
-
-  it('attributes two interleaved asks to their OWN conversations', async () => {
-    // The whole point of keying by envelope id rather than by a single slot: a walk may have more than
-    // one ask outstanding, and a page must never land on the wrong conversation.
-    const ctx = await connected()
-    ctx.connection.requestHistory({ conversation_id: 'conv-first', cursor: '', limit: 10 })
-    const firstId = lastRequestId(ctx)
-    ctx.connection.requestHistory({ conversation_id: 'conv-second', cursor: '', limit: 10 })
-    const secondId = lastRequestId(ctx)
-
-    // Answered out of order, which is the case a FIFO would get wrong.
-    ctx.drivers[0].emit({ type: 'message', plaintext: historyPagePlaintext(PAGE, secondId) })
-    ctx.drivers[0].emit({ type: 'message', plaintext: historyPagePlaintext(PAGE, firstId) })
-
-    expect(
-      emitted(ctx.sink)
-        .filter((e) => e.type === 'historyPageReceived')
-        .map((e) => (e.type === 'historyPageReceived' ? e.conversationId : null))
-    ).toEqual(['conv-second', 'conv-first'])
-  })
-
-  it.each([
-    ['conversation.not_found', 'conversation-not-found', false],
-    ['history.invalid_request', 'history-invalid-request', false],
-    ['history.invalid_page_size', 'history-invalid-page-size', false],
-    ['history.invalid_cursor', 'history-invalid-cursor', false],
-    ['history.unavailable', 'history-unavailable', true]
-  ])('surfaces %s as a typed failure (retryable: %s)', async (code, reason, retryable) => {
-    // The daemon's own `retryable: true` rides EVERY fixture above, so a passthrough of the wire flag
-    // would make all five retryable and this table is what catches it. The flag is computed from the
-    // closed set at the single emit instead.
-    const { sink, drivers, replyTo } = await requested()
-
-    drivers[0].emit({ type: 'message', plaintext: rejectPlaintext(code, replyTo) })
-
-    expect(emitted(sink).filter((e) => e.type === 'historyRequestFailed')).toEqual([
-      { type: 'historyRequestFailed', conversationId: CONV, reason, retryable }
-    ])
-  })
-
-  it('surfaces a correlated code outside the five as unclassified, still settling the ask', async () => {
-    // `message.too_long` is the published case: an entry too large to fit in any page is emitted
-    // anyway and the daemon's own transport answers with it. A walk that dropped it would stall with
-    // no terminal and no cursor to step past the entry.
-    const { sink, drivers, replyTo } = await requested()
-
-    drivers[0].emit({ type: 'message', plaintext: rejectPlaintext('message.too_long', replyTo) })
-
-    expect(emitted(sink).filter((e) => e.type === 'historyRequestFailed')).toEqual([
-      { type: 'historyRequestFailed', conversationId: CONV, reason: 'unclassified', retryable: false }
-    ])
-  })
-
-  it('carries no daemon text on the failure — only client-owned values', async () => {
-    const { sink, drivers, replyTo } = await requested()
-
-    drivers[0].emit({ type: 'message', plaintext: rejectPlaintext('history.invalid_cursor', replyTo) })
-
-    const event = emitted(sink).find((e) => e.type === 'historyRequestFailed')
-    expect(Object.keys(event ?? {}).sort()).toEqual(['conversationId', 'reason', 'retryable', 'type'])
-    expect(JSON.stringify(event)).not.toContain('static daemon text')
-    // Nor the cursor, which the daemon's own rejects deliberately never echo.
-    expect(JSON.stringify(event)).not.toContain(CURSOR)
-  })
-
-  it('drops a reject whose in_reply_to matches no outstanding ask', async () => {
-    const { sink, drivers, replyTo } = await requested()
-
-    drivers[0].emit({ type: 'message', plaintext: rejectPlaintext('history.unavailable', replyTo + 999) })
-
-    expect(emitted(sink).filter((e) => e.type === 'historyRequestFailed')).toEqual([])
-  })
-
-  it('settles the ask on a reject, so a later page under the same id is dropped', async () => {
-    const { sink, drivers, replyTo } = await requested()
-
-    drivers[0].emit({ type: 'message', plaintext: rejectPlaintext('history.unavailable', replyTo) })
-    drivers[0].emit({ type: 'message', plaintext: historyPagePlaintext(PAGE, replyTo) })
-
-    expect(emitted(sink).filter((e) => e.type === 'historyPageReceived')).toEqual([])
-  })
-
-  it('keeps one history request per conversation and admits a retry after interruption', async () => {
-    const ctx = await requested()
-    const payload = { conversation_id: CONV, cursor: CURSOR, limit: 0 }
-    ctx.connection.requestHistory(payload)
-    expect(ctx.drivers[0].sent.map(decodeEnvelope).filter(e => e.type === 'request_history')).toHaveLength(1)
-    ctx.drivers[0].emit({ type: 'relay-link-down', code: 1006 })
-    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
-    ctx.connection.requestHistory(payload)
-    expect(ctx.drivers[0].sent.map(decodeEnvelope).filter(e => e.type === 'request_history')).toHaveLength(2)
-  })
-
-  it('settles abandoned history on explicit redial without a failure reply', async () => {
-    const ctx = await requested()
-    ctx.connection.reconnect()
-    await tick()
-    expect(emitted(ctx.sink).filter(e => e.type === 'historyRequestFailed')).toEqual([
-      { type: 'historyRequestFailed', conversationId: CONV, reason: 'unclassified', retryable: true }
-    ])
-  })
-
-  it('settles history on a socket drop and rejects its later reply', async () => {
-    const ctx = await requested()
-    ctx.drivers[0].emit({ type: 'relay-link-down', code: 1006 })
-    ctx.drivers[0].emit({ type: 'message', plaintext: historyPagePlaintext(PAGE, ctx.replyTo) })
-    expect(emitted(ctx.sink).filter(e => e.type === 'historyRequestFailed')).toHaveLength(1)
-    expect(emitted(ctx.sink).filter(e => e.type === 'historyPageReceived')).toEqual([])
-  })
-
-  it('clears outstanding asks on reconnect, so a stale id cannot correlate on the new connection', async () => {
-    // The fresh connection recycles envelope ids from 2, so a surviving entry would attribute the new
-    // connection's first page to the dead one's conversation — a live misdelivery, not a theoretical one.
-    const ctx = await requested()
-    const staleId = ctx.replyTo
-
-    ctx.connection.reconnect()
-    await tick()
-    ctx.drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
-    ctx.drivers[1].emit({ type: 'message', plaintext: historyPagePlaintext(PAGE, staleId) })
-
-    expect(emitted(ctx.sink).filter((e) => e.type === 'historyPageReceived')).toEqual([])
-  })
-})
-
 describe('createDaemonConnection — requestSystemPrompt + the correlated reply (#1230)', () => {
   const CONV = 'conv-prompt'
 
@@ -12629,6 +12431,115 @@ describe('update-required rejection (#1613)', () => {
   }
 })
 
+describe('daemon without thread is update-required (#1908)', () => {
+  const DAEMON_MESSAGE = 'The Pyrycode daemon on this host needs an update. Update pyry on the host to reconnect.'
+  const message = (message_id: string): SendMessagePayload => ({ conversation_id: 'conv', message_id, text: message_id })
+  const legacyAck = (capabilities: string[] = ['interactive', 'hosted_apps_v1']) => encodeEnvelope({ id: 2,
+    type: 'hello_ack', ts: FIXED_TS, payload: { protocol_version: 'v2', server_id: 'srv-1', conn_id: 'conn-1', capabilities } })
+  const list = encodeEnvelope({ id: 3, type: 'conversations', ts: FIXED_TS, payload: { conversations: [] } })
+
+  it('fails with the daemon cause on the accepted handshake, sends nothing and admits nothing', async () => {
+    const { log, records } = captureLog()
+    const { connection, sink, drivers } = build({ diagnosticLog: log })
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: legacyAck() })
+    expect(emitted(sink)).toEqual([{ type: 'connecting' }, { type: 'failed', cause: 'daemon',
+      error: { code: 'update-required', message: DAEMON_MESSAGE, retryable: true } }])
+    expect(records).toContainEqual({ event: 'daemon-failed', code: 'update-required' })
+    // Supervision stays: the driver is parked, not stopped.
+    expect(drivers[0].stopped).toBe(false)
+    const before = drivers[0].sent.length
+    connection.requestModelList('conv-42')
+    connection.requestSessionSettings('conv-42')
+    connection.requestConversations()
+    connection.queryThread({ type: 'thread_catch_up', payload: { conversation_id: 'conv-42', epoch: '', version: 0 } }, 'parked-query')
+    expect(drivers[0].sent).toHaveLength(before)
+    // Frames from the outdated daemon reach nothing.
+    drivers[0].emit({ type: 'message', plaintext: list })
+    expect(emitted(sink).filter(event => event.type === 'conversationsReceived')).toHaveLength(0)
+    connection.stop()
+    expect(drivers[0].stopped).toBe(true)
+  })
+
+  it('keeps reconnect supervision, and a later handshake with thread clears the state', async () => {
+    const { connection, sink, drivers } = build()
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: legacyAck() })
+    // A daemon update restarts the daemon: the socket drops and the parked driver re-dials itself.
+    drivers[0].emit({ type: 'relay-link-down', code: 1006 })
+    drivers[0].emit({ type: 'handshake-complete', helloAck: legacyAck() })
+    expect(emitted(sink).filter(event => event.type === 'failed')).toHaveLength(2)
+    drivers[0].emit({ type: 'relay-link-down', code: 1006 })
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    expect(emitted(sink).at(-1)).toMatchObject({ type: 'connected', ack: { capabilities: ['thread'] } })
+    const before = drivers[0].sent.length
+    connection.requestModelList('conv-42')
+    expect(drivers[0].sent).toHaveLength(before + 1)
+    drivers[0].emit({ type: 'message', plaintext: list })
+    expect(emitted(sink).filter(event => event.type === 'conversationsReceived')).toHaveLength(1)
+    connection.stop()
+  })
+
+  it('lets a pairing rejection from the outdated daemon end the host as before, still sending nothing', async () => {
+    const { connection, sink, drivers } = build()
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: legacyAck() })
+    drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({ id: 4, type: 'error', ts: FIXED_TS,
+      payload: { code: 'auth.invalid_token', message: 'private', retryable: false } }) })
+    expect(emitted(sink).at(-1)).toMatchObject({ type: 'failed', error: { code: 'pairing-rejected' } })
+    expect(emitted(sink).at(-1)).not.toHaveProperty('cause')
+    const before = drivers[0].sent.length, events = emitted(sink).length
+    connection.requestConversations()
+    drivers[0].emit({ type: 'message', plaintext: list })
+    expect(drivers[0].sent).toHaveLength(before)
+    expect(emitted(sink)).toHaveLength(events)
+    connection.stop()
+  })
+
+  it('stops the parked driver on the app-too-old error, ending supervision for this host', async () => {
+    const { connection, sink, drivers } = build()
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: legacyAck() })
+    drivers[0].emit({ type: 'message', plaintext: encodeEnvelope({ id: 4, type: 'error', ts: FIXED_TS,
+      payload: { code: 'client.update_required', message: 'private', retryable: false } }) })
+    expect(drivers[0].stopped).toBe(true)
+    expect(emitted(sink).at(-1)).toMatchObject({ type: 'failed', error: { code: 'update-required', retryable: false } })
+    expect(emitted(sink).at(-1)).not.toHaveProperty('cause')
+    connection.stop()
+  })
+
+  it('refuses held and new messages for the outdated host and never delivers them after the update', async () => {
+    const { connection, sink, drivers } = build()
+    connection.send(message('held'))
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: legacyAck() })
+    connection.send(message('while-outdated'))
+    const deliveries = emitted(sink).filter(event => event.type === 'messageDelivery')
+    expect(deliveries.at(-1)).toMatchObject({ messageId: 'while-outdated', status: 'not-sent' })
+    drivers[0].emit({ type: 'relay-link-down', code: 1006 })
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    expect(drivers[0].sent.map(bytes => decodeEnvelope(bytes).type)).not.toContain('send_message')
+    connection.stop()
+  })
+
+  it('stops the parked driver on an explicit reconnect, so two sockets never stack', async () => {
+    const { connection, drivers } = build()
+    connection.start()
+    await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: legacyAck([]) })
+    connection.reconnect()
+    await tick()
+    expect(drivers[0].stopped).toBe(true)
+    expect(drivers).toHaveLength(2)
+    connection.stop()
+  })
+})
+
 describe('workspace rename attempt results', () => {
   const payload = { path: '/confirmed', label: 'Private name' }
   it('adds one correlated result while retaining every workspace broadcast', async () => {
@@ -12989,7 +12900,7 @@ describe('readWorkspaceFile (#1626)', () => {
   })
 })
 
-describe('reconnect replay cursor', () => {
+describe('thread-only reconnect hellos', () => {
   const rawFrame = (eventId: unknown, type = 'future', payload: unknown = null): Uint8Array =>
     new TextEncoder().encode(JSON.stringify({ id: 1, type, ts: FIXED_TS, event_id: eventId, payload }))
   const receive = (ctx: ReturnType<typeof build>, eventId: unknown, type = 'future', payload: unknown = null): void =>
@@ -12998,100 +12909,78 @@ describe('reconnect replay cursor', () => {
     const config = await ctx.drivers.at(-1)!.config.loadDialConfig!()
     const payload = decodeEnvelope(config!.session.hello).payload as Record<string, unknown>
     expect(payload).not.toHaveProperty('last_seen_ts')
+    expect(payload).not.toHaveProperty('last_event_id')
     return payload
   }
 
-  it('starts empty and retains the maximum admitted safe integer across automatic and explicit redials', async () => {
+  it('omits replay fields initially and after automatic/explicit reconnect despite admitted event IDs', async () => {
     const ctx = await reachConnected()
     expect(decodeEnvelope(ctx.drivers[0].config.session.hello).payload).not.toHaveProperty('last_event_id')
-    receive(ctx, 12, 'message', null) // rejected payload still establishes the position
-    receive(ctx, 11)
-    receive(ctx, 12)
-    for (const invalid of [undefined, null, '90', 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) receive(ctx, invalid)
-    expect(await hello(ctx)).toHaveProperty('last_event_id', 12)
-    receive(ctx, 13)
-    expect(await hello(ctx)).toHaveProperty('last_event_id', 13)
-    ctx.connection.reconnect()
-    await tick()
-    expect(decodeEnvelope(ctx.drivers[1].config.session.hello).payload).toHaveProperty('last_event_id', 13)
-    ctx.drivers[0].emit({ type: 'message', plaintext: rawFrame(900) })
-    expect(await hello(ctx)).toHaveProperty('last_event_id', 13)
+    receive(ctx, 12, 'message', null)
     receive(ctx, Number.MAX_SAFE_INTEGER)
-    expect(await hello(ctx)).toHaveProperty('last_event_id', Number.MAX_SAFE_INTEGER)
-    // Unknown/malformed frames still emit no new renderer events or commands.
-    expect(emitted(ctx.sink).map(event => event.type)).toEqual(['connecting', 'connected', 'connecting'])
+    await hello(ctx)
+    ctx.connection.reconnect(); await tick()
+    ctx.drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    await hello(ctx)
+    expect(decodeEnvelope(ctx.drivers[1].config.session.hello).payload).not.toHaveProperty('last_event_id')
     expect(ctx.drivers.flatMap(driver => driver.sent)).toEqual([])
+    ctx.connection.stop()
   })
 
-  it('resync clears only its host, logs no position and permits a new lower position', async () => {
-    const { log, records } = captureLog()
-    const a = build({ serverId: 'A', diagnosticLog: log })
-    const b = build({ serverId: 'B', load: async () => ({ ...RECORD, server: 'B' }) })
-    for (const ctx of [a, b]) { ctx.connection.start(); await tick() }
-    receive(a, 41)
-    receive(b, 99)
+  it('legacy pages and resync trigger no content or recovery requests and leave another host usable', async () => {
+    const a = await reachConnected(), b = await reachConnected()
     const before = emitted(a.sink)
-    for (const payload of [null, [], 'gap', 1, {}]) {
-      receive(a, 1000, 'resync', payload)
-      expect(await hello(a)).not.toHaveProperty('last_event_id')
+    for (const type of ['resync', 'history_page']) {
+      for (const payload of [null, [], 'gap', 1, {}, { entries: [], cursor: '', at_start: true }]) receive(a, 99, type, payload)
     }
-    expect(await hello(b)).toHaveProperty('last_event_id', 99)
+    await hello(a); await hello(b)
     expect(emitted(a.sink)).toEqual(before)
     expect(a.drivers[0].sent).toEqual([])
-    a.connection.reconnect()
-    await tick()
-    expect(decodeEnvelope(a.drivers[1].config.session.hello).payload).not.toHaveProperty('last_event_id')
-    receive(a, 2)
-    expect(await hello(a)).toHaveProperty('last_event_id', 2)
-    expect(records.filter(record => record.event === 'replay-cursor-reset')).toEqual(
-      Array.from({ length: 5 }, () => ({ event: 'replay-cursor-reset', code: 'resync' }))
-    )
-    expect(records.every(record => !('event_id' in record) && !('last_event_id' in record))).toBe(true)
-  })
-
-  it('guard failures cannot record or reset a position', async () => {
-    const ctx = await reachConnected()
-    receive(ctx, 10)
-    for (const plaintext of [
-      new Uint8Array(65_520), new Uint8Array([0xff]),
-      new TextEncoder().encode(JSON.stringify({ id: 1, type: 'resync', ts: FIXED_TS, event_id: 100 }))
-    ]) ctx.drivers[0].emit({ type: 'message', plaintext })
-    expect(await hello(ctx)).toHaveProperty('last_event_id', 10)
+    b.connection.queryThread({ type: 'thread_catch_up', payload: { conversation_id: 'c', epoch: '', version: 0 } }, 'other-host')
+    expect(b.drivers[0].sent.map(bytes => decodeEnvelope(bytes).type)).toEqual(['thread_catch_up'])
+    a.connection.stop(); b.connection.stop()
   })
 
   it.each([
     { server: 'replacement' }, { relay: 'wss://other.example/v1/client' },
     { token: 'replacement-token' }, { server_static_pubkey: base64StdEncode(new Uint8Array(32).fill(8)) }
-  ])('record replacement resets the retained connection: %j', async change => {
+  ])('record replacement discards held sends on the retained connection: %j', async change => {
     let record = { ...RECORD }
     const ctx = build({ load: async () => ({ ...record }) })
     ctx.connection.start()
     await tick()
-    receive(ctx, 42)
-    expect(await hello(ctx)).toHaveProperty('last_event_id', 42) // equal fresh object preserves
+    ctx.connection.send({ conversation_id: 'conv', message_id: 'held', text: 'held' })
+    await hello(ctx) // An equivalent fresh pairing object preserves the fence.
     record = { ...record, ...change }
-    expect(await hello(ctx)).not.toHaveProperty('last_event_id')
+    await hello(ctx)
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    expect(ctx.drivers[0].sent).toEqual([])
+    expect(emitted(ctx.sink)).toContainEqual(expect.objectContaining({ type: 'messageDelivery', messageId: 'held', status: 'not-sent' }))
     receive(ctx, 3)
     ctx.connection.reconnect()
     await tick()
-    expect(decodeEnvelope(ctx.drivers[1].config.session.hello).payload).toHaveProperty('last_event_id', 3)
+    expect(decodeEnvelope(ctx.drivers[1].config.session.hello).payload).not.toHaveProperty('last_event_id')
   })
 
-  it('an absent pairing clears the old position before pairing the same host again', async () => {
+  it('an absent pairing discards held sends before pairing the same host again', async () => {
     let record: PairedServerRecord | null = RECORD
     const ctx = build({ load: async () => record })
     ctx.connection.start()
     await tick()
-    receive(ctx, 42)
+    ctx.connection.send({ conversation_id: 'conv', message_id: 'held', text: 'held' })
     record = null
     expect(await ctx.drivers[0].config.loadDialConfig!()).toBeNull()
     record = RECORD
     ctx.connection.reconnect()
     await tick()
     expect(decodeEnvelope(ctx.drivers[1].config.session.hello).payload).not.toHaveProperty('last_event_id')
+    ctx.drivers[1].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    expect(ctx.drivers[1].sent).toEqual([])
+    expect(emitted(ctx.sink)).toContainEqual(expect.objectContaining({ type: 'messageDelivery', messageId: 'held', status: 'not-sent' }))
+    ctx.connection.stop()
   })
 
-  it('a superseded asynchronous load cannot reset the successor cursor', async () => {
+  it('a superseded asynchronous load cannot replace successor pairing', async () => {
     let record = RECORD
     let delayed: Promise<PairedServerRecord | null> | undefined
     const ctx = build({ load: () => delayed ?? Promise.resolve(record) })
@@ -13108,7 +12997,7 @@ describe('reconnect replay cursor', () => {
     receive(ctx, 7)
     resolveOld(RECORD)
     expect(await stale).toBeNull()
-    expect(await hello(ctx)).toHaveProperty('last_event_id', 7)
+    expect(await hello(ctx)).not.toHaveProperty('last_event_id')
   })
 
   it('registry replacement and unpair/re-pair reset only that host, preserving other connections', async () => {
@@ -13140,7 +13029,7 @@ describe('reconnect replay cursor', () => {
     expect(contexts.get(RECORD.server)).toBe(a) // replacement retains the connection
     expect(a.drivers).toHaveLength(2)
     expect(decodeEnvelope(a.drivers[1].config.session.hello).payload).not.toHaveProperty('last_event_id')
-    expect(await hello(b)).toHaveProperty('last_event_id', 99)
+    expect(await hello(b)).not.toHaveProperty('last_event_id')
     receive(a, 7)
 
     records = [other]
@@ -13155,7 +13044,7 @@ describe('reconnect replay cursor', () => {
     expect(decodeEnvelope(pairedAgain.drivers[0].config.session.hello).payload).not.toHaveProperty('last_event_id')
     expect(contexts.get(other.server)).toBe(b)
     expect(b.drivers).toHaveLength(1)
-    expect(await hello(b)).toHaveProperty('last_event_id', 99)
+    expect(await hello(b)).not.toHaveProperty('last_event_id')
     registry.stop()
   })
 })
@@ -13269,6 +13158,26 @@ describe('composer diagnostics through the daemon connection', () => {
     expect(lines.join()).not.toContain('SECRET')
     for (const ctx of [local, other]) ctx.connection.stop()
     expect(lines).toHaveLength(4)
+  })
+  it('acknowledges canonical accepted sends by host, conversation and authenticated device', async () => {
+    const lines: string[] = []
+    const lifecycle = createMessageLifecycle(createDiagnosticLog({ sink: { write: line => lines.push(line) } }))
+    const ctx = build({ serverId: 'host', messageLifecycle: lifecycle })
+    ctx.connection.start(); await tick()
+    ctx.drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    lifecycle.queued(id, 'chat')
+    ctx.connection.send({ message_id: id, conversation_id: 'chat', text: 'TEXT_SECRET' })
+    ctx.drivers[0].observations[0]({ type: 'sent', connectionId: '22345678-1234-4123-8123-123456789abc' })
+    const publish = (device_id: string, conversation_id = 'chat') => ctx.drivers[0].emit({ type: 'message',
+      plaintext: encodeEnvelope({ id: 1, type: 'thread_item_added', ts: FIXED_TS, payload: {
+        conversation_id, epoch: 'epoch', version: 1, item: { id: 1, rev: 1, kind: 'user_message', status: 'queued', active: true,
+          shown: true, summary: '', content: { device_id, message_id: id, text: 'WIRE_SECRET' } } } }) })
+    publish('other-device'); publish(Buffer.from(PAIR.publicKey).toString('hex'), 'other-chat')
+    expect(lines).toHaveLength(2)
+    publish(Buffer.from(PAIR.publicKey).toString('hex')); publish(Buffer.from(PAIR.publicKey).toString('hex'))
+    expect(lines.map(line => JSON.parse(line).event)).toEqual(['message-queued', 'message-sent', 'message-acknowledged'])
+    expect(lines.join()).not.toContain('SECRET')
+    ctx.connection.stop()
   })
   it.each(['unavailable', 'driver-failure', 'encode-failure'] as const)('records %s without inventing sent', async mode => {
     const lines: string[] = []

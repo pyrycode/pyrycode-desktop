@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import { build, loadConfigFromFile, preview } from 'vite'
 import type { ThreadTaskInputs } from '../src/renderer/src/screens/conversation/threadTaskPresentation'
 import type { ThreadItem, ThreadUpdate } from '../src/shared/wire/thread'
+import type { ConversationSummary } from '../src/shared/wire/types'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import { ATTACHMENT_RETRIEVAL_CHANNEL, ATTACHMENT_RETRIEVAL_EVENT_CHANNEL } from '../src/shared/ipc/attachmentRetrieval'
 import { ATTACHMENT_BYTES_CHANNEL, ATTACHMENT_BYTES_EVENT_CHANNEL } from '../src/shared/ipc/attachmentBytes'
@@ -14,11 +15,26 @@ import { capturePairedApp } from './fixtures/capturePairedApp'
 import { test, expect, seedConversationsFrame, SEEDED_ROW, FIRST_SERVER_ID, SECOND_SERVER_ID, SECOND_SEEDED_ROW } from './fixtures/launchPairedApp'
 
 type Fixture = {
+  read: (row: Partial<ConversationSummary>, readerOpen?: boolean) => void
+  readBatch: (items: ThreadItem[], version: number, completion: 'complete' | 'older' | 'incomplete' | 'abandon') => void
+  repair: (version: number) => void
+  probe: () => number[]
+  readTargets: number[]
+  readAttempts: { host: string; chat: string; target: number }[]
+  receivedMark: () => number | undefined
+  loseOwner: (host: string) => void
+  connected: (host: string) => boolean
+  precommitTargets: number[]
+  send: (text: string, deviceId: string | null) => void
+  sendConnection: (hostId: string, connected: boolean) => void
+  actions: unknown[]
   activeChat: () => string | null
   unavailable: (host: string) => void
+  reconnect: (host: string) => void
   scope: (host: string, chat: string, epoch: string) => void
   batch: (items: ThreadItem[], version: number) => void
   update: (update: ThreadUpdate) => void
+  commitUpdate: (update: ThreadUpdate) => void
   taskInputs: (inputs: Omit<ThreadTaskInputs, 'onStopTask'>, callback?: boolean) => void
   turnRunning: (running: boolean) => void
   escapes: string[]
@@ -27,30 +43,96 @@ type Fixture = {
   paths: string[]
 }
 const fixtureSource = `
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { useStore } from 'zustand';
 import { activeConversationStore } from './store/activeConversationStore';
 import { sessionStore } from './store/sessionStore';
 import { createThreadItemStore } from './store/threadItemStore';
 import { ThreadItemsTimeline } from './screens/conversation/ConversationScreen';
+import { createThreadSendStore } from './store/threadSendStore';
+import { conversationListStore } from './store/conversationListStore';
+import { ConversationListData } from './store/conversationListBridge';
+import { conversationReadRouteStore } from './store/conversationReadRouteStore';
+import { isConversationUnread } from './store/conversationUnread';
+import { useReadPublication, createReadPublisher } from './store/conversationReadPublisher';
+import { submitMessage } from './screens/conversation/composerSend';
 const threadStore = createThreadItemStore();
+const sends = createThreadSendStore(), actions = [];
 const replies = [], paths = [], stops = [], escapes = [];
+const readTargets = [], readAttempts = [], precommitTargets = [];
+const savedLinks = new Map();
+const readPublisher = createReadPublisher({ rows: () => conversationListStore.getState().conversations ?? [],
+  connected: host => sessionStore.getState().statuses.get(host)?.type === 'connected',
+  epoch: (host, chat) => conversationReadRouteStore.getState().epochFor(host, chat),
+  send: command => { readTargets.push(command.payload.up_to);
+    readAttempts.push({ host: command.serverId, chat: command.payload.conversation_id, target: command.payload.up_to });
+    window.pyry.sendCommand(command); } });
 function ThreadFixture() {
+  useReadPublication(readPublisher);
+  const [readInputs, setReadInputs] = useState(undefined);
+  const [completeThrough, setCompleteThrough] = useState(0);
   const [scope, setScope] = useState(null);
   const [taskInputs, setTaskInputs] = useState({});
+  const [backgroundTasksOpen, setBackgroundTasksOpen] = useState(false);
   const [turnRunning, setTurnRunning] = useState(false);
+  const [connection, setConnection] = useState(undefined);
+  const [receipts, setReceipts] = useState([]);
+  const rows = useStore(conversationListStore, s => s.conversations);
+  useEffect(() => window.pyry.onDaemonEvent(event => {
+    if (['conversationUpdated', 'conversationDeleted', 'conversationsReceived'].includes(event.type))
+      setReceipts(held => [...held, [event.type, event.serverId]]);
+  }), []);
+  const local = useStore(sends, s => scope ? s.select(scope.host, scope.chat) : null);
   const snapshot = useStore(threadStore, s => scope ? s.snapshot(scope.host, scope.chat) : null);
   window.threadFixture = { replies, paths, stops, escapes, turnRunning: setTurnRunning,
+    readTargets, readAttempts, precommitTargets,
+    connected(host) { return sessionStore.getState().statuses.get(host)?.type === 'connected'; },
+    receivedMark() { return conversationListStore.getState().conversations?.find(r => r.id === scope.chat && r.serverId === scope.host)?.read_up_to; },
+    loseOwner(host) { conversationListStore.getState().clearConversationsFor(host); },
+    probe() { window.dispatchEvent(new Event('focus')); document.querySelector('.conversation__thread')?.dispatchEvent(new Event('scroll')); return [...readTargets]; },
+    read(row, readerOpen = false) {
+      const full = { id: scope.chat, serverId: scope.host, read_up_to: 0, ...row };
+      setReadInputs({ row: full, readerOpen, publisher: readPublisher });
+      conversationListStore.getState().setConversations([full], scope.host);
+    },
+    readBatch(items, version, completion) {
+      const s = threadStore.getState(), b = s.beginBatch(scope.host, scope.chat, scope.epoch);
+      b.applyItems(items, version);
+      if (completion === 'complete' || completion === 'older') b.commit({ fromVersion: 0,
+        version, ranges: items.filter(i => i.order > 0).map(i => ({ start: i.order, end: i.order + 1 })) });
+      if (completion === 'complete') setCompleteThrough(version);
+      if (completion === 'abandon') b.abandon();
+      window.dispatchEvent(new Event('focus')); document.querySelector('.conversation__thread')?.dispatchEvent(new Event('scroll'));
+      precommitTargets.push(...readTargets);
+    },
+    repair(version) { threadStore.getState().requireRepair(scope.host, scope.chat, scope.epoch, version); },
+    actions,
+    sendConnection(hostId, connected) { setConnection({ hostId, status: connected ? { type: 'connected',
+      ack: { server_id: hostId, conn_id: 'fixture', protocol_version: '2', capabilities: [] } } : { type: 'disconnected' } }); },
+    send(text, deviceId) { submitMessage(text, scope.chat, { serverId: scope.host, threadSend: { store: sends, deviceId },
+      newMessageId: () => 'shared-id', sendCommand: command => actions.push([scope.host, command]) }); },
     taskInputs(inputs, callback = true) { setTaskInputs({ ...inputs, onStopTask: callback ? (host, chat, task) => stops.push([host, chat, task]) : undefined }); },
     activeChat() { return activeConversationStore.getState().activeConversation?.id ?? null; },
-    unavailable(host) { sessionStore.setState(s => ({ statuses: new Map(s.statuses).set(host, { type: 'disconnected' }) })); },
-    scope(host, chat, epoch) { threadStore.getState().acceptEpoch(host, chat, epoch); setScope({ host, chat, epoch }); },
+    unavailable(host) { savedLinks.set(host, sessionStore.getState().statuses.get(host));
+      sessionStore.setState(s => ({ statuses: new Map(s.statuses).set(host, { type: 'disconnected' }) })); },
+    reconnect(host) { sessionStore.setState(s => ({ statuses: new Map(s.statuses).set(host, savedLinks.get(host)) })); },
+    scope(host, chat, epoch) { conversationReadRouteStore.getState().select(host, chat, epoch);
+      threadStore.getState().acceptEpoch(host, chat, epoch); setReadInputs(undefined); setCompleteThrough(0); setScope({ host, chat, epoch }); },
     batch(items, version) { const s = threadStore.getState(); const b = s.beginBatch(scope.host, scope.chat, scope.epoch);
-      b.applyItems(items, version); b.commit({ fromVersion: 0, version, ranges: [{ start: 0, end: version }] }); },
-    update(update) { threadStore.getState().applyUpdate(scope.host, update); }
+      b.applyItems(items, version); b.commit({ fromVersion: 0, version, ranges: [{ start: 0, end: version }] });
+      sends.getState().settle(s.snapshot(scope.host, scope.chat)); },
+    commitUpdate(update) { flushSync(() => window.threadFixture.update(update)); },
+    update(update) { threadStore.getState().applyUpdate(scope.host, update);
+      sends.getState().settle(threadStore.getState().snapshot(scope.host, scope.chat)); }
   };
   return snapshot ? <div className="conversation" onKeyDown={event => { if (event.key === 'Escape') escapes.push('bubble'); }}><div className="conversation__covered">
-    <ThreadItemsTimeline snapshot={snapshot} taskInputs={taskInputs} turnRunning={turnRunning} foldTools onReply={(role, text) => replies.push(role + ':' + text)}
+    <ConversationListData />
+    <output hidden data-testid="read-state">{JSON.stringify({ receipts, scope,
+      marks: (rows ?? []).map(row => [row.serverId, row.id, row.read_up_to,
+        isConversationUnread(row)]) })}</output>
+    <ThreadItemsTimeline snapshot={snapshot} backgroundTasksOpen={backgroundTasksOpen} onBackgroundTasksOpenChange={setBackgroundTasksOpen} readInputs={readInputs && { ...readInputs, completeThrough }} sendInputs={{ connection, local: { ...local, hostId: scope.host, conversationId: scope.chat },
+      onAction: (host, command) => actions.push([host, command]) }} taskInputs={taskInputs} turnRunning={turnRunning} foldTools onReply={(role, text) => replies.push(role + ':' + text)}
       onOpenMarkdownPath={path => paths.push(path)} />
     <textarea className="composer__input" aria-label="Fixture composer" onKeyDown={event => {
       if (turnRunning && event.key === 'Escape' && !event.nativeEvent.isComposing) escapes.push('interrupt');
@@ -73,11 +155,310 @@ const item = (id: number, kind: string, content: unknown, fields: Partial<Thread
   id, rev: id, kind, order: id, status: 'done', active: false, shown: true, summary: `summary ${id}`, content, ...fields
 })
 
+for (const width of [1280, 800]) test(`publishes only committed visible authoritative read evidence at ${width}`, async ({ launchPairedApp }) => {
+  const server = await rendererFixture(), outbound: { host: string; chat: string; target: number; request: number }[] = []
+  let replyLists = true
+  const reply = (host: string, seed: ConversationSummary) => (bytes: Uint8Array) => {
+    const e = decodeEnvelope(bytes)
+    if (e.type === 'mark_conversation_read') {
+      const p = e.payload as { conversation_id: string; up_to: number }
+      outbound.push({ host, chat: p.conversation_id, target: p.up_to, request: e.id })
+    }
+    return replyLists && e.type === 'list_conversations' ? [seedConversationsFrame(seed)] : []
+  }
+  try {
+    const { page, app, servers } = await launchPairedApp({ threadMode: 'native', buildReplyFrames:
+      reply(FIRST_SERVER_ID, { ...SEEDED_ROW, read_up_to: 0, latest_entry_id: 999 })
+    }, { rendererUrl: server.resolvedUrls!.local[0], secondServer: { threadMode: 'native', buildReplyFrames:
+      reply(SECOND_SERVER_ID, { ...SECOND_SEEDED_ROW, read_up_to: 0 }) } })
+    await page.locator('.channel-list__row-open').first().click()
+    await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled()
+    await expect.poll(() => page.evaluate(host => (window as unknown as { threadFixture: Fixture }).threadFixture.connected(host), SECOND_SERVER_ID)).toBe(true)
+    replyLists = false // Hold refreshes so acknowledgements, rather than list replacement, prove confirmation.
+    await app.evaluate(({ BrowserWindow }, width) => { const w = BrowserWindow.getAllWindows()[0]; w.setSize(width, 800); w.show(); w.focus() }, width)
+    const settle = () => page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+    const targets = () => page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.readTargets)
+    const state = async () => JSON.parse(await page.getByTestId('read-state').textContent() ?? '{}') as {
+      receipts: [string, string][]; marks: [string, string, number, boolean][] }
+    const mark = async (host: string) => (await state()).marks.find(r => r[0] === host && r[1] === SEEDED_ROW.id)
+    let frameId = 100
+    const receive = async (host: string, type: 'conversation_updated' | 'conversation_deleted' | 'conversations', payload: unknown, request?: number) => {
+      const before = (await state()).receipts.length
+      servers.find(s => s.serverId === host)!.daemon.pushFrame(encodeEnvelope({
+        id: ++frameId, type, ts: '2026-10-15T12:00:00Z', payload, in_reply_to: request }))
+      const event = { conversation_updated: 'conversationUpdated', conversation_deleted: 'conversationDeleted', conversations: 'conversationsReceived' }[type]
+      await expect.poll(async () => (await state()).receipts.slice(before)).toEqual([[event, host]])
+      await settle() // Receipt state and list-derived read state have both committed before absence checks.
+    }
+    const acknowledge = (host: string, target: number, request?: number) => receive(host, 'conversation_updated', {
+      id: SEEDED_ROW.id, name: SEEDED_ROW.name, cwd: SEEDED_ROW.cwd, is_promoted: false,
+      last_used_at: SEEDED_ROW.last_used_at, workspace_label: null, read_up_to: target }, request)
+    const attempts = () => page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.readAttempts)
+    const delivered = () => outbound.map(({ host, chat, target }) => ({ host, chat, target }))
+    const expected = (host: string, target: number) => ({ host, chat: SEEDED_ROW.id, target })
+    const reconnect = async (host: string) => {
+      await page.evaluate(host => { const f = (window as unknown as { threadFixture: Fixture }).threadFixture;
+        f.unavailable(host); f.reconnect(host); f.probe() }, host)
+      await settle()
+    }
+    const read = async (shown: number | undefined, readerOpen = false, readUpTo = 0) => {
+      await page.evaluate(({ shown, readerOpen, readUpTo }) => (window as unknown as { threadFixture: Fixture }).threadFixture.read({
+        last_shown_version: shown, read_up_to: readUpTo, latest_entry_id: 999 }, readerOpen), { shown, readerOpen, readUpTo })
+      await settle()
+    }
+    const batch = async (items: ThreadItem[], version: number, completion: Parameters<Fixture['readBatch']>[2] = 'complete') => {
+      await page.evaluate(({ items, version, completion }) => (window as unknown as { threadFixture: Fixture }).threadFixture.readBatch(items, version, completion), { items, version, completion })
+      await settle()
+    }
+    const scope = async (host = FIRST_SERVER_ID, epoch = 'read') => {
+      await page.evaluate(({ host, chat, epoch }) => (window as unknown as { threadFixture: Fixture }).threadFixture.scope(host, chat, epoch), { host, chat: SEEDED_ROW.id, epoch })
+      await settle()
+    }
+    const focus = async (focused: boolean) => {
+      await page.evaluate(focused => { Object.defineProperty(document, 'hasFocus', { configurable: true, value: () => focused });
+        window.dispatchEvent(new Event(focused ? 'focus' : 'blur')) }, focused)
+      await settle()
+    }
+    const row = (id: number) => page.locator(`[data-read-row="${id}"]`)
+    await scope()
+    await read(undefined)
+    const queued = item(500, 'user_message', { text: 'Unordered queue' }, { order: 0, status: 'queued' })
+    await batch([item(7, 'assistant_message', { text: 'Committed reply' }), queued], 10)
+    await expect(row(7)).toContainText('Committed reply')
+    expect(await targets()).toEqual([])
+    await read(0); expect(await targets()).toEqual([])
+    await read(10)
+    expect(await targets()).toEqual([])
+    await batch([{ ...queued, rev: 501, shown: false }], 10)
+    await expect.poll(targets).toEqual([10])
+    await expect.poll(attempts).toEqual([expected(FIRST_SERVER_ID, 10)])
+    await expect.poll(delivered).toEqual([expected(FIRST_SERVER_ID, 10)])
+    expect(await page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.receivedMark())).toBe(0)
+    // Sending alone leaves the received mark untouched; only an owning-daemon receipt confirms it.
+    expect(await page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.probe())).toEqual([10])
+    await page.evaluate(() => { const f = (window as unknown as { threadFixture: Fixture }).threadFixture;
+      f.read({ last_shown_version: 11, read_up_to: 0 });
+      f.readBatch([{ id: 7, rev: 11, kind: 'assistant_message', order: 7, shown: true, status: 'done', active: false,
+        summary: 'reply', content: { text: 'Committed reply appended' } }], 11, 'complete');
+      if (document.querySelector('[data-read-row="7"]')?.textContent?.includes('appended')) throw new Error('probe ran after commit');
+      f.probe();
+      if (f.readTargets.includes(11)) throw new Error('uncommitted target escaped');
+    })
+    await expect(row(7)).toContainText('appended')
+    await expect.poll(targets).toEqual([10, 11])
+    expect(await page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.precommitTargets)).not.toContain(11)
+
+    await focus(false); await read(12)
+    await batch([item(7, 'assistant_message', { text: 'Blurred append' }, { rev: 12 })], 12)
+    await expect(row(7)).toContainText('Blurred append')
+    expect(await targets()).toEqual([10, 11])
+    await focus(true); await expect.poll(targets).toEqual([10, 11, 12])
+    await read(13, true)
+    await batch([item(7, 'assistant_message', { text: 'Reader-covered append' }, { rev: 13 })], 13)
+    await expect(row(7)).toContainText('Reader-covered append')
+    expect(await targets()).toEqual([10, 11, 12])
+    await read(13); await expect.poll(targets).toEqual([10, 11, 12, 13])
+
+    // Large shown rows require their own uncovered trailing edge, even with a hidden trailing item.
+    await read(14, true)
+    await batch([item(8, 'assistant_message', { text: 'Long reply. '.repeat(3000) }),
+      item(999, 'turn_end', { stop_reason: 'end_turn' }, { order: 1000, shown: false })], 14)
+    const thread = page.getByLabel('Conversation history')
+    await thread.focus(); await thread.press('Home')
+    await expect.poll(() => thread.evaluate(el => el.scrollTop)).toBe(0)
+    await read(14)
+    expect(await targets()).not.toContain(14)
+    await thread.evaluate(el => { el.scrollTop = el.scrollHeight })
+    await expect.poll(targets).toContain(14)
+    await expect(row(999)).toHaveCount(0)
+
+    // A bottom chrome rectangle covers the row even though the scroller itself contains it.
+    await read(15, true)
+    await batch([item(9, 'assistant_message', { text: 'Obscured newest row' })], 15)
+    await thread.evaluate(el => { el.scrollTop = el.scrollHeight;
+      const cover = document.createElement('div'); cover.className = 'conversation__input-chrome'; cover.id = 'read-cover';
+      cover.style.cssText = 'position:fixed;inset:0;z-index:100;pointer-events:none'; el.closest('.conversation__covered')!.append(cover) })
+    await read(15); expect(await targets()).not.toContain(15)
+    await page.evaluate(() => { document.getElementById('read-cover')!.remove(); (window as unknown as { threadFixture: Fixture }).threadFixture.probe() })
+    await expect.poll(targets).toContain(15)
+
+    // Full older pages and unfinished/abandoned catch-up never supply newest completion authority.
+    await read(16)
+    await batch([item(9, 'assistant_message', { text: 'Incomplete text' }, { rev: 16 })], 16, 'incomplete')
+    await expect(row(9)).toContainText('Incomplete text'); expect(await targets()).not.toContain(16)
+    await batch([item(9, 'assistant_message', { text: 'Abandoned text' }, { rev: 17 })], 17, 'abandon')
+    await expect(row(9)).toContainText('Abandoned text'); expect(await targets()).not.toContain(16)
+    await batch([item(1, 'user_message', { text: 'Older page' })], 20, 'older')
+    await expect(row(1)).toContainText('Older page'); expect(await targets()).not.toContain(16)
+    await page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.repair(22))
+    await read(22); expect(await targets()).not.toContain(22)
+    await batch([item(9, 'assistant_message', { text: 'Repaired complete text' }, { rev: 22 })], 22)
+    await thread.evaluate(el => { el.scrollTop = el.scrollHeight })
+    await expect.poll(targets).toContain(22)
+    await expect.poll(() => delivered().at(-1)).toEqual(expected(FIRST_SERVER_ID, 22))
+    await acknowledge(FIRST_SERVER_ID, 4, outbound.at(-1)!.request)
+    expect(await mark(FIRST_SERVER_ID)).toEqual([FIRST_SERVER_ID, SEEDED_ROW.id, 4, true])
+    await page.evaluate(host => (window as unknown as { threadFixture: Fixture }).threadFixture.unavailable(host), FIRST_SERVER_ID)
+    await read(23, true)
+    await batch([item(10, 'assistant_message', { text: 'Not evidenced while reader open' })], 23)
+    await page.evaluate(host => { // Link recovery retries the old evidence without upgrading to summary 23.
+      (window as unknown as { threadFixture: Fixture }).threadFixture.reconnect(host)
+    }, FIRST_SERVER_ID)
+    await expect.poll(targets).toEqual([10, 11, 12, 13, 14, 15, 22, 22])
+    await expect.poll(attempts).toEqual([10, 11, 12, 13, 14, 15, 22, 22].map(t => expected(FIRST_SERVER_ID, t)))
+    await expect.poll(delivered).toEqual(await attempts())
+    await acknowledge(FIRST_SERVER_ID, 22, outbound.at(-1)!.request)
+    expect(await mark(FIRST_SERVER_ID)).toEqual([FIRST_SERVER_ID, SEEDED_ROW.id, 22, true])
+    const confirmed = await attempts()
+    await reconnect(FIRST_SERVER_ID)
+    expect(await attempts()).toEqual(confirmed) // A confirming receipt retires 22; hidden summary 23 cannot replace it.
+    await read(23)
+    await expect.poll(() => delivered().at(-1)).toEqual(expected(FIRST_SERVER_ID, 23))
+    const priorEpoch = await attempts(), priorEpochRequest = outbound.at(-1)!.request
+    await scope(FIRST_SERVER_ID, 'replacement')
+    await read(24, true)
+    await batch([item(10, 'assistant_message', { text: 'Replacement epoch' })], 24)
+    await expect(row(10)).toContainText('Replacement epoch')
+    await acknowledge(FIRST_SERVER_ID, 23, priorEpochRequest) // Late receipt from the discarded pending epoch.
+    expect(await mark(FIRST_SERVER_ID)).toEqual([FIRST_SERVER_ID, SEEDED_ROW.id, 23, true])
+    await reconnect(FIRST_SERVER_ID)
+    expect(await attempts()).toEqual(priorEpoch)
+    expect(await targets()).not.toContain(24)
+    await read(24)
+    await expect.poll(targets).toContain(24)
+    await capturePairedApp(app, page, `/tmp/builder-1936/read-${width}.png`)
+
+    // A nested newest row is excluded while its actual ancestor is collapsed.
+    await read(25, true)
+    await batch([item(20, 'agent', { name: 'Agent', tool_use_id: 'parent', input_summary: 'Parent', input: {},
+      result: { is_error: false, result_summary: 'launched' } }, { status: 'finished' }),
+      item(21, 'assistant_message', { text: 'Nested newest content' }, { parent: 20 })], 25)
+    await expect(row(21)).toBeHidden()
+    await read(25); expect(await targets()).not.toContain(25)
+    await row(20).getByRole('button').first().click()
+    await expect(row(21)).toBeVisible()
+    await thread.evaluate(el => { el.scrollTop = el.scrollHeight })
+    await expect.poll(targets).toContain(25)
+    await expect.poll(() => delivered().at(-1)).toEqual(expected(FIRST_SERVER_ID, 25))
+    const oldHostRequest = outbound.at(-1)!.request
+    await receive(SECOND_SERVER_ID, 'conversations', { conversations: [{ ...SECOND_SEEDED_ROW,
+      id: SEEDED_ROW.id, last_shown_version: 25, read_up_to: 0 }] })
+    await scope(SECOND_SERVER_ID)
+    await read(25); await batch([item(21, 'assistant_message', { text: 'Other host' })], 25)
+    await expect(row(21)).toContainText('Other host')
+    await expect.poll(async () => (await attempts()).at(-1)).toEqual(expected(SECOND_SERVER_ID, 25))
+    await acknowledge(FIRST_SERVER_ID, 25, oldHostRequest) // Same ID and target, different owning daemon.
+    expect(await mark(FIRST_SERVER_ID)).toEqual([FIRST_SERVER_ID, SEEDED_ROW.id, 25, false])
+    expect(await mark(SECOND_SERVER_ID)).toEqual([SECOND_SERVER_ID, SEEDED_ROW.id, 0, true])
+    await reconnect(SECOND_SERVER_ID)
+    await expect.poll(async () => (await attempts()).slice(-2)).toEqual([expected(SECOND_SERVER_ID, 25), expected(SECOND_SERVER_ID, 25)])
+    expect(delivered().filter(a => a.host === SECOND_SERVER_ID)).toEqual([]) // Main retains its ambiguous-owner refusal.
+
+    // Deletion and owner loss invalidate claims while their committed content and observer stay mounted.
+    await page.evaluate(host => (window as unknown as { threadFixture: Fixture }).threadFixture.unavailable(host), SECOND_SERVER_ID)
+    await receive(SECOND_SERVER_ID, 'conversation_deleted', { id: SEEDED_ROW.id })
+    await receive(SECOND_SERVER_ID, 'conversations', { conversations: [] })
+    const deleted = await attempts()
+    await acknowledge(SECOND_SERVER_ID, 25)
+    expect(await mark(SECOND_SERVER_ID)).toBeUndefined()
+    await expect(row(21)).toContainText('Other host')
+    await page.evaluate(host => { const f = (window as unknown as { threadFixture: Fixture }).threadFixture; f.reconnect(host); f.probe() }, SECOND_SERVER_ID)
+    await settle(); expect(await attempts()).toEqual(deleted)
+    expect(await mark(FIRST_SERVER_ID)).toEqual([FIRST_SERVER_ID, SEEDED_ROW.id, 25, false])
+
+    await scope(SECOND_SERVER_ID, 'owner-loss')
+    await receive(SECOND_SERVER_ID, 'conversations', { conversations: [{ ...SECOND_SEEDED_ROW,
+      id: SEEDED_ROW.id, last_shown_version: 26, read_up_to: 0 }] })
+    await read(26); await batch([item(21, 'assistant_message', { text: 'Owner-loss content' }, { rev: 26 })], 26)
+    await expect(row(21)).toContainText('Owner-loss content')
+    await expect.poll(async () => (await attempts()).at(-1)).toEqual(expected(SECOND_SERVER_ID, 26))
+    const ownerLost = await attempts()
+    await page.evaluate(host => (window as unknown as { threadFixture: Fixture }).threadFixture.loseOwner(host), SECOND_SERVER_ID)
+    await expect.poll(() => mark(SECOND_SERVER_ID)).toBeUndefined() // Committed list removal, not a timer-only absence.
+    await acknowledge(SECOND_SERVER_ID, 26)
+    await reconnect(SECOND_SERVER_ID)
+    await expect(row(21)).toContainText('Owner-loss content')
+    expect(await attempts()).toEqual(ownerLost)
+    expect(await mark(FIRST_SERVER_ID)).toEqual([FIRST_SERVER_ID, SEEDED_ROW.id, 25, false])
+  } finally { await new Promise<void>((resolve, reject) => server.httpServer.close(e => e ? reject(e) : resolve())) }
+})
+
+test('settles sends and targets genuine queue handles through authoritative terminal revisions', async ({ launchPairedApp }) => {
+  const server = await rendererFixture()
+  try {
+    const { page, app } = await launchPairedApp({ threadMode: 'native',}, { rendererUrl: server.resolvedUrls!.local[0] })
+    await page.locator('.channel-list__row-open').first().click()
+    await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled()
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 800))
+    const chat = 'snapshot-owning-chat'
+    const scope = (host = FIRST_SERVER_ID, conversation = chat) => page.evaluate(({ host, conversation }) =>
+      (window as unknown as { threadFixture: Fixture }).threadFixture.scope(host, conversation, 'sends'), { host, conversation })
+    const connection = (connected: boolean) => page.evaluate(({ host, connected }) =>
+      (window as unknown as { threadFixture: Fixture }).threadFixture.sendConnection(host, connected), { host: FIRST_SERVER_ID, connected })
+    let version = 1000
+    const batch = (items: ThreadItem[]) => page.evaluate(({ items, version }) =>
+      (window as unknown as { threadFixture: Fixture }).threadFixture.batch(items, version), { items, version: ++version })
+    const change = (id: number, base_rev: number, changes: Record<string, unknown>) => page.evaluate(update =>
+      (window as unknown as { threadFixture: Fixture }).threadFixture.update(update), {
+        type: 'thread_item_changed', payload: { conversation_id: chat, epoch: 'sends', version: ++version,
+          item_id: id, base_rev, rev: version, changes }
+      } satisfies ThreadUpdate)
+    const actions = () => page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.actions)
+    const row = (id: number) => page.locator(`[data-read-row="${id}"]`)
+    const queued = (id: number, handle: number, text: string, device = 'device') => item(id, 'user_message', {
+      text, device_id: device, message_id: 'shared-id', queued_msg_id: handle,
+      attachments: [{ attachment_id: 'daemon-file', filename: 'daemon.pdf' }]
+    }, { order: 0, active: true, status: 'queued', rev: version })
+    await scope(); await connection(true)
+    await page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.send('local display path', 'device'))
+    await expect(page.getByText('local display path', { exact: true })).toHaveCount(1)
+    await expect(page.getByText('Sending…', { exact: true })).toBeVisible()
+    // Equal message ids from a peer or another scope cannot acknowledge the local send.
+    await batch([queued(101, 8, 'peer truth', 'peer')])
+    await expect(page.getByText('local display path', { exact: true })).toHaveCount(1)
+    await scope(SECOND_SERVER_ID); await batch([queued(100, 7, 'other host truth')])
+    await expect(page.getByText('local display path', { exact: true })).toHaveCount(0)
+    await scope(); await expect(page.getByText('local display path', { exact: true })).toHaveCount(1)
+    // The first own observation is a catch-up full item: acknowledgement was never supplied.
+    const accepted = queued(100, 7, 'daemon normalized truth')
+    await batch([accepted]); await batch([accepted])
+    await expect(page.getByText('local display path', { exact: true })).toHaveCount(0)
+    await expect(row(100)).toContainText('daemon normalized truth')
+    await expect(row(100)).toContainText('daemon.pdf')
+    await expect(page.getByText('Waiting for Claude', { exact: true })).toBeVisible()
+    await expect(row(100).getByRole('button', { name: 'Send queued message now' })).toBeVisible()
+    await page.screenshot({ path: '/tmp/builder-1906/queued.png', animations: 'disabled' })
+    await row(100).getByRole('button', { name: 'Send queued message now' }).click()
+    await expect.poll(actions).toContainEqual([FIRST_SERVER_ID, { type: 'sendQueuedNow', payload: { conversation_id: chat, queued_msg_id: 7 } }])
+    await expect(row(100)).toContainText('daemon normalized truth')
+    await connection(false); await expect(row(100).getByRole('button', { name: 'Drop queued message' })).toHaveCount(0)
+    await connection(true)
+    await change(100, accepted.rev, { order: 50, status: 'delivered', active: false })
+    await expect(row(100)).toHaveCount(1)
+    await expect(row(100).getByRole('button', { name: 'Send queued message now' })).toHaveCount(0)
+    await expect(page.getByText('Waiting for Claude', { exact: true })).toHaveCount(0)
+    await expect(page.getByText('Sending…', { exact: true })).toHaveCount(0)
+    const dropped = queued(102, 9, 'drop truth')
+    await batch([dropped]); await row(102).getByRole('button', { name: 'Drop queued message' }).click()
+    await expect.poll(actions).toContainEqual([FIRST_SERVER_ID, { type: 'dequeueMessage', payload: { conversation_id: chat, queued_msg_id: 9 } }])
+    await expect(row(102)).toHaveCount(1)
+    await change(102, dropped.rev, { active: false, status: 'dropped', shown: false })
+    await expect(row(102)).toHaveCount(0)
+    const lost = queued(103, 7, 'restart loss')
+    await batch([lost]); await change(103, lost.rev, { status: 'lost', active: false })
+    await expect(row(103)).toContainText('Not delivered')
+    await batch([queued(104, 7, 'reused queue id')])
+    await expect(row(103).getByRole('button', { name: 'Drop queued message' })).toHaveCount(0)
+    await expect(row(100).getByRole('button', { name: 'Drop queued message' })).toHaveCount(0)
+    await expect(row(104).getByRole('button', { name: 'Drop queued message' })).toBeVisible()
+  } finally { await server.httpServer.close() }
+})
+
 for (const width of [1280, 800]) test(`authoritative items retain identity, actions and scroll at ${width}`, async ({ launchPairedApp }) => {
   const server = await rendererFixture()
   try {
     const asks: unknown[] = []
-    const { page, app } = await launchPairedApp({ buildReplyFrames: bytes => {
+    const { page, app } = await launchPairedApp({ threadMode: 'native', buildReplyFrames: bytes => {
       const e = decodeEnvelope(bytes)
       if (e.type === 'request_attachment') asks.push(e.payload)
       return e.type === 'list_conversations' ? [seedConversationsFrame()] : []
@@ -215,8 +596,8 @@ for (const realRetrieval of [false, true]) test(realRetrieval
       return e.type === 'list_conversations'
         ? [seedConversationsFrame(host === FIRST_SERVER_ID ? SEEDED_ROW : SECOND_SEEDED_ROW)] : []
     }
-    const { page, app } = await launchPairedApp({ buildReplyFrames: replies(FIRST_SERVER_ID) }, {
-      rendererUrl: server.resolvedUrls!.local[0], secondServer: { buildReplyFrames: replies(SECOND_SERVER_ID) }
+    const { page, app } = await launchPairedApp({ threadMode: 'native', buildReplyFrames: replies(FIRST_SERVER_ID) }, {
+      rendererUrl: server.resolvedUrls!.local[0], secondServer: { threadMode: 'native', buildReplyFrames: replies(SECOND_SERVER_ID) }
     })
     await page.locator('.channel-list__row-open').first().click()
     await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled()
@@ -302,8 +683,8 @@ test('a late retrieval disconnect cannot settle a switched thread with reused im
       return e.type === 'list_conversations'
         ? [seedConversationsFrame(host === FIRST_SERVER_ID ? SEEDED_ROW : SECOND_SEEDED_ROW)] : []
     }
-    const { page, servers } = await launchPairedApp({ buildReplyFrames: replies(FIRST_SERVER_ID) }, {
-      rendererUrl: server.resolvedUrls!.local[0], secondServer: { buildReplyFrames: replies(SECOND_SERVER_ID) }
+    const { page, servers } = await launchPairedApp({ threadMode: 'native', buildReplyFrames: replies(FIRST_SERVER_ID) }, {
+      rendererUrl: server.resolvedUrls!.local[0], secondServer: { threadMode: 'native', buildReplyFrames: replies(SECOND_SERVER_ID) }
     })
     await page.locator('.channel-list__row-open').first().click()
     await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled()
@@ -355,7 +736,7 @@ test('a late retrieval disconnect cannot settle a switched thread with reused im
 for (const width of [1280, 800]) test(`supplied agents repair nesting and retain lifecycle, expansion and scroll at ${width}`, async ({ launchPairedApp }) => {
   const server = await rendererFixture()
   try {
-    const { page, app } = await launchPairedApp({ buildReplyFrames: bytes => decodeEnvelope(bytes).type === 'list_conversations'
+    const { page, app } = await launchPairedApp({ threadMode: 'native', buildReplyFrames: bytes => decodeEnvelope(bytes).type === 'list_conversations'
       ? [seedConversationsFrame()] : [] }, { rendererUrl: server.resolvedUrls!.local[0] })
     await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 800), width)
     let version = 1000
@@ -441,22 +822,79 @@ for (const width of [1280, 800]) test(`supplied agents repair nesting and retain
     await capturePairedApp(app, page, `/tmp/builder-1937/agents-${width}.png`)
 
     await batch(Array.from({ length: 20 }, (_, i) => item(100 + i, 'assistant_message', { text: `Reading row ${i}\n\n` + 'Paragraph. '.repeat(100) })))
+    await expect(row(119)).toContainText('Reading row 19')
+    // Registered after React's target scroll listener: this records processed motion,
+    // rather than treating a geometry read as acknowledgement of the queued event.
+    await thread.evaluate(el => {
+      const probe = { count: 0, top: el.scrollTop, remove: () => {},
+        async ready(after: number): Promise<{ stable: boolean; processed: boolean }> {
+          const sample = () => ({ top: el.scrollTop, height: el.scrollHeight, viewport: el.clientHeight,
+            width: el.clientWidth, anchor: el.querySelector('[data-read-row="100"]')!.getBoundingClientRect().top,
+            count: probe.count, processedTop: probe.top })
+          let previous = sample(), stable = true
+          for (let frame = 0; frame < 20; frame++) {
+            await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+            const next = sample()
+            if (JSON.stringify(next) !== JSON.stringify(previous)) stable = false
+            previous = next
+          }
+          return { stable, processed: previous.count > after && previous.processedTop === previous.top }
+        } }
+      const onScroll = () => { probe.count++; probe.top = el.scrollTop }
+      el.addEventListener('scroll', onScroll)
+      probe.remove = () => el.removeEventListener('scroll', onScroll)
+      ;(window as unknown as { agentScroll: typeof probe }).agentScroll = probe
+    })
+    const settled = async (after = -1) => {
+      await expect.poll(() => page.evaluate(after => (window as unknown as {
+        agentScroll: { ready: (after: number) => Promise<{ stable: boolean; processed: boolean }> }
+      }).agentScroll.ready(after), after)).toEqual({ stable: true, processed: true })
+    }
     await thread.focus(); await page.keyboard.press('End')
     await expect.poll(distance).toBeLessThanOrEqual(1)
+    await settled()
     await change(10, { active: false, status: 'finished', ended_order: 125 })
+    await expect(chip(10)).toContainText('Finished')
     await expect.poll(distance).toBeLessThanOrEqual(1)
+    await settled()
     await thread.focus(); await page.keyboard.press('Home')
     await expect.poll(() => thread.evaluate(el => el.scrollTop)).toBe(0)
-    await row(100).evaluate(el => el.scrollIntoView({ block: 'start' }))
-    await expect.poll(async () => (await row(100).boundingBox())!.y - (await thread.boundingBox())!.y).toBeCloseTo(0, 0)
-    const anchor = row(100), before = (await anchor.boundingBox())!.y
-    await change(40, { parent: 10 })
+    await settled()
+    const base_rev = revisions.get(40)!, rev = ++version; revisions.set(40, rev)
+    // Force the update to commit in this task immediately after readiness. Without
+    // the processing barrier, this schedule deterministically restores Home's anchor.
+    const held = await row(100).evaluate(async (el, update) => {
+      const thread = el.parentElement!
+      const probe = (window as unknown as { agentScroll: { count: number;
+        ready: (after: number) => Promise<{ stable: boolean; processed: boolean }> } }).agentScroll
+      const after = probe.count
+      el.scrollIntoView({ block: 'start' })
+      let ready = await probe.ready(after)
+      while (!ready.stable || !ready.processed) ready = await probe.ready(after)
+      const before = el.getBoundingClientRect().top
+      const aligned = before - thread.getBoundingClientRect().top
+      const distance = thread.scrollHeight - thread.scrollTop - thread.clientHeight
+      ;(window as unknown as { threadFixture: Fixture }).threadFixture.commitUpdate(update)
+      return { before, aligned, distance }
+    }, { type: 'thread_item_changed', payload: { conversation_id: SEEDED_ROW.id, epoch: 'agents', version,
+      item_id: 40, base_rev, rev, changes: { parent: 10 } } } satisfies ThreadUpdate)
+    expect(held.aligned).toBeCloseTo(0, 0)
+    expect(held.distance).toBeGreaterThan(100)
+    const anchor = row(100), before = held.before
+    // The child count changes only after the new parent projection commits.
+    await expect(chip(10)).toContainText('1 tool')
+    await expect(chip(30)).toContainText('0 tools')
+    await settled()
     await expect.poll(async () => (await anchor.boundingBox())!.y).toBeCloseTo(before, 0)
     await batch([item(5, 'user_message', { text: 'Older history. '.repeat(100) }, { status: 'delivered' })])
+    await expect(row(5)).toContainText('Older history.')
+    await settled()
     await expect.poll(async () => (await anchor.boundingBox())!.y).toBeCloseTo(before, 0)
     expect(await distance()).toBeGreaterThan(100)
+    expect(await row(40).evaluate(el => el === (window as unknown as { agentChild: Element }).agentChild)).toBe(true)
     await expect(chip(10)).toHaveAttribute('aria-expanded', 'true')
     await expect(row(40).locator('.tool-row__result')).toBeVisible()
+    await page.evaluate(() => (window as unknown as { agentScroll: { remove: () => void } }).agentScroll.remove())
     await thread.focus(); await page.keyboard.press('Home')
     await page.locator('.agent-start-marker').filter({ hasText: 'agent-10' }).click()
     await expect.poll(async () => {
@@ -481,7 +919,7 @@ for (const width of [1280, 800]) test(`supplied agents repair nesting and retain
 for (const width of [1280, 800]) test('supplied task controls retain lifecycle and scope at ' + width, async ({ launchPairedApp }) => {
   const server = await rendererFixture()
   try {
-    const { page, app } = await launchPairedApp({ buildReplyFrames: bytes => decodeEnvelope(bytes).type === 'list_conversations'
+    const { page, app } = await launchPairedApp({ threadMode: 'native', buildReplyFrames: bytes => decodeEnvelope(bytes).type === 'list_conversations'
       ? [seedConversationsFrame(SEEDED_ROW)] : [] }, { rendererUrl: server.resolvedUrls!.local[0] })
     await page.locator('.channel-list__row-open').first().click()
     await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled()
@@ -577,6 +1015,9 @@ for (const width of [1280, 800]) test('supplied task controls retain lifecycle a
     await capturePairedApp(app, page, '/tmp/builder-1938/panel-' + width + '.png')
     await scope(SECOND_SERVER_ID)
     await batch([work])
+    await expect(panel).toContainText('Review races')
+    await expect(panel).not.toContainText('Review complete')
+    await panel.getByRole('button', { name: 'Close', exact: true }).click()
     await expect(panel).toHaveCount(0)
     const escapesBeforeSwitch = await page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.escapes.length)
     await thread.press('Escape')
@@ -590,17 +1031,24 @@ for (const width of [1280, 800]) test('supplied task controls retain lifecycle a
     expect(await page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.stops))
       .toEqual([[FIRST_SERVER_ID, SEEDED_ROW.id, 'raw-task'], [SECOND_SERVER_ID, SEEDED_ROW.id, 'raw-task']])
     await scope()
+    await expect(panel).toContainText('Review complete')
+    await panel.getByRole('button', { name: 'Close', exact: true }).click()
     await expect(panel).toHaveCount(0)
     await expect(pill).toHaveCount(0)
     await page.getByRole('button', { name: 'Background tasks', exact: true }).click()
     await expect(panel).toContainText('Review complete')
     await scope(FIRST_SERVER_ID, 'another-chat')
     await batch([work])
+    await expect(panel).toContainText('Review races')
+    await panel.getByRole('button', { name: 'Close', exact: true }).click()
     await expect(panel).toHaveCount(0)
     await pill.click()
     await expect(panel).not.toContainText('Wrong host')
     await expect(stop).toHaveCount(0)
     await scope(FIRST_SERVER_ID, SEEDED_ROW.id, 'new-epoch')
+    await expect(panel).toBeVisible()
+    await expect(panel.locator('li')).toHaveCount(0)
+    await panel.getByRole('button', { name: 'Close', exact: true }).click()
     await expect(panel).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Background tasks', exact: true })).toHaveCount(0)
   } finally { await new Promise<void>((resolve, reject) => server.httpServer!.close(error => error ? reject(error) : resolve())) }

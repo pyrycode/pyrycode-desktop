@@ -62,7 +62,7 @@ async function connected(serverId = 'host') {
   })
   connection.start(); await vi.waitFor(() => expect(configs).toHaveLength(1))
   configs[0].onEvent({ type: 'handshake-complete', helloAck: frame('hello_ack', {
-    protocol_version: 'v2', server_id: 'host', conn_id: 'connection', capabilities: []
+    protocol_version: 'v2', server_id: 'host', conn_id: 'connection', capabilities: ['thread']
   }) })
   const emit = (bytes: Uint8Array) => configs.at(-1)!.onEvent({ type: 'message', plaintext: bytes })
   function request(type: string): number {
@@ -114,7 +114,8 @@ it.each(cases)('%s clears before fresh, maps its family and remains inert for le
     const clear = received.at(-1)!
     expect(clear).toMatchObject({ type: 'sessionStateCleared', family: family(type), serverId: 'host', inReplyTo: in_reply_to,
       correlation: { id: 99, ts: 'stamp', in_reply_to } })
-    expect(Object.hasOwn(clear, 'conversationId')).toBe(false)
+    expect(Object.hasOwn(clear, 'conversationId')).toBe(type === 'session_settings')
+    if (type === 'session_settings') expect(clear).toMatchObject({ conversationId: 'conversation' })
     expect(Object.hasOwn(clear, 'envelopeSessionId')).toBe(tag !== undefined)
     if (tag !== undefined) expect(clear).toMatchObject({ envelopeSessionId: tag, correlation: { session_id: tag } })
     const before = received.length
@@ -203,7 +204,7 @@ it('isolates equal conversation/session IDs across hosts and preserves subscript
     ['sessionStateCleared', 'a'], ['turnState', 'b'], ['turnState', 'a']
   ])
   for (const h of [a, b]) {
-    expect((decodeEnvelope(h.configs[0].session.hello).payload as { capabilities: string[] }).capabilities).not.toContain('thread')
+    expect((decodeEnvelope(h.configs[0].session.hello).payload as { capabilities: string[] }).capabilities).toContain('thread')
     expect(h.sent).toHaveLength(0)
   }
   off(); const before = received.length
@@ -242,4 +243,21 @@ it('unknown and duplicate ordinary settings replies keep existing settlement gat
   h.emit(frame('session_settings', settings, { in_reply_to: reply, session_id: null }))
   expect(received).toHaveLength(before + 1)
   off(); h.connection.stop()
+})
+
+it.each(cases)('%s preserves independent conversation routing through the real preload', async (type, payload, eventType) => {
+  const received: StampedDaemonEvent[] = [], off = api.onDaemonEvent(e => received.push(e)), h = await connected()
+  const in_reply_to = h.request(type)
+  h.emit(frame(type, payload, { conversation_id: 'conversation', session_id: 'producer', in_reply_to }))
+  expect(received.at(-1)).toMatchObject({ type: eventType, envelopeConversationId: 'conversation', envelopeSessionId: 'producer', serverId: 'host' })
+  h.emit(frame(type, {}, { conversation_id: 'conversation', session_id: null, session_state_cleared: true }))
+  expect(received.at(-1)).toMatchObject({ type: 'sessionStateCleared', envelopeConversationId: 'conversation', envelopeSessionId: null })
+  off(); h.connection.stop()
+})
+
+it.each([null, '', 7, {}, []])('rejects malformed envelope conversation identity %j', conversation_id => {
+  expect(() => parseInboundMessage(frame('turn_state', { ...c, state: 'idle' }, { conversation_id }))).toThrow(WireDecodeError)
+})
+it('rejects conflicting envelope and payload conversation routes', () => {
+  expect(() => parseInboundMessage(frame('turn_state', { ...c, state: 'idle' }, { conversation_id: 'other' }))).toThrow(WireDecodeError)
 })

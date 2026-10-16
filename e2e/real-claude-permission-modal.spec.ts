@@ -1,7 +1,8 @@
+import { liveProof, scenarioMode } from './fixtures/clientScenario'
 import { type Page } from '@playwright/test'
 import { existsSync, statSync, utimesSync } from 'node:fs'
 import { join } from 'node:path'
-import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
+import { test, expect, encodePairingPayload } from './fixtures/clientScenario'
 import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
@@ -58,7 +59,11 @@ test('real claude session checkbox grants repeated Bash use only in the current 
         allowLabel: event.options.find(option => option.id === 'allow_once')?.label ?? null,
         offered: event.alwaysAllow?.offered === true
       })
-      if (event.type === 'turnEnd') drive.completed.push(event.conversationId)
+      if (event.type === 'turnEnd') drive.completed.push(event.conversationId!)
+      const supplied = event.type === 'threadReply' && event.reply.type === 'thread_items' ? event.reply.payload.items
+        : event.type === 'threadUpdate' && event.update.type === 'thread_item_added' ? [event.update.payload.item] : []
+      for (const item of supplied) if (item.kind === 'turn_end' && item.parent === undefined && 'conversationId' in event)
+        drive.completed.push(event.conversationId!)
       if (event.type === 'runConfigReceived' && event.sessionId) drive.sessions.set(event.conversationId, {
         id: event.sessionId, received: (drive.sessions.get(event.conversationId)?.received ?? 0) + 1
       })
@@ -83,7 +88,7 @@ test('real claude session checkbox grants repeated Bash use only in the current 
     }
     const submit = async (): Promise<void> => { await composer.fill(message); await send.click() }
     const conversationId = await create(1)
-    expect(existsSync(witness)).toBe(false)
+    await liveProof(() => { expect(existsSync(witness)).toBe(false) })
     await submit()
     await expect(panel).toBeVisible({ timeout: TURN_TIMEOUT_MS })
     expect(await page.evaluate(id => (window as DriveWindow).permissionDrive.modals
@@ -94,7 +99,7 @@ test('real claude session checkbox grants repeated Bash use only in the current 
     await expect(checkbox).toBeVisible()
     await expect(checkbox).not.toBeChecked()
     expect(await panel.locator('.permission-panel__rules li').count()).toBeGreaterThan(0)
-    expect(existsSync(witness)).toBe(false)
+    await liveProof(() => { expect(existsSync(witness)).toBe(false) })
     await panel.locator('.permission-panel__session-offer label').click()
     await expect(checkbox).toBeChecked()
     const allowLabel = await page.evaluate(() => (window as DriveWindow).permissionDrive.modals.at(-1)?.allowLabel)
@@ -104,28 +109,33 @@ test('real claude session checkbox grants repeated Bash use only in the current 
     await panel.getByRole('button', { name: allowLabel, exact: true }).press('Space')
     await expect(checkbox).toBeChecked()
     await expect(panel.getByRole('status')).toHaveText('Activate this choice again to confirm.')
-    expect(existsSync(witness)).toBe(false)
+    await liveProof(() => { expect(existsSync(witness)).toBe(false) })
     await panel.getByRole('button', { name: allowLabel, exact: true }).click()
-    await expect.poll(modified, { timeout: TURN_TIMEOUT_MS }).toBeGreaterThan(STALE_SECONDS * 1000)
+    await liveProof(async () => { await expect.poll(modified, { timeout: TURN_TIMEOUT_MS }).toBeGreaterThan(STALE_SECONDS * 1000) })
     await expect.poll(async () => (await driveCounts(page, conversationId)).completed,
       { timeout: TURN_TIMEOUT_MS }).toBe(1)
     await expect(panel).toHaveCount(0)
     const originalSession = await sessionId(page, conversationId)
 
-    utimesSync(witness, STALE_SECONDS, STALE_SECONDS)
-    expect(modified()).toBe(STALE_SECONDS * 1000)
+    await liveProof(() => { utimesSync(witness, STALE_SECONDS, STALE_SECONDS) })
+    await liveProof(() => { expect(modified()).toBe(STALE_SECONDS * 1000) })
     const beforeRepeat = await driveCounts(page, conversationId)
     await submit()
     // Observing every permission event catches a transient panel as well as a held one.
+    if (scenarioMode === 'replay') {
+      await expect.poll(async () => (await driveCounts(page, conversationId)).completed,
+        { timeout: TURN_TIMEOUT_MS }).toBeGreaterThan(beforeRepeat.completed)
+    } else {
     await expect.poll(async () => {
       const counts = await driveCounts(page, conversationId)
       if (counts.modals !== beforeRepeat.modals) return 'unexpected-permission'
       return counts.completed > beforeRepeat.completed && modified() > STALE_SECONDS * 1000 ? 'fresh-effect' : 'waiting'
     }, { timeout: TURN_TIMEOUT_MS }).toBe('fresh-effect')
+    }
     expect((await driveCounts(page, conversationId)).modals).toBe(beforeRepeat.modals)
     expect(await sessionId(page, conversationId) === originalSession).toBe(true)
 
-    utimesSync(witness, STALE_SECONDS, STALE_SECONDS)
+    await liveProof(() => { utimesSync(witness, STALE_SECONDS, STALE_SECONDS) })
     const freshConversation = await create(2)
     expect(freshConversation !== conversationId).toBe(true)
     const beforeFresh = await driveCounts(page, freshConversation)
@@ -133,7 +143,7 @@ test('real claude session checkbox grants repeated Bash use only in the current 
     // A new session in the SAME workspace must ask before a fresh tool effect.
     await expect(panel).toBeVisible({ timeout: TURN_TIMEOUT_MS })
     expect((await driveCounts(page, freshConversation)).modals).toBeGreaterThan(beforeFresh.modals)
-    expect(modified()).toBe(STALE_SECONDS * 1000)
+    await liveProof(() => { expect(modified()).toBe(STALE_SECONDS * 1000) })
     expect(await sessionId(page, freshConversation) !== originalSession).toBe(true)
     await expect(checkbox).not.toBeChecked()
     // The acceptance is complete above: the fresh session asked before any effect. Cancelling is
@@ -142,7 +152,7 @@ test('real claude session checkbox grants repeated Bash use only in the current 
     // prompt after a modal_cancel has no upstream proof, so no assertion here waits on it.
     await panel.getByRole('button', { name: 'Cancel', exact: true }).click()
     await expect(panel).toHaveCount(0)
-    expect(modified()).toBe(STALE_SECONDS * 1000)
+    await liveProof(() => { expect(modified()).toBe(STALE_SECONDS * 1000) })
   } finally {
     await page.evaluate(() => { (window as DriveWindow).permissionDrive.off(); delete (window as any).permissionDrive })
   }

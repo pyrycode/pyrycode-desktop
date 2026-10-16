@@ -104,40 +104,13 @@ the combined list again exceeded the size cap.
   yet; #975, #976, #683 and #682 are its queued readers. See [Model-list wire
   types](model-list-wire-types.md) for the wire shape and [Inbound message
   decode](inbound-message-decode.md) for #972's decode.
-- **`historyPageReceived{conversationId,entries,cursor,atStart}` / `historyRequestFailed{conversationId,reason,retryable}`**
-  ([#1222](https://github.com/pyrycode/pyrycode-desktop/issues/1222)) are conversation scroll-back's
-  transport pair — one backward step of a walk over the daemon's append-only on-disk log, and its
-  refusal. **`conversationId` on both arms is client-owned**, not daemon-asserted like every routing
-  key above it in this file: a `history_page` carries no conversation id at all, so [daemon
-  connection](daemon-connection.md)'s new `pendingHistoryRequests` map resolves it from the envelope
-  id the request itself was sent under (the `runConfigReceived` provenance argument, restated for a
-  second reply that names no conversation). `entries: readonly HistoryEntry[]` is reused **verbatim**
-  — the `queueState`/`conversationsReceived` nested-array precedent — and is this union's most
-  untrusted payload: each entry is replayed content carrying exactly the trust class of the live frame
-  it mirrors (the daemon's § *Security model* threat 1), and nothing about being stored makes it more
-  trusted. `cursor`/`atStart` cross **as sent**, never inferred from each other or from the entry
-  count — `atStart` is the only termination signal, and a short page is not an end-of-log signal.
-  `reason: HistoryRequestFailure` is a **new, six-member sibling** of `DebugBundleFailure`'s
-  information-minimising shape, duplicating `HistoryRejectReason`'s five members by hand (the
-  `AttachmentUploadFailure`/`DaemonErrorOutcome` mirroring precedent, since `inboundMessage.ts` is
-  IPC-free by placement rule) plus one, `'unclassified'` — not a hedge, but where a correlated
-  `message.too_long` lands (§ *Page size*'s over-cap entry case), so a correlated refusal always
-  settles the ask. `retryable` is **computed once, at this emit**, diverging deliberately from
-  `DaemonErrorOutcome`'s documented-not-computed posture: this verb's five codes are published in one
-  section with exactly one retryable member (`history-unavailable`), where the consumer that would
-  otherwise re-derive it is a scroll-back walk driver ([#1224](https://github.com/pyrycode/pyrycode-desktop/issues/1224))
-  — precisely where a wrong re-derivation becomes a self-inflicted retry loop against a relay that is
-  merely withholding the frame. Ships dormant/permanent-null across all four exhaustive bridges:
-  `daemonEventBridge`/`modalBridge`/`questionBridge` null both arms **permanently** (a replayed frame
-  is never a `SessionAction`, a modal, or a question — even though a page may *carry* a stored
-  `modal_shown` among its entries without *being* one), while `timelineBridge` nulls them **dormantly**
-  — a page's entries are literally timeline items, and [#1223](https://github.com/pyrycode/pyrycode-desktop/issues/1223)
-  is expected to claim them. See [Request history send](request-history-send.md) for the whole verb
-  pair: the outbound builder, the fail-closed decode, and the correlation map both arms are emitted
-  from.
+- **`historyPageReceived` / `historyRequestFailed` were removed in #2025.** Their
+  correlation, decoder and four renderer bridge no-op cases are gone. Retained
+  `HistoryTimelineEvent`/entries serve storage and shared translation, not page IPC.
+  See [retired request history](request-history-send.md).
 - **`systemPromptReceived{conversationId,systemPrompt,sessionPromptStatus}`**
   ([#1230](https://github.com/pyrycode/pyrycode-desktop/issues/1230)) is the read half of a
-  conversation's system prompt. **`conversationId` is client-owned**, `historyPageReceived`'s
+  conversation's system prompt. **`conversationId` is client-owned**, the former history reply's
   provenance exactly — the reply carries no conversation id at all, so [daemon
   connection](daemon-connection.md)'s new `pendingSystemPromptRequests` map resolves it from the
   envelope id the request was sent under; the omission is a **security property** here, keeping an
@@ -146,7 +119,7 @@ the combined list again exceeded the size cap.
   bridge unchanged; `sessionPromptStatus` is a closed three-value literal, independent of the prompt.
   Untrusted operator text reaching no log sink; the four exhaustive bridges each take a dormant no-op
   arm, since their shared `assertNever` is the one sink left. This verb has **no error frame** at all,
-  unlike `historyPageReceived`'s sibling refusal. See [System prompt send](system-prompt-send.md) for
+  unlike the retired history reply's sibling refusal. See [System prompt send](system-prompt-send.md) for
   the whole verb pair.
 
 - **`workspaceUpdated{path, label}`** ([#1288](https://github.com/pyrycode/pyrycode-desktop/issues/1288))

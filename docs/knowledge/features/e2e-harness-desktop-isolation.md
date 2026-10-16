@@ -17,7 +17,10 @@ Linux always shows windows; macOS and Windows default to hidden, with exact
 `HIDDEN_WINDOW_ENV_FLAG='1'`; shown launches remove an inherited flag. The
 [window-presentation affordance](window-presentation-affordance.md) also disables
 `backgroundThrottling` for hidden windows, which otherwise remain occluded.
-Shown windows retain normal product presentation and background throttling.
+Shown windows retain normal product presentation. Before its default pairing
+drive, `launchPairedApp` also disables background throttling on the exact pairing
+window, including shown launches; see [Welcome readiness](#separate-welcome-readiness-boundary).
+The smoke and real-tier launch paths retain their existing throttling policy.
 
 `readDesktopIsolation(app)` reads Chromium's parsed switches and actual window
 visibility inside the acquired app. `expectDesktopIsolated(app)` requires all
@@ -42,6 +45,18 @@ product UI, toolbar assertions, actionability checks, timeouts or retry policy.
 **Show-window opt-out for headless Linux (2026-10-04).** On Linux under Xvfb, as in the pyrybox dispatcher container, a window that is never shown produces no frames, so every `page.screenshot` and `locator.screenshot` waits out its 30-second timeout. Measured: three specs went from 3 failed in 2.3 minutes with the window hidden to 4 passed in 10 seconds with it shown. Setting `PYRY_E2E_SHOW_WINDOW=1` (`SHOW_WINDOW_E2E_ENV_FLAG` in `desktopIsolation.ts`) makes both launch sites, `launchIsolatedApp` and `realDaemon.ts`, leave `HIDDEN_WINDOW_ENV_FLAG` off. The throttling switches still apply, and `expectDesktopIsolated` and the isolation spec skip only the not-visible clause. Only the harness reads the variable, so the app's own gate is unchanged. On macOS and Windows, leave it unset on a machine someone is using: shown windows still take focus. Linux's shown default below targets unattended virtual-display runs.
 
 **Linux shows the window by default (\#1796, 2026-10-06).** The dispatcher sets the flag for its gates, but a Codex agent's shell keeps only allowlisted variables, so a builder's own Playwright runs in the same container launched hidden and timed out on screenshots the gate passed. `e2eShowsWindow` now returns true on Linux whatever the flag says, so agent runs and gates share one presentation. macOS and Windows keep the hidden default and the exact `'1'` opt-out.
+
+**One X display per run (2026-10-15).** On Linux, [`runDisplay.ts`](../../../e2e/fixtures/runDisplay.ts) is the global setup of both Playwright configs. Before any worker starts, it starts a private Xvfb with the container display's screen and `-noreset`, and points the run's `DISPLAY` at it. Workers inherit that, and every launch site copies `process.env` into Electron's environment. It applies however the run starts: the verifier gate, its `-g` re-run, the live gate, `npm run e2e` or an agent's own `npx playwright test`. Before this, all of them drew on the agent container's one display `:99` and shared its clipboard, which the `clipboard` project can only serialise within one run. Wrapping a run in `xvfb-run -a` is no longer needed and does no harm.
+
+- `PYRY_E2E_DISPLAY=inherit` keeps the inherited `DISPLAY`, for example to watch a run on a Linux desktop. `PYRY_E2E_SHOW_WINDOW` cannot serve as the switch, because the container sets it for gates.
+- macOS and Windows are untouched. Linux without Xvfb uses the inherited `DISPLAY` and fails at setup when there is none.
+- `-displayfd` lets the server pick a free number and report it once it is listening, so concurrent runs never collide.
+- A small shell holds the server and stops it when the runner's end of its standard input closes. A kill of the runner alone therefore stops it too, and a signal to the process group reaches it directly.
+- The display is per run, not per worker. Workers of one run already ignore the display's pointer (#1813), get Playwright's focus emulation and take turns on the clipboard. Measured on 2026-10-15, the shared server used under 2 percent of one core during a four-worker run.
+
+**The harness hands out a loaded window (2026-10-15).** `appWindow(app)` in `desktopIsolation.ts` returns the first window once `#root` exists and the app document's `load` has fired. `launchPairedApp` (before `onLaunched`), `realDaemon.ts`, `smoke.spec.ts` and `pairing-recovery.spec.ts` take the window from it. Playwright already holds back a new page's initial empty document until the first real navigation commits, so `firstWindow()` never hands out a page that is about to navigate away. In 66 of 80 probed launches, though, the app document was still `interactive` when it resolved. `onLaunched` hooks now always run after the bundle has executed and React has mounted, and still before pairing.
+
+**"Execution context was destroyed" from the main process is not a navigation.** Playwright rewrites every protocol error from an evaluation that is neither a JavaScript exception nor a closed session into that sentence. With the original error kept, all 11 losses reproduced from `app.evaluate` and `browserWindow().evaluate` in the agent image were V8's `Promise was collected`, long after the renderer had loaded. The tolerances in `mainProcessRead.ts`, `confirmedPush.ts`, `composerWindowSetup.ts`, `localListFailure.ts` and `pairing-authentication.spec.ts` therefore stay: every one of them wraps a main-process evaluation, which a window load wait does not reach.
 
 Shown Xvfb windows share native pointer input even though each launch owns its process
 and profile. Throttling exemptions do not isolate that input. In the
@@ -284,10 +299,39 @@ explicit unavailable outcomes; only validated primitives and fixed labels enter
 the report. See [capture and cleanup ownership](e2e-harness-launch-fate.md#welcome-stall-diagnostics)
 and [revision-separated acceptance](e2e-harness-launch-fate.md#recorded-welcome-diagnostic-acceptance).
 
-No natural Welcome stall was captured while validating this instrumentation.
-Controlled nonresponse and advancing-timer/zero-frame faults prove capture only,
-without requiring actual OS minimization. The historical cause remains unknown.
-When the first natural failure arrives, retain its attachments and file a
-follow-up that distinguishes observations from hypotheses, establishes a
-confirmed cause with a check separating alternatives, then fixes that boundary
-with a regression. The separate hover diagnosis supplies no Welcome cause.
+The original instrumentation's controlled nonresponse and advancing-timer/zero-frame
+faults prove capture only, without requiring actual OS minimization. The later
+[#1986 investigation](https://github.com/pyrycode/pyrycode-desktop/issues/1986#issuecomment-6182367676)
+reproduced a native-hidden mechanism at `cfd0ad90`, with app/helper sources identical
+to the historical `df4ce98b` Welcome timeout. Native hiding left the renderer
+responsive and the CTA enabled, but produced zero animation frames and 14 timer
+ticks over 750ms. The ordinary click timed out after 30000ms waiting for visibility,
+enabled state and stability; no pointerdown, pointerup or click arrived. Shown and
+covered controls delivered trusted input and reached the pairing form. Showing
+the window or disabling background throttling released the pending ordinary click.
+Renderer timers therefore do not establish frame progress or click actionability.
+
+Shown launches can still be native-hidden before their first paint: all 100 normal
+initial-hook samples observed hidden/loading windows with throttling enabled.
+The Chromium switches alone did not protect that interval. `launchPairedApp` now
+acquires `app.browserWindow(page)` after the launch hook and reuse/skip checks,
+sets `webContents.setBackgroundThrottling(false)` before the ordinary pairing
+drive, and disposes the handle in `finally`. The setting lasts for that window's
+lifetime; disposing the handle does not restore throttling. Native presentation,
+`pairFromUnpairedLaunch(page, payload, label?)`, real-tier callers and diagnostic
+capture/cleanup remain unchanged.
+
+`ordinary Welcome pairing stays responsive while its native window is hidden`
+in `e2e/welcome-stall.spec.ts` holds the exact native window hidden after its normal
+first show (or retains hidden presentation). It requires one trusted Welcome click,
+normal pairing/confirmation through enabled Send, hidden native state with throttling
+disabled, two real animation-frame callbacks and no stall attachment. Removing
+only the fixture repair reproduces the original click boundary. See
+[revision-separated repair evidence](e2e-harness-launch-fate.md#recorded-welcome-repair-acceptance).
+
+This controlled defect is distinct from the unrecorded historical trigger: the
+natural failure's raw call log and attachment remain unavailable, and normal green
+launches do not explain why its hidden interval persisted. The separate hover
+diagnosis supplies no Welcome cause. Retain native, renderer/frame and input
+evidence on any new natural failure; macOS/Windows native execution and actual
+minimized-window behavior are not established by the Linux hidden-window proof.

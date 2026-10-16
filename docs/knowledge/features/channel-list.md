@@ -13,14 +13,15 @@ geometry](channel-list-desktop-row-geometry.md). Mirrors the mobile home screen 
 [#140](../codebase/140.md) shipped as a stand-in.
 
 Introduced in [#141](../codebase/141.md). Conversation rendering remains a pure view over held state;
-the app-wide self-update row reads a separate store and sends narrow actions through preload.
+host apps consume a separate display stream, and the app-wide self-update row reads its own store
+and sends narrow actions through preload.
 Updater eligibility, download verification and installation authority stay in main.
 
 ## What it does
 
 The sidebar shows each saved host once, in paired-server order, including a host with no
-conversations. Under each host are fixed **Channels** and **Chats** sections. Channels holds active
-promoted rows; Chats holds active unpromoted rows. Each host's Channels and Chats sort alphabetically
+conversations. Under each host are fixed **Channels**, **Chats** and **Apps** sections, in that order.
+Channels holds active promoted rows; Chats holds active unpromoted rows. Each host's Channels and Chats sort alphabetically
 by displayed title, separately; the unattributed Channels and Chats fallbacks after all hosts follow
 the same rule. A rename or daemon auto-name moves the row after the re-list; an unnamed chat sorts at
 its **Untitled** placeholder position until named. Displayed titles remain verbatim. Archived rows
@@ -28,13 +29,13 @@ belong only in [Archive](archive-screen.md), which retains daemon list order. A 
 server stamp remains visible in a fallback without host actions; it is never assigned to another
 host. Two paired daemon workspaces on one machine remain two hosts.
 
-The host and both sections begin expanded and fold independently, including on an empty host.
-Folding preserves the selected conversation and composer draft. Host rows show no connection dots or
-dot wrapper in any state; Edit host reveals on hover or keyboard focus. A failed host keeps a
+The host and all three sections begin expanded and fold independently, including on an empty host.
+Folding preserves the current conversation or app selection and composer draft. Host rows show no
+connection dots or dot wrapper in any state; Edit host reveals on hover or keyboard focus. A failed host keeps a
 separate, visible Repair host control and its error-colored glyph and label, and reveals its
 sections even if it was folded before failure. See [host and section folds](channel-list-host-fold.md).
 
-Connected hosts have a trailing plus on each section. **Create channel** and **Create chat** open
+Connected hosts have a trailing plus on Channels and Chats. **Create channel** and **Create chat** open
 their respective confirmation dialogs, including on an empty host. Confirmation targets the clicked
 host with `cwd: null`, letting that daemon workspace choose its default folder; Cancel sends no
 create. Disconnected hosts cannot create. The section labels are fixed and have no rename action.
@@ -51,8 +52,50 @@ Conversation rows retain their title, status dot, selection, edit and
 [Edit channel](edit-channel-dialog.md); the Chats pen opens
 [Edit chat](rename-conversation-dialog.md). The row's own identity, stored `cwd` and daemon
 contract are unchanged. The 400px card uses the [host-first geometry](channel-list-tree-inset.md).
-There are no sidebar workspace rows, global Channels/Chats trees or section divider. Apps rows and
-actions are absent.
+There are no sidebar workspace rows, global Channels/Chats trees or section divider.
+
+### Host apps
+
+Each paired host's Apps section lists complete discovery in daemon order, independently of its
+conversations. Titles render as escaped React text, bounded to 128 characters by main. Rows show
+readable `starting`, `running`, `stopped` or `failed` observed state beside the title, with existing
+status-dot styles. Contiguous lifecycle updates change that host's rows without a restart; removal
+affects only its row. Equal app IDs on two hosts remain distinct. Apps has no creation plus:
+creation stays conversational.
+
+| Discovery state | Section body |
+| --- | --- |
+| Initial or `loading` | Loading apps… |
+| Complete `ready` with no items | No apps |
+| `failed` | Could not load apps, with Retry |
+| `unavailable` | Apps disconnected |
+| `unsupported` | Apps unsupported |
+
+Retry refreshes only the clicked host; in-progress refreshes coalesce in main. Disconnected and
+unsupported hosts send no discovery or resource requests. Partial pages and cached readiness after
+reconnect never become rows. Retry uses shared typography, outline, spacing, radius and focus tokens.
+
+`ChannelList` owns a mount-local Zustand Map of display snapshots keyed by host. Its effect subscribes
+through `window.pyry.onHostedApps(serverId, listener)`, clears the Map when the saved-host list changes,
+and deactivates callbacks before unsubscribing. `ChannelListView` receives injectable display and pane
+state plus select/refresh callbacks. Main and preload provide the additional
+[subscription and replacement fences](daemon-connection-hosted-resource-views.md#sidebar-display-projection).
+
+Clicking an app sends `hostedPane({ type: 'select', serverId, appId })`; the streamed
+`hostedPaneStore` state highlights only that host/app. While a pane is open, conversation highlights
+are suppressed. Selection does not start a non-running app or authorize a release from display
+metadata. Main retains readiness and opening authority. Apps and host folds preserve each other's
+section state and selection. Returning to the original channel/chat closes the hosted pane and
+[restores its selection and draft](paired-shell-routing.md#hosted-app-selection-and-trusted-chrome).
+
+[`e2e/hosted-app-sidebar.spec.ts`](../../../e2e/hosted-app-sidebar.spec.ts) clicks production rows
+through preload/IPC; [counted evidence](daemon-connection-hosted-resource-views.md#sidebar-verification)
+records its four cases. Static renderer tests prove escaped text, states and selection markup only.
+Apps reuse `.channel-list__row-open`, so conversation fixture activation and row counts must exclude
+rows containing `.channel-list__app-state`. Seeding apps only after fixture launch hides an overly
+broad selector. Fold checks must account for three sections per host, and pointer-pill tests must
+place a real conversation control at the scrollport edge: extra Apps rows can remove the overflow
+precondition without changing the control itself.
 
 ### App-wide self-update row
 
@@ -259,10 +302,10 @@ failure treatment or controls. The saved-chats read-error line remains below the
 `groupByServer(serverIds, rows): { servers, unattributed }` remains the pure attribution
 boundary. The container reads saved ids in `pairedServerStore.list()` order and passes them to
 `ChannelListView`. `renderBody` partitions and sorts active rows once, groups each partition by server,
-then renders one keyed `CollapsibleHostGroup` per saved id with Channels and Chats beneath it.
+then renders one keyed `CollapsibleHostGroup` per saved id with Channels, Chats and Apps beneath it.
 No path grouping occurs in this active render. `groupByServer` preserves incoming row order, so
-each host's section and each unattributed fallback is a sorted subsequence of its active partition,
-using the same normalized-key, trimmed-label and ID tie-breaks. Sorting conversations never changes
+each host's conversation section and each unattributed fallback is a sorted subsequence of its active
+partition, using the same normalized-key, trimmed-label and ID tie-breaks. Sorting conversations never changes
 paired-host order or fallback placement. A host's key is its saved server id, so reordering cannot
 transfer fold state to a different host.
 
@@ -290,6 +333,34 @@ placement/geometry/testing lessons from wiring it in. An outstanding permission 
 or a pending question batch, shows the gold `input-required` dot. Idle stays an unfilled primary ring at
 half opacity even on hovered/open rows; working is solid primary blue and blinks; new messages is solid
 success green. See [the dot's paint contract](conversation-status-dot.md).
+
+#### Thread-route unread and attention
+
+`ConversationStatusDotControl` and the badge's `conversationStatusNow(row)` use
+thread read policy for every host-stamped row, including before its first snapshot
+or opening. `conversationReadRouteStore` additionally retains the accepted epoch
+for scoped read publication. Optional summary fields do not negotiate capability.
+Off-screen attention comes from that host/conversation's bound live state.
+
+On a selected thread route, unread means received `last_shown_version > read_up_to`, even
+without a held timeline. Zero is present and equality is read. Missing either field makes
+thread unread unavailable (the predicate returns false); history IDs, local counts and local
+marks cannot fill that gap. Hidden trailing items and live-state counters cannot raise this
+comparison. Sending a read command never clears it; only the owning daemon's received mark
+can confirm reading. See [committed thread read publication](conversation-shell.md#authoritative-thread-read-publication).
+
+Both local stamp paths use `stampLastReadFor`. Any explicitly selected thread with the same
+conversation ID suppresses stamping, including when its metadata is missing: local marks
+are ID-keyed, so choosing only one host's matching row would leave another path to a stamp.
+Host-stamped production rows always suppress legacy local read stamps. Retained
+unattributed callers keep the previous history/local-count policy.
+
+The actual host-stamped row supplies read fields and mode. Attention still ranks pending
+permission/trust/questions above working, then new messages, then idle. Archived rows stay
+outside the active sidebar; the badge excludes archived and muted rows and counts only
+input-required/new-messages, once per eligible conversation. Muting does not hide its dot.
+Route changes also wake the badge subscription. See [unread](conversation-unread.md) and
+[badge composition](app-badge.md).
 
 ### CSS (`channels.css`)
 
@@ -399,10 +470,10 @@ cannot establish hover paint or layout stability. See the
 - Missing or unpaired server stamps render in an unattributed Channels or Chats
   section after the hosts. These sections have no create control. Host attribution
   never falls back to the first saved host.
-- A host's two section folds survive closing and reopening the host because the
-  hidden section components stay mounted. A failed host reveals both sections and
+- A host's three section folds survive closing and reopening the host because the
+  hidden section components stay mounted. A failed host reveals all three sections and
   repair even if it was closed earlier. Recovery restores its held host fold.
-- Apps rows and actions are absent. Workspace names, folder paths and
+- Apps retain daemon order rather than conversation title order. Workspace names, folder paths and
   `workspace_label` are retained as data but do not produce sidebar rows.
 - A host disclosure does not prove a connected session: connecting, disconnected and unreported
   hosts remain foldable but cannot create. Authentication checks need connected-only controls or

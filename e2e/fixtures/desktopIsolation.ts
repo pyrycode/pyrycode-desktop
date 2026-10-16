@@ -1,7 +1,9 @@
-import { expect, type ElectronApplication, type TestInfo } from '@playwright/test'
+import { expect, type ElectronApplication, type Page, type TestInfo } from '@playwright/test'
 import { electron } from './electronLaunch'
 import type { ChildProcess } from 'node:child_process'
 import { HIDDEN_WINDOW_ENV_FLAG } from '../../src/main/windowPresentation'
+import { isTransientContextLoss } from './mainProcessRead'
+import { setTimeout as delay } from 'node:timers/promises'
 
 // The one place the default tier launches Electron (#1067). Both launch sites — `launchPairedApp.ts`
 // (48 of the 49 spec files) and `smoke.spec.ts` (the 49th) — go through `launchIsolatedApp` below, so
@@ -127,7 +129,7 @@ export async function launchIsolatedApp(options: {
 }): Promise<ElectronApplication> {
   const app = await electron.launch({
     args: [...options.args, ...RENDERER_THROTTLING_SWITCHES.map((name) => `--${name}`)],
-    env: withWindowPresentation(options.env)
+    env: Object.fromEntries(Object.entries(withWindowPresentation(options.env)).filter((entry): entry is [string, string] => entry[1] !== undefined))
   })
   options.fate.watch(app)
   try {
@@ -142,6 +144,30 @@ export async function launchIsolatedApp(options: {
     }
     throw error
   }
+}
+
+/**
+ * The launched app's first window, once its own document has finished loading. Each site that launches
+ * the app and then drives its first window takes it from here: `launchPairedApp` before its `onLaunched`
+ * hook and the pairing drive, `realDaemon.ts`'s launch, `smoke.spec.ts` and `pairing-recovery.spec.ts`.
+ * A hook that calls `firstWindow()` itself gets the same, already loaded page.
+ *
+ * `firstWindow()` alone resolves before that point in most launches. Playwright reports the page once the
+ * navigation to the app document has committed, not once it has loaded: measured 2026-10-15 in the agent
+ * image, 66 of 80 launches came back with `document.readyState` still `interactive`, with and without CPU
+ * load. Its scripts and styles may still be running, so a spec's first read could see a half-started app.
+ * `#root` is the app's own mount element and exists only in the app document, so waiting for it first
+ * makes sure the load state awaited next belongs to that document.
+ *
+ * This is NOT what the `Execution context was destroyed` helpers in mainProcessRead.ts, confirmedPush.ts,
+ * composerWindowSetup.ts and localListFailure.ts are for. Those wrap main-process evaluations, which this
+ * wait does not touch; see mainProcessRead.ts for that cause.
+ */
+export async function appWindow(app: ElectronApplication): Promise<Page> {
+  const page = await app.firstWindow()
+  await page.locator('#root').waitFor({ state: 'attached' })
+  await page.waitForLoadState('load')
+  return page
 }
 
 /**
@@ -175,14 +201,25 @@ async function ignoreDisplayPointer(app: ElectronApplication): Promise<void> {
 export async function readDesktopIsolation(
   app: ElectronApplication
 ): Promise<DesktopIsolationState> {
-  return app.evaluate(({ app: electronApp, BrowserWindow }, switches) => {
+  const deadline = Date.now() + 5_000
+  const read = ({ app: electronApp, BrowserWindow }: typeof import('electron'), switches: string[]) => {
     const windows = BrowserWindow.getAllWindows()
     return {
       switchesApplied: switches.filter((name) => electronApp.commandLine.hasSwitch(name)),
       windows: windows.length,
       visibleWindows: windows.filter((window) => window.isVisible()).length
     }
-  }, [...RENDERER_THROTTLING_SWITCHES])
+  }
+  // This is a read only. A lost inspector promise must neither satisfy isolation
+  // nor relaunch the application; repeat the read within the existing five-second bound.
+  for (;;) {
+    try {
+      return await app.evaluate(read, [...RENDERER_THROTTLING_SWITCHES])
+    } catch (error) {
+      if (!isTransientContextLoss(error) || Date.now() >= deadline) throw error
+      await delay(100)
+    }
+  }
 }
 
 /**

@@ -246,6 +246,11 @@ test('an idle-eviction marker for another chat never steers this chat’s settin
   // is B's whether or not the gate exists, so a drive that only read the end state would pass with the
   // gate deleted. ---
   daemon.pushFrame(sessionTransitionFrame(requestB!.conversationId, SESSION_B_ROTATED))
+  const beforeCurrentRead = requests.length
+  await page.locator('.channel-list__row-open[aria-current="true"]').click()
+  await expect.poll(() => requests.length).toBeGreaterThan(beforeCurrentRead)
+  daemon.pushFrame(runConfigFrame(requests.at(-1)!.envelopeId, SESSION_B_ROTATED))
+  daemon.pushFrame(modelListFrame(requestB!.conversationId))
   await trigger(BASELINE_EFFORT).click()
   await expect(panel).toBeVisible()
   await panel.getByRole('menuitem', { name: SECOND_PICK, exact: true }).click()
@@ -386,7 +391,7 @@ test('a reset that finishes while another chat is open draws its separator in th
   // snapshot, this bubble did not exist before the push, so waiting for it cannot pass early. ---
   daemon.pushFrame(assistantDeltaFrame(bravoId, BARRIER_TEXT))
   await expect(
-    page.locator('.bubble[data-thread-role="assistant"]').filter({ hasText: BARRIER_TEXT })
+    page.locator('[data-thread-role="assistant"]').filter({ hasText: BARRIER_TEXT })
   ).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
 
   // --- 5. B, the chat on screen when A's marker arrived, shows no separator. Before #1559 it showed one. ---

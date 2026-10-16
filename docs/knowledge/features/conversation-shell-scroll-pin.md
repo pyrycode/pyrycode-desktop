@@ -19,11 +19,12 @@ release following synchronously when `scrollTop > 0`, before native scrolling st
 Waiting for `onScroll` would let a render or row-growth observation re-pin during the
 input-to-scroll interval and interrupt Chromium's animated movement. Untrusted input
 does not release intent; keys targeted at descendant controls retain their behavior.
-At zero, input leaves following unchanged unless connected history demand deliberately
+At zero, input leaves following unchanged unless accepted history demand deliberately
 releases it; see [User demand and prepend position](#user-demand-and-prepend-position).
 
 The 4px bottom tolerance allows rounding while already following. A released reader
-resumes only on downward movement into that band, rather than merely being inside it:
+resumes on downward movement into that band or trusted downward wheel bottom intent
+as described below, rather than merely being inside it:
 even a 1px upward wheel must remain released through subsequent streaming growth.
 The DOM-local `scrollOffset` ref snapshots the offset at upward input and refreshes on
 every scroll before the echo/resize guards, so those events cannot leave stale direction
@@ -64,7 +65,7 @@ hoisting every leaf store subscription would re-render the timeline unnecessaril
 Likewise, a fixed scroll container's border box does not change when a row's decoded
 image grows. Row observation catches that content growth. The callback re-reads both
 refs, measures chrome even without a thread, and pins only a mounted, following
-thread. An empty offline chat can omit `Timeline` while notices and Re-pair remain;
+thread. A pane without a thread snapshot can omit item rows while notices and Re-pair remain;
 measurement rooted only in the scroller would place that pill inside the header.
 Direct-child membership changes reconcile row targets: only new children are observed,
 and detached or replaced children are unobserved. Chrome targets reconcile separately
@@ -121,18 +122,26 @@ and `scrollHeight`. While following, a scroll with changed geometry leaves the d
 to the pending observer rather than clearing the flag on layout movement. That
 observer refreshes all three measurements after the guarded pin. Trusted upward input
 still releases following synchronously, so the geometry guard cannot reclaim a held reader.
-Held readers retain native anchoring. This covers metadata reflow, narrowing, widening
-and 100%/125% zoom without another follow state machine or async task.
+Visible held readers retain native anchoring. This covers metadata reflow, narrowing,
+widening and 100%/125% zoom without another follow state machine or async task.
 
-Chromium can reach the bottom before delivering a trusted downward wheel callback,
-then change hovered-row heights before the scroll callback. The wheel handler measures
-the actual bottom and resumes following there; subsequent downward scrolls retain an
-already-following reader's intent even if metadata moved the endpoint. The existing pin
-write restores clearance only when outside the tolerance or clearing temporary padding.
-An immediate predictive wheel pin would interrupt small native movements; movements
-inside the tolerance remain unsnapped. Upward input still takes precedence. See
-[metadata-collapse design](../../specs/architecture/1898-collapse-message-metadata.md)
-and [counted browser evidence](conversation-shell-message-bubble-testing.md#metadata-collapse-verification).
+Chromium can deliver a trusted downward wheel before or after native movement.
+The wheel handler resumes following when already in the bottom band, or when positive
+pixel-mode input (`deltaMode === 0`) covers the measured remaining range
+(`scrollHeight - clientHeight - scrollTop`). The latter expresses bottom intent before
+movement: layout can exchange hovered metadata rows, collapsing one by 28px and revealing
+another by the same height. Native anchoring can leave the endpoint 28px short with
+unchanged total height, so geometry stability or a measured-bottom-only guard misses it.
+
+The wheel handler sets the existing intent ref without an immediate scroll write.
+Existing scroll/resize paths restore clearance; subsequent downward scrolls retain an
+already-following reader's intent even if metadata moved the endpoint. The pin writes
+only when outside the tolerance or clearing temporary padding. Short downward gestures
+that do not reach the band or cover the remaining range keep a released reader held;
+non-pixel input retains the measured-bottom guard. Trusted upward input still releases
+following synchronously. See [metadata-collapse design](../../specs/architecture/1898-collapse-message-metadata.md),
+[wheel-ordering repair](../../specs/architecture/1955-metadata-scroll-reliability.md#revisions)
+and [counted browser evidence](conversation-shell-message-bubble-testing.md#metadata-wheel-ordering-verification).
 
 `pinnedOffset` protects the pin's own scroll-event echo. It records the exact offset
 read back after a write that actually moved the thread, and is cleared on every scroll
@@ -167,6 +176,32 @@ repeatedly reveals/collapses the tail at 1280px and 800px, wheels from history s
 through changing metadata, and focuses an above-viewport row without moving a held
 content anchor. See
 [recorded browser and capture evidence](development-verification-layout-evidence.md#translucent-conversation-controls).
+
+### Covered reader resize preservation
+
+The [Markdown reader](conversation-shell-markdown-reader.md#pane-wiring) hides the
+mounted thread with `data-covered`. Hidden rows cannot supply native scroll anchors:
+resizing can clamp a settled offset, and returning to the original dimensions does
+not recover it merely because the thread stayed mounted. A released thread can
+even settle at the bottom without resuming following; equal geometry alone does
+not identify intent. Additional frame settlement cannot repair this persistent loss.
+
+`useThreadScrollPin` keeps one conversation-scoped `coveredPosition` ref. At the
+first covered viewport change it records the last processed width, height and
+offset, preferring an outstanding pin-write offset when present. The existing
+scroll handler, layout effect and resize observer all preserve this record before
+replacing those measurements, so whichever callback runs first cannot save the
+already-clamped position instead. When the original thread viewport width and height
+return while still covered, a released reader gets its recorded offset back; the
+existing echo guard records the write. Following readers keep the ordinary bottom
+pin, and this restoration never re-arms following.
+
+Uncovering, conversation changes and teardown clear the record; each later open
+captures its own position and dimensions. Back at different dimensions keeps the
+current native position. There are no new listeners or asynchronous jobs. The
+[controlled regression and Linux counts](development-verification-layout-evidence.md#reader-resize-scroll-preservation)
+distinguish this settled-state loss from the earlier reopen focus/hover race and
+the unavailable historical failure trace.
 
 ### Streaming input verification
 
@@ -272,6 +307,51 @@ arrival adds a new assistant row; unchanged-membership growth is proved by the f
 Observation-root replacement within a surviving hook was source-reviewed rather than
 separately exercised in the browser.
 
+Before any adversarial geometry changes, the second case requires the exact ordered
+Markdown contents of all 100 assistant rows (`History row 0` through `History row 99`)
+within a local 15-second deadline, then requires zero streaming cursors. Its
+`feed-readiness` attachment records elapsed feed time, committed count and tail.
+`FakeDaemon.pushFrame` completion proves sending only; the subsequent six animation
+frames settle layout after the positive DOM barrier. Hook-work counting remains
+disabled until the existing measurement reset, so feed readiness cannot inflate
+the bounded-work oracle.
+
+The [feed-readiness investigation](../../specs/architecture/2033-scroll-work-feed-readiness.md#revisions)
+found the unchanged natural-scheduling baseline green on build-hp-1. An identical
+temporary 6× renderer slowdown in control and repaired runs exposed the deadline:
+the original five-second assertion failed while delivery continued, reaching all
+100 rows and the expected tail at 8257ms; the repaired run observed readiness at
+7489ms and passed the remaining geometry/cleanup checks. The timeline control ran
+1 executed, 0 passed, 1 failed, 0 skipped; the repaired comparison ran 1 executed,
+1 passed, 0 failed, 0 skipped. Both configured 2 workers and used 1, with zero
+retries and report errors. This establishes deadline
+sensitivity under slower rendering, without reproducing the original build-fractal-2
+scheduling trace or establishing a transport defect. Fifteen seconds matches the
+sibling's initial-render allowance and gives headroom above the measured 8.26-second
+completion while retaining the fixture's 60-second test limit. The slowdown and
+timeline observer are diagnostic only and do not ship.
+
+The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2034#issuecomment-6203933037)
+confirms Linux validation at implementation `bcc8400efdbe759af1e0c38283d4b70fc5aae6a0`:
+
+| Run | Executed / passed / failed / skipped | Configured / effective workers |
+| --- | --- | --- |
+| Ten separate consecutive named-case invocations | 10 / 10 / 0 / 0 | 2 / 1 each |
+| Both scroll-work cases | 2 / 2 / 0 / 0 | 2 / 1 |
+| Complete configured fake suite | 432 / 432 / 0 / 19 | 2 / 2 |
+
+The named `gaps, long hidden runs and target changes preserve a valid anchor and clean observations`
+case was present and passed in every named invocation and the full report; both
+scroll-work cases passed in the two-case and full runs. Every readiness attachment
+records 100 rows ending in `History row 99`. All runs used zero retries and had no
+report-level errors; clipboard/parallel projects stayed unchanged. The plan records
+the inherited skip reasons, JSON/stderr paths and archive hashes. Dispatcher verifier
+gate 6 independently passed the named case at evidence-only head
+`9fec6f564bd82e84242bbe8a435d76c1eb401152`: 432 executed/passed, 0 failed,
+19 skipped, zero retries and report errors, with 4 configured/effective workers.
+That gate corroborates the separate two-worker acceptance run rather than supplying
+its concurrency evidence.
+
 Recorded evidence for [#1892](../../specs/architecture/1892-bounded-scroll-anchor.md#revisions):
 
 - The recorded pre-fix main renderer at `214d15625f51495c2e07772d320003dc1eec7588`
@@ -306,9 +386,10 @@ cost are separate concerns. No live-Claude or visual comparison was required or 
 ## Supplied snapshot anchor restoration
 
 The injectable [daemon item view](conversation-shell-timeline-render.md#supplied-daemon-item-presentation)
-calls `useThreadScrollPin(conversationId, 0, false, snapshot.items)`: legacy history
-demand is disabled, and the optional immutable presentation token is the item-list
-reference. A held reader's remembered anchor includes that token. A changed list
+calls `useThreadScrollPin(conversationId, visibleItems, onOlder)`. The immutable
+presentation token combines the snapshot item list and pending local sends through
+a memoized array; upward paging uses the supplied `onOlder` callback. A held reader's
+remembered anchor includes that token. A changed list
 restores the surviving direct-child row to its measured viewport position before
 paint, covering older-item prepends (including at offset zero) and content revisions
 above the reader. Following readers use the existing bottom pin as rows append/grow.
@@ -319,8 +400,9 @@ older batch may insert rows while the store retains its existing version through
 `Math.max`; same/lower-watermark batches can also revise held content. Requiring an
 increasing watermark would miss those changes and let the viewed row move at zero
 offset, where Chromium suppresses native anchoring. Immutable `snapshot.items`
-identity detects those display changes independently of certification. Legacy callers
-omit the token and retain restoration on increasing `prependedRows`.
+identity invalidates the memoized presentation independently of certification. Both
+surviving callers use supplied items. The legacy numeric `prependedRows` comparison
+and visible-gap demand branch were removed in #2023.
 
 The scope-keyed view remount resets its anchor and following state on host,
 conversation or epoch changes even when ids match. Observer cleanup still belongs
@@ -341,12 +423,68 @@ passed. Ticket coverage executed 3, passed 3,
 failed 0, skipped 1; the skip is the separate #1926 attachment transport reproduction.
 Full fake-transport coverage executed 380, passed 379, failed 1, skipped 4, with the
 unrelated `history-gaps` failure passing an isolated rerun (1 executed/passed,
-0 failed/skipped). These are injected snapshot/typed-update proofs; production
-selection and combined live acceptance remain with #1908.
+0 failed/skipped). These are injected snapshot/typed-update proofs. Production
+shares this pin with the actual authoritative scroller; its send-from-older-content
+regression passed in the final [activation run](thread-runtime.md#validation-boundaries).
+Credentialed live acceptance is separately pending.
+
+The supplied-agent cases establish a stronger held-reader baseline at native
+1280×800 and 800×800. After native End/Home motion settles, a spec-local target
+scroll listener registered after React records processing count and offset. Parking
+row 100 requires a newer processed event at the current offset and 20 consecutive
+unchanged animation-frame samples of offset, content height, viewport height/width,
+row position and processing state. Geometry alone can show the parked row while
+`rememberTop` still holds Home's anchor. The fixture commits child 40's move from
+agent 30 to agent 10 synchronously in the same renderer task after readiness; see
+[listener ordering and commit scheduling](development-verification-layout-and-input.md#layout-and-input).
+
+Before checking preservation, agent 10's `1 tool` and agent 30's `0 tools` certify
+the reparent projection committed. Rendered row 5 certifies the older insertion.
+Each update then settles before comparison with the original row-100 baseline;
+unchanged pre-update geometry cannot satisfy these commit barriers. The cases retain
+the <0.5px position tolerance, distance from bottom greater than 100px, child DOM
+identity, expansion, lifecycle and host/chat/epoch reuse checks. Optional supplied
+read-observer inputs stay disabled; no production scroll behavior changed.
+
+The [diagnosis and commands](../../specs/architecture/1964-agent-reparent-scroll-reliability.md#revisions)
+pin independent main at `bbcd894329a4a4410d0c10cd797e4f1bb05634d8`
+(Linux x86_64, Electron 33, isolated Xvfb displays). The
+[verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1968#issuecomment-6179180620)
+checked the retained reports under `/tmp/builder-1964/`:
+
+| Run | Executed | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| Unmodified main, `main.json` | 20 | 20 | 0 | 0 |
+| Forced immediate commit before park processing, `control.json` | 2 | 0 | 2 | 0 |
+| Same commit after park processing, `processed-control.json` | 2 | 2 | 0 | 0 |
+| Shipping regression with park readiness removed, `pre-repair.json` | 2 | 0 | 2 | 0 |
+| Repaired repetitions, `final.json` | 20 | 20 | 0 | 0 |
+| Full supplied-renderer spec, `spec.json` | 10 | 10 | 0 | 0 |
+
+In the instrumented immediate-commit control, both widths parked row 100 at y=0,
+scrollTop 810, but restoration used Home's marker at top 97 before the park's scroll
+event processed. The commit left row 100 at y=720, scrollTop 0. Processing first
+selected row 100 at top 0; reparenting committed at scrollTop 720/y=0 and older
+insertion retained y=0. Removing only shipping park readiness also failed both
+unchanged position assertions after the child counts committed. These interventions
+diagnose a reproduced setup race; the original #1936 event trace was unavailable,
+so they do not establish its exact schedule. The green unmodified runs alone did
+not diagnose the intermittency.
+
+Both exact named tests, `supplied agents repair nesting and retain lifecycle,
+expansion and scroll at 1280` and `supplied agents repair nesting and retain
+lifecycle, expansion and scroll at 800`, were present and passed ten times each in
+`final.json`, with zero retries or flaky results. Both also passed in `spec.json`.
+No sleeps, larger timeouts, relaxed assertions, skipped assertions or baseline
+resets after updates were introduced. Dispatcher verifier gate 6 separately recorded
+395 executed, 394 passed, 1 unrelated failed and 3 skipped; the verdict confirms
+both agent cases executed/passed (2/2, 0 failed/skipped). The supplied gate report
+contains no full verifier-gate pass. This is fake-transport supplied-renderer
+evidence; live Claude was not required.
 
 ## Inline question growth
 
-`Timeline.trailing` places `QuestionHistorySlot` after message rows, even with empty/offline history
+`ThreadItemsTimeline.trailing` places `QuestionHistorySlot` after message rows, even with empty/offline history
 while a batch, permission or owned rejection remains pending. Its shared wrapper is a direct child
 observed by `useThreadScrollPin`.
 Arrival, local card edits and same-request growth preserve the existing `following` ref: readers
@@ -375,71 +513,64 @@ store drafts were cleared; store clearing alone cannot release observer-held DOM
 
 [`useThreadScrollPin`](../../../src/renderer/src/screens/conversation/ConversationScreen.tsx)
 separates local scroll measurement from download intent. `onScroll` updates bottom
-following only; it never requests history. The shared `readUpward` input helper
+following only; it never requests history. Trusted upward wheel input and thread-
+focused ArrowUp/PageUp/Home call `readUpward` before native scrolling. That helper
 snapshots the offset and releases following when upward range exists, independently
-of host availability, then calls `demandHistory` before the browser scrolls.
-`demandHistory` requires a connected conversation host. A visible known
-gap between measured header/input overlays takes priority, selecting the first
-marker from newer toward older rows; otherwise `isNearTop` governs oldest-end demand.
-The band includes offsets from zero through `HISTORY_ASK_BAND_VIEWPORTS` (2) viewport
-heights, scaled by the thread's own measured `clientHeight` rather than a fixed pixel
-rim (widened from a fixed 200px band by [#1752](https://github.com/pyrycode/pyrycode-desktop/issues/1752)).
-Crossing into it does not queue demand. See [history admission](chat-history.md#received-state-admission-and-ownership)
-for first-page coverage, pending-read gates and retry policy.
+of host availability, then calls `demandHistory`.
 
-`Timeline` keeps its empty content inside the same focusable scroll region
-(`tabIndex={0}`, client-owned accessible label `Conversation history`). Returning
-`EmptyThread` before mounting that region makes first-page input unreachable.
-The browser's keyboard-focus indicator remains visible. At `scrollTop === 0`, ordinary
-upward input has no upward range and preserves following, including on an offline short
-thread whose rows later grow. Connected demand in the band or at a visible gap deliberately
-releases following even on a short thread, retaining the prepend anchor regardless of
-whether admission permits another request. Programmatic movement and a page's arrival
-cannot ask for another page. Descendant-control keys do not enter this demand path.
+`demandHistory` releases following and remembers the visible anchor independently
+of connectivity. When `isNearTop` holds it calls the supplied `onOlder` callback;
+production routes that through the [thread runtime](thread-runtime.md#independent-saved-traversal),
+which consumes saved held pages before dispatching new older network demand.
+Offline, pending and failed server state cannot block this local path. The band
+includes zero through `HISTORY_ASK_BAND_VIEWPORTS` (2) thread viewport heights, using measured `clientHeight`. Merely entering the band,
+programmatic movement, page arrival and reconnect cannot ask for another batch.
+There is no legacy visible-gap scan, gap-priority request or history-store request
+from this hook. Retained anchor filtering for `data-history-gap` is a geometry rule,
+not a paging route.
 
-Chromium suppresses native anchoring at exactly `scrollTop === 0`. Stable row keys
-and clearing bottom following alone therefore cannot preserve that reader's place.
-The pin remembers the first positive-height direct-child non-gap row whose bottom is
-below the usable top edge (the greater of thread top and measured header bottom), and
-its top relative to the thread. It refreshes this local measurement after renders,
-scrolls and connected demand through the [ordered candidate index](#thread-scroll-pin),
-draining pending mutations before binary lookup so collapsed rows cannot become anchors.
-When `prependedRows` increases for the same conversation while not following, a layout
-effect restores the surviving row's position before paint. This covers zero-offset
-prepends and middle-of-thread gap insertion. At nonzero offsets, native anchoring remains
-enabled; if it already held the row, the measured displacement requires no extra movement.
-Structural prepend compensation may still enumerate and measure all rows to calculate
-the content bottom and missing scroll range. That exceptional work is separate from
-scroll lookup and ordinary same-row streaming growth, whose membership stays unchanged.
-The synchronous intent release and direction check retain this compensation and its
-pin-write echo protection. Momentum flings can still leave a stale remembered anchor;
-the streaming-input fix does not change that separate limitation.
+`ThreadItemsTimeline` keeps empty content in the same focusable scroll region
+(`tabIndex={0}`, client-owned label `Conversation history`); an early `EmptyThread`
+return would make first-page input unreachable. The callback reports whether local
+demand started or network demand is eligible. At zero with no accepted demand,
+`demandHistory` restores prior following intent; a short offline thread with no
+remaining saved demand must still follow later intrinsic row growth. Removing only
+the connectivity guard would release that intent on a no-op. Accepted saved demand
+releases following and keeps the anchor even offline. Repeated input during a local
+read coalesces; local failure requires explicit Retry. Descendant-control keys do
+not enter this path. The four short-offline no-op regressions and both mounted
+saved-traversal cases passed in the [counted Linux gate](chat-history-testing-restoration.md#counted-unchanged-saved-traversal-validation).
 
-A short thread may not have enough scroll range to reach the measured target.
-The pin adds only the measured bottom padding needed to retain its existing blank
-space below the rows. Bottom following removes that inline padding and restores
-the measured stylesheet input clearance, including after a successful send. The existing
-`pinnedOffset` echo guard prevents compensation's scroll event from re-arming
-following. Measuring row displacement matters: `scrollHeight` includes unused
-viewport space in short threads and is not the inserted content's height.
-Convert the measured content bottom to absolute scroll coordinates by adding
-`scrollTop` before computing missing room. A stable reader row alone can hide
-unnecessary blank-space growth at nonzero offset; retain the exact insertion/
-scroll-height assertion as well as anchor geometry.
+Chromium suppresses native anchoring at exactly zero. Stable item keys and releasing
+following cannot alone preserve that reader's place. The pin remembers the first
+positive-height direct-child non-gap row whose bottom exceeds the greater of the
+thread top and measured header bottom. It refreshes this measurement through the
+[ordered candidate index](#thread-scroll-pin), draining pending mutations before
+lookup so collapsed rows cannot become anchors.
 
-[`thread-scroll-pin.spec.ts`](../../../e2e/thread-scroll-pin.spec.ts) covers a
-one-row held thread receiving one or twenty rows, an overflowing thread at zero,
-and the existing nonzero native-anchor case. It identifies the retained row by
-content and checks its viewport top, plus zero extra requests and padding removal
-on send. Index-addressed assertions can pass while a reused DOM node displays a
-different row. The nonzero case alone can also pass while zero-offset prepends
-remain broken. Native ArrowUp scrolling animates after release, so that case issues
-demand at zero before parking the nonzero anchor and releasing the held reply.
+For the same conversation, a changed immutable presentation token restores a
+surviving held row before paint. This covers older-item prepends and revisions
+above the reader, including batches whose watermark does not advance. Numeric
+prepend counters are no longer presentation inputs. At nonzero offsets native
+anchoring remains enabled; if it already held the row, displacement requires no
+extra movement. Structural compensation can still enumerate rows to measure the
+content bottom/missing scroll range, separately from ordinary bounded scroll lookup
+and same-row growth. Momentum flings can leave a stale remembered anchor; the
+streaming-input repair does not change that separate limitation.
 
-[`history-walk.spec.ts`](../../../e2e/history-walk.spec.ts) proves the band edge: an
-input parked at exactly `HISTORY_ASK_BAND_VIEWPORTS * clientHeight` asks, one pixel
-further out sends nothing. The "sends nothing" half cannot be ordered behind a later
-in-band ask in the same test — `requestOlderHistory`'s single-request-in-flight guard
-would swallow the in-band ask if the out-of-band input had (wrongly) already asked, so
-the two cases would be indistinguishable by request count. The absence is read after a
-fixed settle instead, before the in-band input fires.
+A short thread may lack range to restore the target. The pin adds only the measured
+bottom padding needed to retain existing blank space. Bottom following removes it
+and restores stylesheet input clearance, including after a successful send. The
+`pinnedOffset` echo guard prevents compensation from re-arming following. Measure
+row displacement rather than `scrollHeight`, which includes unused viewport space;
+add `scrollTop` when converting content bottom to absolute scroll coordinates.
+A stable row alone can hide unnecessary blank-space growth, so keep padding/range
+assertions alongside anchor geometry.
+
+Current supplied-item prepend/revision, held-reader and following proofs live in
+[`thread-items.spec.ts`](../../../e2e/thread-items.spec.ts); see
+[watermark-independent restoration](#supplied-snapshot-anchor-restoration) and its
+reader-setup barriers. [`thread-scroll-pin.spec.ts`](../../../e2e/thread-scroll-pin.spec.ts)
+retains trusted input, short/overflowing prepend, image growth and send resumption
+coverage. Those interaction tests are separate from removed legacy gap-projection
+assertions and the producer/history tests retained until #2024.

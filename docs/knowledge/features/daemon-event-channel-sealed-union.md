@@ -45,11 +45,13 @@ export type DaemonEvent =
       ; occurredAt: string; workspaceCwd: string | null }
   | { type: 'sessionSettingsUpdated'; sessionId: string; changeId: string }
   | { type: 'sessionSettingsRejected'; changeId: string }
-  | { type: 'historyPageReceived'; conversationId: string; entries: readonly HistoryTimelineEntry[]
-      ; cursor: string; atStart: boolean }
-  | { type: 'historyRequestFailed'; conversationId: string; reason: HistoryRequestFailure
-      ; retryable: boolean }
 ```
+
+`historyPageReceived`, `historyRequestFailed` and `HistoryRequestFailure` are
+removed (#2025), including their no-op switch cases in the four exhaustive
+renderer bridges. `HistoryTimelineEvent` and `HistoryTimelineEntry` remain shared
+translator/storage declarations, not legacy reply IPC. The shared fake publisher
+still translates those declarations into authoritative items.
 
 `threadReply` and `threadQueryFailed` are additive members on the existing
 `window.pyry.onDaemonEvent` subscription. The connection-bound sink supplies
@@ -100,21 +102,15 @@ its position between the debug-bundle members and `assistantDelta`) had already 
 history](daemon-event-channel-sealed-union-history.md) for what the two removed members carried while
 they existed.
 
-`HistoryTimelineEntry.event` uses `HistoryTimelineEvent`; its `turnEnd` member
-carries the same optional stopped-turn fields as the live member, without a
-per-entry `conversationId`. The enclosing page supplies the request-correlated id.
-See [stopped-turn metadata](daemon-event-channel.md#stopped-turn-metadata) for the
-absence, byte-bound and display-only contract. Live `turnEnd` also carries the
-existing optional `daemonTs` envelope stamp for the history/live join.
-
-`HistoryTimelineEvent` also has placement-only `backgroundTaskStarted`
-(`taskId`, `toolCallId`, `taskType`, `description`) and `backgroundTaskUpdated`
-(`taskId`, `status`) members. They carry no patch, summary, roster or turn authority;
-the enclosing correlated page owns routing. Live started/updated members retain their
-live fields and optional `daemonTs` envelope stamp for bounded overlap joins.
-No IPC channel or privileged capability is added. See
-[lifecycle decoding](request-history-send.md#background-agent-placement-events) and
-[placement collection](conversation-timeline-store-internals.md#background-agent-history-placement).
+`HistoryTimelineEntry.event` and `HistoryTimelineEvent` remain shared
+storage/translation declarations. Their `turnEnd` member carries optional
+stopped-turn fields without a per-entry `conversationId`; placement-only
+`backgroundTaskStarted` (`taskId`, `toolCallId`, `taskType`, `description`) and
+`backgroundTaskUpdated` (`taskId`, `status`) carry no patch, summary, roster or
+turn authority. They no longer arrive through a correlated history-page event.
+The shared fake publisher translates retained fixture input into authoritative
+items; see [retained boundaries](request-history-send.md#retained-boundaries).
+Live members retain their existing named fields and envelope timestamp paths.
 
 ## 2. Per-member history
 

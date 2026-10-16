@@ -73,6 +73,7 @@ export interface InnerFrameV2 {
 }
 
 export type EnvelopeType =
+  | keyof HostedPayloads
   | 'thread_item_added'
   | 'thread_item_changed'
   | 'thread_text_append'
@@ -546,6 +547,8 @@ export interface Envelope {
   /** Producing session: omission, explicit no-session null, or a nonempty ID. */
   session_id?: string | null
   session_state_cleared?: boolean
+  /** Explicit conversation route, independent of the producing session. */
+  conversation_id?: string
 }
 
 export type WireRole = 'user' | 'assistant'
@@ -4037,6 +4040,57 @@ export interface ErrorPayload {
   // is a digits-only MAJOR.MINOR.PATCH. On the window's `failed` event it is that validated value.
   min_client_version?: string
 }
+
+/** Hosted-app v1, daemon contract revision 964c5c4b. Data only; no capability activation. */
+export interface HostedAppRecord {
+  app_id: string
+  title: string
+  desired: 'available' | 'stopped'
+  state: 'starting' | 'running' | 'stopped' | 'failed'
+  active_release: string | null
+  pending_release: string | null
+  last_error: Pick<ErrorPayload, 'code' | 'message'> | null
+  revision: number
+}
+
+/** Directional payload declarations. Resource members carry no semantic-validation claim. */
+export interface HostedPayloads {
+  // Client → daemon requests/controls (no in_reply_to).
+  list_apps: { cursor?: string }
+  app_asset_request: { app_id: string; release_version: string; path: string; navigation: boolean; query?: string }
+  app_api_request: {
+    app_id: string; release_version: string; path: string; query?: string
+    method: 'GET' | 'HEAD' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS'
+    headers: Record<string, string>; body: string
+  }
+  app_response_credit: { app_id: string; request_id: number; next_index: number }
+  app_cancel: { request_id: number; app_id?: string }
+  // Daemon → client replies (required in_reply_to).
+  apps: { revision: number; items: HostedAppRecord[]; next_cursor: string | null }
+  app_response: {
+    app_id: string; release_version: string; status: number; headers: Record<string, string>
+    size_bytes: number; total_chunks: number; sha256: string
+  }
+  app_response_chunk: { app_id: string; index: number; data: string }
+  app_cancelled: { request_id: number; app_id?: string }
+  // Daemon → client notifications (no in_reply_to).
+  app_updated: HostedAppRecord
+  app_removed: { app_id: string; revision: number }
+}
+
+/** Only discovery/control payloads returned by main's validator; bridge errors reuse ErrorPayload. */
+export type HostedControlEnvelope = {
+  [K in 'list_apps' | 'apps' | 'app_updated' | 'app_removed' | 'app_cancel' | 'app_cancelled' | 'error']:
+    Pick<Envelope, 'id' | 'ts'> & { type: K; payload: K extends keyof HostedPayloads ? HostedPayloads[K] : ErrorPayload }
+    & (K extends 'apps' | 'app_cancelled' | 'error' ? { in_reply_to: number } : { in_reply_to?: never })
+}['list_apps' | 'apps' | 'app_updated' | 'app_removed' | 'app_cancel' | 'app_cancelled' | 'error']
+
+/** Per-frame resource validation only; pending ownership and assembly remain consumer-owned. */
+export type HostedResourceEnvelope = {
+  [K in 'app_asset_request' | 'app_api_request' | 'app_response' | 'app_response_chunk' | 'app_response_credit']:
+    Pick<Envelope, 'id' | 'ts'> & { type: K; payload: HostedPayloads[K] }
+    & (K extends 'app_response' | 'app_response_chunk' ? { in_reply_to: number } : { in_reply_to?: never })
+}['app_asset_request' | 'app_api_request' | 'app_response' | 'app_response_chunk' | 'app_response_credit']
 
 /** QR pairing payload: relay address, server id, pairing token, server static key. */
 export interface QrPayload {

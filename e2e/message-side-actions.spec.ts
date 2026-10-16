@@ -16,6 +16,8 @@ const frames = (inbound: Uint8Array): Uint8Array[] => {
   const payload = envelope.payload as SendMessagePayload
   const turnId = payload.message_id
   return [
+    encodeEnvelope({ id: 19, type: 'message', ts: TS, payload: { ...payload, role: 'user',
+      attachments: payload.attachment_ids?.map(id => ({ attachment_id: id, filename: 'report.pdf' })) } }),
     encodeEnvelope({ id: 20, type: 'assistant_delta', ts: TS, payload: {
       conversation_id: SEEDED_ROW.id, turn_id: turnId, seq: 0, text: payload.text
     } }),
@@ -100,7 +102,7 @@ test('copy and reply do not increase short or multi-line bubble heights or neigh
         button.style.removeProperty('min-height')
       })
     })
-    await page.locator('.bubble[data-thread-role="user"]').last().scrollIntoViewIfNeeded()
+    await page.locator('[data-thread-role="user"]').last().scrollIntoViewIfNeeded()
     await page.screenshot({ path: `/tmp/builder-1896/messages-${width}.png`, animations: 'disabled' })
   }
 })
@@ -130,7 +132,7 @@ test('copy and reply hover layers surround only the pointed glyph without changi
     await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 800), width)
     await expect.poll(() => page.evaluate(() => innerWidth)).toBe(width)
     for (const role of ['user', 'assistant']) {
-      const bubble = page.locator(`.bubble[data-thread-role="${role}"]`)
+      const bubble = page.locator(`[data-thread-role="${role}"]`)
       const row = bubble.locator('..')
       const copy = row.getByRole('button', { name: 'Copy message' })
       const reply = row.getByRole('button', { name: 'Reply to message' })
@@ -188,15 +190,17 @@ test('copy and reply hover layers surround only the pointed glyph without changi
   }
 })
 
-test('side copy and row cap retain sizing while metadata expands on hover and focus', async ({ launchPairedApp }) => {
+test('side copy and row cap retain sizing while metadata expands on hover and focus', async ({ launchPairedApp }, testInfo) => {
   const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: frames })
   for (const text of [LONG, SHORT]) {
     await page.getByPlaceholder('Message…').fill(text)
     await page.getByRole('button', { name: 'Send' }).click()
     await expect(page.locator('.bubble__markdown')).toHaveCount(text === SHORT ? 2 : 1)
+    await expect(page.locator('.bubble__markdown').last()).toHaveText(text)
+    await expect(page.locator('.bubble__cursor')).toHaveCount(0)
   }
-  const users = page.locator('.bubble[data-thread-role="user"]')
-  const assistants = page.locator('.bubble[data-thread-role="assistant"]')
+  const users = page.locator('[data-thread-role="user"]')
+  const assistants = page.locator('[data-thread-role="assistant"]')
   for (const width of [800, 1280, 1800]) {
     await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 1000), width)
     await expect.poll(() => page.evaluate(() => innerWidth)).toBe(width)
@@ -268,6 +272,10 @@ test('side copy and row cap retain sizing while metadata expands on hover and fo
     await expect(bubble.locator('.bubble__meta button')).toHaveCount(0)
   }
 
+  // Prove the earlier presses wrote a different value, so a stale matching clipboard
+  // from another execution cannot satisfy the streaming-copy assertion below.
+  await expect.poll(() => app.evaluate(({ clipboard }) => clipboard.readText())).toBe(SHORT)
+
   // Upload completion is the production IPC event seam used by attachment-file-row.spec.ts.
   await app.evaluate(({ BrowserWindow }, payload) => {
     BrowserWindow.getAllWindows()[0].webContents.send(payload.channel, payload.event)
@@ -287,13 +295,56 @@ test('side copy and row cap retain sizing while metadata expands on hover and fo
   await expect(attached.locator('.bubble__meta-time')).toBeVisible()
   expect((await dimensions(attached))[1]).toBeGreaterThan(attachedSize[1])
 
+  // The attachment is an optimistic user echo; wait for its daemon reply and turn_end
+  // to commit before injecting an independent streaming turn.
+  await expect(assistants).toHaveCount(3)
+  await expect(assistants.nth(2).locator('.bubble__markdown')).toHaveText('Attached report')
+  await expect(page.locator('.bubble__cursor')).toHaveCount(0)
   daemon.pushFrame(encodeEnvelope({ id: 30, type: 'assistant_delta', ts: TS, payload: {
     conversation_id: SEEDED_ROW.id, turn_id: 'stream', seq: 0, text: 'Streaming partial reply'
   } }))
-  const tail = assistants.last()
+  const tail = assistants.filter({ hasText: 'Streaming partial reply' })
+  await expect(assistants).toHaveCount(4)
+  await expect(tail).toHaveCount(1)
+  await expect(tail.locator('.bubble__markdown')).toHaveText('Streaming partial reply')
   await expect(tail.locator('.bubble__cursor')).toBeVisible()
-  await tail.locator('..').getByRole('button', { name: 'Copy message' }).click()
-  await expect.poll(() => app.evaluate(({ clipboard }) => clipboard.readText())).toBe('Streaming partial reply')
+  const streamCopy = tail.locator('..').getByRole('button', { name: 'Copy message' })
+  // Moving focus collapses the attached row's metadata. Do that before pressing:
+  // otherwise a press spanning frames can move Copy 28px upward before release.
+  await streamCopy.focus()
+  await expect(streamCopy).toBeFocused()
+  await streamCopy.hover()
+  const observations: unknown[] = []
+  await expect.poll(async () => {
+    const observation = await streamCopy.evaluate(async el => {
+      const read = () => {
+        const box = el.getBoundingClientRect()
+        const thread = el.closest('.conversation__thread')!
+        return { x: box.x, y: box.y, width: box.width, height: box.height,
+          top: thread.scrollTop, content: thread.scrollHeight,
+          focused: document.activeElement === el, hovered: el.matches(':hover') }
+      }
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+      const previous = read()
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+      const current = read()
+      return { previous, current, stable: JSON.stringify(previous) === JSON.stringify(current) }
+    })
+    observations.push(observation)
+    return observation.stable && observation.current.focused && observation.current.hovered
+  }).toBe(true)
+  // Observe native delivery without replacing the clipboard API or the React handler.
+  await streamCopy.evaluate(el => el.addEventListener('click', event => {
+    el.setAttribute('data-copy-activation', event.isTrusted ? 'trusted' : 'untrusted')
+  }, { once: true }))
+  await streamCopy.click()
+  try {
+    await expect(streamCopy).toHaveAttribute('data-copy-activation', 'trusted')
+    await expect.poll(() => app.evaluate(({ clipboard }) => clipboard.readText())).toBe('Streaming partial reply')
+  } finally {
+    await testInfo.attach('stream-copy-readiness', { contentType: 'application/json', body: JSON.stringify(observations) })
+    await streamCopy.evaluate(el => el.removeAttribute('data-copy-activation'))
+  }
 
   daemon.pushFrame(encodeEnvelope({ id: 31, type: 'queue_state', ts: TS, payload: {
     conversation_id: SEEDED_ROW.id, queued: [{ queued_msg_id: 1, text: LONG, ts: TS }]

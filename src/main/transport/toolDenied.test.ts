@@ -35,15 +35,4 @@ describe('tool denial decoder', () => {
   it('rejects a non-string report entry', () => {
     expect(() => parseInboundMessage(frame({ ...payload, dropped_fields: [4] }))).toThrow()
   })
-  it('decodes the same marker from stored history', () => {
-    const decoded = parseInboundMessage(encodeEnvelope({
-      id: 2, type: 'history_page', ts: '2026-09-11T12:00:00Z',
-      payload: { entries: [{ id: 1, type: 'tool_denied', ts: '2026-09-11T12:00:00Z', payload }], cursor: '', at_start: true }
-    }))
-    expect(decoded).toMatchObject({ historyPage: { entries: [{ event: {
-      type: 'toolDenied', turnId: 't1', toolUseId: 'u1', toolName: 'Bash',
-      decisionReasonType: 'rule', decisionReason: 'Blocked command', message: 'Permission required',
-      truncatedFields: ['message'], droppedFields: ['tool_name']
-    } }] } })
-  })
 })

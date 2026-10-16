@@ -2,6 +2,9 @@ import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/lau
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { EnvelopeType } from '../src/shared/wire/types'
 
+// Scripted history is published as thread catch-up/pages by the shared fake daemon.
+test.use({ scriptedHistory: true })
+
 const ts = '2026-10-05T12:00:00Z'
 const payload = (id: string) => ({ conversation_id: SEEDED_ROW.id, turn_id: 'run-turn', tool_use_id: id })
 const frame = (type: EnvelopeType, value: unknown) => encodeEnvelope({ id: 1, type, ts, payload: value })
@@ -10,7 +13,12 @@ for (const width of [800, 1280]) test(`tool runs retain expansion and update col
   let historyRequest: number | undefined
   const { page, daemon, app } = await launchPairedApp({ buildReplyFrames: (bytes) => {
     const request = decodeEnvelope(bytes)
-    if (request.type === 'request_history') { historyRequest = request.id; return [] }
+    if (request.type === 'request_history') {
+      const opening = historyRequest === undefined
+      historyRequest = request.id
+      return opening ? [encodeEnvelope({ id: 1, type: 'history_page', ts, in_reply_to: request.id,
+        payload: { entries: [], cursor: 'older', at_start: false } })] : []
+    }
     return [seedConversationsFrame()]
   } })
   await app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size, 800), width)

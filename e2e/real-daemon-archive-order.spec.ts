@@ -1,9 +1,10 @@
-import { execFile } from 'node:child_process'
+import { scenarioDaemonRevision, liveProof } from './fixtures/clientScenario'
+
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { promisify } from 'node:util'
-import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
-import { daemonIdentity } from './fixtures/daemonVersion'
+
+import { test, expect, encodePairingPayload } from './fixtures/clientScenario'
+
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
 test.use({ spawnClaude: false, seedPromoted: true })
@@ -14,9 +15,7 @@ const ROUNDTRIP = 15_000
 
 test('real daemon shows the second archived channel first, against last-used ascending order', async ({ relay, daemon, page }) => {
   test.setTimeout(120_000)
-  const pyryBin = process.env.PYRY_BIN ?? 'pyry'
-  const { stdout } = await promisify(execFile)(pyryBin, ['version'])
-  const revision = daemonIdentity(stdout)
+  const revision = scenarioDaemonRevision()
   console.log(`daemon-revision: ${revision}`)
   test.info().annotations.push({ type: 'daemon-revision', description: revision })
 
@@ -42,13 +41,18 @@ test('real daemon shows the second archived channel first, against last-used asc
     const saved = JSON.parse(await readFile(registryPath, 'utf8'))
     return saved.conversations
   }
+  let first: Awaited<ReturnType<typeof registry>>[number] | undefined
+  let second: Awaited<ReturnType<typeof registry>>[number] | undefined
+  await liveProof(async () => {
   const before = await registry()
-  const first = before.find((row) => row.name === FIRST)
-  const second = before.find((row) => row.name === SECOND)
+  first = before.find((row) => row.name === FIRST)
+  second = before.find((row) => row.name === SECOND)
   expect(first).toBeDefined()
   expect(second).toBeDefined()
   if (first === undefined || second === undefined) throw new Error('synthetic channels missing')
   expect(Date.parse(first.last_used_at)).toBeLessThan(Date.parse(second.last_used_at))
+
+  })
 
   await page.locator('.channel-list__row-open').filter({ hasText: FIRST }).click()
   await page.locator('.conversation__overflow-trigger').click()
@@ -73,15 +77,17 @@ test('real daemon shows the second archived channel first, against last-used asc
   await expect(page.getByRole('tab', { name: 'Channels (2)', exact: true })).toBeVisible()
   await expect(page.locator('.archive__row-title')).toHaveText([SECOND, FIRST])
 
+  await liveProof(async () => {
   const after = await registry()
-  const firstStamp = after.find((row) => row.id === first.id)?.archived_at
-  const secondStamp = after.find((row) => row.id === second.id)?.archived_at
+  const firstStamp = after.find((row) => row.id === first!.id)?.archived_at
+  const secondStamp = after.find((row) => row.id === second!.id)?.archived_at
   // Missing prerequisite support must fail acceptance, not pass on a coincidental fallback order.
   expect(typeof firstStamp).toBe('string')
   expect(typeof secondStamp).toBe('string')
   if (firstStamp === undefined || secondStamp === undefined) throw new Error('daemon archive stamps missing')
   expect(Date.parse(firstStamp)).toBeLessThan(Date.parse(secondStamp))
-  expect(after.filter((row) => row.id === first.id || row.id === second.id)
+  expect(after.filter((row) => row.id === first!.id || row.id === second!.id)
     .sort((a, b) => Date.parse(a.last_used_at) - Date.parse(b.last_used_at)).map((row) => row.name))
     .toEqual([FIRST, SECOND])
+  })
 })

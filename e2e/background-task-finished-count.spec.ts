@@ -3,6 +3,9 @@ import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
 import { encodeEnvelope, decodeEnvelope } from '../src/main/transport/codec'
 import type { BackgroundTask, ConversationSummary, EnvelopeType } from '../src/shared/wire/types'
 
+// Scripted history is published as thread catch-up/pages by the shared fake daemon.
+test.use({ scriptedHistory: true })
+
 // #1561: the composer's task-count pill counts only the tasks claude has not reported finished. A
 // `background_task_updated` whose `status` is `completed` / `failed` / `stopped` takes a listed task out
 // of the COUNT at once, without waiting for an emptier roster that nothing guarantees will come, while

@@ -29,6 +29,170 @@ On the client, trace the actual inbound parser rather than trusting an old symbo
 A shared model-row lookup can govern behaviour as well as display text.
 Read all callers before broadening what an empty identifier means.
 
+## Owned history mutation evidence
+
+A one-item edit after full replacement can conceal an unbounded production append
+path. Start empty and measure successive additions at growing saved sizes, keeping
+untouched placement bytes as an independent assertion. Measure changed-item
+serialization/protection separately from logarithmic sequence-index reads/writes;
+ciphertext equality alone does not prove that no full scan occurred. Batch fixtures
+must also check each shared authenticated path flushes once, because correct final
+bytes can hide repeated work that stalls mounted browser setup.
+
+Compare separately flushed, coalesced and held-failure progress after fresh protected
+reopen. A completion flag combined with later metadata can erase saved/pending fences;
+carry exact version intervals and certified availability boundaries instead. Include
+same-epoch explicit resets, memory-only holder recreation and lost acknowledgements.
+Individually admitted JSON additions must still fit full-reader aggregate bounds.
+See [owned regression assertions and counted Linux/package validation](chat-history-testing-storage.md#owned-mutation-regressions-and-counted-validation)
+for the final #2044 verifier evidence: 9,103 units executed/passed, 0 failed, 3 skipped;
+435 configured fake cases executed/passed, 0 failed, 3 skipped; packaged owned-update
+reopen present/passed, 1 executed, 0 failed/skipped. These are recorded results on
+`5005bf69`, Linux x64, not checks rerun by documentation. The skips provide no live
+acceptance; macOS and live-Claude are outside that ticket's scope. Historical failures
+and teardown follow-up #2054 remain linked from the testing reference.
+
+## Authoritative thread read evidence
+
+Renderer units are static `renderToStaticMarkup` in Node: they prove markup and pure decisions,
+not effects, focus, scrolling or publication. The existing `rendererFixture` in
+[`e2e/thread-items.spec.ts`](../../../e2e/thread-items.spec.ts) supplies route, immutable
+snapshot, summary, completion and reader inputs to the isolated item view. Keep
+`ConversationListData` mounted when replacing `App`; writing a mark directly into the list
+store does not test received owning-daemon confirmation.
+
+Assert three boundaries separately: renderer publisher attempts with host/conversation/target,
+wire commands recorded by the fake daemon, and received marks reflected through the mounted
+receipt bridge. Main can refuse a host-qualified attempt when two connected hosts claim the
+same conversation ID. Fake `conversation_updated` acknowledgements must correlate with the
+recorded wire request; also exercise unsolicited late marks. A below-target clamp stays
+pending, while a confirming mark retires it. Neither a successful send nor an attempt count
+establishes acknowledgement.
+
+Fence absence assertions with positive callback/processing and React-commit barriers. For the
+pre-commit race, receive a same-row append and newer summary, trigger focus/scroll/list probes
+before committing, then show that only committed complete visible content permits the newer
+target. Receipt/list output must commit before checking exclusions after clamps, epoch/host
+replacement, deletion or owner loss, with the observer still mounted. Cover blur, reader,
+above-tail/chrome overlap, collapsed descendants, hidden trailing items, shown unordered/queued
+items, older/incomplete/abandoned batches and repair fences. A poll that immediately sees no
+command can otherwise pass before any input reaches the consumer.
+
+History fakes need the same ownership discipline. In
+[`e2e/tool-groups.spec.ts`](../../../e2e/tool-groups.spec.ts), keep the quiet conversation's
+history request pending and positively observe it before returning to the seeded chat. Capture
+requests by host/conversation and answer the seeded request, then wait for its historical child
+to commit before asserting the finished marker. One shared latest-request slot can reply to the
+wrong chat because main correlates replies by request ID and suppresses repeated pending asks.
+Reply to `list_conversations` with the current roster, retaining the single-row launch seed and
+both rows afterwards; a catch-all one-row list response can silently remove quiet ownership.
+The [controlled shared-ID proof](../../specs/architecture/1936-visible-thread-read-marks.md#revisions)
+failed at the historical-child commit barrier (`0 tools`, expected `1 tool`); selecting the
+owning request passed the existing identity, finished-marker and navigation assertions. Preserve
+that barrier and request ordering when reusing the scenario to validate another platform.
+
+The [final verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/1965#issuecomment-6188903924)
+records the configured Linux gate on `20d0f07140931f3f0aaad4977f6a186c5f761727`, 2026-10-15:
+`npx playwright test --reporter=json` ran **407 executed, 407 passed, 0 failed, 3 skipped,
+0 flaky**, with four workers, clipboard/parallel projects and zero retries. All 12 thread-items
+and 6 tool-groups cases were present and passed, including both 1280/800 variants of
+`publishes only committed visible authoritative read evidence` and
+`connect roster Agents appear before history and keep identity through live and historical launches`.
+The three skips are macOS-only badge/window lifecycle cases. Units recorded 10,279 executed/passed,
+0 failed, 3 skipped across 405 passing files. Install, docs guard and build passed; pre-verify
+recorded 3 passed and 2 deliberately skipped by `--no-suite`, with typecheck subsequently in build.
+These results supersede the earlier red complete gates; a focused pass or a baseline comparison
+alone did not satisfy that full-suite requirement.
+
+The [connect-roster verifier](https://github.com/pyrycode/pyrycode-desktop/pull/2000#issuecomment-6189606015)
+records the unchanged scenario/configuration on `1e6cc84ce2117dd6c06a31d11af901f25ac7d6eb`,
+2026-10-15: the complete Linux gate ran **427 executed, 427 passed, 0 failed, 3 skipped,
+0 flaky**, four actual workers and zero retries. The named connect-roster scenario above was
+present and passed: **1 executed, 1 passed, 0 failed, 0 skipped**, retry 0. The skips were two
+macOS badge cases and the macOS window-reopen case. Retained reports are
+`/work/Projects/pyrycode-desktop-agents/logs/verifier-gate_#1998.pass.json` and
+`verifier-gate_#1998_6.log` (Playwright JSON) with its stderr log in that directory; shared
+verifier evidence bundle `7e872c636b8d6eb367de8e665f72659b5feea9c4cbce0cf933466bd04cf00a29`
+includes the verdict and report tail, with the full-report pointer in `pointers.json`.
+
+The [native validation evidence](../../specs/architecture/1998-connect-roster-native-validation.md#validation-evidence)
+now includes inspected managed `desktop-fake-suite` task
+`0234f9aa222747faa60ae91272b3c4c0a8c191f095a48b442728b5adbb6e44ce`, run on the MacBook
+at revision `0573bc79d97199427d6eebdf4f36f9d3785f7321`, 2026-10-15. The complete configured
+suite recorded **429 executed, 429 passed, 0 failed, 1 skipped, 0 flaky**, four actual
+workers and zero retries. The named connect-roster scenario above was present and passed:
+**1 executed, 1 passed, 0 failed, 0 skipped**, retry 0. The sole skip was the independent
+input-enabled-cover hover case because a never-shown window receives no display pointer.
+The named case's `launch-fate` attachment records a running app at outcome, exit 0 and no
+teardown failures; the setup summary is `[]`, with no top-level report errors.
+
+Documentation inspected all six retained artifacts in `/tmp/docs-1998-native-20261015/desktop/`:
+`capture.json`, `playwright.json`, `playwright.list.log`, `execution.log`, returned
+`playwright.config.ts` and `fake-daemon-setup.json`. They remain retrievable through the
+managed task. Its invocation was Playwright `test --config=playwright.config.ts`, without
+file, grep, project or shard filters; all 430 configured cases are accounted for.
+The returned configuration SHA256 is
+`f2868e97d72733c286ff8c3098f09adc62e2e8bfa3ad9393e000eebf9a429d5a`, matching the
+candidate and original failing configuration. The scenario is unchanged in the current
+branch; later main merges changed configuration, so these counts belong to the recorded
+candidate. Reuse the controlled ownership proof above rather than adding another regression
+or replacing the complete configured gate with a filtered pass.
+
+Native execution is verified; acceptance remains pending the builder's required returned-artifact
+inspection and evidence commit, as specified by the PR/verifier handoff. The earlier task-access
+blocker is resolved. This documentation inspection does not stand in for that builder-owned step;
+return the existing task reports to the builder without requesting duplicate execution.
+
+Separate native/macOS evidence for older candidate `ddb9bce8db99546129037f00713b753f603562d9`
+remains unverified and handed to the dispatcher: task
+`400bbaf6852f5e7efa8c860719fcf81552c8014a58142a12f66936d55fa14a07` has no verified result
+in the verdict. Any result needs its own revision/configuration, executed/failed/skipped counts,
+named cases and setup-attachment review before native acceptance. Replacement-epoch captures at
+1280×773 and 800×773 show existing bubbles and copy/reply controls; the supplied fixture omits
+the surrounding sidebar/top/input chrome, so they do not prove integrated chrome fidelity.
+No real-Claude/live-daemon test ran or was required for this supplied seam.
+Production activation has separate [counted fake-suite evidence](thread-runtime.md#validation-boundaries).
+Credentialed live acceptance remains pending in the live runbook.
+
+## Hosted app link verification
+
+[`e2e/hosted-app-links.spec.ts`](../../../e2e/hosted-app-links.spec.ts) clicks links
+in the production conversation renderer through privileged preload/IPC and inspects
+native hosted content and fake-daemon dispatch. `launchPairedApp` uses legacy
+non-UUID host IDs; use `skipPairing` and spec-local canonical UUIDv4 pairing for
+this grammar instead of silently testing targets the parser must refuse.
+
+The configured verifier gate on `fd19fde4bd34febc3111693f2171d62a520015a4`,
+2026-10-15, ran `npx playwright test --reporter=json`: **436 executed, 436 passed,
+0 failed, 3 skipped**. All four named cases below were present and passed, as
+confirmed by the dispatcher gate report and
+[final verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/2005#issuecomment-6191844871).
+The skips were three macOS-only badge/window lifecycle cases on Linux.
+
+| Passed scenario | Behavior covered |
+| --- | --- |
+| `streaming and settled links preserve conversation drafts` | Pending/frozen and settled activation, repeated opens, keyboard activation, unchanged healthy discovery and sidebar return releasing native content/restoring the draft. |
+| `latest host selection survives delayed replies` | Equal app IDs on two hosts, cross-host selection and delayed A discovery/command replies after selecting B. |
+| `invalid and unpaired links stay bounded` | Malformed destinations stay visible/inert, manual pairing cancel preserves the draft, and successful pairing does not open the original target automatically. |
+| `links reuse discovery recovery` | Missing/stopped/failed apps, offline/reconnect and unsupported recovery, failed discovery refresh and held completion, Reopen and removal. |
+
+Fence zero-dispatch/OS-handoff assertions with positive processing evidence.
+The delayed-selection case releases old discovery, observes a newer B label and
+uses an ordered snapshot response after releasing A's command result before
+checking B's generation/native identity and zero A assets. Recovery observes
+authoritative status/discovery processing before excluding resources; a requested
+walk alone does not establish readiness. Ready content and return-to-conversation
+checks precede the final `shell.openExternal` spy assertions.
+
+Static parser/renderer tests pin exact raw destinations, normalized-destination
+denial, escaped titles/reference-label delimiters, meaningful labels, opt-in output
+and no render-time activation. Main boundary units independently cover attached
+privileged main-frame and named paired-host admission. Static renders cannot prove
+clicks, effects or native composition. Existing
+[native-view/Fetch proof](daemon-connection-hosted-resource-views.md#native-viewer-verification)
+retains its scope; these synthetic reply scenarios establish no real Claude
+creation/publish, daemon/relay or SQL acceptance, which remains #1929.
+
 ## Review and document hygiene
 
 The pipeline uses one GitHub identity. A reviewer cannot approve or request changes

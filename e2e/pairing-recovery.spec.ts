@@ -1,7 +1,7 @@
 import type { Locator, Page } from '@playwright/test'
 import { test, expect, seedConversationsFrame, SEEDED_ROW, SECOND_SEEDED_ROW,
   type PairedServerHandle } from './fixtures/launchPairedApp'
-import { launchIsolatedApp, createLaunchFateLog, attachLaunchFate } from './fixtures/desktopIsolation'
+import { appWindow, launchIsolatedApp, createLaunchFateLog, attachLaunchFate } from './fixtures/desktopIsolation'
 import { COMPOSER_REPAIR_BUTTON_COPY } from '../src/renderer/src/screens/conversation/composerSend'
 import { encodeEnvelope, decodeEnvelope } from '../src/main/transport/codec'
 import { DAEMON_EVENT_CHANNEL } from '../src/shared/ipc/events'
@@ -63,7 +63,7 @@ test('startup rejection before a list waits for manual repair, cancels and re-pa
   // Reuse the SAME endpoint and fake daemon, so this is a decoded rejection, not connection refusal.
   const app = await launchIsolatedApp({ args: ['.', `--user-data-dir=${first.userDataDir}`], env, fate })
   try {
-    const page = await app.firstWindow()
+    const page = await appWindow(app)
     await page.setViewportSize({ width: 800, height: 800 })
     const recovery = page.getByRole('dialog', { name: 'Pair', exact: true })
     await expect(page.locator('.channel-list__host')).toHaveCount(1)
@@ -153,7 +153,7 @@ test('healthy host remains usable; last-host and repeated failures never navigat
   await expect(page.locator('.conversation__banner')).toHaveCount(0)
   await page.getByPlaceholder('Message…').fill('Hello healthy host')
   await page.getByRole('button', { name: 'Send', exact: true }).click()
-  await expect(page.locator('.bubble[data-thread-role="assistant"]')).toContainText('Healthy host reply')
+  await expect(page.locator('[data-thread-role="assistant"]')).toContainText('Healthy host reply')
   expect(sends).toBe(1)
   // The composer entry targets A even though B was the last host to connect.
   await page.locator('.channel-list__row-open').filter({ hasText: 'Seeded discussion' }).click()
@@ -173,7 +173,7 @@ test('healthy host remains usable; last-host and repeated failures never navigat
   await expectFailedHost(hostA)
   await expect(page.getByRole('dialog', { name: 'Pair', exact: true })).toHaveCount(0)
   await expect(page.getByPlaceholder('Message…')).toHaveValue('Keep the current draft')
-  await expect(page.locator('.bubble[data-thread-role="assistant"]')).toContainText('Healthy host reply')
+  await expect(page.locator('[data-thread-role="assistant"]')).toContainText('Healthy host reply')
   await expect(page.locator('.channel-list__host--failed')).toHaveCount(2)
   await expect(page.locator('.channel-list__row-open')).toHaveCount(2)
   await page.screenshot({ path: testInfo.outputPath('failed-host-thread-1280.png') })
@@ -184,7 +184,7 @@ test('healthy host remains usable; last-host and repeated failures never navigat
   await expect(page.locator('.channel-list__row-open').filter({ hasText: 'Failure barrier' })).toBeVisible()
   await expect(page.getByRole('dialog', { name: 'Pair', exact: true })).toHaveCount(0)
   await expect(page.getByPlaceholder('Message…')).toHaveValue('Keep the current draft')
-  await expect(page.locator('.bubble[data-thread-role="assistant"]')).toContainText('Healthy host reply')
+  await expect(page.locator('[data-thread-role="assistant"]')).toContainText('Healthy host reply')
   await page.getByRole('button', { name: 'Repair host', exact: true }).first().click()
   await page.getByRole('textbox', { name: 'Pairing code', exact: true }).fill(freshCode(a))
   await page.getByRole('button', { name: 'Pair', exact: true }).click()

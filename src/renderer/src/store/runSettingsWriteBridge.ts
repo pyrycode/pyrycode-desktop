@@ -1,3 +1,4 @@
+import { sendConversationCommand } from '../screens/conversation/conversationActionAvailability'
 // The renderer data path for the Run configuration write machine — framework-free helpers plus one
 // headless App-level component, mirroring sessionIdBridge.ts. It is bidirectional: an OUTBOUND submit
 // helper (mint a correlation id → dispatch the optimistic change → send the `setSessionSettings`
@@ -8,6 +9,7 @@
 // Nothing here touches keys, sockets, ipcRenderer, or raw frames — it subscribes through the
 // preload bridge and sends one already-typed command; `changeId` is a client-minted, IPC-internal
 // correlation key, never a secret and never serialized onto the wire.
+import { threadRuntime } from './threadRuntime'
 import { useEffect } from 'react'
 import type { DaemonEvent } from '@shared/ipc/events'
 import type { RendererCommand } from '@shared/ipc/commands'
@@ -21,10 +23,8 @@ import { lastEffortStore } from './lastEffortStore'
 import { rememberedModel } from './rememberedModel'
 import type { StoreApi } from 'zustand/vanilla'
 import type { RunSettingsWriteStore } from './runSettingsWriteStore'
-import { conversationTimelineStore, type ConversationTimelineStore } from './conversationTimelineStore'
 import { activeConversationStore } from './activeConversationStore'
-import { conversationListStore, selectConversations } from './conversationListStore'
-import { serverIdForOpenConversation } from '../screens/conversation/unpairAction'
+import { conversationHostNow } from '../screens/conversation/conversationActionAvailability'
 import { requestRunConfigSnapshot } from '../screens/conversation/runConfigSnapshot'
 
 /** Compile-time exhaustiveness guard: a new SettingsChange field without a case is a type error. */
@@ -66,10 +66,7 @@ export function translateWriteEvent(event: DaemonEvent): RunSettingsWriteEvent |
 export function subscribeRunSettingsWrite(
   onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
   dispatch: (event: RunSettingsWriteEvent) => void,
-  getOwningServerId: () => string | null = () => serverIdForOpenConversation(
-    selectConversations(conversationListStore.getState()),
-    activeConversationStore.getState().activeConversation?.id ?? null
-  ),
+  getOwningServerId: () => string | null = () => conversationHostNow(activeConversationStore.getState().activeConversation?.id ?? null),
   logReconnect?: () => void
 ): () => void {
   return onDaemonEvent((event) => {
@@ -220,41 +217,19 @@ export function foldWriteEvent(deps: FoldWriteEventDeps, event: RunSettingsWrite
   }
 }
 
-/** Observe live edges, never held model readings or history. Both subscriptions share app lifetime. */
+/** Forward newly selected models to the authoritative refusal controls. */
 export function subscribeRefusalRecovery(
-  onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void,
   writes: StoreApi<RunSettingsWriteStore>,
-  timelines: StoreApi<ConversationTimelineStore>,
   getOpenId: () => string | null,
-  log?: (code: string) => void
+  modelSelected: (id: string, changeId: string) => void
 ): () => void {
-  const offWrites = writes.subscribe((next, previous) => {
+  return writes.subscribe((next, previous) => {
     const id = getOpenId()
     if (id === null) return
     for (const [changeId, change] of next.pending) {
-      if (change.field === 'model' && !previous.pending.has(changeId)) {
-        timelines.getState().dispatchFor(id, { type: 'refusalModelSelected', changeId })
-      }
+      if (change.field === 'model' && !previous.pending.has(changeId)) modelSelected(id, changeId)
     }
   })
-  const offEvents = onDaemonEvent(event => {
-    const state = timelines.getState()
-    if (event.type === 'modelAnnounced' || event.type === 'sessionTransition') {
-      if (!state.timelines.get(event.conversationId)?.timeline.refusalOffer) return
-      state.dispatchFor(event.conversationId, event.type === 'modelAnnounced'
-        ? { type: 'refusalModelAnnounced', model: event.model } : { type: 'refusalSessionReplaced' })
-    } else if (event.type === 'sessionSettingsUpdated' || event.type === 'sessionSettingsRejected' || event.type === 'connected') {
-      for (const [id, slice] of state.timelines) {
-        if (slice.timeline.refusalOffer === undefined) continue
-        if (event.type !== 'connected' && slice.timeline.refusalOffer.changeId === event.changeId) {
-          log?.(event.type === 'sessionSettingsUpdated' ? 'confirmed' : 'rejected')
-        }
-        state.dispatchFor(id, event.type === 'connected' ? { type: 'refusalWriteAbandoned' }
-          : { type: 'refusalWriteSettled', changeId: event.changeId, confirmed: event.type === 'sessionSettingsUpdated' })
-      }
-    }
-  })
-  return () => { offWrites(); offEvents() }
 }
 
 /**
@@ -270,9 +245,12 @@ export function subscribeRefusalRecovery(
  */
 export function RunSettingsWriteData(): null {
   useEffect(() => subscribeRefusalRecovery(
-    window.pyry.onDaemonEvent, runSettingsWriteStore, conversationTimelineStore,
+    runSettingsWriteStore,
     () => activeConversationStore.getState().activeConversation?.id ?? null,
-    code => window.pyry.sendDiagnostic({ event: 'refusal-recovery', code })
+    (id, changeId) => {
+      const host = conversationHostNow(id)
+      if (host) threadRuntime.refusals.getState().selected(host, id, changeId)
+    }
   ), [])
   useEffect(() => {
     // #1169: the fold, not a bare dispatch. Every reply still reaches the store exactly as before; the
@@ -291,7 +269,7 @@ export function RunSettingsWriteData(): null {
             window.pyry.sendDiagnostic({ event: 'composer-model-preference', code: 'confirmed' })
           },
           refresh: () => requestRunConfigSnapshot(
-            window.pyry.sendCommand,
+            sendConversationCommand,
             activeConversationStore.getState().activeConversation?.id ?? null
           ),
           log: code => window.pyry.sendDiagnostic({ event: 'composer-effort', code })

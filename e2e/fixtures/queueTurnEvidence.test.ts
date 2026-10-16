@@ -9,6 +9,24 @@ const end = (turnId: string, isError = false) =>
   ({ type: 'turnEnd' as const, turnId, conversationId: 'origin', stopReason: 'end_turn', isError })
 
 describe('queued-turn evidence', () => {
+  it('uses negotiated authoritative queue and turn facts without raw event delivery', () => {
+    const proof = createQueueTurnEvidence(options)
+    proof.observe({ type: 'connected', serverId: 'host', ack: { capabilities: ['interactive', 'thread'] } } as DaemonEvent)
+    const added = (item: Record<string, unknown>, version: number) => proof.observe({ type: 'threadUpdate', serverId: 'host',
+      conversationId: 'origin', update: { type: 'thread_item_added', payload: { conversation_id: 'origin', epoch: 'epoch', version, item } } } as DaemonEvent)
+    added({ id: 1, rev: 1, kind: 'user_message', status: 'queued', active: true, shown: true,
+      content: { message_id: 'follow-up', queued_msg_id: 7 } }, 1)
+    expect(proof.snapshot([]).queuedMessageIds).toEqual(['follow-up'])
+    added({ id: 2, rev: 1, kind: 'assistant_message', turn: 'one', content: { text: 'FIRST_DONE' } }, 2)
+    added({ id: 3, rev: 1, kind: 'turn_end', turn: 'one', content: { stop_reason: 'end_turn' } }, 3)
+    expect(proof.snapshot([0]).complete).toBe(true)
+    // Replayed terminal full items cannot manufacture a second completion.
+    added({ id: 3, rev: 1, kind: 'turn_end', turn: 'one', content: { stop_reason: 'end_turn' } }, 3)
+    expect(proof.snapshot([0]).turns[0].completions).toBe(1)
+    // Withheld legacy events cannot provide the second turn's proof on this route.
+    proof.observe(delta('two', 'SECOND_DONE')); proof.observe(end('two'))
+    expect(proof.snapshot([0, 1]).complete).toBe(false)
+  })
   it('binds to the UI-created conversation before its first turn', () => {
     const proof = createQueueTurnEvidence({ ...options, conversationId: '' })
     proof.observe({ type: 'conversationCreated', conversation: { id: 'origin' } } as DaemonEvent)
@@ -89,4 +107,17 @@ describe('queued-turn evidence', () => {
     expect(proof.snapshot([0]).queuedMessageIds).toEqual(['message-2'])
     expect(JSON.stringify(proof.snapshot([0]))).not.toContain('private body')
   })
+})
+
+it('retains the captured field-change/text-suffix pair at one revision without counting a duplicate suffix', () => {
+  const proof = createQueueTurnEvidence(options)
+  const update = (type: string, payload: Record<string, unknown>) => proof.observe({ type: 'threadUpdate', serverId: 'host',
+    conversationId: 'origin', update: { type, payload: { conversation_id: 'origin', epoch: 'epoch', ...payload } } } as DaemonEvent)
+  update('thread_item_added', { version: 19, item: { id: 19, rev: 19, kind: 'assistant_message', turn: 'one', content: { text: 'FIRST_' } } })
+  update('thread_item_changed', { version: 20, item_id: 19, base_rev: 19, rev: 20, changes: { summary: 'FIRST_DONE' } })
+  update('thread_text_append', { version: 20, item_id: 19, base_rev: 20, rev: 20, text: 'DONE' })
+  update('thread_text_append', { version: 20, item_id: 19, base_rev: 20, rev: 20, text: 'SECOND_DONE' })
+  update('thread_item_added', { version: 22, item: { id: 21, rev: 21, kind: 'turn_end', turn: 'one', content: { stop_reason: 'end_turn' } } })
+  expect(proof.snapshot([0]).complete).toBe(true)
+  expect(proof.snapshot([0]).turns[0].markers).toEqual([0])
 })

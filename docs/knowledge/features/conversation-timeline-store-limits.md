@@ -44,20 +44,12 @@ Retention, send windows and row identity in the [conversation timeline](conversa
   association. This feature does not recover missed offline events or replay
   `compaction_boundary` from history. History's existing `compacting` decoder carries
   outcomes, but prepending its reduced rows does not create a live pending association.
-- **Replay and running-phase reconciliation serve different purposes.** Desktop sends
-  the latest valid `event_id` as `last_event_id` on reconnect with the same pairing,
-  requesting the daemon's bounded retained tail for its current conversation. The
-  [cursor is held per host in main-process memory](daemon-connection-lifecycle.md#replay-cursor-lifetime);
-  an expired or unavailable tail still needs history recovery. After replay, a daemon
-  containing [pyrycode#2718](https://github.com/pyrycode/pyrycode/pull/2718) reasserts
-  the open interactive turn's current `thinking` or `responding` as `turn_state`,
-  keyed by `conversation_id` and without `event_id`; this delivery does not advance
-  the replay cursor. The mounted bridge first translates `connected` to `reconnected`,
-  clearing transient status in the conversation on screen while preserving held rows,
-  then routes the attributed phase into its keyed slice. The existing status returns
-  before another phase transition or send. If the turn ended offline, the daemon
-  sends no phase snapshot and the open timeline stays idle. This proof covers the
-  conversation kept open across disconnect, not navigation to another conversation.
+- **Production reconnect uses authoritative thread recovery.** The old replay
+  cursor and renderer reconstruction path retired in #2030/#2025. Initial and
+  reconnect hellos omit both replay fields; legacy `resync` produces no content
+  or recovery request. The legacy keyed-phase/replay behavior described in older
+  notes is not the production route. See [thread runtime](thread-runtime.md#restore-recovery-and-cleanup)
+  for checkpoint recovery and separately owned live state.
 - **`api_retry` and `compacting` still have no connect-time reassertion.** Reconnect
   clears their held status; a genuinely live retry or compaction waits for its next
   wire edge. Replay of a retained edge is not a current-status snapshot and cannot
@@ -131,14 +123,12 @@ Retention, send windows and row identity in the [conversation timeline](conversa
   including surviving echo rows and reserved evidence-only page tails. Numeric keys
   do not establish history chronology. See
   [page boundary mapping](conversation-timeline-store-internals.md#background-agent-history-placement).
-- **Saved timelines have no background-task frames.** `readSavedTimeline` snapshots
-  retain the unchanged format and existing placement; neither task lifecycle evidence
-  nor `rowArrivalOrder` is persisted. A saved Agent/result alone cannot reconstruct a
-  live-tail row or its terminal boundary. Connect rosters now supply provisional
-  rows through a memory-only display projection; synthetic items never enter saved
-  history. Daemon pages now reconstruct finished Agents from started/updated placement
-  evidence; saved snapshots alone cannot. Durable history admission/persistence and
-  newest-page refresh use [retained contributions and receipts](chat-history.md#received-state-admission-and-ownership).
+- **Legacy saved timelines have no background-task frames.** Their retained
+  format excludes task lifecycle evidence and `rowArrivalOrder`; a saved Agent/result
+  cannot reconstruct a live-tail row or terminal boundary. Legacy roster/page
+  projections remain memory-only producer behavior. Production `readSavedTimeline`
+  requests only authoritative daemon items and does not restore this legacy holder.
+  See [protected history](chat-history.md#received-state-admission-and-ownership).
 - **Repeat admission needs retained display evidence.** The mounted entry path
   joins newest/older overlaps and split replies against contributions, preserving
   surviving rows once. Legacy row-only admission cannot infer durable contribution

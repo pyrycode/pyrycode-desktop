@@ -10,6 +10,10 @@ import {
   type StatusOrigin
 } from './sessionStore'
 import { translateDaemonEvent } from './daemonEventBridge'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { ConnectionBanner, daemonLeg } from '../screens/conversation/ConversationScreen'
+import { DAEMON_UPDATE_REQUIRED_COPY, isDaemonUpdateRequired } from '../screens/conversation/composerSend'
 
 // Fixtures — plain wire-shaped data, mirroring sessionStore.test.ts. No transport involved.
 const ack: HelloAckPayload = {
@@ -75,6 +79,21 @@ describe('translateDaemonEvent — each variant dispatched into a fresh store', 
     if (status.type === 'error') {
       expect(status.error).not.toBe(wireErr)
     }
+  })
+
+  it('failed with the daemon cause keeps it, so the copy names the daemon (#1908)', () => {
+    const store = createSessionStore()
+    dispatchIfAction(store, translateDaemonEvent({ type: 'failed', cause: 'daemon',
+      error: { code: 'update-required', message: 'daemon', retryable: true } }))
+    const status = store.getState().status
+    expect(status).toEqual({ type: 'error', error: { code: 'update-required', message: 'daemon', retryable: true, cause: 'daemon' } })
+    expect(isDaemonUpdateRequired(status)).toBe(true)
+    expect(renderToStaticMarkup(createElement(ConnectionBanner, { status }))).toContain(DAEMON_UPDATE_REQUIRED_COPY)
+    expect(daemonLeg(status).label).toBe('Pyrycode Daemon update needed')
+    // The app-too-old rejection (#1613) carries no cause and keeps its generic treatment.
+    const appTooOld = { type: 'error', error: { code: 'update-required', message: 'app', retryable: false } } as const
+    expect(isDaemonUpdateRequired(appTooOld)).toBe(false)
+    expect(renderToStaticMarkup(createElement(ConnectionBanner, { status: appTooOld }))).not.toContain(DAEMON_UPDATE_REQUIRED_COPY)
   })
 
   it('messageReceived → appends the message by reference', () => {

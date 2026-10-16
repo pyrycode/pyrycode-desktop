@@ -7,9 +7,11 @@ import { fileSecretPersistence } from './fileSecretPersistence'
 import { createChatHistoryStore } from './chatHistoryStore'
 import { createChatHistoryHandler } from './chatHistoryHandler'
 import { createDiagnosticLog } from './diagnosticLog'
+import { createHistoryDatabase } from './historyDatabase'
 
 const roots: string[] = []
-afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
+const owners: ReturnType<typeof createHistoryDatabase>[] = []
+afterEach(async () => { owners.splice(0).forEach(db => db.close()); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
 const summary = (id: string) => ({ id, name: null, is_promoted: false, is_archived: false, cwd: '/', last_message_ts: '', last_used_at: '', workspace_label: null })
 const list = (serverId = 'a', ids = ['chat']) => ({ version: 1, kind: 'list', serverId, conversations: ids.map(summary) })
 const timeline = (serverId = 'a', conversationId = 'chat', text = 'private-content') => ({ version: 1, kind: 'timeline', serverId, conversationId,
@@ -27,16 +29,18 @@ async function setup() {
   const secureStore = createSecureStore({ encryption, persistence })
   const lines: string[] = []
   const log = createDiagnosticLog({ sink: { write: (line) => { lines.push(line) } } })
-  const fresh = () => createChatHistoryStore({ secureStore, log })
-  return { dir, disk, encryption, persistence, secureStore, lines, fresh, store: fresh() }
+  const database = createHistoryDatabase({ userDataPath: dir }); owners.push(database)
+  const fresh = () => { database.close(); return createChatHistoryStore({ secureStore, log, encryption, database }) }
+  return { dir, disk, encryption, persistence, secureStore, lines, database, fresh, store: fresh() }
 }
 
 describe('protected chat history storage', () => {
   it('explicit removal follows held writes, removes omitted timelines and cannot be undone by queued old saves', async () => {
     const h = await setup()
     const paired = new Set(['a', 'b'])
+    let membership = async () => {}
     const handler = createChatHistoryHandler({ store: h.store, log: { event: () => {} }, pairedServers: {
-      loadById: async server => paired.has(server) ? { server, relay: '', token: '', server_static_pubkey: '' } : null
+      loadById: async server => { await membership(); return paired.has(server) ? { server, relay: '', token: '', server_static_pubkey: '' } : null }
     } })
     for (const snapshot of [list(), timeline(), timeline('a', 'omitted'), list('b'), timeline('b')]) {
       expect(await handler(null, replace(snapshot))).toEqual({ status: 'ok' })
@@ -48,7 +52,7 @@ describe('protected chat history storage', () => {
     let started = () => {}
     const held = new Promise<void>(resolve => { release = resolve })
     const writing = new Promise<void>(resolve => { started = resolve })
-    h.persistence.write = async (name, bytes) => { started(); await held; await h.disk.write(name, bytes) }
+    membership = async () => { started(); await held }
     const oldWrite = handler(null, replace(timeline('a', 'chat', 'held old text')))
     await writing
     let cleared = false
@@ -89,7 +93,7 @@ describe('protected chat history storage', () => {
     expect(await h.fresh().execute({ operation: 'readList', serverId: 'a' })).toEqual({ status: 'stored', snapshot: list('a', ['second', 'chat']) })
     expect(await h.fresh().execute({ operation: 'readTimeline', serverId: 'a', conversationId: 'chat' })).toEqual({ status: 'stored', snapshot: timeline() })
     expect(await h.store.execute({ operation: 'readList', serverId: 'missing' })).toEqual({ status: 'missing' })
-    for (const name of await readdir(h.dir)) expect((await readFile(join(h.dir, name))).toString()).not.toContain('private-content')
+    for (const name of await readdir(join(h.dir, 'history'))) expect((await readFile(join(h.dir, 'history', name))).toString()).not.toContain('private-content')
     expect(await h.secureStore.get('paired-server')).toEqual(new TextEncoder().encode('credential'))
     expect(h.lines.join('')).not.toMatch(/private-content|credential|chat-history|\/tmp/)
   })
@@ -126,37 +130,33 @@ describe('protected chat history storage', () => {
   })
   it('orders overlapping replacements and removals, copying input before waiting', async () => {
     const h = await setup()
-    await h.store.execute(replace(timeline()))
+    await h.secureStore.set('chat-history', Buffer.from(JSON.stringify({ version: 1, snapshots: [timeline()] })))
     let release = () => {}; let entered = () => {}
     const held = new Promise<void>((resolve) => { release = resolve })
     const started = new Promise<void>((resolve) => { entered = resolve })
-    h.persistence.write = async (name, bytes) => { entered(); await held; await h.disk.write(name, bytes) }
+    const get = h.secureStore.get
+    h.secureStore.get = async name => { entered(); await held; return get(name) }
     const first = h.store.execute(replace(timeline('a', 'chat', 'first')))
     await started
-    expect(await h.fresh().execute({ operation: 'readTimeline', serverId: 'a', conversationId: 'chat' })).toEqual({ status: 'stored', snapshot: timeline() })
+    expect(h.database.transaction(db => db.prepare('SELECT count(*) AS n FROM legacy_scopes').get())).toEqual({ n: 0 })
     const snapshot = timeline('a', 'chat', 'last')
     const second = h.store.execute(replace(snapshot)); snapshot.items[0]!.text = 'mutated'
     release(); await Promise.all([first, second])
     expect(await h.store.execute({ operation: 'readTimeline', serverId: 'a', conversationId: 'chat' })).toEqual({ status: 'stored', snapshot: timeline('a', 'chat', 'last') })
     for (const operation of ['removeConversation', 'removeServer']) {
-      const heldSave = new Promise<void>((resolve) => { release = resolve })
-      const saveStarted = new Promise<void>((resolve) => { entered = resolve })
-      h.persistence.write = async (name, bytes) => { entered(); await heldSave; await h.disk.write(name, bytes) }
       const save = h.store.execute(replace(timeline()))
-      await saveStarted
       const remove = h.store.execute({ operation, serverId: 'a', ...(operation === 'removeConversation' ? { conversationId: 'chat' } : {}) })
-      await new Promise<void>((resolve) => setImmediate(resolve))
-      release()
       expect(await Promise.all([save, remove])).toEqual([{ status: 'ok' }, { status: 'ok' }])
       expect(await h.fresh().execute({ operation: 'readTimeline', serverId: 'a', conversationId: 'chat' })).toEqual({ status: 'missing' })
     }
   })
-  it('keeps later list saves after an earlier replacement is held in persistence', async () => {
+  it('keeps later list saves after an earlier replacement is held in import', async () => {
     const h = await setup()
     let release = () => {}; let entered = () => {}
     const held = new Promise<void>((resolve) => { release = resolve })
     const started = new Promise<void>((resolve) => { entered = resolve })
-    h.persistence.write = async (name, bytes) => { entered(); await held; await h.disk.write(name, bytes) }
+    const get = h.secureStore.get
+    h.secureStore.get = async name => { entered(); await held; return get(name) }
     const first = h.store.execute(replace(list('a', ['first'])))
     await started
     const last = h.store.execute(replace(list('a', ['last'])))
@@ -171,14 +171,14 @@ describe('protected chat history storage', () => {
     h.encryption.isAvailable = () => false
     expect(await h.store.execute(replace(list()))).toEqual({ status: 'error', code: 'encryption-unavailable' })
     h.encryption.isAvailable = () => true
-    h.persistence.write = async () => { throw new Error('/secret/path private-content') }
+    h.database.transaction(db => db.exec("CREATE TRIGGER fail_write BEFORE INSERT ON legacy_scopes BEGIN SELECT RAISE(ABORT, 'private'); END"))
     expect(await h.store.execute(replace(timeline('a', 'chat', 'new')))).toEqual({ status: 'error', code: 'write-failed' })
-    h.persistence.delete = async () => { throw new Error('credential') }
+    h.database.transaction(db => db.exec("CREATE TRIGGER fail_remove BEFORE DELETE ON legacy_scopes BEGIN SELECT RAISE(ABORT, 'private'); END"))
     expect(await h.store.execute({ operation: 'removeServer', serverId: 'a' })).toEqual({ status: 'error', code: 'remove-failed' })
     expect(await h.fresh().execute({ operation: 'readTimeline', serverId: 'a', conversationId: 'chat' })).toEqual({ status: 'stored', snapshot: timeline() })
-    h.persistence.write = h.disk.write; h.persistence.delete = h.disk.delete
+    h.database.transaction(db => db.exec('DROP TRIGGER fail_write; DROP TRIGGER fail_remove'))
     expect(await h.store.execute(replace(list()))).toEqual({ status: 'ok' })
-    h.persistence.write = async () => { throw new Error('secret') }
+    h.database.transaction(db => db.exec("CREATE TRIGGER fail_list BEFORE INSERT ON history_lists BEGIN SELECT RAISE(ABORT, 'private'); END"))
     expect(await h.store.execute(replace(list('a', ['new'])))).toEqual({ status: 'error', code: 'write-failed' })
     expect(await h.store.execute({ operation: 'removeConversation', serverId: 'a', conversationId: 'chat' }))
       .toEqual({ status: 'error', code: 'remove-failed' })
@@ -186,7 +186,8 @@ describe('protected chat history storage', () => {
     expect(h.lines.join('')).not.toMatch(/private-content|credential|secret\/path/)
   })
   it.each(['malformed', 'version', 'decrypt', 'record', 'duplicate'])('distinguishes %s from missing without erasing or replacing', async (mode) => {
-    const h = await setup(); await h.store.execute(replace(timeline()))
+    const h = await setup()
+    await h.secureStore.set('chat-history', Buffer.from(JSON.stringify({ version: 1, snapshots: [timeline()] })))
     const name = 'chat-history'
     if (mode === 'decrypt') h.encryption.decrypt = () => { throw new Error('secret') }
     else {
@@ -238,7 +239,8 @@ it('retains exact served receipts and reserved client identities across fresh pr
     ] }, rowIdentity: { rowKeys: [-8], nextRowKey: 42 } }
   expect(await h.store.execute(replace(snapshot))).toEqual({ status: 'ok' })
   const secureStore = createSecureStore({ encryption: h.encryption, persistence: h.disk })
-  const fresh = createChatHistoryStore({ secureStore, log: { event: () => {} } })
+  h.database.close()
+  const fresh = createChatHistoryStore({ secureStore, encryption: h.encryption, database: h.database, log: { event: () => {} } })
   expect(await fresh.execute({ operation: 'readTimeline', serverId: 'a', conversationId: 'chat' }))
     .toEqual({ status: 'stored', snapshot })
   const invalid = { ...snapshot, served: { ...snapshot.served, highestId: 8 } }

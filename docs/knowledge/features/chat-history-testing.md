@@ -3,274 +3,158 @@
 Verification reference for [protected local chat history](chat-history.md).
 Received ownership and storage behavior are defined in the parent overview.
 
-## Demand and snapshot contracts
+- [Demand and admission](chat-history-testing-contracts.md): snapshot validation, migration and fresh-owner contracts.
+- [Indexed storage](chat-history-testing-storage.md): owned mutations, bounded work, rollback and counted validation.
+- [Native runtime](chat-history-testing-native.md): ABI preparation, packaged protection and counted native evidence.
+- [Restoration and removal](chat-history-testing-restoration.md): delayed reads, lifecycle fences and protected restart regressions.
 
-[`historyDemand.test.ts`](../../../src/renderer/src/store/historyDemand.test.ts)
-checks unknown/restored/complete coverage, discarded pending backwards demand,
-failure retry from the retained cursor and host isolation. Main connection tests cover abandoned
-requests and late replies. [`history-on-open.spec.ts`](../../../e2e/history-on-open.spec.ts)
-counts opening/reconnect asks and leave/reopen deferral behind an owned read and
-original request. Its IPC observer is installed before pairing/activation, so
-counts cannot be confused with commands discarded by host routing. Settle opening
-with backwards paging eligible before rejecting composer/synthetic/downward input,
-resize and programmatic movement; pending exclusion alone would hide broken input
-gates. A separate case withholds opening to prove pending exclusion. Mounted newest
-content appears without upward input and arrival creates no scroll cascade.
-An empty page needs a later received live frame as a receipt barrier;
-row count alone cannot prove that the empty response has settled.
+## Stable protected authoritative storage and pages
 
-The known-gap scenario in [`history-gaps.spec.ts`](../../../e2e/history-gaps.spec.ts)
-measures eligibility before each fresh ArrowUp, including after protected restoration.
-A successful programmatic park or screenshot can precede a layout pin that moves
-the marker out of view. Its local helper moves the pointer away, focuses the thread,
-and polls for scroll offset, content height and viewport dimensions stable within
-0.1px over three animation frames. It then centers the marker between the measured
-top/input chrome, settles movement, and asserts focused, positive-height marker
-intersection with that unobscured reading area and unchanged request count.
-Older-end `isNearTop` readiness cannot establish gap eligibility. One fresh key
-must add exactly one request with `gap-start`, or the saved `gap-step` after reload;
-retain negative/pending-input, no settlement cascade, failure/Retry, sub-two-pixel
-anchor, expanded-tool and final-content assertions. See
-[controlled cause and counted validation](development-verification-history.md#known-gap-recovery-verification).
+[`indexedThreadHistory.test.ts`](../../../src/main/indexedThreadHistory.test.ts)
+uses disk databases and fresh owners for exact admitted round trips, 200-item
+held-order traversal, first-arrival ties, hidden/unordered items, inert JSON/nulls,
+optional defaults and covered unfinished progress. It retains scoped cleanup,
+missing/saved-empty, token size/coordinate bounds, selected-index tampering and
+rollback regressions. The schema-6 fixtures add:
 
-The real-daemon gap scenario preserves the same demand contract across a full
-Electron exit: save served/display baseline evidence, write all 205 posts while
-closed, reopen the same protected profile, and ask newest exactly once with the
-empty cursor. Programmatic positioning asks nothing; each fresh focused ArrowUp
-at the visible gap asks once, settlement asks nothing, and the resolved transcript
-places the baseline before all 205 posts in order, each appearing once.
+- `upgrades committed schema-5 history transactionally and preserves old continuations`:
+  independently seeded old protected envelopes upgrade with exact content and
+  arrival positions; the old token still works after conversion and fresh reopen.
+- `preserves schema-5 commits across failed migration and retries: %s`:
+  corrupt associations, unavailable protection, encryption failure and SQL insertion
+  failure leave identical committed database bytes, schema 5 and no payload table.
+  Removing the injected fault permits exact reads and old-token traversal.
+- `retains stable payloads while replacement rotates generation and changes placement`:
+  held-order/evidence/progress changes and identical replacement retain payload
+  bytes while invalidating continuations. A revised item changes only its payload;
+  an epoch change replaces payloads. The encryption fake prefixes a new serial on
+  every call: deterministic encryption could produce identical bytes after an
+  unnecessary rewrite and falsely prove retention.
+- `rejects protected payload association tampering: %s`:
+  lookup/revision edits, payload substitution, cross-owner ciphertext, orphans and
+  old placement/range replay reject full reads/replacement while preserving the
+  equal-id peer host. Selected pages reject relevant corruption; an unselected
+  orphan is deliberately left to complete validation.
+- `empty replacements always rotate protected generation and invalidate older continuations`:
+  repeated saved-empty replacements rotate generation, complementing existing
+  identical replacement and deletion/recreation token rejection.
 
-Its scenario-local `asks(): Promise<string[]>` polls only inspection availability
-through `readMainProcess`, bounded at five seconds. `NOT_YET_AVAILABLE` cannot
-satisfy a count assertion; every caller gets an actual successful read, including
-the immediate empty-cursor and no-cascade checks. A count read failing after a key
-does not establish a rejected request or invalid geometry. Never replay the key,
-observer installation or posts to recover inspection; other errors propagate.
-See [observer recovery](e2e-harness-context-recovery.md#tolerating-a-transient-inspection-context-loss-on-reads)
-and [diagnosis and counted live evidence](development-verification-history.md#known-gap-recovery-verification).
+`selected reads/JSON decodes/decrypts stay bounded when unrelated history grows`
+compares 10 versus 1,000 items/ranges after storage conversion. Its two-item page
+reads seven SQL results: scope, header, two placements, two directly looked-up
+payloads and newest range. Six JSON decodes and six decrypts account separately
+for placements and payloads; growing unrelated history changes none of these counts.
+Paging calls no full reader and performs no whole-history scan after migration.
+Selected containing-range evidence plus the newest anchor remains intact.
 
-[`newestHistoryDemand.test.ts`](../../../src/renderer/src/store/newestHistoryDemand.test.ts)
-covers offline opening, connection edges, navigation/equal-id host isolation,
-duplicate sync, read settlement/cancellation/live supersession, pending deferral,
-held `atStart`, newest failure/Retry and retained coverage/receipts. Page-first
-missing/stored read completion must also be covered after reopening, including a
-failed following refresh: read-first tests alone miss disk results erasing newly
-admitted rows and evidence. Empty/undrawable/legacy settlement retires loading read
-ownership while settled saved presentation survives.
-
-[`chatHistory.test.ts`](../../../src/shared/chatHistory.test.ts) checks row shapes, projection,
-detached inputs, limits and coordinates. Read-ID cases round-trip zero/safe maximum, restore older
-omitted fields and reject invalid values. Attribution cases round-trip parented/older parentless
-rows and reject malformed parents; `toolGroups.test.tsx` checks restored grouping.
-[`chatHistoryStore.test.ts`](../../../src/main/chatHistoryStore.test.ts) uses real
-temporary files with injected reversible encryption to cover fresh-instance
-reads, empty-versus-missing records, host separation, retained unlisted timelines,
-held overlapping writes/removals and preservation after read/write/delete failures.
-These tests exercise the storage seams without proving the OS keychain adapter.
-[`chatHistoryHandler.test.ts`](../../../src/main/chatHistoryHandler.test.ts)
-covers membership, rejected requests before record access, ordering and contained
-failures for the original six operations; the daemon-cache tests below cover the
-additive `readThread`/`replaceThread` operations.
+Those schema-6 fixtures retain full/page compatibility proof. Owned writes use the
+[schema-7 regressions](chat-history-testing-storage.md#owned-mutation-regressions-and-counted-validation).
+Production shown-opening and newest-first saved traversal use authorized partial
+page IPC. The [restart and mounted regressions](chat-history-testing-restoration.md#restoration)
+cover opening omissions, offline/held-reply input, anchor offsets and local retry.
+See the [bounded-opening regressions](chat-history-testing-storage.md#bounded-opening-selection-and-work).
+Multi-family import, outer-commit rollback and
+[fresh-owner fixtures](chat-history-testing-contracts.md#demand-and-snapshot-contracts) still apply.
 
 ## Recording and removal
 
-[`chatHistoryWriter.test.ts`](../../../src/renderer/src/store/chatHistoryWriter.test.ts)
-injects stores, receipt context, scheduling and storage to prove coalescing,
-return-to-saved-value suppression, newest-during-write retention, failure recovery,
-successful coverage, attribution refusal and capture before eleven-chat eviction.
-Equal-id cases alternate stamped hosts before and after buffered writes flush,
-checking distinct text, turn completion and coverage without crossover. Explicit
-saved restoration followed by a same-host receipt must keep recording even when
-both lists claim the id. Separate refusal cases retain unknown/directly installed
-rows through a later stamp and reject missing origins and ambiguous local echoes;
-a store-cleared host replacement must not be treated as retained contamination.
-Cancellation regressions must include later live content and retained coverage;
-checking only echo addition or its immediate removal misses a writer that has
-silently stopped recording the held chat.
-
-Removal regressions hold membership checks and protected writes, then use fresh
-storage instances to verify absent lists and omitted timelines, stale admission
-rejection, other-host preservation and fresh saves after re-pairing. Writer tests
-also hold removal through shutdown for both outcomes.
-[`chat-history-removal.test.ts`](../../../e2e/chat-history-removal.test.ts) combines
-receipt-stamped holders, the real scoped-clear selector and protected storage.
-Its same-session re-pair must save only fresh text for an omitted timeline. Manually
-clearing all timelines or restarting before re-pairing masks the retained-slice bug.
-The recording Playwright scenario re-pairs before restart, then checks persistence
-after restart and no added history downloads.
-
-Conversation-deletion regressions hold real protected-store list and timeline writes,
-deliver confirmation with buffered and later stale captures, and await flush/stop
-before fresh-instance reads. They check both removed records, same-host peers and
-another host's equal id. Empty/partial lists and eviction must retain timelines;
-failed cleanup must preserve content without a success diagnostic. The recording
-Playwright test holds confirmation after the delete command, proves retention, then
-waits for the actual `removeConversation` result to be `ok` before asserting absence
-and restarting. Renderer disappearance or an early missing read cannot prove cleanup
-or ordering; the scenario withholds list refresh responses throughout deletion. Its two
-`__conversationRemovals` counter reads go through the shared `readMainProcess` helper, bounded at
-five seconds, so a transient loss of Electron's inspection context does not redden the scenario (see
-[E2E test harness § Tolerating a transient inspection-context loss on
-reads](e2e-harness-context-recovery.md#tolerating-a-transient-inspection-context-loss-on-reads)); the counting
-wrapper's own install stays a single un-retried call.
-
-[`daemonItemCache.test.ts`](../../../src/renderer/src/store/daemonItemCache.test.ts)
-injects the optional thread source into the same writer. It holds an in-flight save
-while newer snapshots and an epoch replacement arrive, then checks the final owned
-snapshot and the equal-id peer host. Hydration schedules no write; subsequent owned
-facts remain saveable. Confirmation during buffered/held saves clears the held
-conversation, suppresses later captures and queues removal behind admitted writes.
-Successful/failed unpair cases exercise the pause, off-screen scopes, delayed reads,
-other-host preservation and fresh same-host reuse rather than restarting away
-ownership bugs. `stop()` must detach the thread observer and finish its owned work.
-
-[`daemonItemHistory.test.ts`](../../../src/main/daemonItemHistory.test.ts) uses the
-existing protected filesystem seam and fresh storage services to check coexistence
-of legacy/daemon records, equal conversation/item ids on two hosts, and ordered
-removal of both formats plus the saved-list entry. Main-handler unpair tests reject
-stale reads/writes, remove off-screen records and allow fresh same-host requests.
-Malformed IPC/disk metadata, bounded inert JSON, missing optional availability and
-unavailable encryption cases check classified failures and preservation of data.
-Arrival-order rejection fixtures include missing, duplicate, unknown and invalid
-ids; diagnostics remain content-free and inert keys cannot affect object prototypes.
+The [recording/removal fixtures](chat-history-testing-restoration.md#recording-and-removal)
+hold writer admission and removal settlement, then reopen protected storage through
+fresh owners. Only confirmed deletion or successful unpair grants cleanup;
+failed unpair preserves admitted facts and pending read ownership.
 
 ## Restoration
 
-Daemon restoration uses `readSavedTimeline({ threads, ... })` and `readThread`,
-separately from the legacy holder path below. `daemonItemCache.test.ts` covers
-stored/missing/error/rejected reads settling after live admission, cancellation,
-replacement reads, epoch-string reuse and conversation/host/global cleanup. Its
-incomplete/repair fixture restores checkpoint 100, applied version 300 and unfinished
-version 250: a certificate through 200 clears repair but leaves later live success
-fenced until certification covers 250. A completed snapshot's restoration retains
-its exact ranges and older availability without adding coverage.
+Bounded `openThreadPage` restoration selects 200 shown identities plus active and
+recorded dependencies, then merges saved-only rows and compatible revisions with
+same-owner live facts. Initial admission preserves the read; cancellation,
+reset/replacement and cleanup fence it even after identical strings are reused.
+Hydration emits no owned save; subsequent received changes still persist.
 
-[`daemon-item-cache.test.ts`](../../../e2e/daemon-item-cache.test.ts) is a Node Vitest
-integration test, despite its directory. It connects the real writer to protected
-temporary-file storage, flushes or stops the writer, constructs fresh storage and thread
-store instances, and hydrates through the local reader without Electron or a daemon.
-Both completion variants compare snapshots across restart, preserve hidden items,
-patch nulls and inert own keys, and apply later live changes on one of two equal-id
-hosts. The test encryption backend proves the protected persistence seam, not the
-OS keychain adapter. Keeping cross-process imports here avoids pulling renderer
-implementation into the composite Node production project.
-
-Permanent restart regressions in that file cover two traps that a same-instance
-read misses. `saves live success after abandoning a batch already covered through
-%s` uses both 50 and 100 beneath/equal to checkpoint 100, checks that revision and
-checkpoint 200 reach fresh storage, then verifies live progress after hydration.
-`restart preserves first-arrival ties after order changes and clears` compares
-restored and uninterrupted stores after numeric ties and null-cleared orders.
-The renderer test `restores snapshots without arrival metadata using their supplied
-held order` covers the older-snapshot fallback. These fixtures complement unfinished
-progress tests; accepting covered values must not weaken fences above checkpoint.
-
-These supplied-state tests cover cache preparation and local hydration. Production
-thread subscriptions, capability activation, actual offline screen display and
-reconnect from the saved complete checkpoint through #1902 remain
-[#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908). Existing legacy
-browser/liveness proofs below do not establish that daemon-item integration.
-
-[`savedTimelineRestorer.test.ts`](../../../src/renderer/src/store/savedTimelineRestorer.test.ts)
-covers explicit admission, row identity metadata and coverage, equal-id host
-isolation, delayed success/failure after invalidation, and eleven-chat eviction
-and reload. Echo regressions cover same-host reopening, cross-host replacement and
-rejection of a delayed read after sending. Writer tests pair restoration with a
-subsequent same-host receipt:
-restoration and eviction must write nothing, but later content must save with the
-restored owner and coverage. Static screen tests cover local notices, host-bound
-display and partial-row cursor suppression both connected and offline, normal rendering
-after live receipts, and held versus restored queue visibility. Healthy-host interaction
-tests assert no `.conversation__banner` at all, so they still reject an additional
-connection warning caused by another host's failure.
-`beginLocalTimelineRead(host, id)!.complete(null)` is the shortest way to stage a
-settled-empty local read in a static screen test: it parses a synthesized empty
-snapshot and settles `localRead: 'loaded'` with no items, which is otherwise awkward
-to reach through the store's public surface. Removing a piece of rendered copy
-silently deletes every `not.toContain`/absence assertion aimed at it too — those
-assertions keep passing against a screen that renders nothing at all, so a copy
-removal needs a sweep for such assertions and a flip to a positive claim about what
-does render (\#1447).
-
-[`savedListRestorer.test.ts`](../../../src/renderer/src/store/savedListRestorer.test.ts)
-covers ordered host isolation with equal ids, missing/empty/error results, duplicate
-admission and delayed success/failure after received lists, clears and cancellation.
-It runs the real writer alongside restoration: installing and clearing local lists
-must schedule no save, while a later received list must still record.
-
-[`received-read-marks.spec.ts`](../../../e2e/received-read-marks.spec.ts) separates immediate mounted
-dot/badge clearing from persistence: after host A's push, saved host marks remain the received
-list values `[0, 2]`. A store update alone cannot prove a saved mark. See
-[counted verifier evidence](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves).
+The [restoration regressions](chat-history-testing-restoration.md#restoration)
+cover revision/arrival ties, saved repair/unfinished fences, surviving batches,
+protected fresh-owner overlap and mounted visibility while the server reply is held.
+Keep the covered-unfinished-progress and arrival-order restart tests. See
+[counted bounded-opening validation](chat-history-testing-native.md#counted-bounded-opening-validation)
+for the opening measurements, and
+[unchanged traversal validation](chat-history-testing-native.md#counted-unchanged-saved-traversal-validation)
+for the current Linux revision, counted suite/native results and selected traversal work.
 
 ## Browser persistence and lifecycle
 
 [`message-reply.spec.ts`](../../../e2e/message-reply.spec.ts)'s enabled
 `received history is saved for equal ids on different hosts and replies reopen offline`
 uses two hosts advertising `seed-conversation` with distinct assistant replies.
-It polls each protected `readTimeline` result, visits the second chat, disconnects
+It polls each protected `readThread` result, visits the second chat, disconnects
 the first host, then reopens its saved chat offline and quotes only its original
-reply into that host's draft. Both saved timelines remain independent afterward.
+reply into that host's draft. Both saved daemon-item records remain independent
+afterward.
 Draft isolation and ordinary saved/offline reply tests remain enabled: either
 could pass while received persistence is broken, so neither substitutes for this
 regression. See [counted fake-transport evidence](development-verification-what-each-test-tier-proves.md#equal-id-received-history).
 
 [`chat-history-recording.spec.ts`](../../../e2e/chat-history-recording.spec.ts)
-exercises the mounted production observer and handler, real composer cancellation,
-quit/relaunch and window close/reopen. It freezes renderer timers after earlier
-saves, verifies the final content is still absent on disk, then closes: a test
-that waits for the debounce before quitting cannot prove the flush. Reusing the
-user-data directory proves disconnected local reads without a new handshake,
-including the last list, partial live text and loaded older page. The suite also
-covers pairing-rejected access, saved-host validation and zero added history
-requests. It also proves restored sidebar browsing after normal quit/relaunch,
-a rejected host beside a usable connected host, and mounted local read failures.
-The pairing-recovery regression must expect the saved row after startup rejection;
-row absence no longer proves rejection. Keep the decoded rejection and actual
-repair-click assertions. Restored message UI is exercised by opening and copying
-received content after restart, including a rejected host beside a connected one.
-A held-IPC result crosses repair opening/cancellation before release, then proves
-reading and copying without renderer commands during opening or scrolling. Command
-observation must precede main's host routing: absent socket traffic can hide a
-renderer command discarded offline. In the held-IPC scenario, observing
-`pyry:command` at main avoids CDP function-breakpoint observation stalling the test.
-Reload fixtures wait for saved-list persistence and use a newly named received row
-as their receipt barrier; saved rows can return without a status replay, so row
-count alone is not that barrier. The test encryption backend does not prove the OS
-keychain adapter.
+retains the active `local list read failures stay beside the saved host` case.
+The exact nine already-skipped legacy-only cases from the
+[cleanup inventory](https://github.com/pyrycode/pyrycode-desktop/issues/2020#issuecomment-6200547647)
+were deleted by #2029, together with their private fixtures:
 
-Repeated-page persistence needs separate receipt and save barriers. Restored rows
-and enabled Send can precede the newest reply; focusing the thread creates no
-history demand. Install `observeCommands` and a `historyPageReceived` listener
-before opening the saved chat, match the host/conversation/expected cursor, then
-await delivery before polling the actual protected `readTimeline` snapshot. The
-receipt is not proof of the writer's buffered save. Keep immediate fake replies
-so synchronization does not remove restoration-overlap coverage; a held reply is
-useful for diagnosis, not a replacement for that timing.
+- `confirmed deletion removes saved content through restart without waiting for a list refresh`
+- `explicit unpair discards buffered history across restart while same-server repair retains it`
+- `receipt saturation still saves a repeated page and later live content across fresh relaunches`
+- `records received content, drains buffered quit, and reads locally after relaunch`
+- `window close saves accepted deltas before their frame and reopening restores the full reply`
+- `restores a pairing-rejected saved host beside a usable connected host`
+- `pending saved reading survives opening and cancelling host repair`
+- `saved coverage survives offline restart, reconnect, live receipts and connected reopening`
+- `protected restoration joins partial pages while retaining an expanded tool and content anchor`
 
-The receipt-saturation scenario keeps 500 receipts × 200 ids, evicts only `page-0`
-for `repeat`, and preserves oldest-end coverage and the single assistant's key
-`-8`. It verifies exactly one newest command (`cursor: ''`, limit 200), retains the
-five-second full saved-snapshot predicate after the separate 20-second receipt
-wait, then saves later live content at key `42` with next key `43` and checks
-equality after a third fresh Electron launch. See
-[cause and counted validation](development-verification-history.md#served-page-persistence-verification).
+Authoritative cache/removal/restart tests and all 16 `thread-activation.spec.ts`
+cases remain. They cover offline restoration/live overlap, complete and interrupted
+checkpoints, deletion/unpair, saved-checkpoint reconnect and older paging. No
+broader suite was disabled, and no skip or assertion was weakened by this removal.
+When seeding protected state, await a successful buffered save separately from the
+received-event barrier; receipt or rendered text alone does not prove persistence.
+
+### Counted validation for renderer persistence removal
+
+After #2033's scroll-readiness repair merged through main
+`1366e69e1e23d1ae264735f449ed86ff2dd7373b`, the completed builder run on
+`79c7a4aae729c53019295a507de748b530089c43` superseded the earlier one-failure
+run. The [plan](../../specs/architecture/2029-renderer-history-persistence.md#validation-after-blocker-repair)
+records 432 executed, 432 passed, 0 failed and 10 existing skips, with two workers,
+both projects and zero retries/flaky results. All 15 thread-activation cases passed.
+
+The dispatcher's verifier gate 6 on `9971072191ad45844bfae3d5581a218e97f9f024`
+independently recorded **432 executed, 432 passed, 0 failed, 10 skipped**.
+Its named results explicitly include passed
+`local list read failures stay beside the saved host` and
+`gaps, long hidden runs and target changes preserve a valid anchor and clean observations`.
+The [verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2032#issuecomment-6204463520)
+also confirms all 15 thread-activation cases passed, plus unit results of
+10,224 executed and passed, 0 failed and 30 skipped across 416 files. Build and
+docs guard passed.
+The 10 browser skips were three macOS-only cases and seven pre-existing legacy
+scenarios; they are not execution evidence for those paths. No live spec changed
+and this refactor required no live-Claude run.
 
 ## History continuity and overlap
 
-The continuity scenario starts with incomplete saved coverage, restarts offline,
-reads, then reconnects and asks newest once while retaining saved partial-assistant
-presentation. Later same-host live text resumes normal rendering; trusted upward
-input asks older with the saved cursor. A connected restart checks ordered content,
-retained coverage and no duplicate rows. Holding the local read proves zero asks
-before settlement, then exactly one newest ask without further reader input.
+Production offline/live continuity and checkpoint overlap are covered by
+`thread-activation.spec.ts` and the
+[authoritative cache restart fixtures](chat-history-testing-restoration.md#restoration).
+The retired recording continuity cases no longer provide browser proof for legacy
+cursor/receipt persistence. The remaining renderer reconstruction producers and
+their exclusive fixtures were deleted in #2030. The historical overlap discussion
+below explains the old reconstruction path, not current executable regressions or
+authoritative restoration. See [completed inventory and validation](thread-runtime.md#renderer-producer-retirement-validation).
 
 [`real-daemon-history-on-open.spec.ts`](../../../e2e/real-daemon-history-on-open.spec.ts)
 saves a baseline with served/display evidence, fully exits Electron through the
 shared protected-profile relaunch fixture, and writes 205 unique `pyry channel post`
 entries only in its awaited while-closed callback. Reopening asks newest once
 without upward input and exposes the gap. Fresh focused input fills it under the
-[demand and observation contract](#demand-and-snapshot-contracts), retaining the
+[demand and observation contract](chat-history-testing-contracts.md#demand-and-snapshot-contracts), retaining the
 baseline and all posts exactly once in order. `spawnClaude: false` proves real
 daemon storage/transport, not a Claude turn or production-relay delivery; see
 [counted live acceptance](live-e2e-runbook.md#current-real-claude-gate-state).
@@ -314,3 +198,18 @@ exist on `ThreadItem`. A local `PersistedThreadItem` type omits `keyof TurnEndMe
 `turnBoundary` arm and leaves every other arm untouched, and the assertion compares against that
 instead. The fix for a live-only field belongs here, narrowing the guard's comparison type —
 never widening `DurableThreadItem` to carry a field the persistence layer must keep stripping.
+
+
+## Packaged native storage check
+
+`scripts/history-native-smoke.mjs` builds an isolated application and verifies
+protected history in the packaged Electron runtime. Dependency collection must
+use that isolated application as `projectDir`. Building from the repository root
+can package the ordinary Node database module even when the staged copy was
+rebuilt for Electron, producing a native-module ABI mismatch after packaging.
+
+The final macOS arm64 check for the thread activation passed with Electron 33.4.11,
+Node 20.18.3 and `better-sqlite3` 12.4.1. The native module was unpacked from the
+archive and the production OS keychain backend was available. A Linux
+`basic_text` backend cannot prove protected storage and must remain a failure.
+Fake encryption unit tests and an unpackaged launch are separate evidence.

@@ -275,10 +275,10 @@ export interface RetrievedAttachmentChunk extends Omit<AttachmentChunkPayload, '
 
 /**
  * The daemon envelope timestamp, mixed into live timeline-bearing results. The message arm also
- * carries it for receipt display. It is per-frame, independent of server origin. History page
- * envelope times are not entry times, so the page arm intentionally carries no FrameTimestamp.
+ * carries it for receipt display. It is per-frame, independent of server origin; this metadata
+ * does not establish authoritative thread content or a recovery checkpoint.
  *
- * SECURITY: `decodeEnvelope` validates string shape. Timeline joins use a bounded comparand; user
+ * SECURITY: `decodeEnvelope` validates string shape. User
  * receipts parse a bounded value into finite epoch milliseconds. Never use it as a path, filename,
  * URL, React key or log field. Diagnostics carry only static codes, byte lengths and payload hashes.
  */
@@ -371,7 +371,7 @@ interface FrameTimestamp {
  * open or resolve.
  *
  * IT TAKES NO FrameTimestamp, and the neighbouring `compacting` arm — which DOES mix it in — is the
- * wrong half of the family to copy here. That mix-in marks exactly the arms the retained history vocabulary represents;
+ * wrong half of the family to copy here. That mix-in marks exactly the arms `HistoryTimelineEvent` represents;
  * `resetting` is ephemeral status with no replay ring and no durable history upstream, so it gains no
  * arm there, and stamping a `ts` would advertise a join nothing can perform.
  *
@@ -414,7 +414,7 @@ interface FrameTimestamp {
  * enumerate claude's lines; the deltas received do not sum to the turn's total).
  *
  * IT TAKES NO FrameTimestamp, and the omission is the design rather than an oversight. That mix-in
- * marks exactly the arms the retained history vocabulary represents, which need (`type`, `ts`) as the join key between a
+ * marks exactly the arms `HistoryTimelineEvent` represents, which need (`type`, `ts`) as the join key between a
  * served page and what the live stream already drew. This type gains no arm there — a stored one is
  * still skipped — so there is no page half for a `ts` to join against, and stamping it would advertise a
  * join nothing can perform. `model-announced` above is the precedent.
@@ -448,7 +448,7 @@ interface FrameTimestamp {
  * both when negative and when past setTimeout's ~24.8-day clamp. See RateLimitedPayload.
  *
  * IT TAKES NO FrameTimestamp, for the kind above's reason: that mix-in marks exactly the arms
- * the retained history vocabulary represents, this type gains no arm there, and stamping it would advertise a join
+ * `HistoryTimelineEvent` represents, this type gains no arm there, and stamping it would advertise a join
  * nothing can perform.
  *
  * NOTHING DECODED REACHES THE LOG. `status` and `limit_type` are claude-authored text that crossed the
@@ -503,7 +503,7 @@ interface FrameTimestamp {
  * anything proportional to any of them.
  *
  * IT TAKES NO FrameTimestamp, for the two kinds above's reason: that mix-in marks exactly the arms
- * the retained history vocabulary represents, this type gains no arm there, and stamping it would advertise a join
+ * `HistoryTimelineEvent` represents, this type gains no arm there, and stamping it would advertise a join
  * nothing can perform.
  *
  * NOTHING DECODED REACHES THE LOG. `model` is claude-authored text that crossed the subprocess trust
@@ -516,7 +516,7 @@ interface FrameTimestamp {
  *
  * The `mcp-status` kind (#1489) carries the decoded MCPStatusPayload — claude's MCP server list for one
  * conversation, published live and as the answer to `mcp_status_request`. Conversation-scoped like the
- * kinds above, and like them it takes NO FrameTimestamp, because this type gains no the retained history vocabulary
+ * kinds above, and like them it takes NO FrameTimestamp, because this type gains no retained history
  * arm. The fail-closed defence is one required string, a list-shape guard and one required number, plus
  * a per-row narrowing of FIVE plain `requireString`s where ONE BAD ROW DROPS THE WHOLE FRAME rather than
  * yielding a partial list. `servers: []` is a POSITIVE report of no servers and `dropped_servers` is
@@ -829,7 +829,7 @@ type InboundPayload =
   | {
       kind: 'conversation-updated'
       conversationUpdated: ConversationUpdatedPayload
-      // OPTIONAL, like `session-settings`' and `history-page`'s (#1249). Absence is the ORDINARY case
+      // OPTIONAL, like `session-settings`' and `system-prompt`'s (#1249). Absence is the ORDINARY case
       // here, not a degraded one, which is why this member carried no handle at all until a consumer
       // needed one: the daemon also pushes this record genuinely unsolicited, with no `in_reply_to`,
       // when a host-side `pyry channel new` mints a conversation (pyrycode#2156). So a record without
@@ -864,8 +864,8 @@ type InboundPayload =
   | {
       kind: 'system-prompt'
       systemPrompt: SystemPromptPayload
-      // OPTIONAL, like `session-settings`' and `history-page`'s, and for the same reason as the
-      // latter: a reply without a correlation handle is merely UNCORRELATABLE, not malformed, so the
+      // OPTIONAL, like `session-settings`: a reply without a correlation handle is
+      // UNCORRELATABLE, not malformed, so the
       // fail-closed drop belongs one layer up rather than here as a decode failure.
       //
       // IT IS THE ONLY HANDLE THERE IS, and here that is a security property rather than an
@@ -3854,7 +3854,7 @@ function parseInboundPayload(envelope: Envelope, plaintext: Uint8Array, diagnost
       // the type, which logged a WIRE-SUPPLIED `envelope.type`; the code here is a static literal.
       //
       // NO `ts` on the returned arm — see the kind's paragraph on InboundDaemonMessage: the mix-in
-      // marks the arms the retained history vocabulary represents, and this type gains no arm there.
+      // marks the arms `HistoryTimelineEvent` represents, and this type gains no arm there.
       // Nothing consumes this arm yet: daemonConnection's inbound switch has no catch-all, so the
       // report stops here until #1515 claims it.
       const resetting = parseResettingPayload(envelope.payload)
@@ -3919,7 +3919,7 @@ function parseInboundPayload(envelope: Envelope, plaintext: Uint8Array, diagnost
       // code here is a static literal.
       //
       // NO `ts` on the returned arm — see the kind's paragraph on InboundDaemonMessage: the mix-in
-      // marks the arms the retained history vocabulary represents, and this type gains no arm there.
+      // marks the arms `HistoryTimelineEvent` represents, and this type gains no arm there.
       // Nothing consumes this arm yet: daemonConnection's inbound switch has no catch-all, so the
       // reading stops here until the carry slice claims it.
       const thinkingProgress = parseThinkingProgressPayload(envelope.payload)
@@ -3952,7 +3952,7 @@ function parseInboundPayload(envelope: Envelope, plaintext: Uint8Array, diagnost
       // WIRE-SUPPLIED `envelope.type`; the code here is a static literal.
       //
       // NO `ts` on the returned arm — see the kind's paragraph on InboundDaemonMessage: the mix-in
-      // marks the arms the retained history vocabulary represents, and this type gains no arm there.
+      // marks the arms `HistoryTimelineEvent` represents, and this type gains no arm there.
       // Nothing consumes this arm yet: daemonConnection's inbound switch has no catch-all, so the
       // report stops here until the carry slice claims it.
       const rateLimited = parseRateLimitedPayload(envelope.payload)
@@ -3975,7 +3975,7 @@ function parseInboundPayload(envelope: Envelope, plaintext: Uint8Array, diagnost
       // WIRE-SUPPLIED `envelope.type`; the code here is a static literal.
       //
       // NO `ts` on the returned arm — see the kind's paragraph on InboundDaemonMessage: the mix-in marks
-      // the arms the retained history vocabulary represents, and this type gains no arm there.
+      // the arms `HistoryTimelineEvent` represents, and this type gains no arm there.
       // Nothing consumes this arm yet: daemonConnection's inbound switch has no catch-all, so the
       // reading stops here until the carry slice claims it.
       const contextUsage = parseContextUsagePayload(envelope.payload)

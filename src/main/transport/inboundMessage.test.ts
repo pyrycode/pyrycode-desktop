@@ -2922,8 +2922,8 @@ describe('parseInboundMessage — resetting recognition (#1514, additive)', () =
     expect(parseInboundMessage(encodeResetting(RESETTING))).not.toBeNull()
   })
 
-  it('carries NO ts — this type gains no retained history vocabulary arm, so there is nothing to join (AC5)', () => {
-    // The mix-in marks exactly the arms retained history vocabulary draws. `compacting`'s arm DOES take it,
+  it('carries NO ts — this type gains no HistoryTimelineEvent arm, so there is nothing to join (AC5)', () => {
+    // The mix-in marks exactly the arms HistoryTimelineEvent draws. `compacting`'s arm DOES take it,
     // which is what makes the nearer neighbour the wrong half of the family to copy here.
     expect(parseInboundMessage(encodeResetting(RESETTING))).not.toHaveProperty('ts')
   })
@@ -3043,7 +3043,7 @@ describe('parseInboundMessage — attachment_offered recognition (#1619, AC1)', 
     })
   })
 
-  it('carries NO ts — the frame is live-only and gains no retained history vocabulary arm', () => {
+  it('carries NO ts — the frame is live-only and gains no HistoryTimelineEvent arm', () => {
     expect(parseInboundMessage(encodeAttachmentOffered(ATTACHMENT_OFFERED))).not.toHaveProperty('ts')
   })
 
@@ -3313,7 +3313,7 @@ describe('parseInboundMessage — thinking_progress recognition (#1312, additive
   })
 
   it('carries NO ts — the arm is not timeline-bearing, so there is no history half to join', () => {
-    // #1225's FrameTimestamp marks exactly the arms retained history vocabulary draws. AC3 keeps this type
+    // #1225's FrameTimestamp marks exactly the arms HistoryTimelineEvent draws. AC3 keeps this type
     // armless there, so a stamp here would advertise a join nothing can perform.
     expect(parseInboundMessage(encodeThinkingProgress(THINKING_PROGRESS))).not.toHaveProperty('ts')
   })
@@ -3424,7 +3424,7 @@ describe('parseInboundMessage — rate_limited recognition (#1318, additive)', (
   })
 
   it('carries NO ts — the arm is not timeline-bearing, so there is no history half to join', () => {
-    // #1225's FrameTimestamp marks exactly the arms retained history vocabulary draws. AC5 keeps this type
+    // #1225's FrameTimestamp marks exactly the arms HistoryTimelineEvent draws. AC5 keeps this type
     // armless there, so a stamp here would advertise a join nothing can perform.
     expect(parseInboundMessage(encodeRateLimited(RATE_LIMITED))).not.toHaveProperty('ts')
   })
@@ -3509,7 +3509,7 @@ describe('parseInboundMessage — context_usage recognition (#1454, AC1/AC4)', (
   })
 
   it('carries NO ts — the arm is not timeline-bearing, so there is no history half to join', () => {
-    // #1225's FrameTimestamp marks exactly the arms retained history vocabulary draws. This type gains none, so
+    // #1225's FrameTimestamp marks exactly the arms HistoryTimelineEvent draws. This type gains none, so
     // a stamp here would advertise a join nothing can perform.
     expect(parseInboundMessage(encodeContextUsage(CONTEXT_USAGE_FRAME))).not.toHaveProperty('ts')
   })
@@ -4440,7 +4440,7 @@ describe('parseInboundMessage — mcp_status recognition (#1489, AC1)', () => {
   })
 
   it('carries NO ts — the arm is not timeline-bearing, so there is no history half to join', () => {
-    // FrameTimestamp marks exactly the arms retained history vocabulary draws, and this type gains none there.
+    // FrameTimestamp marks exactly the arms HistoryTimelineEvent draws, and this type gains none there.
     expect(parseInboundMessage(encodeMCPStatus(MCP_STATUS_FRAME))).not.toHaveProperty('ts')
   })
 
@@ -10526,7 +10526,7 @@ describe('parseInboundMessage — system_prompt recognition (#1230)', () => {
   })
 
   it('carries an absent in_reply_to as undefined rather than failing the decode', () => {
-    // Optional here for `history-page`'s stated reason: a reply with no correlation handle is
+    // Optional here for `system-prompt`'s stated reason: a reply with no correlation handle is
     // UNCORRELATABLE, not malformed, and the fail-closed drop belongs one layer up in daemonConnection
     // where the outstanding-request map lives.
     expect(

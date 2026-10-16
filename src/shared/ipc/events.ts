@@ -1516,7 +1516,7 @@ type BaseDaemonEvent =
   // do not sum to the turn's total, so no consumer may accumulate them into one. A field crosses when
   // something needs it, not before — and a delta present on the arm is an invitation to sum it.
   //
-  // NO `daemonTs`, and the omission is the design. That mix-in marks the arms the retained history vocabulary
+  // NO `daemonTs`, and the omission is the design. That mix-in marks the arms `HistoryTimelineEvent`
   // draws, which need (`type`, `ts`) as the join key between a served page and what the live stream
   // already drew; a stored `thinking_progress` is still skipped, so there is no page half to join
   // against and stamping it would advertise a join nothing can perform. `modelAnnounced`, not
@@ -1579,7 +1579,7 @@ type BaseDaemonEvent =
   // misses that lookup exactly as an unrecognised value does, and there is nothing on screen for a
   // truncation marker to qualify. A field crosses when something needs it, not before.
   //
-  // NO `daemonTs`, and the omission is the design. That mix-in marks the arms the retained history vocabulary
+  // NO `daemonTs`, and the omission is the design. That mix-in marks the arms `HistoryTimelineEvent`
   // draws, which need (`type`, `ts`) as the join key between a served page and what the live stream
   // already drew; #1318 keeps this type armless there, so there is no page half to join against and
   // stamping it would advertise a join nothing can perform. `thinkingProgress` and `modelAnnounced`,
@@ -1644,7 +1644,7 @@ type BaseDaemonEvent =
   // (`ContextUsageMCPTool`), which is the existing split rather than a new one. `readonly` on each
   // array mirrors both precedents; the row interfaces stay mutable, exactly as `QueuedItem` does.
   //
-  // NO `daemonTs`, and the omission is the design. That mix-in marks the arms the retained history vocabulary
+  // NO `daemonTs`, and the omission is the design. That mix-in marks the arms `HistoryTimelineEvent`
   // draws, which need (`type`, `ts`) as the join key between a served page and what the live stream
   // already drew; the decode arm takes no FrameTimestamp, so there is no page half to join against and
   // stamping it would advertise a join nothing can perform. `rateLimited` and `thinkingProgress`, not
@@ -1783,7 +1783,7 @@ type BaseDaemonEvent =
   // set beyond the one measured-benign status is unmeasured. Every field here is DAEMON-authored, so
   // narrowing is safe and widening would throw away a four-value switch for an open one.
   //
-  // NO `daemonTs`, and the omission is the design. That mix-in marks the arms the retained history vocabulary
+  // NO `daemonTs`, and the omission is the design. That mix-in marks the arms `HistoryTimelineEvent`
   // draws, which need (`type`, `ts`) as the join key between a served page and what the live stream
   // already drew; #1514 keeps this type armless there — a stored `resetting` is SKIPPED rather than
   // served — so there is no page half to join against and stamping it would advertise a join nothing

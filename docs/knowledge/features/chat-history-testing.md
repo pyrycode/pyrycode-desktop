@@ -118,6 +118,50 @@ cursor leakage; the durable-row fixture also checks raw unknown text on disk.
 These fixtures prove the protected persistence
 seam; production OS encryption requires the packaged proof below.
 
+### Stable protected authoritative storage and pages
+
+[`indexedThreadHistory.test.ts`](../../../src/main/indexedThreadHistory.test.ts)
+uses disk databases and fresh owners for exact admitted round trips, 200-item
+held-order traversal, first-arrival ties, hidden/unordered items, inert JSON/nulls,
+optional defaults and covered unfinished progress. It retains scoped cleanup,
+missing/saved-empty, token size/coordinate bounds, selected-index tampering and
+rollback regressions. The schema-6 fixtures add:
+
+- `upgrades committed schema-5 history transactionally and preserves old continuations`:
+  independently seeded old protected envelopes upgrade with exact content and
+  arrival positions; the old token still works after conversion and fresh reopen.
+- `preserves schema-5 commits across failed migration and retries: %s`:
+  corrupt associations, unavailable protection, encryption failure and SQL insertion
+  failure leave identical committed database bytes, schema 5 and no payload table.
+  Removing the injected fault permits exact reads and old-token traversal.
+- `retains stable payloads while replacement rotates generation and changes placement`:
+  held-order/evidence/progress changes and identical replacement retain payload
+  bytes while invalidating continuations. A revised item changes only its payload;
+  an epoch change replaces payloads. The encryption fake prefixes a new serial on
+  every call: deterministic encryption could produce identical bytes after an
+  unnecessary rewrite and falsely prove retention.
+- `rejects protected payload association tampering: %s`:
+  lookup/revision edits, payload substitution, cross-owner ciphertext, orphans and
+  old placement/range replay reject full reads/replacement while preserving the
+  equal-id peer host. Selected pages reject relevant corruption; an unselected
+  orphan is deliberately left to complete validation.
+- `empty replacements always rotate protected generation and invalidate older continuations`:
+  repeated saved-empty replacements rotate generation, complementing existing
+  identical replacement and deletion/recreation token rejection.
+
+`selected reads/JSON decodes/decrypts stay bounded when unrelated history grows`
+compares 10 versus 1,000 items/ranges after storage conversion. Its two-item page
+reads seven SQL results: scope, header, two placements, two directly looked-up
+payloads and newest range. Six JSON decodes and six decrypts account separately
+for placements and payloads; growing unrelated history changes none of these counts.
+Paging calls no full reader and performs no whole-history scan after migration.
+Selected containing-range evidence plus the newest anchor remains intact.
+
+These fixtures prove the layout through disk seams, not an owned-update API.
+Owned incremental writes remain #2044; partial restoration/navigation remain
+\#2041/#2042. Renderer page IPC is not introduced. Existing multi-family import,
+outer-commit rollback and fresh-owner fixtures above still apply.
+
 ### Bounded legacy page regressions
 
 The same on-disk `indexedLegacyHistory.test.ts` fixture covers callable page reads;
@@ -213,6 +257,44 @@ direct smoke invocation rejects them before packaging imports or scratch creatio
 pins Windows rejection. Run the native proof on the operating system running the
 ticket; opposite-OS scheduling is outside scope. Existing NSIS x64/arm64 targets
 remain unchanged.
+
+#### Counted stable-binding validation
+
+The [stable-binding verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2045#issuecomment-6209414001)
+records Linux x64 evidence at `61ec3eaf44cea1e16d58c2bf2bc28e3b81f28568`
+(2026-10-16), superseding the earlier builder totals:
+
+| Run or included module | Executed | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| Full unit suite, 392 passing files | 9,165 | 9,165 | 0 | 30 |
+| Indexed authoritative module, included above | 38 | 38 | 0 | 0 |
+| Migration module, included above | 21 | 21 | 0 | 0 |
+| Application history-store module, included above | 14 | 14 | 0 | 0 |
+| Complete configured fake suite, original gate 8 | 435 | 434 | 1 | 3 |
+| Separate visible-tail rerun | 2 | 2 | 0 | 0 |
+| Packaged production-encryption case, included in gate 8 | 1 | 1 | 0 | 0 |
+
+The supplied gate report explicitly lists
+`packaged protected history commits and reopens with production encryption` as
+present and passed. The verifier inspected `/tmp/pyry-history-native-XpWH6e/runtime.stdout`:
+Electron 33.4.11, Node 20.18.3, SQLite adapter 12.4.1, production `gnome_libsecret`,
+packaged/ASAR/unpacked flags true and `stage: complete`.
+
+The original fake gate failed
+`committed folded tails require focus, uncovered viewport and a closed reader`.
+That exact test is present and passed in the separate two-executed, zero-failed,
+zero-skipped rerun, according to the verifier's inspected dispatcher report.
+The verifier records dispatcher acceptance as unrelated flakiness; the original
+failed capture remains failed and is not a new full-suite pass. The supplied gate
+report retains only the original run. Its three skips are macOS-only cases;
+macOS is outside this Linux ticket's verification scope.
+
+Install, native adapter preparation, typecheck, build and docs guard passed per
+the verdict. Pre-verify recorded three passed checks and two intentional
+`--no-suite` skips, with units/typecheck in subsequent gates. This storage-only
+change required no live-Claude run. The verdict links dispatcher gate logs
+5/6/8 and the `2026-10-16T06-16-49-715Z` rerun; these are recorded evidence,
+not tests rerun by documentation.
 
 The [activation verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2019#issuecomment-6208451299)
 and dispatcher gate 8 record Linux x64 acceptance on

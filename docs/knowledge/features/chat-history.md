@@ -470,8 +470,9 @@ for saved-read notices, result/error classifications and preservation after fail
 ## Storage and concurrency
 
 Production `createChatHistoryStore` composes the indexed legacy and authoritative
-backends with protected list cells in schema 5. One main-process database owner
-lazily opens a reusable synchronous connection at `history/history.sqlite` beneath
+backends with protected list cells and schema-6 authoritative payloads. One
+main-process database owner lazily opens a reusable synchronous connection at
+`history/history.sqlite` beneath
 trusted `userDataPath`. The composition root retains it across window reopening;
 graceful app quit flushes renderers, drains handler/store admission and closes it.
 Directory creation uses mode 0700 and the database is set to 0600. Reads and
@@ -504,24 +505,33 @@ bounded page selection without a whole-timeline or all-evidence cell. Full
 reconstruction returns one committed snapshot and checks its records against
 canonical parser output.
 
-Authoritative scopes separately protect header metadata, held items and ranges,
-including first-arrival and containing-range associations. Lists are complete
-protected cells. Both full readers preserve exact supplied ownership and content;
-neither family converts into the other.
+Authoritative scopes separately protect header metadata, item placements, stable
+item payloads and ranges, including first-arrival and containing-range associations.
+Payload lookup uses stable owner/item id; protected placements bind the exact
+ciphertext digest and current generation. Binding placements only to the stable
+owner would allow older placement/evidence replay. Schema-5 conversion validates
+all authoritative scopes atomically and preserves old continuations; ordinary
+schema-6 pages perform no conversion scan. See
+[storage bindings and migration](chat-history-api.md#api).
+Lists remain complete protected cells. Both full readers preserve exact supplied
+ownership and content; neither family converts into the other.
 
-Every replacement, including identical or empty content, receives a new random UUID
-snapshot identity; delete/recreate cannot reuse the previous commit's identity.
-Scope deletion cascades to all its evidence. These identities identify commits,
-not authorization. Payload protection and reviewed structural columns are detailed
-in [failure preservation](chat-history-results.md#results-and-failure-preservation).
+Every replacement, including identical or empty content, rotates its continuation
+identity. Legacy scopes use a fresh snapshot UUID; authoritative scopes retain
+their owner and rotate a protected generation, reusing unchanged same-epoch item
+ciphertext. Delete/recreate receives fresh ownership; deletion cascades to all
+evidence and payloads. These identities are not authorization. Payload protection
+and reviewed structural columns are detailed in
+[failure preservation](chat-history-results.md#results-and-failure-preservation).
 
 The adapter is pinned to `better-sqlite3` 12.4.1. Host Node and Electron require
 separate native rebuilds; packaging rebuilds for the target ABI and unpacks the
 adapter from asar. See [runtime preparation and counted native proof](chat-history-testing.md#native-runtime-and-packaged-proof).
 Windows NSIS x64/arm64 targets remain configured; these smokes add no Linux/macOS
-release channel. Bounded legacy and authoritative pages remain callable main-only;
-page IPC, renderer consumers and partial writes belong to #1931. Production reads
-and replacements still use complete snapshots.
+release channel. Bounded legacy and authoritative pages remain callable main-only.
+Owned incremental writes remain #2044; partial restoration/navigation remain
+\#2041/#2042 under #1931, with no renderer page IPC added by the binding migration.
+Production reads and replacements still use complete snapshots.
 
 ## Testing
 

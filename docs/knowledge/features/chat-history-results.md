@@ -45,26 +45,48 @@ attach an error to a newer list or a cleared host.
 | `membership-unavailable` | The saved-host lookup threw. |
 | `unreadable` | Reading, decryption, UTF-8/JSON decoding or stored-record validation failed. Duplicate snapshot identities are invalid. |
 | `unsupported-version` | The stored collection or a stored snapshot has a safe-integer numeric version other than 1, or SQLite schema admission rejects an unfamiliar version/nonempty unversioned database. Malformed snapshot version values are `unreadable`. |
-| `encryption-unavailable` | Protection is unavailable or raises `EncryptionUnavailableError`. The indexed backend checks availability before opening the database, including for reads/removals; collection removal can require encryption to rewrite remaining records. |
-| `write-failed` | A replacement failed for another write/encryption reason. |
-| `remove-failed` | A removal's replacement or deletion failed for another reason. |
+| `encryption-unavailable` | Protection is unavailable or raises `EncryptionUnavailableError`. The application store and indexed backends check availability before database access, including reads/removals. |
+| `write-failed` | A replacement or import mutation/outer COMMIT failed for another write/encryption reason, even when a read triggered import. |
+| `remove-failed` | A removal mutation/COMMIT or pending-source cleanup failed for another reason. Source cleanup can fail after the database deletion committed. |
 
-Collection reads never write. Every collection mutation first reads and validates the entire collection;
-an unreadable or unsupported collection is preserved, including on removal. It is
-never treated as an empty default. A failed replacement leaves the previous
-readable ciphertext intact and does not prevent subsequent operations. This
-differs from the [paired-server store](paired-server-store.md)'s deliberate
-malformed-record overwrite during re-pairing: chat history has no such recovery
-exception.
+First access, including a read, can import the protected version-1 collection and
+write durable completion state. The entire source and addressed destination records
+are validated before any import mutation; duplicate identities, unreadable input
+and unsupported versions preserve the original source and last committed records.
+Both families, protected lists and completion share one transaction. A failure
+before commit leaves no partially imported family or completed marker, and later
+queued work can retry. No invalid source or database becomes empty storage as
+recovery. This differs from the [paired-server store](paired-server-store.md)'s
+deliberate malformed-record overwrite during re-pairing.
+
+Failure classification follows the phase, not just the requested operation:
+source/destination read, decode and validation errors stay `unreadable`; safe-integer
+stored versions other than 1 stay `unsupported-version`, including list reads,
+replacement and both removals. Malformed versions stay `unreadable`. After complete
+validation, raw list insertion, completion insertion and outer import COMMIT errors
+are `write-failed`. Classified backend and protection errors retain their codes.
+Successful nested replacements do not prove the enclosing COMMIT succeeded; its
+failure is also `write-failed` and preserves the previous committed snapshot.
+
+Completion prevents all future source reads/decryption. Retirement is separate:
+pending cleanup directly retries source deletion and records retirement afterward,
+without replaying records. Reads/replacements remain usable after a source-delete
+failure. A removal returns `remove-failed` if cleanup fails after its database
+transaction committed; this error does not imply the deleted SQLite records were
+restored. Retained source bytes cannot resurrect them after restart or coordinate
+reuse. Cleanup reports only `history-source-retired` with `ok` or `remove-failed`.
 
 Indexed operations validate only the affected scope(s) in their own family, as
 described in [the API](chat-history-api.md#api). Content records, encrypted evidence, scope identity and
 schema migration share one SQLite transaction. An insertion/deletion, encryption,
 decryption or validation failure rolls back changes and preserves the last committed
 snapshot; later operations remain usable. Even reads can commit the schema-1 key
-migration, schema-3 receipt-start index and schema-4 authoritative tables, but cannot
-commit them if selected validation or full reconstruction fails. Unreadable data and
-unsupported schemas are never recreated or overwritten as recovery.
+migration, schema-3 receipt-start index, schema-4 authoritative tables and schema-5
+list/import tables, but cannot commit them if selected validation or full
+reconstruction fails in that transaction. Unreadable data and
+unsupported schemas are never recreated or overwritten as recovery. The application
+store's initial completion check may already commit additive schema admission
+before source validation; that creates no imported content or completion marker.
 
 Authoritative replacement and conversation removal fully validate the existing
 addressed snapshot; host removal validates all authoritative scopes for that exact
@@ -75,6 +97,15 @@ Malformed saved metadata or index associations return `unreadable`, never an emp
 default. Validation failures precede mutation; later protection/SQL failures use
 `write-failed` or `remove-failed` and preserve the previous committed snapshot.
 Unavailable encryption is checked before opening/migrating either indexed family.
+
+Those family-only removals are internal primitives. Production store removal wraps
+both families and the protected list update in one transaction; validation or
+mutation failure in either rolls back all three. Host removal includes off-screen
+records. Handler admission invalidates queued pre-removal conversation/host work
+while allowing fresh saved-host replacements at identical coordinates. Credential-first
+unpair preserves a matched erase even on history failure, reports static
+`history-unpair-cleanup: failed` and completes ordinary unpaired teardown; successful
+credential removal alone does not prove successful history deletion.
 
 New indexed legacy writes encrypt an envelope containing `indexedLegacyRecord: 1`, the
 committed `snapshotId` and the complete structural record with its payload. Decode
@@ -110,7 +141,9 @@ unencrypted columns are:
 | `thread_scopes` | `identity`: fresh locally generated UUID; `server`, `conversation`: exact UTF-16LE ownership BLOBs, including NUL/lone-surrogate distinctions. |
 | `thread_records` ownership/order | `scope`: committed UUID; `kind`: `header`, `item` or `range`; `ordinal`: nonnegative held/range position (zero for header). |
 | Authoritative selection indexes | `arrival`: original nonnegative first-arrival position or null; `item_order`: nonnegative safe integer or null; `range_ordinal`: containing saved range position or null; `range_start`, `range_end`: nonnegative safe-integer range bounds or null. Unused indexes are null. |
-| Schema/index metadata | `user_version`: integer 4 after successful operation migration (base creation uses 2); indexes, including `legacy_receipt_start` and `thread_ranges`, duplicate only reviewed ownership and structural columns. |
+| `history_lists` | `server`: exact UTF-16LE host BLOB; `payload` is an encrypted complete list snapshot, validated against that owner. |
+| `history_import` | `singleton`: fixed integer 1, whose presence means import completed; `retired`: 0 for pending cleanup or 1 for recorded retirement. |
+| Schema/index metadata | `user_version`: integer 5 after successful transaction migration (base creation uses 2); indexes, including `legacy_receipt_start` and `thread_ranges`, duplicate only reviewed ownership and structural columns. |
 
 `payload` is a ciphertext BLOB. Timestamps, join strings, opaque cursors, attachment
 fields, message text and raw unknown objects never become plaintext lookup/order
@@ -121,7 +154,7 @@ unknown JSON and scalar progress/repair/availability remain protected payloads.
 Diagnostics contain only static lifecycle event names and operation/result codes:
 `history-storage-operation`, `history-storage-result`, `history-handler-result`,
 `history-writer-started`, `history-writer-result`, `history-flushed`,
-`history-list-restore`, `history-timeline-restore` and `history-unpair-cleanup`
+`history-list-restore`, `history-timeline-restore`, `history-source-retired` and `history-unpair-cleanup`
 (static lifecycle/result codes).
 They include no requests, coordinates, message content, keys, storage paths or
 caught errors. Successful reads return the declared chat content; error replies
@@ -135,8 +168,9 @@ automatic retry loop for an unchanged snapshot.
 Conversation cleanup reports `history-writer-result: conversation-removed` only
 after storage returns `status: 'ok'`. Classified failures report their static error
 code, unexpected results report `remove-failed`, and thrown IPC failures report
-`ipc-failed`, without coordinates or exception text. Failed removal preserves the
-protected store's prior content and retains stale-save suppression; daemon
+`ipc-failed`, without coordinates or exception text. Failed database removal preserves
+prior committed content; source-retirement failure may follow a committed deletion.
+Both failures retain stale-save suppression; daemon
 confirmation alone does not prove local cleanup succeeded. There is no automatic
 removal retry, but another confirmed receipt can retry it.
 

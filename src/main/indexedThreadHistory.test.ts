@@ -120,6 +120,14 @@ it.each(['corrupt', 'protection', 'encrypt', 'insert'])('preserves schema-5 comm
 
 it('retains stable payloads while replacement rotates generation and changes placement', async () => {
   const h = setup(), s = snapshot()
+  const encrypt = h.encryption.encrypt, decrypt = h.encryption.decrypt
+  let serial = 0
+  // Distinct ciphertext on every call makes unnecessary re-encryption observable.
+  h.encryption.encrypt = bytes => {
+    const prefix = Buffer.alloc(4); prefix.writeUInt32BE(++serial)
+    return Buffer.concat([prefix, Buffer.from(encrypt(bytes))])
+  }
+  h.encryption.decrypt = bytes => decrypt(bytes.subarray(4))
   expect(await h.store.execute(put(s))).toEqual({ status: 'ok' })
   const payloads = () => h.database.transaction(db => db.prepare('SELECT * FROM thread_payloads ORDER BY item_id').all())
   const before = payloads(), continuation = (await page(h.store)).continuation

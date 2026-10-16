@@ -150,7 +150,7 @@ test('real GPT-6 Luna channel replies with Low effort from creation', async ({ r
       const readsBeforeCreate = proof.settings().length
       const acksBeforeCreate = proof.acks().length
       const name = `Luna live ${scenarioNonce()}`
-      await page.getByRole('button', { name: 'Create channel', exact: true }).click({ force: true })
+      await page.getByRole('button', { name: 'Create channel', exact: true }).click()
       const dialog = page.getByRole('dialog', { name: 'Create channel', exact: true })
       await dialog.getByRole('textbox', { name: 'Channel name:', exact: true }).fill(name)
       await dialog.locator('.create-channel__model').click()

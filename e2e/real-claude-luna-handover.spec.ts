@@ -9,12 +9,14 @@ import { waitForEffortProof } from './fixtures/effortProof'
 import type { EffortEvidence } from './fixtures/effortProof'
 import type { StampedDaemonEvent } from '../src/shared/ipc/events'
 import type { RendererCommand } from '../src/shared/ipc/commands'
+import { completedHandoverReply } from './fixtures/lunaHandoverProof'
 
 test.use({ codexCapture: true, seedPromoted: true, claudeModel: 'opus' })
 const ROUNDTRIP = 15_000
 const TURN = 120_000
 type ProofEvent = Extract<StampedDaemonEvent, { type: 'runConfigReceived' | 'modelList' |
-  'sessionSettingsUpdated' | 'conversationsReceived' | 'conversationCreated' | 'assistantDelta' | 'turnEnd' }>
+  'sessionSettingsUpdated' | 'conversationsReceived' | 'conversationCreated' | 'assistantDelta' | 'turnEnd' |
+  'threadUpdate' | 'threadReply' }>
 type ProofCommand = Extract<RendererCommand, { type: 'requestSessionSettings' | 'setSessionSettings' | 'switchAgent' }>
 type ProofWindow = Window & {
   __handoverEvents: (ProofEvent | ProofCommand)[]
@@ -30,7 +32,8 @@ async function observe(page: Page) {
     target.__stopHandoverProof = target.pyry.onDaemonEvent(event => {
       if (event.type === 'runConfigReceived' || event.type === 'modelList' ||
           event.type === 'sessionSettingsUpdated' || event.type === 'conversationsReceived' ||
-          event.type === 'conversationCreated' || event.type === 'assistantDelta' || event.type === 'turnEnd') {
+          event.type === 'conversationCreated' || event.type === 'assistantDelta' || event.type === 'turnEnd' ||
+          event.type === 'threadUpdate' || event.type === 'threadReply') {
         target.__handoverEvents.push(event)
       }
     })
@@ -46,7 +49,8 @@ async function observe(page: Page) {
   })
   const snapshot = () => page.evaluate(() => ({
     events: (window as unknown as ProofWindow).__handoverEvents,
-    footer: document.querySelector('.composer__effort-label')?.textContent ?? ''
+    footer: document.querySelector('.composer__effort-label')?.textContent ?? '',
+    modelFooter: document.querySelector('.composer__model-label')?.textContent ?? ''
   }))
   const effortSnapshot = async () => {
     const { events, footer } = await snapshot()
@@ -65,33 +69,27 @@ async function observe(page: Page) {
 }
 
 async function completedReply(page: Page, proof: Awaited<ReturnType<typeof observe>>,
-  serverId: string, conversationId: string, prompt: string): Promise<string> {
+  serverId: string, conversationId: string, agent: 'claude' | 'codex', prompt: string) {
   await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled({ timeout: TURN })
   const assistantRows = page.locator('[data-thread-role="assistant"]')
   const before = await assistantRows.count()
-  const after = await proof.mark()
+  const beforeSend = (await proof.snapshot()).events
+  const settings = beforeSend.findLast(event => event.type === 'runConfigReceived' &&
+    event.serverId === serverId && event.conversationId === conversationId)
+  if (settings?.type !== 'runConfigReceived' || !settings.sessionId) throw new Error('Missing owning-session settings')
+  const owner = { serverId, conversationId, sessionId: settings.sessionId, agent }
+  const after = beforeSend.length
   await page.getByPlaceholder('Message…').fill(prompt)
   await page.getByRole('button', { name: 'Send', exact: true }).click()
-  let reply = ''
+  let reply: ReturnType<typeof completedHandoverReply>
   await expect.poll(async () => {
-    const fresh = (await proof.snapshot()).events.slice(after)
-    const end = fresh.findLast(event => event.type === 'turnEnd' &&
-      event.serverId === serverId && event.conversationId === conversationId)
-    if (end?.type !== 'turnEnd') return false
-    expect(end.stopReason).toBe('end_turn')
-    expect(end.isError).not.toBe(true)
-    expect(end.outcome === undefined || end.outcome === 'success').toBe(true)
-    expect(end.terminalReason === undefined || end.terminalReason === 'completed').toBe(true)
-    expect(end.errorCategory).toBeFalsy()
-    reply = fresh.filter((event): event is Extract<ProofEvent, { type: 'assistantDelta' }> =>
-      event.type === 'assistantDelta' && event.serverId === serverId &&
-      event.conversationId === conversationId && event.turnId === end.turnId)
-      .map(event => event.text).join('')
-    return reply.trim().length > 0
+    reply = completedHandoverReply((await proof.snapshot()).events, after, owner)
+    return reply !== undefined
   }, { timeout: TURN }).toBe(true)
   await expect.poll(() => assistantRows.count(), { timeout: TURN }).toBeGreaterThan(before)
   await expect(page.locator('.bubble__cursor')).toHaveCount(0, { timeout: TURN })
-  return reply
+  if (!reply) throw new Error('Missing completed owning-session reply')
+  return { ...reply, owner, after }
 }
 
 test('real Claude conversation hands over to GPT-6 Luna at Low effort and Luna answers with the pre-switch fact', async ({ relay, daemon }, testInfo) => {
@@ -114,7 +112,8 @@ test('real Claude conversation hands over to GPT-6 Luna at Low effort and Luna a
       await expect.poll(async () => (await proof.snapshot()).events.some(event =>
         event.type === 'runConfigReceived' && event.serverId === daemon.pairFields.server),
       { timeout: ROUNDTRIP }).toBe(true)
-      const initial = (await proof.snapshot()).events.findLast(event => event.type === 'runConfigReceived')!
+      const initial = (await proof.snapshot()).events.findLast(event =>
+        event.type === 'runConfigReceived' && event.serverId === daemon.pairFields.server)!
       expect(initial.type).toBe('runConfigReceived')
       if (initial.type !== 'runConfigReceived') throw new Error('Missing initial run configuration')
       const { conversationId } = initial
@@ -127,9 +126,9 @@ test('real Claude conversation hands over to GPT-6 Luna at Low effort and Luna a
       expect(claudeConversation).toBeDefined()
       expect(claudeConversation?.agent ?? 'claude').toBe('claude')
 
-      const claudeReply = await completedReply(page, proof, serverId, conversationId,
+      const claudeReply = await completedReply(page, proof, serverId, conversationId, 'claude',
         `Remember the code word ${token} for this conversation. Reply only with that code word.`)
-      expect(claudeReply).toContain(token)
+      expect(claudeReply.text).toContain(token)
       await expect(page.locator('[data-thread-role="assistant"]').last()).toContainText(token)
       const beforeRefresh = await proof.mark()
       await row.click()
@@ -185,9 +184,9 @@ test('real Claude conversation hands over to GPT-6 Luna at Low effort and Luna a
       await expect(footer).not.toHaveText('Default')
 
       // Do not restate the token: only the transferred conversation can supply this answer.
-      const lunaReply = await completedReply(page, proof, serverId, conversationId,
+      const lunaReply = await completedReply(page, proof, serverId, conversationId, 'codex',
         'What is the code word I asked you to remember earlier in this conversation? Reply only with the code word.')
-      expect(lunaReply).toContain(token)
+      expect(lunaReply.text).toContain(token)
       await expect(page.locator('[data-thread-role="assistant"]').last()).toContainText(token)
       const beforeReadback = (await proof.effortSnapshot()).events.length
       await row.click()
@@ -204,6 +203,13 @@ test('real Claude conversation hands over to GPT-6 Luna at Low effort and Luna a
       await testInfo.attach('handover-answer', { contentType: 'application/json',
         body: Buffer.from(JSON.stringify({ serverId, conversationId, token, claudeReply, lunaReply,
           footer: await footer.innerText(), settings })) })
-    } finally { await proof.stop() }
+    } finally {
+      // Same-attempt evidence survives a failed turn/answer/settings assertion; it establishes no PASS by itself.
+      try {
+        const attempt = await proof.snapshot()
+        await testInfo.attach('handover-attempt', { contentType: 'application/json',
+          body: Buffer.from(JSON.stringify({ revision, token, ...attempt })) })
+      } finally { await proof.stop() }
+    }
   })
 })

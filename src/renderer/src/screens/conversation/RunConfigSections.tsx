@@ -31,6 +31,7 @@ import { changeSetting, isAddressableSessionId } from './runSettingsControls'
 import { contextUsagePercent } from './contextUsage'
 import {
   useConversationListStore,
+  conversationListStore,
   selectConversations,
   selectConversationAgentFor,
   type ConversationListState

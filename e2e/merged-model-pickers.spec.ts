@@ -164,6 +164,9 @@ for (const entry of ['footer', 'sheet'] as const) {
       const { page, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
         const e = decodeEnvelope(bytes); sent.push(e)
         if (e.type === 'list_conversations') return [frame('conversations', { conversations: [{ ...SEEDED_ROW, agent }] })]
+        if (e.type === 'request_model_list') return [frame('model_list', {
+          conversation_id: SEEDED_ROW.id, models: rows, dropped_models: 0
+        }, e.id)]
         if (e.type === 'request_session_settings') return [frame('session_settings', snapshot(), e.id)]
         if (e.type === 'set_session_settings') return [frame('session_settings_updated', { session_id: 'session' }, e.id)]
         return []
@@ -285,7 +288,11 @@ for (const entry of ['footer', 'sheet'] as const) {
       // Removal of the conversation abandons pending and restores the underlying Codex reading.
       daemon.pushFrame(frame('conversations', { conversations: [] }))
       await expect(status).toHaveCount(0)
+      await expect(page.locator('.channel-list__row-open')).toHaveCount(0)
       daemon.pushFrame(frame('conversations', { conversations: [{ ...SEEDED_ROW, agent }] }))
+      // Current ownership reconciliation closes a removed pane; re-open the restored row.
+      await expect(page.locator('.channel-list__row-open')).toBeVisible()
+      await page.locator('.channel-list__row-open').click()
       await expect(trigger).toHaveText('GPT-6 Luna')
       expect(writes()).toHaveLength(priorOwnPick ? 2 : 1)
       await expect(page.locator('.conversation')).not.toContainText('PRIVATE')

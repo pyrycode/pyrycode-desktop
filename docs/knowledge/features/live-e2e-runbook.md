@@ -114,35 +114,57 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 
 ## Current real-claude gate state
 
-As of 2026-10-15, credentialed acceptance of production daemon-built threads is
-pending. The final manual fake-daemon suite executed and passed 434 cases, failed
-zero and skipped 20. The 15 production activation cases and 12 supplied thread
-cases were present and passed. This is fake-transport evidence only. The source
-revision is `8d2f3a03d69c7b81019354feca58d42e0008d977`. See the
-[activation plan](../../specs/architecture/1908-thread-activation.md#manual-completion-shared-fake-migration-and-client-regressions)
-for configuration, source/report hashes and individual skip reasons.
+As of October 16, the current production-thread assertions have actual live
+capture evidence. Desktop `8bd3abb9` executed all 28 active real scenarios and the
+permission scenario from PR #2036: 29 passed, zero failed, one existing reset-prompt
+fixme. The [migration inventory](../../client-replay-migration.md) names every file,
+physical proof and exclusion. All 1,028 original expect expressions and all 1,036
+from the integrated baseline remain, apart from type syntax and an equivalent
+read-only inspection wrapper. No matcher or expected value was weakened.
 
-No credentialed thread run, daemon source revision, binary digest or live artifact
-is supplied by this manual completion. Do not carry earlier legacy-route live
-acceptance forward as proof of this activation. Execute the following exact specs
-against an isolated source-stamped daemon containing daemon #3164, #3236 and #3324:
+Captures use clean daemon source `58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`,
+including merged core PR #3505 (cold/idle view demand) and PR #3509 (Send now
+written state). The isolated macOS executable SHA-256 is
+`5f5b3b9ce42eda74024637f4929dd720d36c1226ce6e370eb62fbe9e6b22f7c0`;
+Claude Code reports `2.1.280`. The installed daemon was not replaced. The actual
+app connection, independently of the fixture's probe, accepts `interactive` and
+`thread`. Committed recordings retain their own successful source identities.
 
-- `e2e/real-claude-thread.spec.ts`
-- `e2e/real-daemon-history-on-open.spec.ts`
-- `e2e/real-claude-phase-reconnect.spec.ts`
-- `e2e/real-claude-queue-delivery.spec.ts`
-- `e2e/real-claude-queue-send-now.spec.ts`
-- `e2e/real-claude-permission-modal.spec.ts`
-- `e2e/real-claude-permission-mode.spec.ts`
-- `e2e/real-claude-codex-channel.spec.ts`
+Equivalent-scope timing excludes builds and counts the same 29 active scenarios,
+with one worker and zero retries in every row. Replay does not claim live-only
+filesystem, provider, encryption interoperability or OS proof.
 
-Record the Desktop source and daemon source/binary identities. Assert accepted
-`interactive` and `thread` on the actual app connection separately from the
-fixture's probe pairing. Return named-scenario executed/passed/failed/skipped counts
-and JSON/artifact paths for send/stream, reopen, reconnect, older paging, agent
-placement, queued delivery, session reset and saved-history recovery. Collection
-or an all-skip exit supplies no execution proof. Use the dedicated test executable;
-never silently replace the operator's running daemon.
+| Execution | Passed | Failed | Existing fixme | Seconds |
+| --- | ---: | ---: | ---: | ---: |
+| Fresh live capture, including original permission | 29 | 0 | 1 | 266.666 |
+| Committed capture replay under executable guard | 29 | 0 | 1 | 78.966 |
+| Fresh capture replay under executable guard | 29 | 0 | 1 | 136.900 |
+
+Both guarded macOS runs reported zero forbidden process-launch attempts. The
+fresh replay and comparison resumed after fixing the shared read-only inspector
+failure; they did not recapture or substitute failed fixtures. Strict comparison
+flags 18 changed traces, covering read marks, query coverage, numeric cursors and
+observed reconnect boundaries. Manual review found identical ordered mutation
+types, choices and payloads after identity binding. The verifier keeps those
+changes as drift and exits unsuccessfully when they occur; there is no claim of a
+drift-free provider transcript or silent baseline regeneration.
+
+The complete integrated unit suite passed 9,205 tests in 399 files, skipped six
+existing opt-in cases and failed zero, in 47.63 seconds with four workers. The
+full default application rerun and final Linux replay confirmation are pending.
+Linux source `32aadb0b` already passed three independent fresh live history cases,
+zero retries, including all 205 closed-app posts, saved-checkpoint catch-up and
+fresh-profile paging. A prior Linux guarded run at `8e9dd6ec` passed all 29 cases;
+the latest source's first replay attempt failed a bounded inspector read and
+remains a failed report. Its independent confirmation is pending.
+
+The packaged macOS history proof passed with the production encryption backend,
+not the fixture backend. The complete Go check, including race-enabled native
+and tagged E2E suites, and its documentation guard passed for the daemon
+prerequisite. Normal Desktop output contains no recorder markers, and the
+29 committed recordings are byte-identical to successful actual capture files.
+The known-credential scan found no configured Claude or Codex credential material
+in the recordings or production JavaScript.
 
 ### Earlier October 14 effort acceptance
 

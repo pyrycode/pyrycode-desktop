@@ -55,7 +55,10 @@ liveness, native platform integration, and daemon/tool filesystem effects cannot
 be established by application-message replay. Their live checks remain required.
 These boundaries do not exempt the client request and UI assertions within a
 mixed scenario from migration. Existing fixmes remain visible and are not counted
-as successful captures or replay coverage.
+as successful captures or replay coverage. The excluded reset-prompt scenario
+failed its original September 15 live gate because reset relaunched the child
+from frozen arguments instead of applying the newly stored system prompt. There
+is no successful current capture of that assertion; its full test remains a fixme.
 
 #1929 asks for a new orchestrator-hosted app integration, not an existing real
 Claude spec. It is relevant board context but has no current scenario to migrate.
@@ -118,7 +121,7 @@ never executes or claims the filesystem/OS proof.
 
 Observed push-overload closes are recorded at the exact application-message prefix with their actual WebSocket code. Replay forwards every preceding encrypted frame before reproducing that local close; explicit application reconnects and profile relaunches still come from the shared scenario. Capture adapters remain separate build inputs.
 
-The evidence observers also retain native identity semantics: queue markers include an ordered same-revision suffix, and a completed permission turn is counted once even when reconnect returns its item again. These repairs preserve every original matcher and strengthen the meaning of completion. An AST audit retains all 1,028 original expect expressions, plus all 1,036 from merged baseline `aebee62f`, normalizing only type assertions and the equivalent read-only inspection wrapper. The wrapper retries the existing transient CDP read failure without retrying input or handler installation. All matchers and expected values remain unchanged.
+The evidence observers also retain native identity semantics: queue markers include an ordered same-revision suffix, and a completed permission turn is counted once even when reconnect returns its item again. These repairs preserve every original matcher and strengthen the meaning of completion. An AST audit retains all 1,028 original expect expressions, plus all 1,036 from merged baseline `aebee62f`, normalizing only type assertions and the equivalent read-only inspection wrapper. The wrapper retries only the existing transient CDP inspection failure. Isolation read-back uses the same bounded treatment, preserving all isolation matchers. History observer installation inspects the actual IPC listener after a lost acknowledgement; a guarded installation can run again only after conclusive absence, and cannot duplicate a late listener or reset observations. All original matchers and expected values remain unchanged.
 
 
 The queue-drop scenario positively observes its native turn completion and rendered
@@ -129,6 +132,8 @@ and only before any menu activation was dispatched. No mutation is retried.
 Question answers and refusals bind their fresh answer token once; every choice,
 answer field and subsequent token reuse remains checked.
 
+Reset, system-prompt save and the Codex scenario now positively observe a normal native turn completion before subsequent configuration input. The Codex Create channel input also waits for the actual enabled control after reconnect. The visible-tail fake scenario drains the queued scroll input before its next pushed completion; all original read-mark assertions remain.
+
 Saved restoration can finish between an ordered field update and its text suffix.
 The store retains that pending companion only when the exact admitted live item
 wins the merge; a replacement item invalidates it. This integrates with the
@@ -136,12 +141,29 @@ saved/live restoration fixes merged in PR #2058.
 
 ## Validation evidence
 
-On October 16, all 29 active cases passed guarded offline replay in 76.172 seconds,
-with zero forbidden executable launch attempts, zero failures and one pre-existing
-fixme. Every committed recording is byte-identical to a successful actual capture;
-source identities are retained per recording rather than rewritten to the merge
-commit. Fresh live verification and the final default-suite results are recorded
-in the live runbook.
+On October 16, all 29 active cases passed fresh live capture on Desktop
+`8bd3abb9`, using the isolated `58f46aa5` daemon (macOS binary SHA-256
+`5f5b3b9ce42eda74024637f4929dd720d36c1226ce6e370eb62fbe9e6b22f7c0`).
+All original live-only assertions ran. The complete integrated unit suite passed
+9,205 tests in 399 files, with six existing opt-in skips. The live runbook records
+final full-suite, cross-platform replay counts and equivalent-scope timings.
+
+Every committed recording is byte-identical to a successful actual capture;
+source identities remain per recording rather than being rewritten to the merge
+commit. The fresh comparison identified 18 strict trace differences: query/read-mark
+coverage, numeric cursors and observed connection-close boundaries varied with
+provider output and arrival timing. Manual review found the same ordered mutation
+types, choices and payloads after fresh identity binding. These remain reported
+as drift; no cursor, read mark or close is erased to turn verification green.
+The upload identity comparison now binds `attachment_ids` to the same previously
+observed `attachment_id`, while changed bytes or substituted attachments still fail.
+
+Earlier failed runs remain failures: transient Electron inspector reads, a lost
+observer-installation acknowledgement, one Linux paging-progress timeout, a
+macOS fake-server HTTP 501 before Electron launch, and loopback handshake
+starvation under unrestricted unit concurrency. Read and installation handling
+are bounded as described above; unit verification uses four workers. No test
+retry or assertion weakening converts those runs into successful evidence.
 
 The dedicated Codex scenario's provider warning retains the path of its isolated
 test config. It contains no credential or config contents. The configured Claude

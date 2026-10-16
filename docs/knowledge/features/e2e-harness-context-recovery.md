@@ -42,6 +42,18 @@ this reader; listener installation, 205 posts, protected relaunch and native inp
 remain single actions. Polling availability does not wait for a desired count or
 replace the caller's original count assertion.
 
+The shared client scenarios retain that read-only contract in `mainRead`. Isolation
+read-back also retries only the exact transient error, for five seconds; it still
+requires the actual switches, an existing window and hidden state when configured.
+`historyQueryEvidence.ts` addresses a separate lost installation acknowledgement:
+the installed IPC listener has a main-process identity marker. Inspection must
+confirm that exact listener. Only conclusive absence after transient loss permits
+a second guarded installation; a late evaluation cannot duplicate the listener or
+reset the collected requests. Fatal and inconclusive inspection failures fail setup.
+Unit fault cases execute the real callbacks, covering loss before and after effect,
+retained observations and unrelated failures. Native input, posts and assertions
+remain unchanged. See the [migration inventory](../../client-replay-migration.md).
+
 The [history diagnosis and validation](development-verification-history.md#known-gap-recovery-verification)
 distinguishes a failed post-ArrowUp inspection from a rejected history request.
 Controlled one-shot loss after reading two requests failed the original observer

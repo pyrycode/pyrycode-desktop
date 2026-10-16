@@ -4,11 +4,11 @@
 
 - `CLAUDE.md`, `docs/knowledge/INDEX.md`, `docs/knowledge/features/conversation-shell.md` → renderer boundaries and existing desktop layout.
 - `docs/knowledge/features/composer-send.md`, `docs/knowledge/features/development-verification.md` → send gating, static versus mounted proof.
-- `ConversationScreen.tsx` → `ConversationScreen`, `useOpenConnectionStatus`, `TopOverlayControl`, `ComposerErrorSlot`: host routing, restoration inputs and existing notice placement.
-- `TopOverlay.tsx`, `TopOverlay.test.tsx` → `TopOverlay`: existing Error treatment and pointer-transparent stack.
-- `composerSend.ts`, `composerSend.test.ts` → connection predicates and client-owned explanations; preserve their policy.
-- `ConversationScreen.test.tsx`, `daemonEventBridge.test.ts` → retired surface assertions and daemon-update distinction.
-- `conversation.css` → `.conversation__top-overlay`, `.top-overlay-pill`: existing wrapping, absolute placement and pointer routing need no new styling.
+- `src/renderer/src/screens/conversation/ConversationScreen.tsx` → `ConversationScreen`, `useOpenConnectionStatus`, `TopOverlayControl`, `ComposerErrorSlot`: host routing, restoration inputs and existing notice placement.
+- `src/renderer/src/screens/conversation/TopOverlay.tsx` and adjacent `TopOverlay.test.tsx` → `TopOverlay`: existing Error treatment and pointer-transparent stack.
+- `src/renderer/src/screens/conversation/composerSend.ts` and adjacent `composerSend.test.ts` → connection predicates and client-owned explanations; preserve their policy.
+- `src/renderer/src/screens/conversation/ConversationScreen.test.tsx`, `src/renderer/src/store/daemonEventBridge.test.ts` → retired surface assertions and daemon-update distinction.
+- `src/renderer/src/screens/conversation/conversation.css` → `.conversation__top-overlay`, `.top-overlay-pill`: existing wrapping, absolute placement and pointer routing need no new styling.
 - `e2e/unpair-repair.spec.ts`, `e2e/host-row-per-server.spec.ts`, `e2e/thread-activation.spec.ts`, `e2e/composer-usage-limit.spec.ts` → recovery observation, offline rows and mounted geometry fixtures.
 
 ## Design source

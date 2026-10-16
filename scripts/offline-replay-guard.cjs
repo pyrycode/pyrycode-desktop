@@ -14,7 +14,7 @@ const check = command => {
 }
 for (const name of ['spawn', 'spawnSync', 'execFile', 'execFileSync']) {
   const actual = cp[name]
-  cp[name] = function(command, ...args) { check(command); return actual.call(this, command, ...args) }
+  cp[name] = function(command, ...args) { if (args.some(value => value && typeof value === 'object' && !Array.isArray(value) && value.shell)) check('shell'); check(command); return actual.call(this, command, ...args) }
 }
 for (const name of ['exec', 'execSync']) cp[name] = () => { check('shell') }
 syncBuiltinESMExports()

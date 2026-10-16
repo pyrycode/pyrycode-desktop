@@ -87,7 +87,12 @@ const capture = live.extend<{ _clientCapture: void }>({
         const page = await app.firstWindow()
         const identity = await page.evaluate(() => window.pyry.deviceIdentity())
         if (!identity.ok) throw new Error('Capture device identity unavailable')
-        const result = await app.evaluate(() => (globalThis as CaptureGlobal).__desktopExchangeCapture!.takeConnections())
+        const result = await app.evaluate(() => {
+          const capture = (globalThis as CaptureGlobal).__desktopExchangeCapture!
+          const result = capture.takeConnections()
+          capture.stop()
+          return result
+        })
         if (!result.connections) throw new Error('Capture observed no authenticated connection')
         const offset = wire.length
         barriers.push(...result.barriers.map(b => ({ ...b, before: b.before + offset })))
@@ -99,7 +104,6 @@ const capture = live.extend<{ _clientCapture: void }>({
         }
         connections += result.connections
         if (devices.length !== connections) throw new Error('Capture lacks connection provenance')
-        await app.evaluate(() => (globalThis as CaptureGlobal).__desktopExchangeCapture!.stop())
       } catch (error) { failure ??= error; throw error }
       finally { if (active === app) active = undefined }
     }

@@ -16,6 +16,7 @@ export function createQueueTurnEvidence(options: {
   let thread = false, epoch = '', invalid = false
   const items = new Map<number, Record<string, unknown>>()
   const ended = new Set<number>()
+  let appendCompanion: { id: number; rev: number; version: number } | undefined
   const record = (value: unknown): value is Record<string, unknown> =>
     typeof value === 'object' && value !== null && !Array.isArray(value)
   const suffixLimit = Math.max(...options.markers.map(marker => marker.length)) - 1
@@ -30,11 +31,13 @@ export function createQueueTurnEvidence(options: {
       if (event.type !== 'threadUpdate' && event.type !== 'threadReply') return
       const update = event.type === 'threadUpdate' ? event.update : event.reply
       const p = update.payload
+      const companion = appendCompanion
+      appendCompanion = undefined
       if (epoch !== p.epoch) { epoch = p.epoch; items.clear(); turns.clear(); ended.clear(); invalid = false }
-      const publish = (item: Record<string, unknown>) => {
+      const publish = (item: Record<string, unknown>, pairedSuffix = false) => {
         if (typeof item.id !== 'number' || typeof item.rev !== 'number') { invalid = true; return }
         const before = items.get(item.id)
-        if (before && typeof before.rev === 'number' && before.rev >= item.rev) return
+        if (before && typeof before.rev === 'number' && (before.rev > item.rev || before.rev === item.rev && !pairedSuffix)) return
         items.set(item.id, item)
         const content = record(item.content) ? item.content : {}
         if (item.kind === 'user_message') {
@@ -60,14 +63,19 @@ export function createQueueTurnEvidence(options: {
         }
       }
       if (update.type === 'thread_item_added') publish(update.payload.item)
-      else if (update.type === 'thread_items') update.payload.items.forEach(publish)
+      else if (update.type === 'thread_items') update.payload.items.forEach(item => publish(item))
       else if (update.type !== 'thread_reset') {
         const held = items.get(update.payload.item_id)
-        if (held && typeof held.rev === 'number' && held.rev >= update.payload.rev) return
+        const pairedSuffix = update.type === 'thread_text_append' && update.payload.rev === update.payload.base_rev &&
+          companion?.id === update.payload.item_id && companion.rev === update.payload.rev && companion.version === update.payload.version
+        if (held && typeof held.rev === 'number' && held.rev >= update.payload.rev && !pairedSuffix) return
         if (!held || held.rev !== update.payload.base_rev) { invalid = true; return }
-        if (update.type === 'thread_item_changed') publish({ ...held, ...update.payload.changes, rev: update.payload.rev })
+        if (update.type === 'thread_item_changed') {
+          publish({ ...held, ...update.payload.changes, rev: update.payload.rev })
+          appendCompanion = { id: update.payload.item_id, rev: update.payload.rev, version: update.payload.version }
+        }
         else if (record(held.content) && typeof held.content.text === 'string') publish({ ...held, rev: update.payload.rev,
-          content: { ...held.content, text: held.content.text + update.payload.text } })
+          content: { ...held.content, text: held.content.text + update.payload.text } }, pairedSuffix)
         else invalid = true
       }
       return

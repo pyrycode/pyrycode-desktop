@@ -581,11 +581,14 @@ export async function withIsolatedElectronApp(
   let relaunching = false
   const close = async (app: ElectronApplication): Promise<void> => {
     const child = app.process()
-    await clientAppLifecycle.closing?.(app)
-    await app.close()
-    await expect.poll(() => child.exitCode !== null || child.signalCode !== null, {
-      message: 'Electron process exited before relaunch', timeout: 15_000
-    }).toBe(true)
+    try {
+      await clientAppLifecycle.closing?.(app)
+    } finally {
+      await app.close()
+      await expect.poll(() => child.exitCode !== null || child.signalCode !== null, {
+        message: 'Electron process exited before relaunch', timeout: 15_000
+      }).toBe(true)
+    }
   }
   const launch = async (): Promise<IsolatedElectronApp> => {
     const app = await electron.launch({

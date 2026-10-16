@@ -267,7 +267,9 @@ export class RecordedExchange {
     const before = new Map(this.identities)
     const payload = expected.payload as Record<string, unknown>
     // Only these client-owned opaque identities vary. Choices, text, cursors and routes must match exactly.
-    const bindings = actual.type === 'send_message' ? ['message_id'] : actual.type === 'modal_answer' ? ['answer_token'] : actual.type === 'attachment_chunk' ? ['attachment_id'] : []
+    const bindings = actual.type === 'send_message' ? ['message_id'] :
+      ['modal_answer', 'question_answer', 'question_refused'].includes(actual.type) ? ['answer_token'] :
+        actual.type === 'attachment_chunk' ? ['attachment_id'] : []
     const newlyBound: string[] = []
     for (const key of bindings) if (nonempty(payload[key]) && nonempty(actual.payload[key]) && !this.boundClientIdentities.has(payload[key])) {
       this.identities.set(payload[key], actual.payload[key])

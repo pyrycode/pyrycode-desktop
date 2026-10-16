@@ -31,6 +31,13 @@ describe('recording request contract verification', () => {
       expect(requestContract(fresh)).not.toBe(requestContract(fixture()))
     }
   })
+  it('accepts a fresh question batch identity but detects changed answers', () => {
+    const make = (batch: string, value: string) => ({ ...fixture(), wire: [{ direction: 'client',
+      message: { type: 'question_answer', payload: { question_batch_id: batch,
+        answer_token: batch + '-answer', answers: [{ question_index: 0, values: [value] }] } } }] })
+    expect(requestContract(make('fresh-batch', 'TTL'))).toBe(requestContract(make('old-batch', 'TTL')))
+    expect(requestContract(make('fresh-batch', 'LRU'))).not.toBe(requestContract(make('old-batch', 'TTL')))
+  })
 })
 
 it('compares explicit fresh scenario inputs but still detects altered content and causal checkpoints', () => {

@@ -1,6 +1,6 @@
 const queriesAllowed = new Set(['list_conversations', 'thread_catch_up', 'thread_page', 'request_session_settings',
   'request_context_usage', 'request_model_list', 'request_system_prompt'])
-const identities = new Set(['conversation_id', 'session_id', 'modal_id', 'message_id', 'device_id', 'answer_token', 'epoch', 'attachment_id', 'tool_use_id', 'task_id'])
+const identities = new Set(['conversation_id', 'session_id', 'modal_id', 'question_batch_id', 'message_id', 'device_id', 'answer_token', 'epoch', 'attachment_id', 'tool_use_id', 'task_id'])
 
 /** Compare the UI's real request contract, ignoring only fresh opaque identities and query order. */
 export function requestContract(recording) {

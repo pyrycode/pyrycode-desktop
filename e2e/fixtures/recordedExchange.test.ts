@@ -130,6 +130,29 @@ it('binds an upload identity once across all chunks', () => {
   send(replay, 90, 'attachment_chunk', { attachment_id: 'fresh-upload', index: 0, data: 'same-test-bytes' })
   expect(() => send(replay, 91, 'attachment_chunk', { attachment_id: 'different-upload', index: 1, data: 'same-test-bytes' })).toThrow('step 2')
 })
+it.each(['question_answer', 'question_refused'])('binds a fresh %s token once while checking the complete payload', type => {
+  const recording = fixture()
+  const answers = [{ question_index: 0, values: ['TTL'] }]
+  const answerFields = type === 'question_answer' ? { answers } : {}
+  recording.wire = [
+    { direction: 'client', message: message(1, type, {
+      question_batch_id: 'batch', answer_token: 'recorded-answer', ...answerFields
+    }) },
+    { direction: 'client', message: message(2, type, {
+      question_batch_id: 'batch', answer_token: 'recorded-answer', ...answerFields
+    }) }
+  ]
+  const replay = new RecordedExchange(recording)
+  send(replay, 90, type, { question_batch_id: 'batch', answer_token: 'fresh-answer', ...answerFields })
+  expect(() => send(replay, 91, type, {
+    question_batch_id: 'batch', answer_token: 'different-answer', ...answerFields
+  })).toThrow('step 2')
+  const changed = new RecordedExchange(recording)
+  expect(() => send(changed, 90, type, {
+    question_batch_id: 'batch', answer_token: 'fresh-answer',
+    answers: [{ question_index: 0, values: ['LRU'] }]
+  })).toThrow('step 1')
+})
 it('validates retained optional envelope fields instead of dropping them', () => {
   const recording = fixture()
   Object.assign(recording.wire[1].message, { conversation_id: null })

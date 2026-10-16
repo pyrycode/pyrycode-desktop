@@ -180,6 +180,21 @@ const rosterLinked = (id: number) => ({ task_id: `task-${id}`, task_link: { task
 ] } })
 
 describe('supplied agents', () => {
+  it('shows the structured task description on launch markers instead of the raw JSON summary', () => {
+    const description = 'Wait 60 minutes then close'
+    const raw = JSON.stringify({ description, model: 'haiku', run_in_background: true })
+    for (const fields of [{ status: 'running', active: true }, { status: 'finished', active: false }]) {
+      const html = render([agent(10, fields, {
+        ...linked(10), input_summary: raw, input: { description, model: 'haiku' }
+      })])
+      expect(html).toContain(`<span class="agent-start-marker__description">${description}</span>`)
+      expect(html).not.toContain('&quot;run_in_background&quot;')
+      expect(html).toContain('Go to agent')
+    }
+    expect(render([agent(10, {}, { ...linked(10), input_summary: description })]))
+      .toContain(`<span class="agent-start-marker__description">${description}</span>`)
+  })
+
   it('supplied ancestry repairs missing parents, caps depth and counts only distinct shown tools', () => {
     const input = [agent(10), agent(20, { parent: 10 }), agent(30, { parent: 20 }),
       item(40, 'tool_call', { name: 'Read', tool_use_id: 'same' }, { parent: 30 }),

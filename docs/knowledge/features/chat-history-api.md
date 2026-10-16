@@ -51,14 +51,15 @@ with `createChatHistoryHandler` in production.
 The authoritative family has its own main-only
 [`createIndexedThreadHistory({ database, encryption, log })`](../../../src/main/indexedThreadHistory.ts).
 Its `execute(unknown): Promise<ThreadHistoryResult>` accepts `readThread`,
-`replaceThread`, `removeConversation`, `removeServer`, `newestThreadPage` and
+`replaceThread`, `mutateThread`, `removeConversation`, `removeServer`, `newestThreadPage` and
 `beforeThreadPage`. Full operations use the existing shared request/result shapes;
 replacement retains the normalized `daemon-items` snapshot exactly, including
 hidden/unordered items, inert unknown JSON, explicit nulls and optional arrival
 metadata. Requests are detached and validated before database access. Removal
 affects only authoritative scopes for the exact owner, preserving legacy records,
 lists and other hosts' equal ids. This callable backend shares the supplied database
-owner. Production `createChatHistoryStore` delegates full thread operations to it;
+owner. Production `createChatHistoryStore` delegates full and owned thread
+operations to it;
 direct backend calls perform no saved-host authorization.
 
 Both backends retain detached-callable Promise `execute` methods and expose
@@ -102,7 +103,8 @@ Corrupt input, unavailable protection, conversion or later operation failure lea
 the last commit intact and permits retry; no version marker commits ahead of
 conversion. Legacy/list-only operations need not initiate this protected upgrade.
 
-In schema 6, `thread_scopes.identity` is the stable owner. Item lookup uses
+In the retained schema-6 representation, `thread_scopes.identity` is the stable
+owner. Item lookup uses
 `thread_payloads(scope, item_id)`; its protected envelope binds owner, epoch, id,
 revision and the exact admitted item, independently of held/range positions or
 continuation generation. A protected item placement in `thread_records` binds all
@@ -113,11 +115,32 @@ the header's current generation. Binding only the stable owner would permit repl
 of older protected placements/evidence after replacement. See
 [the binding decision](../decisions/0013-stable-protected-thread-bindings.md).
 
-Full replacement preserves the owner, rotates generation and rewrites placement
-and evidence records. It reuses exact ciphertext for unchanged items in the same
+Retained full replacement preserves the owner, rotates generation and rewrites
+placement and evidence records. It reuses exact ciphertext for unchanged items in the same
 epoch; changed items or a changed epoch receive new payloads. This remains a full
 snapshot validation/replacement, not an incremental write. Scope removal cascades
 to placements, ranges and payloads; recreation receives a new owner and generation.
+
+Schema 7 adds `thread_auth(scope, tree, path, payload)` in the first owned-write
+transaction. Conversion is lazy per addressed scope: fully validate its schema-6
+snapshot, retain exact item ciphertext and held/arrival order, then rebind placements
+and ranges to the stable owner and build authenticated indexes. Other scopes keep
+their retained representation. Conversion, schema marker and requested mutation
+commit or roll back together. Existing fractional-index scopes also convert once,
+after full validation, to the final AVL representation without rewriting placements.
+See [ADR 0014](../decisions/0014-authenticated-owned-thread-mutations.md).
+
+The mutable protected header authenticates item-id, numeric-order/arrival and range
+radix roots plus an AVL held sequence with subtree counts. Stable placement ordinals
+identify nodes; they are not dense display positions. Rank verifies the complete
+hinted route from the protected root, so plaintext parent hints grant no authority.
+Leaves bind exact placement/range ciphertext digests, and placements still bind the
+item payload digest. Changed paths and the protected header commit with changed
+facts; each path flushes once per transaction. Unchanged payloads and placements
+stay byte-identical. Continuation generation rotates independently on every owned
+commit, including metadata-only work. Old records/branches cannot authenticate
+against the current root; rolling back every protected record remains outside the
+guarantee. Full/page readers support both representations.
 
 Before its first operation, the application store checks completion, then decrypts
 and validates the entire version-1 secure-store collection, including duplicate
@@ -143,6 +166,51 @@ and conversation removal validate the existing addressed snapshot before mutatio
 host removal validates every scope in the backend's own family for that exact host.
 Other hosts and peer conversations remain independent. See
 [rollback and protection](chat-history-results.md#results-and-failure-preservation).
+
+### Owned authoritative mutations
+
+Ordinary received saves use the existing fixed IPC with
+`{ operation: 'mutateThread', serverId, conversationId, change }`:
+
+| `change` field | Contract |
+| --- | --- |
+| `metadata` | Exact host/conversation/epoch and scalar progress, repair and optional availability; excludes items, ranges and arrival arrays. |
+| `items`, `removeIds`, `ranges` | Changed complete item facts, explicit item removals and newly certified ranges. Omitted saved facts/evidence survive. |
+| `acceptEpoch` | Required boolean allowing creation/epoch transition. Reaccepting an already saved epoch preserves it. |
+| `resetId?` | Bounded identity for an explicit reset with epoch admission; a new identity resets even the same epoch, while retrying the recorded identity preserves later facts. |
+| `completion?` | Exact completed `{ fromVersion, version }`, supplied by successful `beginBatch.commit`; never an unbound certification flag. |
+| `availability?` | `{ start, available }` for the certified oldest supplied boundary; requires completion. |
+| `priorProgress?` | Earlier metadata/completion/availability observations retained in admission order during coalescing and retry. |
+
+`parseChatHistoryRequest` detaches only changed JSON and bounded observations.
+Unknown request/change/observation keys, duplicate item/removal ids, overlap between
+those ids, mismatched observation coordinates/epochs and invalid intervals reject
+before storage.
+Completion requires `0 <= fromVersion <= version <= metadata.checkpoint`.
+Hydration and missing/recreated holders supply no completion or removal authority.
+Higher stored revisions win over older/equal revisions; a conflicting item kind
+rejects the mutation. New items receive stable first-arrival positions; revisions
+retain them. Ordering uses saved neighbors, including unloaded items, rather than
+the apparent tail of a partial holder. Removal leaves arrival gaps.
+
+Main folds `priorProgress` then the current observation against saved progress.
+Completion is admitted only when `fromVersion <= saved checkpoint`; it can advance
+fenced progress only through its own `version`. Uncovered saved and pending repair
+or unfinished obligations survive metadata-only saves and later live progress.
+New epochs start from empty progress. Retrying already-covered repair observations
+does not revive old obligations, but a new repair at the current checkpoint persists.
+Availability compares certified boundaries against retained evidence: older wins,
+equal-boundary exhaustion (`false`) wins, and newer/metadata-only observations cannot
+erase older exhaustion. A holder's scalar checkpoint or availability alone cannot
+certify unloaded work.
+
+After one-time conversion, mutation reads/decrypts only changed items and required
+metadata/evidence, with fixed-width lookup and logarithmic sequence work. A protected
+aggregate JSON-node count subtracts removed/revised old items and adds changed items;
+exceeding the shared 100,000-node limit rolls back the transaction so retained
+full/page readers remain coherent. Metadata replay touches the header with work
+proportional to received observations, not saved history. Protection stays in main;
+the renderer receives no SQL, filesystem, keys, ciphertext or page capability.
 
 ### Main-only bounded authoritative pages
 
@@ -174,8 +242,10 @@ placements and their directly looked-up payloads, and relevant ranges in one
 synchronous transaction. Ranges are the saved ranges containing selected
 nonnegative safe-integer orders (`start <= order < end`), plus the newest saved
 range as an anchor even for empty/unordered windows, once each in saved range order.
-Protected per-item range membership selects evidence and verifies containment;
-using mutable numeric range indexes alone could silently omit damaged evidence.
+Retained placements use protected per-item range membership to verify containment.
+Mutable scopes instead authenticate range predecessor/exact lookup against the
+protected range root, so merged evidence needs no untouched placement rewrite.
+Trusting mutable numeric range indexes alone could silently omit damaged evidence.
 Nonindexable orders remain inert item content and establish no coverage. Header
 counts determine window contiguity and exhaustion without a continuation probe.
 Neither the full reader nor complete item/range/arrival arrays are loaded. Shared
@@ -184,11 +254,12 @@ snapshot as complete; full reads retain aggregate and complete-membership valida
 
 The base64url continuation protects exactly `{ format: 'daemon-items', identity,
 before }` through `SecretEncryption`. `identity` is the protected generation UUID;
-`before` is a positive safe-integer exclusive held ordinal. Exact scoped lookup and
+`before` is a positive safe-integer exclusive held rank (ordinal in retained scopes).
+Exact scoped lookup and
 the validated header bind that generation to host, conversation and epoch in the
 same transaction. Migration alone and fresh-instance reopen retain validity;
-every replacement, including identical or empty content, rotates generation
-without necessarily re-encrypting item payloads. Deletion/recreation cannot revive it.
+every replacement and owned mutation, including identical or empty content, rotates
+generation without necessarily re-encrypting item payloads. Deletion/recreation cannot revive it.
 These tokens are local positions, separate from daemon cursors.
 
 Compact token plaintext is at most 101 ASCII bytes, independent of coordinate/epoch
@@ -198,9 +269,8 @@ protection overhead fails without returning an inadmissible token. Copying owner
 and epoch strings into the token would break traversal for valid long surrogate
 strings after JSON/protection expansion. See [page failures](chat-history-results.md#bounded-page-results).
 
-Authoritative full operations and collection import use the migrated layout.
-Owned incremental writes remain #2044; partial restoration and navigation remain
-\#2041/#2042. These page
+Authoritative full operations, collection import and owned mutations share the
+readers above. Partial restoration and navigation remain #2041/#2042. These page
 operations introduce no renderer page IPC. Local continuation/exhaustion never
 certifies daemon completeness or changes saved checkpoint, repair or availability.
 
@@ -303,6 +373,7 @@ Every request has `operation` and `serverId`. Additional fields are operation-sp
 | `replaceTimeline` | `conversationId`, `snapshot` of kind `timeline` | Replace only that legacy timeline in full, preserving supplied row order. |
 | `readThread` | `conversationId` | Read only the addressed daemon-item record. |
 | `replaceThread` | `conversationId`, `snapshot` of kind `daemon-items` | Replace only that held thread snapshot in full. |
+| `mutateThread` | `conversationId`, `change` | Atomically apply validated owned facts/progress; preserve unowned items/evidence. |
 | `removeConversation` | `conversationId` | Atomically remove both conversation formats and its entry from the host's saved list. |
 | `removeServer` | None | Remove every snapshot for that host, including conversations absent from its latest list. |
 
@@ -330,9 +401,10 @@ the existing string/array bounds. Invalid requests are classified before storage
 malformed saved metadata uses `unreadable`. Neither path replaces valid saved data,
 and diagnostics remain static event/code values without content or coordinates.
 
-`createChatHistoryWriter` requires `threads` and `lists`; its only replacements
-are `replaceThread` for changed authoritative snapshots and `replaceList` for
-received lists with a matching host receipt. Legacy timeline observations and
+`createChatHistoryWriter` requires `threads` and `lists`; it sends `mutateThread`
+for owned authoritative changes and `replaceList` for received lists with a matching
+host receipt. Full `replaceThread` remains available to retained callers/import.
+Legacy timeline observations and
 `replaceTimeline` submission are removed from the renderer. Hydration
 is excluded from saves, and later received changes remain eligible. Confirmed
 deletion clears that held scope and suppresses both saved formats; successful

@@ -71,7 +71,7 @@ These tests exercise the storage seams without proving the OS keychain adapter.
 covers membership, rejected requests before record access, ordering and contained
 failures. `invalidates queued conversation work while allowing fresh identical
 coordinates` includes a stale list replacement as well as conversation requests;
-the daemon-cache tests below cover `readThread`/`replaceThread`.
+the daemon-cache tests below cover `readThread`/`mutateThread`.
 
 [`chatHistoryMigration.test.ts`](../../../src/main/chatHistoryMigration.test.ts)
 tests activated storage with real disk, fresh owners and reversible protection.
@@ -157,10 +157,73 @@ for placements and payloads; growing unrelated history changes none of these cou
 Paging calls no full reader and performs no whole-history scan after migration.
 Selected containing-range evidence plus the newest anchor remains intact.
 
-These fixtures prove the layout through disk seams, not an owned-update API.
-Owned incremental writes remain #2044; partial restoration/navigation remain
-\#2041/#2042. Renderer page IPC is not introduced. Existing multi-family import,
-outer-commit rollback and fresh-owner fixtures above still apply.
+Those schema-6 fixtures retain full/page compatibility proof. Owned writes use the
+schema-7 regressions below; partial restoration/navigation remain #2041/#2042.
+Renderer page IPC is not introduced. Multi-family import, outer-commit rollback and
+fresh-owner fixtures above still apply.
+
+### Owned mutation regressions and counted validation
+
+The same protected-disk `indexedThreadHistory.test.ts` fixtures cover subset and
+metadata-only saves, highest revisions, explicit removal/epoch transition, stale
+tokens, range merging without placement rewrites, placement/range/branch replay,
+transactional rollback/retry and lazy schema-6 conversion. Aggregate admission uses
+two separately flushed 60,000-null items: the second rejects atomically and fresh
+full/page reads retain the first. Old fractional roots convert with exact placement
+bytes; tampered parent hints cannot authorize rank.
+
+Replacement-seeded edits can hide growing append cost. `successive owned additions
+keep ordering paths and record work bounded without rewriting placements` starts
+empty, adds through 513 items and checks mutations at 16/128/512: fewer than 500
+record reads and 300 writes, with the first placement unchanged. Shuffled additions,
+order movement, internal removal and fresh pages pin AVL behavior. `ordinary owned
+validation, serialization and protected record work stay bounded as unrelated
+history grows` compares 10/1,000 items: each revision has three decrypts, three
+encrypts and equal item-serialization counts, with fewer than 40 extra reads/writes
+for logarithmic sequence work. `coalesces shared protected paths into one write per
+path in an owned batch` uses 400 items: each final path is written once. Rewriting
+shared paths per item previously stalled the visible-tail browser setup.
+
+`e2e/daemon-item-cache.test.ts` compares separate, coalesced and held-failure saves
+through protected disk/reopen. It covers saved/pending repair and unfinished fences,
+partial/repeated completion, later live progress, same-epoch holder recreation,
+explicit same-epoch reset and lost acknowledgements. A retried completed repair
+cannot revive obligations behind checkpoint; a new repair at checkpoint persists.
+Certified older/newer/equal boundaries preserve oldest exhaustion through metadata-only
+saves. Writer fixtures retain newer work after failure and memory-only holder loss;
+existing removal/cache/arrival-restart proofs now exercise owned requests.
+
+The [final verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/2053#issuecomment-6212879270)
+records Linux x64 on `5005bf69a9eb04ea2d7e11dbccd50cfbc464680e`, 2026-10-16:
+
+| Run | Executed | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| Units, 391 passing files | 9,103 | 9,103 | 0 | 3 |
+| Complete configured fake suite, verifier gate 8 | 435 | 435 | 0 | 3 |
+| Packaged production-protection case, included above | 1 | 1 | 0 | 0 |
+
+The verifier confirms the repaired ordering, aggregate, reset and availability
+regressions passed. Gate 8 explicitly contains passed `read setup is reused across
+committed same-row deltas on short and long threads`. The packaged
+`packaged protected history commits and reopens with production encryption` case
+passed, including exact owned-update/reopen and 100,000 retained memberships.
+Its inspected `/tmp/pyry-history-native-rDa7aD/runtime.stdout` records Linux x64,
+Electron 33.4.11 / Node 20.18.3, better-sqlite3 12.4.1, `gnome_libsecret`,
+packaged/asar/native-unpacked true and stage complete. Fake suite: four workers,
+both configured projects, zero retries/flaky results or top-level errors. Build,
+install, native rebuilds and docs guard passed. Pre-verify ran three structural/security
+checks with `--no-suite`; counted units and build ran separately.
+
+Unit skips require live-relay credentials; browser skips are three macOS-only
+badge/window cases. Neither establishes live acceptance. macOS and live-Claude
+are outside this ticket's scope; no live-Claude run was required. Earlier failures
+remain failed in the [plan](../../specs/architecture/2044-owned-thread-changes.md):
+fractional ordering missed bounded append work, and an exploratory packaged run
+rejected `basic_text` until the existing admitted secret service was supplied.
+The earlier full fake run with 434 passed, 1 failed, 3 skipped hit teardown context
+loss tracked by [#2054](https://github.com/pyrycode/pyrycode-desktop/issues/2054)
+(Backlog, priority:low). Final counted passes supersede those candidates; no
+assertion, timeout, retry, skip or suite configuration was weakened.
 
 ### Bounded legacy page regressions
 
@@ -240,7 +303,8 @@ an isolated entrypoint, launches the packaged Electron app and writes `runtime.s
 and `runtime.stderr` beneath the supplied scratch directory. It uses the actual
 `electronSecretEncryption` through activated `createChatHistoryStore`, imports
 both protected formats, closes/reopens the database and compares parser-normalized
-content structurally. A 500-receipt by 200-id fixture exercises 100,000 memberships,
+content structurally. An owned item revision is committed and compared exactly
+after another fresh reopen. A 500-receipt by 200-id fixture exercises 100,000 memberships,
 full replacement and exact fresh reopen. It checks all history-directory files for
 fixture plaintext and reports versions, packaged/asar/native-unpacked flags,
 static stage and nonzero test counts.
@@ -384,8 +448,9 @@ covers host-matched received-list admission, coalescing, return-to-saved-value
 suppression, newest-during-write retention, contained write failures and shutdown.
 Generic persistence/removal assertions use authoritative snapshots.
 `retains ordered deletion when a late item holder is cleared before draining`
-pins the independent removal queue key: clearing a late holder must cancel its
-pending item save without cancelling disk removal. Pending-unpair tests hold both
+pins the independent removal queue key: clearing a late holder must preserve
+queued disk removal. Memory-only disappearance now retains owned pending saves;
+confirmed deletion explicitly discards them. Pending-unpair tests hold both
 settlement outcomes through shutdown, and old in-flight completions cannot restore
 comparison state after successful removal.
 
@@ -487,8 +552,8 @@ These supplied-state tests cover cache preparation and local hydration.
 reconnect, interrupted recovery, epoch replacement and cleanup. Its counted final
 fake-suite results are recorded in the [activation plan](../../specs/architecture/1908-thread-activation.md#manual-completion-shared-fake-migration-and-client-regressions).
 Existing legacy browser/liveness proofs below do not establish daemon-item live
-acceptance. Production uses complete indexed snapshots; bounded pages remain
-main-only until #1931 activates consumers and partial writers.
+acceptance. Production reads complete indexed snapshots and saves owned changes;
+bounded pages remain main-only pending #2041/#2042 reader activation.
 
 The direct legacy `beginLocalTimelineRead` admission, newest-demand and exclusive
 bridge/frame tests were removed with the renderer holder/producers in #2030.

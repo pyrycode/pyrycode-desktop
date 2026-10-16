@@ -46,7 +46,7 @@ attach an error to a newer list or a cleared host.
 | `unreadable` | Reading, decryption, UTF-8/JSON decoding or stored-record validation failed. Duplicate snapshot identities are invalid. |
 | `unsupported-version` | The stored collection or a stored snapshot has a safe-integer numeric version other than 1, or SQLite schema admission rejects an unfamiliar version/nonempty unversioned database. Malformed snapshot version values are `unreadable`. |
 | `encryption-unavailable` | Protection is unavailable or raises `EncryptionUnavailableError`. The application store and indexed backends check availability before database access, including reads/removals. |
-| `write-failed` | A replacement or import mutation/outer COMMIT failed for another write/encryption reason, even when a read triggered import. |
+| `write-failed` | An owned mutation, replacement or import/outer COMMIT failed for another write/encryption reason, even when a read triggered import. |
 | `remove-failed` | A removal mutation/COMMIT or pending-source cleanup failed for another reason. Source cleanup can fail after the database deletion committed. |
 
 First access, including a read, can import the protected version-1 collection and
@@ -93,7 +93,7 @@ before source validation; that creates no imported content or completion marker.
 Authoritative replacement and conversation removal fully validate the existing
 addressed snapshot; host removal validates all authoritative scopes for that exact
 host before deleting any. Their removals affect only `thread_scopes` and cascading
-`thread_records`/`thread_payloads`, preserving legacy rows/evidence, lists and other
+`thread_records`/`thread_payloads`/`thread_auth`, preserving legacy rows/evidence, lists and other
 hosts' equal ids. Every committed replacement rotates the protected generation,
 even when identical or empty; the stable owner and unchanged same-epoch item
 ciphertext can survive replacement.
@@ -121,19 +121,28 @@ Original unwrapped records remain readable, using selected codec/index checks fo
 pages and canonical whole-scope checks for full reads. Reads do not rewrite them.
 
 Authoritative headers bind the stable owner and every header index; their protected
-value contains scalar metadata, item/range counts, arrival-presence and current
-generation, with no item/range/arrival arrays. Item placements and ranges bind the
-current generation and every structural index, rejecting older protected record
-replay. Placements contain id/revision and a SHA-256 digest of exact payload
-ciphertext. Separate item envelopes bind owner, epoch, id/revision and content;
-lookup columns must agree with those protected facts. Full reconstruction compares
-canonical records/indexes after shared snapshot admission and rejects orphan
-payloads. Selected reads validate only their placements, payloads and evidence,
-including protected containing-range ordinals, so missing/substituted evidence is
-`unreadable` without decoding unrelated history. An unselected orphan is a full-read
-failure, not something a bounded page scans to discover.
+value contains scalar metadata, item/range counts, arrival presence and continuation
+generation. Retained placements/ranges bind the current generation. Schema-7 mutable
+headers additionally protect authenticated roots, AVL sequence counts, aggregate
+JSON-node count, reset identity and availability boundary. Mutable placements/ranges
+bind the stable owner; current-root proofs reject old-record/branch replay without
+rewriting untouched ciphertext. Rank verifies hinted parent routes from that root.
+Placements contain id/revision and SHA-256 of exact payload ciphertext; separate
+item envelopes bind owner, epoch, id/revision and content. Lookup/index facts must
+agree with those protected associations. See
+[ADR 0014](../decisions/0014-authenticated-owned-thread-mutations.md).
 
-Each indexed `payload` is protected by main-process `SecretEncryption` before it
+Full reads reconstruct and validate complete snapshots and reject orphan payloads.
+Selected reads authenticate only their selected paths, placements, payloads and
+necessary evidence. Mutable range predecessor proofs replace generation-bound range
+ordinals, preserving containing evidence across range merges. An unselected orphan
+remains a full-read failure rather than something bounded pages scan to discover.
+Owned conversion, records, roots and header share one transaction; aggregate-node
+overflow or failed mutation returns `write-failed` and preserves the last commit.
+Malformed owned IPC returns `invalid-request` before storage; malformed protected
+reads return `unreadable`. The writer retains failed ownership for a later flush/event.
+
+Each content-record `payload` is protected by main-process `SecretEncryption` before it
 reaches SQLite, including header coverage/cursors, rows, attachment metadata, raw
 unknown display text, authoritative scalar/item/range facts and individual evidence
 payloads. Production encryption keeps the existing Linux `basic_text` rejection.
@@ -148,14 +157,16 @@ unencrypted columns are:
 | Record selection/order | `kind`: `header`, `row`, `served`, `receipt`, `receipt-id`, `display`, `gap`, `gap-key` or `gap-refused`; `ordinal`, `parent`: nonnegative array positions (zero for unparented records). |
 | Evidence indexes | `entry_id`, `last_id`, `older_id`, `newer_id`: nonnegative safe integers or null; `row_key`: signed safe integer or null. |
 | `thread_scopes` | `identity`: stable locally generated owner UUID, fresh on creation; `server`, `conversation`: exact UTF-16LE ownership BLOBs, including NUL/lone-surrogate distinctions. |
-| `thread_records` ownership/order | `scope`: stable owner UUID; `kind`: `header`, `item` or `range`; `ordinal`: nonnegative held/range position (zero for header). |
+| `thread_records` ownership/order | `scope`: stable owner UUID; `kind`: `header`, `item` or `range`; `ordinal`: nonnegative held/range position in retained scopes, stable record ordinal in mutable scopes (zero for header). |
 | `thread_payloads` lookup | `scope`: stable owner UUID; `item_id`, `revision`: admitted nonnegative safe integers. Primary key `(scope, item_id)`; payload is protected and deletion cascades from the owner. |
 | Authoritative selection indexes | `arrival`: original nonnegative first-arrival position or null; `item_order`: nonnegative safe integer or null; `range_ordinal`: containing saved range position or null; `range_start`, `range_end`: nonnegative safe-integer range bounds or null. Unused indexes are null. |
+| `thread_auth` | `scope`: stable owner UUID; `tree`, `path` and TEXT `payload`: structural index names/addresses, child hashes/counts/heights, placement/range digests and numeric identities, plus untrusted parent hints. No daemon content. Authenticated by protected header roots. |
 | `history_lists` | `server`: exact UTF-16LE host BLOB; `payload` is an encrypted complete list snapshot, validated against that owner. |
 | `history_import` | `singleton`: fixed integer 1, whose presence means import completed; `retired`: 0 for pending cleanup or 1 for recorded retirement. |
-| Schema/index metadata | `user_version`: 6 after protected authoritative conversion; additive legacy/list admission can stop at 5 (base creation uses 2). Indexes, including `legacy_receipt_start` and `thread_ranges`, duplicate only reviewed ownership and structural columns. |
+| Schema/index metadata | `user_version`: 7 after first owned transaction, 6 after retained protected conversion; additive legacy/list admission can stop at 5 (base creation uses 2). Indexes, including `legacy_receipt_start` and `thread_ranges`, duplicate only reviewed ownership and structural columns. |
 
-`payload` is a ciphertext BLOB. Timestamps, join strings, opaque cursors, attachment
+Content-record `payload` is a ciphertext BLOB; `thread_auth.payload` is the
+content-free structural TEXT exception above. Timestamps, join strings, opaque cursors, attachment
 fields, message text and raw unknown objects never become plaintext lookup/order
 columns. Ownership coordinates are intentionally unencrypted structural data, not
 filenames or authorization tokens. Authoritative item id/revision are also numeric

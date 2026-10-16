@@ -40,7 +40,7 @@ import { rememberedModel } from '../../store/rememberedModel'
 import { connectedConversationHostNow, conversationHostNow, useConversationHost, useConversationActionAvailability } from './conversationActionAvailability'
 import { AssistantMarkdown } from './AssistantMarkdown'
 import { StreamingAssistantMarkdown } from './StreamingAssistantMarkdown'
-import { MARKDOWN_OPEN_FAILED_NOTICE, MarkdownReaderView, useMarkdownReader } from './MarkdownReader'
+import { MarkdownReaderView, useMarkdownReader } from './MarkdownReader'
 import { PyryMark } from '../../theme/PyryMark'
 import type { Message } from './messageViewModel'
 import type { ConversationCreatedPayload, WireResetHandoff, WireAgent, MemorySearchPayload } from '@shared/wire/types'
@@ -390,11 +390,6 @@ export function ConversationScreen({
           true sentence. The disconnection itself is still announced, by the #279 banner above. */}
       {selectedHost !== null && (localStatus !== 'loaded' || (offline && authoritativeSnapshot?.items.length)) &&
         <SavedTimelineNotice status={localStatus} />}
-      {/* #1627: a markdown file that could not be opened. One client-owned line, never the path or the
-          reason; cleared by the next open, and gone with the screen on a conversation switch. */}
-      {reader.state.type === 'closed' && reader.state.notice && (
-        <p className="conversation__banner" role="status">{MARKDOWN_OPEN_FAILED_NOTICE}</p>
-      )}
       </div>
       <div className="conversation__message-area">
       {authoritative && !daemonOutdated && authoritativeSnapshot === null && <div className="conversation__thread" aria-live="polite">
@@ -434,7 +429,8 @@ export function ConversationScreen({
           }} />}
           <ThreadPromptSlot host={selectedHost} conversationId={openConversationId} />
         </>} />}
-      <TopOverlayControl onRepairHost={onRepairHost} threadLive={authoritative ? threadLive : undefined} />
+      <TopOverlayControl onRepairHost={onRepairHost} threadLive={authoritative ? threadLive : undefined}
+        markdownOpenFailed={reader.state.type === 'closed' && reader.state.notice} />
       </div>
       {/* #962/#967: the region between the thread and the status area is EMPTY, and that emptiness is the
           design (Figma 102:4 stacks the message area straight onto the input area). #493's api-retry,
@@ -4738,7 +4734,8 @@ function ComposerErrorSlotControl({
 //
 // Repair resolves the host from the stores at CLICK time and delegates to the shell, preserving this
 // host's saved credentials and held chats — the slot's former `handleRepair`, moved.
-function TopOverlayControl({ onRepairHost, threadLive }: {
+function TopOverlayControl({ onRepairHost, threadLive, markdownOpenFailed }: {
+  markdownOpenFailed?: boolean
   onRepairHost?: (serverId: string) => void
   threadLive?: ReturnType<typeof threadRuntime.live>
 }): JSX.Element | null {
@@ -4793,6 +4790,7 @@ function TopOverlayControl({ onRepairHost, threadLive }: {
   }
   return (
     <TopOverlay
+      markdownOpenFailed={markdownOpenFailed}
       sessionError={threadError?.code}
       resolution={resolution?.phase === 'displayed' ? resolution.kind : null}
       onDismissResolution={() => {

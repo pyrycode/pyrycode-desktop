@@ -17,6 +17,7 @@ import type { ModalResolution } from '../../store/modalPrompts'
 import type { UsageLimitReading } from '../../store/usageLimitStore'
 import { isUsageReadingDismissed, usageLimitNotice } from './usageLimitNotice'
 import { COMPOSER_REPAIR_BUTTON_COPY } from './composerSend'
+import { MARKDOWN_OPEN_FAILED_NOTICE } from './MarkdownReader'
 
 /** The X's accessible name — client-owned, since the glyph itself says nothing to a screen reader. */
 export const USAGE_PILL_DISMISS_LABEL = 'Dismiss usage notice'
@@ -30,8 +31,10 @@ export function TopOverlay({
   onRepair,
   resolution,
   onDismissResolution,
-  sessionError
+  sessionError,
+  markdownOpenFailed = false
 }: {
+  markdownOpenFailed?: boolean
   sessionError?: string
   resolution: ModalResolution['kind'] | null
   onDismissResolution: () => void
@@ -44,7 +47,7 @@ export function TopOverlay({
 }): JSX.Element | null {
   const usage = reading === null || isUsageReadingDismissed(reading, dismissed) ? null : reading
   // No pills, no element: the overlay takes no space and leaves nothing in the tree.
-  if (usage === null && resolution === null && sessionError === undefined && !repair) return null
+  if (usage === null && resolution === null && sessionError === undefined && !repair && !markdownOpenFailed) return null
   const notice = usage === null ? null : usageLimitNotice(usage, nowSeconds)
   return (
     <div className="conversation__top-overlay">
@@ -104,6 +107,11 @@ export function TopOverlay({
                 ? 'Claude keeps failing to start. Your message is waiting.'
                 : 'Claude stopped responding.'}
           </span>
+        </div>
+      )}
+      {markdownOpenFailed && (
+        <div className="top-overlay-pill top-overlay-pill--error" role="status">
+          <span className="top-overlay-pill__text">{MARKDOWN_OPEN_FAILED_NOTICE}</span>
         </div>
       )}
       {repair && (

@@ -1199,7 +1199,7 @@ function ThreadItemsView({ pin, snapshot, readInputs, sendInputs, taskInputs, tr
               : row.source.status === 'finished' ? ' agent-start-marker__finished' : ''}`} aria-hidden="true" />
             <span className="agent-start-marker__state">{row.source.active === true ? 'Agent working · ' : ''}{row.outcome}</span>
             <span aria-hidden="true">·</span>
-            <span className="agent-start-marker__description">{item?.kind === 'toolCall' ? item.inputSummary.slice(0, 4096) : ''}</span>
+            <span className="agent-start-marker__description">{item?.kind === 'toolCall' ? (toolHeadlineRuns(item).subject ?? '').slice(0, 4096) : ''}</span>
             <span className="agent-start-marker__action">Go to agent ↓</span>
           </button>
         </div>

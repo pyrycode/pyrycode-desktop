@@ -127,7 +127,7 @@ export async function launchIsolatedApp(options: {
 }): Promise<ElectronApplication> {
   const app = await electron.launch({
     args: [...options.args, ...RENDERER_THROTTLING_SWITCHES.map((name) => `--${name}`)],
-    env: withWindowPresentation(options.env)
+    env: Object.fromEntries(Object.entries(withWindowPresentation(options.env)).filter((entry): entry is [string, string] => entry[1] !== undefined))
   })
   options.fate.watch(app)
   try {

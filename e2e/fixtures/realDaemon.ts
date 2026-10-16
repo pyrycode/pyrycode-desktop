@@ -1,3 +1,4 @@
+import { clientAppLifecycle } from './clientAppLifecycle'
 import {
   test as base,
   expect,
@@ -579,6 +580,7 @@ export async function withIsolatedElectronApp(
   let relaunching = false
   const close = async (app: ElectronApplication): Promise<void> => {
     const child = app.process()
+    await clientAppLifecycle.closing?.(app)
     await app.close()
     await expect.poll(() => child.exitCode !== null || child.signalCode !== null, {
       message: 'Electron process exited before relaunch', timeout: 15_000
@@ -587,12 +589,13 @@ export async function withIsolatedElectronApp(
   const launch = async (): Promise<IsolatedElectronApp> => {
     const app = await electron.launch({
       args: ['.', `--user-data-dir=${userDataDir}`, ...RENDERER_THROTTLING_SWITCHES.map((name) => `--${name}`)],
-      env
+      env: Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined))
     })
     current = app
     // The window once its app document has loaded, as the default tier's launch waits (see `appWindow`).
     const page = await appWindow(app)
     await expectDesktopIsolated(app)
+    await clientAppLifecycle.opened?.(app, page)
     return {
       app, page, userDataDir,
       async relaunch(whileClosed) {

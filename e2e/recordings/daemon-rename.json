@@ -1,0 +1,193 @@
+{
+  "format": "pyrycode.daemon-exchange",
+  "version": 1,
+  "source": {
+    "capturedAt": "2026-10-16T09:36:21.347Z",
+    "desktopRevision": "0e7a40165643772bb419555b30865c618e5952ff",
+    "daemonRevision": "5442746b96920558987621d0e2c1ca6bb320fcea",
+    "daemonBinarySha256": "223693b27514576960d1fd895ccf0188c133b454c1d0440037385a49a8c5d500",
+    "claudeVersion": "not-spawned"
+  },
+  "scenario": {
+    "id": "daemon-rename",
+    "inputs": {
+      "nonce": 1792143380805
+    },
+    "workspace": "/recorded/workspace"
+  },
+  "capabilities": [
+    "interactive",
+    "multi_agent",
+    "stop_background_task",
+    "thread"
+  ],
+  "deviceId": "6a8656f2f5bfc8adde9b9dd00c8fe4436d2ec2f313c84484a0372eb29cab512f",
+  "wire": [
+    {
+      "direction": "client",
+      "atMs": 118,
+      "message": {
+        "id": 2,
+        "type": "list_conversations",
+        "ts": "2026-10-16T09:36:21.229Z",
+        "payload": {}
+      }
+    },
+    {
+      "direction": "daemon",
+      "atMs": 131,
+      "message": {
+        "id": 2,
+        "type": "turn_state",
+        "ts": "2026-10-16T09:36:20.894246Z",
+        "payload": {},
+        "session_id": "77777777-7777-4777-8777-777777777777",
+        "session_state_cleared": true
+      }
+    },
+    {
+      "direction": "daemon",
+      "atMs": 131,
+      "message": {
+        "id": 3,
+        "type": "turn_state",
+        "ts": "2026-10-16T09:36:20.894246Z",
+        "payload": {
+          "conversation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          "state": "idle"
+        },
+        "session_id": "77777777-7777-4777-8777-777777777777"
+      }
+    },
+    {
+      "direction": "daemon",
+      "atMs": 132,
+      "message": {
+        "id": 4,
+        "type": "conversations",
+        "ts": "2026-10-16T09:36:21.240783Z",
+        "payload": {
+          "conversations": [
+            {
+              "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+              "name": null,
+              "is_promoted": true,
+              "current_session_id": "77777777-7777-4777-8777-777777777777",
+              "is_archived": false,
+              "is_muted": false,
+              "read_up_to": 0,
+              "latest_entry_id": 0,
+              "archived_at": null,
+              "cwd": "/recorded/workspace",
+              "workspace_label": null,
+              "last_message_ts": "2026-01-01T00:00:00Z",
+              "last_used_at": "2026-01-01T00:00:00Z",
+              "agent": "claude"
+            }
+          ]
+        },
+        "in_reply_to": 2
+      }
+    },
+    {
+      "direction": "client",
+      "atMs": 173,
+      "message": {
+        "id": 3,
+        "type": "request_system_prompt",
+        "ts": "2026-10-16T09:36:21.284Z",
+        "payload": {
+          "conversation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+        }
+      }
+    },
+    {
+      "direction": "daemon",
+      "atMs": 174,
+      "message": {
+        "id": 5,
+        "type": "system_prompt",
+        "ts": "2026-10-16T09:36:21.285243Z",
+        "payload": {
+          "session_prompt_status": "matches"
+        },
+        "in_reply_to": 3
+      }
+    },
+    {
+      "direction": "client",
+      "atMs": 206,
+      "message": {
+        "id": 4,
+        "type": "rename_conversation",
+        "ts": "2026-10-16T09:36:21.317Z",
+        "payload": {
+          "conversation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          "name": "renamed 1792143380805"
+        }
+      }
+    },
+    {
+      "direction": "daemon",
+      "atMs": 213,
+      "message": {
+        "id": 6,
+        "type": "conversation_updated",
+        "ts": "2026-10-16T09:36:21.323936Z",
+        "payload": {
+          "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          "is_promoted": true,
+          "is_archived": false,
+          "is_muted": false,
+          "read_up_to": 0,
+          "name": "renamed 1792143380805",
+          "cwd": "/recorded/workspace",
+          "workspace_label": null,
+          "last_used_at": "2026-01-01T00:00:00Z",
+          "agent": "claude"
+        },
+        "in_reply_to": 4
+      }
+    },
+    {
+      "direction": "client",
+      "atMs": 213,
+      "message": {
+        "id": 5,
+        "type": "list_conversations",
+        "ts": "2026-10-16T09:36:21.324Z",
+        "payload": {}
+      }
+    },
+    {
+      "direction": "daemon",
+      "atMs": 214,
+      "message": {
+        "id": 7,
+        "type": "conversations",
+        "ts": "2026-10-16T09:36:21.32496Z",
+        "payload": {
+          "conversations": [
+            {
+              "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+              "name": "renamed 1792143380805",
+              "is_promoted": true,
+              "current_session_id": "77777777-7777-4777-8777-777777777777",
+              "is_archived": false,
+              "is_muted": false,
+              "read_up_to": 0,
+              "latest_entry_id": 0,
+              "archived_at": null,
+              "cwd": "/recorded/workspace",
+              "workspace_label": null,
+              "last_message_ts": "2026-01-01T00:00:00Z",
+              "last_used_at": "2026-01-01T00:00:00Z",
+              "agent": "claude"
+            }
+          ]
+        },
+        "in_reply_to": 5
+      }
+    }
+  ]
+}

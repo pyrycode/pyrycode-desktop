@@ -1,0 +1,169 @@
+{
+  "format": "pyrycode.daemon-exchange",
+  "version": 1,
+  "source": {
+    "capturedAt": "2026-10-16T09:36:20.645Z",
+    "desktopRevision": "0e7a40165643772bb419555b30865c618e5952ff",
+    "daemonRevision": "5442746b96920558987621d0e2c1ca6bb320fcea",
+    "daemonBinarySha256": "223693b27514576960d1fd895ccf0188c133b454c1d0440037385a49a8c5d500",
+    "claudeVersion": "not-spawned"
+  },
+  "scenario": {
+    "id": "daemon-promote",
+    "inputs": {
+      "nonce": 1792143380111
+    },
+    "workspace": "/recorded/workspace"
+  },
+  "capabilities": [
+    "interactive",
+    "multi_agent",
+    "stop_background_task",
+    "thread"
+  ],
+  "deviceId": "3ff0ec9f942365cfb1e52d636f1e50eb3a44dc9ffe82d004814f2ae859fc2b4f",
+  "wire": [
+    {
+      "direction": "client",
+      "atMs": 124,
+      "message": {
+        "id": 2,
+        "type": "list_conversations",
+        "ts": "2026-10-16T09:36:20.531Z",
+        "payload": {}
+      }
+    },
+    {
+      "direction": "daemon",
+      "atMs": 136,
+      "message": {
+        "id": 2,
+        "type": "turn_state",
+        "ts": "2026-10-16T09:36:20.208937Z",
+        "payload": {},
+        "session_id": "77777777-7777-4777-8777-777777777777",
+        "session_state_cleared": true
+      }
+    },
+    {
+      "direction": "daemon",
+      "atMs": 136,
+      "message": {
+        "id": 3,
+        "type": "turn_state",
+        "ts": "2026-10-16T09:36:20.208937Z",
+        "payload": {
+          "conversation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          "state": "idle"
+        },
+        "session_id": "77777777-7777-4777-8777-777777777777"
+      }
+    },
+    {
+      "direction": "daemon",
+      "atMs": 136,
+      "message": {
+        "id": 4,
+        "type": "conversations",
+        "ts": "2026-10-16T09:36:20.540914Z",
+        "payload": {
+          "conversations": [
+            {
+              "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+              "name": null,
+              "is_promoted": false,
+              "current_session_id": "77777777-7777-4777-8777-777777777777",
+              "is_archived": false,
+              "is_muted": false,
+              "read_up_to": 0,
+              "latest_entry_id": 0,
+              "archived_at": null,
+              "cwd": "/recorded/workspace",
+              "workspace_label": null,
+              "last_message_ts": "2026-01-01T00:00:00Z",
+              "last_used_at": "2026-01-01T00:00:00Z",
+              "agent": "claude"
+            }
+          ]
+        },
+        "in_reply_to": 2
+      }
+    },
+    {
+      "direction": "client",
+      "atMs": 209,
+      "message": {
+        "id": 3,
+        "type": "promote_conversation",
+        "ts": "2026-10-16T09:36:20.616Z",
+        "payload": {
+          "conversation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          "name": "Untitled",
+          "cwd": "/recorded/workspace"
+        }
+      }
+    },
+    {
+      "direction": "daemon",
+      "atMs": 213,
+      "message": {
+        "id": 5,
+        "type": "conversation_updated",
+        "ts": "2026-10-16T09:36:20.62063Z",
+        "payload": {
+          "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          "is_promoted": true,
+          "is_archived": false,
+          "is_muted": false,
+          "read_up_to": 0,
+          "name": "Untitled",
+          "cwd": "/recorded/workspace",
+          "workspace_label": null,
+          "last_used_at": "2026-01-01T00:00:00Z",
+          "agent": "claude"
+        },
+        "in_reply_to": 3
+      }
+    },
+    {
+      "direction": "client",
+      "atMs": 214,
+      "message": {
+        "id": 4,
+        "type": "list_conversations",
+        "ts": "2026-10-16T09:36:20.621Z",
+        "payload": {}
+      }
+    },
+    {
+      "direction": "daemon",
+      "atMs": 215,
+      "message": {
+        "id": 6,
+        "type": "conversations",
+        "ts": "2026-10-16T09:36:20.62155Z",
+        "payload": {
+          "conversations": [
+            {
+              "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+              "name": "Untitled",
+              "is_promoted": true,
+              "current_session_id": "77777777-7777-4777-8777-777777777777",
+              "is_archived": false,
+              "is_muted": false,
+              "read_up_to": 0,
+              "latest_entry_id": 0,
+              "archived_at": null,
+              "cwd": "/recorded/workspace",
+              "workspace_label": null,
+              "last_message_ts": "2026-01-01T00:00:00Z",
+              "last_used_at": "2026-01-01T00:00:00Z",
+              "agent": "claude"
+            }
+          ]
+        },
+        "in_reply_to": 4
+      }
+    }
+  ]
+}

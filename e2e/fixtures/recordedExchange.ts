@@ -2,15 +2,17 @@ import { randomUUID } from 'node:crypto'
 import { decodeEnvelope, encodeEnvelope } from '../../src/main/transport/codec'
 import type { Envelope } from '../../src/shared/wire/types'
 
-export type RecordedEntry = { direction: 'client' | 'daemon'; message: Envelope; atMs?: number }
+export type RecordedEntry = { direction: 'client' | 'daemon'; message: Envelope; atMs?: number; connection?: number }
 export type Recording = {
   format: 'pyrycode.daemon-exchange'
-  version: 1
+  version: 1 | 2
   source: { capturedAt: string; desktopRevision: string; daemonRevision: string; daemonBinarySha256: string; claudeVersion: string }
   scenario: { id: string; prompt?: string; expectedReply?: string; allowLabel?: string; historyRetry?: boolean;
-    inputs?: { nonce: number }; workspace?: string }
+    inputs?: { nonce: number; [key: string]: unknown }; workspace?: string }
   capabilities: string[]
   deviceId: string
+  devices?: string[]
+  barriers?: { before: number; name: string }[]
   wire: RecordedEntry[]
 }
 const object = (value: unknown): value is Record<string, unknown> =>
@@ -39,7 +41,7 @@ export function parseRecording(text: string): Recording {
   if (Buffer.byteLength(text) > 2_000_000) invalid()
   let value: unknown
   try { value = JSON.parse(text) } catch { return invalid() }
-  if (!object(value) || value.format !== 'pyrycode.daemon-exchange' || value.version !== 1) return invalid()
+  if (!object(value) || value.format !== 'pyrycode.daemon-exchange' || ![1, 2].includes(Number(value.version))) return invalid()
   const { source, scenario, capabilities, deviceId, wire } = value
   if (!object(source) || !nonempty(source.capturedAt) || !Number.isFinite(Date.parse(source.capturedAt)) ||
       !/^[a-f0-9]{40}$/.test(String(source.desktopRevision)) || !/^[a-f0-9]{40}$/.test(String(source.daemonRevision)) ||
@@ -47,17 +49,31 @@ export function parseRecording(text: string): Recording {
       !object(scenario) || !nonempty(scenario.id) || !/^[a-z][a-z0-9-]*$/.test(scenario.id) ||
       !Array.isArray(capabilities) || !capabilities.every(nonempty) || !capabilities.includes('thread') ||
       !capabilities.includes('interactive') || !nonempty(deviceId) || !Array.isArray(wire) ||
-      wire.length === 0 || wire.length > 5000 || !object(wire[0]) || wire[0].direction !== 'client') return invalid()
+      wire.length === 0 || wire.length > 5000 || !object(wire[0]) || value.version === 1 && wire[0].direction !== 'client') return invalid()
   if (scenario.id === 'permission-allow') {
     if (!nonempty(scenario.prompt) || !nonempty(scenario.expectedReply) || !nonempty(scenario.allowLabel) ||
         typeof scenario.historyRetry !== 'boolean') return invalid()
   } else if (!object(scenario.inputs) || !Number.isSafeInteger(scenario.inputs.nonce) ||
       Number(scenario.inputs.nonce) <= 0 || scenario.workspace !== undefined && !nonempty(scenario.workspace)) return invalid()
   assertRecordingSafe(value)
+  if (value.version === 2 && (!Array.isArray(value.devices) || value.devices.length === 0 ||
+      !value.devices.every(nonempty) || value.devices[0] !== deviceId)) return invalid()
+  if (value.barriers !== undefined && (value.version !== 2 || !Array.isArray(value.barriers))) return invalid()
+  let boundary = -1
+  for (const barrier of value.barriers as { before: number; name: string }[] ?? []) {
+    if (!object(barrier) || !Number.isSafeInteger(barrier.before) || barrier.before < 0 || barrier.before > wire.length ||
+        barrier.before < boundary || !nonempty(barrier.name) || !/^[a-z][a-z0-9-]*$/.test(barrier.name)) return invalid()
+    boundary = barrier.before
+  }
+  let connection = 1
   const clientIds = new Set<number>()
   const daemonIds = new Set<number>()
   for (const entry of wire) {
     if (!object(entry) || !['client', 'daemon'].includes(String(entry.direction)) || !object(entry.message)) return invalid()
+    const next = entry.connection ?? 1
+    if (value.version === 1 && entry.connection !== undefined || value.version === 2 &&
+        (typeof next !== 'number' || !Number.isSafeInteger(next) || entry.connection === undefined || next < connection || next > connection + 1)) return invalid()
+    if (next !== connection) { connection = next as number; clientIds.clear(); daemonIds.clear() }
     const m = entry.message
     if (!Number.isSafeInteger(m.id) || Number(m.id) < 0 || !nonempty(m.type) || forbidden.has(m.type) ||
         !nonempty(m.ts) || !object(m.payload) ||
@@ -70,6 +86,7 @@ export function parseRecording(text: string): Recording {
       ...(m.in_reply_to === undefined ? {} : { in_reply_to: m.in_reply_to as number }) }
     try { decodeEnvelope(encodeEnvelope(frame)) } catch { return invalid() }
   }
+  if (value.version === 2 && (value.devices as unknown[]).length !== connection) return invalid()
   return value as Recording
 }
 
@@ -93,6 +110,8 @@ export class RecordedExchange {
   private index = 0
   private matched = 0
   private emitted = 0
+  private connection = 1
+  private barrier = 0
   private failure: Error | undefined
   constructor(recording: Recording) {
     // Clone and validate so callers cannot mutate an active replay.
@@ -113,6 +132,50 @@ export class RecordedExchange {
     if (this.index !== 0 || !nonempty(value)) throw new Error('Recorded exchange identity must be bound before replay')
     this.identities.set(this.recording.deviceId, value)
   }
+  bindCurrentDevice(value: string): void {
+    const next = this.recording.wire[this.index]?.connection
+    const connection = next === this.connection + 1 ? next : this.connection
+    const recorded = this.recording.devices?.[connection - 1] ?? this.recording.deviceId
+    this.identities.set(recorded, value)
+  }
+  reconnect(deviceId?: string): Uint8Array[] {
+    const next = this.recording.wire[this.index]
+    if (this.failure || !next || next.connection !== this.connection + 1 ||
+        this.recording.barriers?.[this.barrier]?.before === this.index) return this.fail('Recorded exchange connection mismatch')
+    this.connection++
+    this.actualIds.clear()
+    this.requestIds.clear()
+    if (deviceId) this.identities.set(this.recording.devices![this.connection - 1], deviceId)
+    return this.drain()
+  }
+  checkpoint(name: string): Uint8Array[] {
+    const expected = this.recording.barriers?.[this.barrier]
+    if (this.failure || !expected || expected.name !== name || expected.before !== this.index)
+      return this.fail('Recorded exchange checkpoint mismatch')
+    this.barrier++
+    return this.drain()
+  }
+  private drain(): Uint8Array[] {
+    const frames: Uint8Array[] = []
+    while (this.index < this.recording.wire.length) {
+      if (this.recording.barriers?.[this.barrier]?.before === this.index) break
+      const entry = this.recording.wire[this.index]
+      if ((entry.connection ?? 1) !== this.connection) break
+      if (entry.direction === 'client') {
+        if (!this.consumed.has(entry.message)) break
+        this.index++
+        continue
+      }
+      const recorded = entry.message
+      this.index++
+      const message = this.mapped(recorded) as Envelope
+      if (recorded.in_reply_to !== undefined) message.in_reply_to = this.requestIds.get(recorded.in_reply_to)!
+      frames.push(encodeEnvelope(message))
+    }
+    this.emitted += frames.length
+    return frames
+  }
+  start(): Uint8Array[] { return this.drain() }
   private mapped(value: unknown): unknown {
     if (typeof value === 'string') return this.identities.get(value) ?? value
     if (Array.isArray(value)) return value.map(child => this.mapped(child))
@@ -131,7 +194,10 @@ export class RecordedExchange {
     const mismatch = `Recorded exchange request mismatch at step ${this.matched + 1}`
     if (!object(actual.payload)) return this.fail(mismatch)
     const eligible: Envelope[] = []
-    for (const entry of this.recording.wire.slice(this.index)) {
+    for (let i = this.index; i < this.recording.wire.length; i++) {
+      if (this.recording.barriers?.[this.barrier]?.before === i) break
+      const entry = this.recording.wire[i]
+      if ((entry.connection ?? 1) !== this.connection) break
       if (entry.direction !== 'client' || this.consumed.has(entry.message)) continue
       if (isAction(entry.message.type)) {
         if (eligible.length === 0) eligible.push(entry.message)
@@ -145,7 +211,7 @@ export class RecordedExchange {
     const before = new Map(this.identities)
     const payload = expected.payload as Record<string, unknown>
     // Only these client-owned opaque identities vary. Choices, text, cursors and routes must match exactly.
-    const bindings = actual.type === 'send_message' ? ['message_id'] : actual.type === 'modal_answer' ? ['answer_token'] : []
+    const bindings = actual.type === 'send_message' ? ['message_id'] : actual.type === 'modal_answer' ? ['answer_token'] : actual.type === 'attachment_chunk' ? ['attachment_id'] : []
     for (const key of bindings) if (nonempty(payload[key]) && nonempty(actual.payload[key])) {
       this.identities.set(payload[key], actual.payload[key])
     }
@@ -157,23 +223,9 @@ export class RecordedExchange {
     this.requestIds.set(expected.id, actual.id)
     this.consumed.add(expected)
     this.matched++
-    const frames: Uint8Array[] = []
-    while (this.index < this.recording.wire.length) {
-      const entry = this.recording.wire[this.index]
-      if (entry.direction === 'client') {
-        if (!this.consumed.has(entry.message)) break
-        this.index++
-        continue
-      }
-      const recorded = entry.message
-      this.index++
-      const message = this.mapped(recorded) as Envelope
-      if (recorded.in_reply_to !== undefined) message.in_reply_to = this.requestIds.get(recorded.in_reply_to)!
-      frames.push(encodeEnvelope(message))
-    }
-    this.emitted += frames.length
-    return frames
+    return this.drain()
   }
+
   stats(): { matchedRequests: number; emittedFrames: number; remainingRequests: number } {
     return { matchedRequests: this.matched, emittedFrames: this.emitted,
       remainingRequests: this.recording.wire.filter(e => e.direction === 'client' && !this.consumed.has(e.message)).length }
@@ -181,6 +233,8 @@ export class RecordedExchange {
   assertComplete(): void {
     if (this.failure) throw this.failure
     const remaining = this.stats().remainingRequests
+    if (this.barrier !== (this.recording.barriers?.length ?? 0) || this.index !== this.recording.wire.length)
+      throw new Error(`Recorded exchange incomplete: ${remaining} requests remain`)
     if (remaining) throw new Error(`Recorded exchange incomplete: ${remaining} requests remain`)
   }
 }

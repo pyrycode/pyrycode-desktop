@@ -1,4 +1,4 @@
-import { test as base } from '@playwright/test'
+import { test as base, type ElectronApplication, type Page } from '@playwright/test'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import { execFileSync } from 'node:child_process'
@@ -7,85 +7,127 @@ import { test as live, withIsolatedElectronApp, type RealDaemonOptions, type Rea
 import { startFakeRelayForwarder } from '../../src/main/transport/fakeRelayForwarder'
 import { startFakeDaemonForTest } from './fakeDaemonSetup'
 import { RecordedExchange, parseRecording, type Recording, type RecordedEntry } from './recordedExchange'
+import { clientAppLifecycle } from './clientAppLifecycle'
+import { daemonIdentity } from './daemonVersion'
 import type { ExchangeCapture } from './exchangeCapture'
 
 export { expect } from '@playwright/test'
 export { encodePairingPayload, withIsolatedElectronApp } from './realDaemon'
-
-// Scenario inputs are captured once. The application's clock, timers and identities stay real.
-let nonce: number | undefined
-export function scenarioNonce(): number { return nonce ?? Date.now() }
-const mode = process.env.PYRY_CLIENT_MODE ?? 'live'
-if (!['live', 'capture', 'replay'].includes(mode)) throw new Error('Unknown client scenario mode')
+export const scenarioMode = process.env.PYRY_CLIENT_MODE ?? 'live'
+if (!['live', 'capture', 'replay'].includes(scenarioMode)) throw new Error('Unknown client scenario mode')
 type CaptureGlobal = typeof globalThis & { __desktopExchangeCapture?: ExchangeCapture }
-type ObservationWindow = typeof window & { captureCapabilities: string[]; stopCaptureCapabilities: () => void }
+type Inputs = { nonce: number; [key: string]: unknown }
+let state: { inputs: Inputs; source: Recording['source']; checkpoint: (name: string) => Promise<void> } | undefined
 
-const capture = live.extend({
-  page: async ({ daemon, spawnClaude }, use, info) => {
-    const output = process.env.PYRY_CLIENT_RECORDING_DIR
-    const binary = process.env.PYRY_BIN
+// Only explicit test-authored inputs are replayed. The application's clock and identities stay real.
+export function scenarioNonce(): number { return state?.inputs.nonce ?? Date.now() }
+export function scenarioInput<T>(name: string, generate: () => T): T {
+  if (!state) return generate()
+  if (scenarioMode === 'replay') {
+    if (!Object.hasOwn(state.inputs, name)) throw new Error('Missing recorded scenario input')
+    return state.inputs[name] as T
+  }
+  const value = generate()
+  state.inputs[name] = value
+  return value
+}
+export async function liveProof(run: () => Promise<void> | void): Promise<void> {
+  if (scenarioMode !== 'replay') await run()
+}
+// A recorded test-side action is distinct from an application request. Its effects
+// are never fabricated: capture executes it; replay releases only captured messages.
+export async function scenarioEffect(name: string, run: () => Promise<void>): Promise<void> {
+  await state?.checkpoint(name)
+  if (scenarioMode !== 'replay') await run()
+}
+export function scenarioDaemonRevision(): string {
+  if (state) return state.source.daemonRevision
+  return daemonIdentity(execFileSync(process.env.PYRY_BIN ?? 'pyry', ['version'], { encoding: 'utf8', timeout: 10_000 }))
+}
+export function scenarioDesktopRevision(): string {
+  return state?.source.desktopRevision ?? execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+}
+
+const capture = live.extend<{ _clientCapture: void }>({
+  _clientCapture: [async ({ daemon, spawnClaude }, use, info) => {
+    const output = process.env.PYRY_CLIENT_RECORDING_DIR, binary = process.env.PYRY_BIN
     if (!output || !binary) throw new Error('Client capture requires explicit output directory and test daemon')
     const build = execFileSync('go', ['version', '-m', binary], { encoding: 'utf8' })
     const daemonRevision = /vcs.revision=([a-f0-9]{40})/.exec(build)?.[1]
     if (!daemonRevision) throw new Error('Capture daemon must identify its source revision')
-    nonce = Date.now()
-    try {
-      await withIsolatedElectronApp(async ({ app, page }) => {
-        await app.evaluate(() => {
-          const recorder = (globalThis as CaptureGlobal).__desktopExchangeCapture
-          if (!recorder) throw new Error('Client capture requires separate capture build')
-          recorder.begin()
-        })
-        await page.evaluate(() => {
-          const target = window as ObservationWindow
-          target.captureCapabilities = []
-          target.stopCaptureCapabilities = window.pyry.onDaemonEvent(event => {
-            if (event.type === 'connected') target.captureCapabilities = event.ack.capabilities
-          })
-        })
-        try {
-          await use(page)
-          if (info.status !== 'passed' || info.errors.length) return
-          const identity = await page.evaluate(() => window.pyry.deviceIdentity())
-          if (!identity.ok) throw new Error('Capture device identity unavailable')
-          const wire = await app.evaluate(() => (globalThis as CaptureGlobal).__desktopExchangeCapture!.take())
-          const nonces = wire.filter(e => e.direction === 'client' && e.message.type === 'modal_answer')
-            .map(e => (e.message.payload as Record<string, unknown>).answer_token)
-          const normalize = (value: unknown): unknown => {
-            if (typeof value === 'string') {
-              const index = nonces.indexOf(value)
-              return index >= 0 ? `recorded-answer-nonce-${index + 1}` : value.replaceAll(daemon.workdir, '/recorded/workspace')
-            }
-            if (Array.isArray(value)) return value.map(normalize)
-            if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, normalize(v)]))
-            return value
-          }
-          const id = basename(info.file, '.spec.ts').replace(/^real-/, '')
-          const recording: Recording = { format: 'pyrycode.daemon-exchange', version: 1,
-            source: { capturedAt: new Date().toISOString(), desktopRevision: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
-              daemonRevision, daemonBinarySha256: createHash('sha256').update(readFileSync(binary)).digest('hex'),
-              claudeVersion: spawnClaude ? execFileSync('claude', ['--version'], { encoding: 'utf8' }).trim() : 'not-spawned' },
-            scenario: { id, inputs: { nonce: nonce! }, workspace: '/recorded/workspace' },
-            capabilities: await page.evaluate(() => (window as ObservationWindow).captureCapabilities),
-            deviceId: identity.deviceId, wire: normalize(wire) as RecordedEntry[] }
-          const encoded = JSON.stringify(recording, null, 2) + '\n'
-          for (const key of ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'PYRY_LIVE_CLAUDE_TOKEN'])
-            if (process.env[key] && encoded.includes(process.env[key]!)) throw new Error('Invalid recording: credential present')
-          parseRecording(encoded)
-          writeFileSync(join(output, `${id}.json`), encoded, { flag: 'wx', mode: 0o600 })
-          await info.attach('capture-provenance', { contentType: 'application/json', body: Buffer.from(JSON.stringify({
-            scenario: id, source: recording.source, frames: wire.length })) })
-        } finally {
-          await app.evaluate(() => (globalThis as CaptureGlobal).__desktopExchangeCapture?.stop())
-          await page.evaluate(() => (window as ObservationWindow).stopCaptureCapabilities())
+    const source: Recording['source'] = { capturedAt: new Date().toISOString(),
+      desktopRevision: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), daemonRevision,
+      daemonBinarySha256: createHash('sha256').update(readFileSync(binary)).digest('hex'),
+      claudeVersion: spawnClaude ? execFileSync('claude', ['--version'], { encoding: 'utf8' }).trim() : 'not-spawned' }
+    const wire: RecordedEntry[] = [], barriers: NonNullable<Recording['barriers']> = [], devices: string[] = []
+    let capabilities: string[] = [], connections = 0, active: ElectronApplication | undefined, failure: unknown
+    const harvested = new Set<ElectronApplication>()
+    const oldFlag = process.env.PYRY_CAPTURE_ON_LAUNCH
+    process.env.PYRY_CAPTURE_ON_LAUNCH = '1'
+    state = { inputs: { nonce: Date.now() }, source, checkpoint: async name => {
+      if (active) await active.evaluate((_, name) => (globalThis as CaptureGlobal).__desktopExchangeCapture!.checkpoint(name), name)
+      else barriers.push({ before: wire.length, name })
+    } }
+    clientAppLifecycle.opened = async app => { active = app }
+    clientAppLifecycle.closing = async app => {
+      if (harvested.has(app)) return
+      harvested.add(app)
+      try {
+        const page = await app.firstWindow()
+        const identity = await page.evaluate(() => window.pyry.deviceIdentity())
+        if (!identity.ok) throw new Error('Capture device identity unavailable')
+        const result = await app.evaluate(() => (globalThis as CaptureGlobal).__desktopExchangeCapture!.takeConnections())
+        if (!result.connections) throw new Error('Capture observed no authenticated connection')
+        const offset = wire.length
+        barriers.push(...result.barriers.map(b => ({ ...b, before: b.before + offset })))
+        wire.push(...result.wire.map(e => ({ ...e, connection: (e.connection ?? 1) + connections })))
+        for (const names of result.capabilities) {
+          if (!names.includes('interactive') || !names.includes('thread')) throw new Error('Capture lacks native thread capabilities')
+          capabilities = names
+          devices.push(identity.deviceId)
         }
-      })
-    } finally { nonce = undefined }
-  }
+        connections += result.connections
+        if (devices.length !== connections) throw new Error('Capture lacks connection provenance')
+        await app.evaluate(() => (globalThis as CaptureGlobal).__desktopExchangeCapture!.stop())
+      } catch (error) { failure ??= error; throw error }
+      finally { if (active === app) active = undefined }
+    }
+    try {
+      await use()
+      if (failure) throw failure
+      if (info.status !== 'passed' || info.errors.length) return
+      const answerNonces = wire.filter(e => e.direction === 'client' && e.message.type === 'modal_answer')
+        .map(e => (e.message.payload as Record<string, unknown>).answer_token)
+      const normalize = (value: unknown): unknown => {
+        if (typeof value === 'string') {
+          const index = answerNonces.indexOf(value)
+          return index >= 0 ? `recorded-answer-nonce-${index + 1}` : value.replaceAll(daemon.workdir, '/recorded/workspace')
+        }
+        if (Array.isArray(value)) return value.map(normalize)
+        if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, normalize(v)]))
+        return value
+      }
+      const id = basename(info.file, '.spec.ts').replace(/^real-/, '')
+      const recording: Recording = { format: 'pyrycode.daemon-exchange', version: 2, source,
+        scenario: { id, inputs: state!.inputs, workspace: '/recorded/workspace' }, capabilities,
+        deviceId: devices[0], devices, barriers, wire: normalize(wire) as RecordedEntry[] }
+      const encoded = JSON.stringify(recording, null, 2) + '\n'
+      for (const key of ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'PYRY_LIVE_CLAUDE_TOKEN'])
+        if (process.env[key] && encoded.includes(process.env[key]!)) throw new Error('Invalid recording: credential present')
+      parseRecording(encoded)
+      writeFileSync(join(output, `${id}.json`), encoded, { flag: 'wx', mode: 0o600 })
+      await info.attach('capture-provenance', { contentType: 'application/json', body: Buffer.from(JSON.stringify({
+        scenario: id, source, frames: wire.length, connections })) })
+    } finally {
+      delete clientAppLifecycle.opened; delete clientAppLifecycle.closing; state = undefined
+      if (oldFlag === undefined) delete process.env.PYRY_CAPTURE_ON_LAUNCH
+      else process.env.PYRY_CAPTURE_ON_LAUNCH = oldFlag
+    }
+  }, { auto: true }]
 })
 
 type ReplayFixtures = RealDaemonOptions & RealDaemonFixtures & {
-  recordingName: string; recording: Recording; exchange: RecordedExchange
+  recordingName: string; recording: Recording; exchange: RecordedExchange; _clientReplay: void
 }
 const replay = base.extend<ReplayFixtures>({
   recordingName: ['', { option: true }],
@@ -99,8 +141,7 @@ const replay = base.extend<ReplayFixtures>({
     const directory = process.env.PYRY_CLIENT_RECORDING_DIR ?? resolve('e2e/recordings')
     const recording = parseRecording(readFileSync(join(directory, `${recordingName}.json`), 'utf8'))
     if (recording.scenario.id !== recordingName) throw new Error('Client recording scenario mismatch')
-    nonce = recording.scenario.inputs!.nonce
-    try { await use(recording) } finally { nonce = undefined }
+    await use(recording)
   },
   exchange: async ({ recording }, use, info) => {
     const exchange = new RecordedExchange(recording)
@@ -116,25 +157,31 @@ const replay = base.extend<ReplayFixtures>({
   },
   daemon: async ({ relay, recording, exchange }, use) => {
     const daemon = await startFakeDaemonForTest({ url: relay.url, helloAck: { capabilities: recording.capabilities },
-      buildReplyFrames: bytes => {
-        try { return exchange.reply(bytes) } catch { return [] }
-      } })
+      buildInitialFrames: () => exchange.start(), buildReconnectFrames: () => exchange.reconnect(),
+      buildReplyFrames: bytes => { try { return exchange.reply(bytes) } catch { return [] } } })
+    state = { inputs: recording.scenario.inputs!, source: recording.source, checkpoint: async name => {
+      for (const frame of exchange.checkpoint(name)) daemon.pushFrame(frame)
+    } }
     try {
-      const pairFields = { server: 'fake-daemon', token: 'dummy-token-not-a-real-credential',
-        server_static_pubkey: Buffer.from(daemon.staticPublicKey).toString('base64') }
-      await use({ pairFields, workdir: recording.scenario.workspace ?? '/recorded/workspace',
-        mintPairing: async () => { throw new Error('Replay has no live pairing service') } })
-    } finally { await daemon.close() }
+      await use({ pairFields: { server: 'fake-daemon', token: 'dummy-token-not-a-real-credential',
+        server_static_pubkey: Buffer.from(daemon.staticPublicKey).toString('base64') },
+      workdir: recording.scenario.workspace ?? '/recorded/workspace',
+      mintPairing: async () => ({ server: 'fake-daemon', token: 'dummy-token-not-a-real-credential',
+        server_static_pubkey: Buffer.from(daemon.staticPublicKey).toString('base64') }) })
+    } finally { state = undefined; await daemon.close() }
   },
-  page: async ({ daemon, exchange }, use) => {
+  _clientReplay: [async ({ daemon, exchange, recording }, use) => {
     void daemon
-    await withIsolatedElectronApp(async ({ page }) => {
+    let first = true
+    clientAppLifecycle.opened = async (_, page) => {
       const identity = await page.evaluate(() => window.pyry.deviceIdentity())
       if (!identity.ok) throw new Error('Replay device identity unavailable')
-      exchange.setDeviceId(identity.deviceId)
-      await use(page)
-    })
-  }
+      if (first) { exchange.setDeviceId(identity.deviceId); first = false }
+      else exchange.bindCurrentDevice(identity.deviceId)
+    }
+    try { await use() } finally { delete clientAppLifecycle.opened }
+  }, { auto: true }],
+  page: async ({ daemon }, use) => { void daemon; await withIsolatedElectronApp(({ page }) => use(page)) }
 })
 
-export const test = (mode === 'replay' ? replay : mode === 'capture' ? capture : live) as typeof live
+export const test = (scenarioMode === 'replay' ? replay : scenarioMode === 'capture' ? capture : live) as typeof live

@@ -27,8 +27,7 @@ async function mainRead<T>(app: ElectronApplication, read: (electron: typeof imp
 // This acceptance uses real daemon storage and a fully exited, protected desktop profile.
 test.use({ spawnClaude: false, seedPromoted: true, requiredCapabilities: ['interactive', 'thread'] })
 
-// https://github.com/pyrycode/pyrycode-desktop/issues/2046 — reproduced on untouched main before storage assertions.
-test.skip('blocked on #2046 — a real daemon lazily fills a served gap after more than 200 entries written while Electron is closed', async ({ relay, daemon }, testInfo) => {
+test('a real daemon lazily fills a served gap after more than 200 entries written while Electron is closed', async ({ relay, daemon }, testInfo) => {
   test.setTimeout(240_000)
   const revision = scenarioDaemonRevision()
   expect(revision, 'thread acceptance requires a source-stamped isolated daemon binary').toMatch(/^[a-f0-9]{7,40}$/)

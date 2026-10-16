@@ -104,14 +104,16 @@ See [Run configuration store](run-config-store.md) for the full data-path design
 ## Run configuration Model/Effort/YOLO sections (#188)
 
 **Writes require the conversation's owning host to be connected (#1380).**
-`useSessionSettingsConnected` resolves unambiguous ownership through
-`serverIdForOpenConversation` and reads that host in `SessionState.statuses`.
+`useSessionSettingsConnected` uses `useConversationHost`: matching selected pane coordinates
+take precedence over the flattened list, with `serverIdForOpenConversation` as the fallback.
+It reads that host in `SessionState.statuses`.
 Missing or ambiguous ownership, missing status, and every non-connected status
 fail closed; neither the global last status nor another connected host enables a write.
 An addressable session ID remains required.
 
-The sheet withholds `onChange` while unavailable: model rows and effort segments
-lose their button semantics, and YOLO retains `aria-readonly="true"`. Held values
+The sheet withholds `onChange` and `onModelSelect` while unavailable: model rows remain
+native disabled buttons, effort segments lose their button semantics, and YOLO retains
+`aria-readonly="true"`. Held values
 remain readable alongside the existing connection indication, including in a
 sheet opened before disconnect. Composer model, effort and permission-mode views
 likewise receive no `onSelect`, retaining their labels without chevrons and
@@ -323,11 +325,17 @@ inherited snapshot can render `Model`. Neither surface offers a Default row or e
 See [Composer model menu](composer-model-menu.md#composermodelmenumodel-one-pure-function-deciding-all-three-renderings)
 for complete label rules and why Claude's `settings.json` can override the published recommendation.
 
-**Clicks retain the actual row.** Production supplies `onModelSelect` to `RunConfigView`, routing
+**Native activation retains the actual row.** Each model row is a `button type="button"`;
+pointer, Enter and Space reach the same selection callback and confirmation guards.
+Without a callback the row is disabled and cannot take focus. Phrasing-content spans and
+the existing row-class button reset preserve the name, descriptor, radio and focus styling.
+Production supplies `onModelSelect` to `RunConfigView`, routing
 through `selectConnectedModel(conversationId, row)` after click-time connection/session checks.
 An own-agent pick uses `changeConnectedSetting` with `row.value` verbatim. An other-agent pick opens
 the existing confirmation for that row without any write or switch command; an absent row agent
-means Claude. Confirmation rechecks the active owning pane and sends once. Static view callers
+means Claude. The click-time agent lookup receives `conversationHostNow(conversationId)`,
+so a selected Codex conversation remains Codex even when another host publishes the same ID
+as Claude. Confirmation rechecks the active owning pane and sends once. Static view callers
 without `onModelSelect` retain the raw model callback through `onChange`; effort/YOLO keep their
 existing callbacks. Announcement matching never writes an announced identifier.
 
@@ -336,15 +344,19 @@ from the merged list. Its marker compares stringified visible-row positions, mat
 option IDs, so equal raw values across agents remain separately clickable. An empty merged visible
 list reads `RUN_CONFIG_MODELS_EMPTY_COPY`; the frame-level partial notice reports the whole entry's
 drops. `RunConfigSections` resolves the conversation agent through `useConversationAgent` and its
-memoised `selectAgentForConversation(conversationId)`, using the same owning-host lookup as
-`useSessionSettingsConnected` and then `selectConversationAgentFor`. A null id or unattributable owner
+memoised `selectAgentForConversation(conversationId, host)`, where `host` comes from
+`useConversationHost`, also used by `useSessionSettingsConnected`. Selected pane coordinates
+outrank ambiguous flattened ownership; the agent is read from that host with
+`selectConversationAgentFor`. A null id or unattributable owner
 answers Claude. `RunConfigView` passes that agent to current-model matching, `RunningModelSection`
 and `EffortSection`, without narrowing the displayed model rows. `publishedRowFor`, `effortRowFor`
 and permission capability lookups remain scoped to that agent.
 
 **Only confirmed pending switches mark the target row.** Production passes
 `usePendingAgentSwitchRow(conversationId)` separately from settings layers; it requires pending
-status for this conversation and its current owning `serverId`. The shared model decision compares
+status for this conversation and its current owning `serverId` from the reactive
+`useConversationHost` subscription. Colliding IDs retain selected-host pending; changing the
+selected host under the same ID removes a foreign overlay. The shared model decision compares
 retained agent, raw value, display name and resolution before returning a visible-row position.
 Opening/Cancel leave the current marker unchanged. Switch marks the picked presentation and changes
 the footer label; further other-agent picks are suppressed. Effort and permission offerings continue

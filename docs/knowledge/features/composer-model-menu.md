@@ -162,11 +162,17 @@ for its agent resolution.
 ## The write
 
 The container supplies optional `onSelect` only for an addressable session whose
-unambiguous owning host reports `connected`. Otherwise the view keeps any held
-label as an inert span and unmounts an open menu, even with published rows present.
+resolved owning host reports `connected`. Selected pane coordinates take precedence;
+without matching selected coordinates, ownership must be unambiguous in the flattened list.
+Otherwise the view keeps any held label as an inert span and unmounts an open menu, even
+with published rows present.
 The callback passes the actual row to `selectConnectedModel(conversationId, row)`, which rechecks
-connection, addressability and the conversation's current agent at click time. An own-agent row
-calls `changeConnectedSetting(conversationId, { field: 'model', value: row.value })`; an other-agent
+connection, addressability and the conversation's current agent at click time. It passes
+`conversationHostNow(conversationId)` to `selectAgentForConversation`, matching the
+`useConversationHost` subscription used by `useConversationAgent`. Two hosts may publish the
+same conversation ID with different agents: falling back to the flattened list here would
+default to Claude and either write a foreign model without confirmation or ignore a Codex pick.
+An own-agent row calls `changeConnectedSetting(conversationId, { field: 'model', value: row.value })`; an other-agent
 row calls `openAgentSwitch` with that exact row. Untagged means Claude in both directions. Opening
 sends no settings write or switch command. The switch store also revalidates the active owning pane
 and outgoing agent on confirmation. Bridge access stays at interaction time, never during render.
@@ -187,7 +193,11 @@ and that control belongs to #682.
 ## Confirmed switch presentation and success (#1662)
 
 `usePendingAgentSwitchRow(conversationId)` supplies a retained row only for `pending` status whose
-`serverId` equals the conversation's current owning host. Opening or cancelling a confirmation
+`serverId` equals the conversation's current owning host. It subscribes through
+`useConversationHost`, so selected host coordinates resolve colliding conversation IDs and
+changing the selected host under the same ID immediately removes a foreign pending overlay.
+Matching only the conversation ID would show another host's choice; resolving only flattened
+ownership would hide a valid selected-host pending choice. Opening or cancelling a confirmation
 installs no model overlay. Switch records pending synchronously before its one command; further
 other-agent picks open no dialog and send nothing. Effort is included only if the displayed effort
 at confirmation is supported by the picked row, as described in
@@ -415,29 +425,37 @@ lifecycle. `e2e/real-claude-question-answer.spec.ts` records the ensuing announc
 agent isolation, pending presentation and both-direction action routing with untagged Claude.
 `e2e/merged-model-pickers.spec.ts` drives footer and sheet entry points, including acknowledged
 own-agent picks, Cancel/Switch, duplicate suppression, refusal, abandonment and authoritative
-success. A row-disappearance assertion would contradict the merged list: after success, assert
-that the outgoing row remains visible and unmarked while the incoming row is current.
+success. Native sheet buttons cover Enter and Space in both directions; disabled rows retain
+their reading without taking focus. Colliding-host cases cover selected-owner routing,
+matching-host pending and foreign-host exclusion, with exact per-host write/switch counts.
+A confirmed settings overlay surviving host navigation is separately tracked in
+[#2068](https://github.com/pyrycode/pyrycode-desktop/issues/2068); pending-switch isolation does
+not establish settings-overlay isolation. A row-disappearance assertion would contradict the
+merged list: after success, assert that the outgoing row remains visible and unmarked while
+the incoming row is current.
 
-The [final verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1846#issuecomment-6040034310)
-for reviewed head `452049d0` records 349 fake-transport tests executed/passed, 0 failed and 4 skipped.
-It explicitly confirms all 12 merged-picker tests and both confirmation tests executed and passed,
-with 0 failures, skips or retries in those 14 cases. This includes both `after a confirmed own-agent
-pick: footer/sheet model picks confirm both agent directions, suppress duplicates and reconcile
-outcomes` cases, all four `footer/sheet switching a previously used claude/codex channel discards
-its outgoing announcement` cases, and `confirmed own-agent settings yield to incoming footer and
-open sheet on authoritative switch`. The settings dependency #1845 is repaired and those prior-own-pick
-regressions are enabled.
+The [October 16 verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1846#issuecomment-6219617302)
+for reviewed head `49ed9418` records the complete Linux fake-transport/captured-client gate:
+488 executed/passed, 0 failed, 4 existing skips, 0 flaky results or retries. All 20 merged-picker,
+2 confirmation, 4 offline-settings and 1 settings-round-trip cases executed and passed, with
+0 failed/skipped in those 27 cases. Keyboard, colliding-host, acknowledged own-pick and outgoing
+announcement regressions remain active. The settings dependency #1845 is repaired.
 
-**Operator hand-over acceptance remains pending.** Establish a fact in a Claude channel, switch it
-through a real picker to GPT-6 Luna at low effort, then ask a question whose answer requires the
-pre-switch turn without restating the fact. Record the correct answer and the footer's Luna display
-name. The [October 7 live gate](https://github.com/pyrycode/pyrycode-desktop/issues/1662#issuecomment-6040137499)
-records 26 executed/passed, 0 failed and 1 skipped, but supplies no named hand-over result or recorded
-answer/footer evidence. The configured command, `npx playwright test --config
-playwright.real-claude.config.ts --reporter=json`, does not implement that scenario. The
-[October 14 prerequisite](live-e2e-runbook.md#earlier-october-14-luna-acceptance) proves a newly created
-Luna channel replies at Low effort, not continuity from Claude. Fake evidence and rerunning the
-configured suite cannot satisfy this separate operator run.
+CDP command observation at `window.pyry.sendCommand` sees the result of
+`sendConversationCommand`, including the selected owning `serverId`. Exact single-command
+assertions must include that host alongside the raw model and supported effort; the wire payload
+alone is not the bridge command shape.
+
+**Operator hand-over acceptance remains pending under `held:live-handover`.** Establish a fresh
+fact in Claude, switch the same conversation through the real picker to GPT-6 Luna at Low, then
+require a completed answer recalling the fact without restating it. The named live spec now
+implements that scenario, but its repaired version has only collected 1 test, 0 executed.
+The historical live failure remains failed. Record fresh current-main counts and same-attempt
+daemon revision, correlated terminal/answer, unchanged conversation ID, saved/applied Low settings
+and published Luna footer before releasing the hold. See the
+[live runbook](live-e2e-runbook.md#claude-to-luna-handover-acceptance-1662) for the exact test,
+attachments and historical results. Collection, fake transport and recorded new-channel proof
+cannot establish continuity from Claude; the automatic live gate is retired.
 
 Renderer tests are static server renders (CLAUDE.md), so they cannot prove clicks or effect delivery.
 `modelSelection.test.tsx` gives both surfaces identical input layers with independently stated expected

@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test'
+process.env.PYRY_CLIENT_MODE = 'replay'
 
 export default defineConfig({
   testDir: './e2e', testMatch: /(^|\/)recorded-[^/]*\.spec\.ts$/,

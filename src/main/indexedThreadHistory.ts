@@ -1,3 +1,4 @@
+import { isSameRevisionTextExtension } from '../shared/threadTextExtension'
 import { createHash, randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import type { createHistoryDatabase } from './historyDatabase'
@@ -558,7 +559,7 @@ export function createIndexedThreadHistory(deps: {
       if (previous) {
         const row = selectedRow(db, owner, 'item', previous), held = object(item(db, row, owner, { ...currentHeader, mutable: mutableState }))
         if (held.id !== id || held.kind !== value.kind || previous.position === null) throw INVALID_CHAT_HISTORY
-        if (natural(held.rev) >= value.rev) { pending.delete(id); return }
+        if (natural(held.rev) > value.rev || (held.rev === value.rev && !isSameRevisionTextExtension(held, value))) { pending.delete(id); return }
         const key = attribution(held)
         if (held.kind === 'turn_end' && key !== null) mutableState.roots.endings = endings.set(mutableState.roots.endings ?? empty(), key + numericKey(row.ordinal), null)
         arrival = natural(row.arrival); ordinal = row.ordinal

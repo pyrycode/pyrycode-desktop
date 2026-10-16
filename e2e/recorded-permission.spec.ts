@@ -5,7 +5,7 @@ test('recorded Claude permission waits for confirmation and renders the complete
   expect(recording.scenario.prompt).toBe(PERMISSION_PROMPT)
   expect(recording.scenario.expectedReply).toBe(PERMISSION_REPLY)
   const result = await drivePermissionScenario(recordedApp.page, {
-    allowLabel: async () => recording.scenario.allowLabel
+    allowLabel: async () => recording.scenario.allowLabel!
   })
   expect(result.historyRetry).toBe(recording.scenario.historyRetry)
 })

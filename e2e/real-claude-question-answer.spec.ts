@@ -1,7 +1,8 @@
+import { scenarioNonce } from './fixtures/clientScenario'
 import { type Page } from '@playwright/test'
 import type { DaemonEvent } from '../src/shared/ipc/events'
 import type { WireModelOption } from '../src/shared/wire/types'
-import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
+import { test, expect, encodePairingPayload } from './fixtures/clientScenario'
 import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
@@ -84,6 +85,7 @@ const QUESTION_MODEL = 'claude-sonnet-5'
 test.use({
   skipPermissions: false,
   interactiveRunner: 'stream-json',
+  stdioPermissionPrompt: true,
   allowRemotePermissions: true,
   // The ONLY model under which a live AskUserQuestion call has been measured in either tree. The daemon
   // side runs both its question gates under it deliberately and records why: tool-selection reliability is
@@ -277,8 +279,8 @@ test('real claude changes model during a question and resumes with the original 
 }, testInfo) => {
   test.setTimeout(SPEC_TIMEOUT_MS)
 
-  // A per-run nonce so reruns differ, never asserted on (Date.now() is fine in a spec).
-  const message = questionAnswerTrigger(Date.now())
+  // A per-run nonce so reruns differ, never asserted on (scenarioNonce() is fine in a spec).
+  const message = questionAnswerTrigger(scenarioNonce())
 
   // --- Precondition: pair against the real daemon, dial the test relay's /v1/client leg. ---
   // Verbatim from real-claude.spec.ts: the app dials `${relay.url}/v1/client` unchanged (NOT pyry's emitted

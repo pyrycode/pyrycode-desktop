@@ -1,0 +1,1051 @@
+{
+  "format": "pyrycode.daemon-exchange",
+  "version": 2,
+  "source": {
+    "capturedAt": "2026-10-16T12:30:07.434Z",
+    "desktopRevision": "00ec821f9380b00cf2dfc0dd4817ee15584106a5",
+    "daemonRevision": "58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf",
+    "daemonBinarySha256": "5f5b3b9ce42eda74024637f4929dd720d36c1226ce6e370eb62fbe9e6b22f7c0",
+    "claudeVersion": "not-spawned"
+  },
+  "scenario": {
+    "id": "daemon-conversation-lifecycle",
+    "inputs": {
+      "nonce": 1792153807452
+    },
+    "workspace": "/recorded/workspace"
+  },
+  "capabilities": [
+    "interactive",
+    "multi_agent",
+    "stop_background_task",
+    "thread"
+  ],
+  "deviceId": "57a3d84d59946fe742f108037e97446fbdc0a1b4c38f6299029d9cc9aff6e109",
+  "devices": [
+    "57a3d84d59946fe742f108037e97446fbdc0a1b4c38f6299029d9cc9aff6e109"
+  ],
+  "barriers": [],
+  "closures": [],
+  "wire": [
+    {
+      "direction": "client",
+      "atMs": 273,
+      "message": {
+        "id": 2,
+        "type": "list_conversations",
+        "ts": "2026-10-16T12:30:07.869Z",
+        "payload": {}
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 289,
+      "message": {
+        "id": 2,
+        "type": "turn_state",
+        "ts": "2026-10-16T12:30:07.514244Z",
+        "payload": {},
+        "conversation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "session_id": "77777777-7777-4777-8777-777777777777",
+        "session_state_cleared": true
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 290,
+      "message": {
+        "id": 3,
+        "type": "turn_state",
+        "ts": "2026-10-16T12:30:07.514244Z",
+        "payload": {
+          "conversation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          "state": "idle"
+        },
+        "conversation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "session_id": "77777777-7777-4777-8777-777777777777"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 290,
+      "message": {
+        "id": 4,
+        "type": "conversations",
+        "ts": "2026-10-16T12:30:07.884276Z",
+        "payload": {
+          "conversations": [
+            {
+              "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+              "name": null,
+              "is_promoted": true,
+              "current_session_id": "77777777-7777-4777-8777-777777777777",
+              "is_archived": false,
+              "is_muted": false,
+              "read_up_to": 0,
+              "latest_entry_id": 0,
+              "archived_at": null,
+              "cwd": "/recorded/workspace",
+              "workspace_label": null,
+              "last_message_ts": "2026-01-01T00:00:00Z",
+              "last_used_at": "2026-01-01T00:00:00Z",
+              "agent": "claude"
+            }
+          ]
+        },
+        "in_reply_to": 2
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 508,
+      "message": {
+        "id": 3,
+        "type": "create_conversation",
+        "ts": "2026-10-16T12:30:08.104Z",
+        "payload": {
+          "is_promoted": false,
+          "name": null,
+          "cwd": null
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 532,
+      "message": {
+        "id": 5,
+        "type": "conversation_created",
+        "ts": "2026-10-16T12:30:08.128159Z",
+        "payload": {
+          "id": "344a8baa-a386-43eb-9f9b-273f97c5334e",
+          "is_promoted": false,
+          "cwd": "/recorded/workspace",
+          "workspace_label": null,
+          "name": null,
+          "last_used_at": "2026-10-16T12:30:08.123379Z",
+          "agent": "claude"
+        },
+        "in_reply_to": 3
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 532,
+      "message": {
+        "id": 4,
+        "type": "list_conversations",
+        "ts": "2026-10-16T12:30:08.128Z",
+        "payload": {}
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 533,
+      "message": {
+        "id": 6,
+        "type": "conversations",
+        "ts": "2026-10-16T12:30:08.129199Z",
+        "payload": {
+          "conversations": [
+            {
+              "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+              "name": null,
+              "is_promoted": true,
+              "current_session_id": "77777777-7777-4777-8777-777777777777",
+              "is_archived": false,
+              "is_muted": false,
+              "read_up_to": 0,
+              "latest_entry_id": 0,
+              "archived_at": null,
+              "cwd": "/recorded/workspace",
+              "workspace_label": null,
+              "last_message_ts": "2026-01-01T00:00:00Z",
+              "last_used_at": "2026-01-01T00:00:00Z",
+              "agent": "claude"
+            },
+            {
+              "id": "344a8baa-a386-43eb-9f9b-273f97c5334e",
+              "name": null,
+              "is_promoted": false,
+              "current_session_id": "01ef0891-82b3-452d-8cbd-340d444674f2",
+              "is_archived": false,
+              "is_muted": false,
+              "read_up_to": 0,
+              "latest_entry_id": 0,
+              "archived_at": null,
+              "cwd": "/recorded/workspace",
+              "workspace_label": null,
+              "last_message_ts": "2026-10-16T12:30:08.123379Z",
+              "last_used_at": "2026-10-16T12:30:08.123379Z",
+              "agent": "claude"
+            }
+          ]
+        },
+        "in_reply_to": 4
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 539,
+      "message": {
+        "id": 5,
+        "type": "request_session_settings",
+        "ts": "2026-10-16T12:30:08.135Z",
+        "payload": {
+          "conversation_id": "344a8baa-a386-43eb-9f9b-273f97c5334e"
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 539,
+      "message": {
+        "id": 6,
+        "type": "request_context_usage",
+        "ts": "2026-10-16T12:30:08.135Z",
+        "payload": {
+          "conversation_id": "344a8baa-a386-43eb-9f9b-273f97c5334e"
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 539,
+      "message": {
+        "id": 7,
+        "type": "request_model_list",
+        "ts": "2026-10-16T12:30:08.135Z",
+        "payload": {
+          "conversation_id": "344a8baa-a386-43eb-9f9b-273f97c5334e"
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 539,
+      "message": {
+        "id": 8,
+        "type": "request_system_prompt",
+        "ts": "2026-10-16T12:30:08.135Z",
+        "payload": {
+          "conversation_id": "344a8baa-a386-43eb-9f9b-273f97c5334e"
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 540,
+      "message": {
+        "id": 7,
+        "type": "error",
+        "ts": "2026-10-16T12:30:08.13571Z",
+        "payload": {
+          "code": "model_list.unavailable",
+          "message": "model list is unavailable",
+          "retryable": true
+        },
+        "in_reply_to": 7
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 540,
+      "message": {
+        "id": 8,
+        "type": "system_prompt",
+        "ts": "2026-10-16T12:30:08.135767Z",
+        "payload": {
+          "session_prompt_status": "matches"
+        },
+        "in_reply_to": 8
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 540,
+      "message": {
+        "id": 9,
+        "type": "session_settings",
+        "ts": "2026-10-16T12:30:08.135711Z",
+        "payload": {},
+        "conversation_id": "344a8baa-a386-43eb-9f9b-273f97c5334e",
+        "session_id": "01ef0891-82b3-452d-8cbd-340d444674f2",
+        "session_state_cleared": true
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 540,
+      "message": {
+        "id": 10,
+        "type": "session_settings",
+        "ts": "2026-10-16T12:30:08.135711Z",
+        "payload": {
+          "session_id": "01ef0891-82b3-452d-8cbd-340d444674f2",
+          "model": "",
+          "effort": "",
+          "yolo": false,
+          "permission_mode": "",
+          "used_tokens": 0,
+          "window_tokens": 200000,
+          "capabilities": {
+            "interrupt": true,
+            "mid_turn_input": true,
+            "slash_commands": true,
+            "mcp_servers": true,
+            "context_usage_detail": true,
+            "effort_levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "permission_modes": [
+              "default",
+              "acceptEdits",
+              "plan",
+              "auto",
+              "dontAsk"
+            ],
+            "attachment_types": [
+              "*/*"
+            ],
+            "models": []
+          },
+          "memory_search": {
+            "availability": "unknown",
+            "providers": []
+          }
+        },
+        "in_reply_to": 5,
+        "conversation_id": "344a8baa-a386-43eb-9f9b-273f97c5334e",
+        "session_id": "01ef0891-82b3-452d-8cbd-340d444674f2"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 540,
+      "message": {
+        "id": 11,
+        "type": "error",
+        "ts": "2026-10-16T12:30:08.135892Z",
+        "payload": {
+          "code": "context_usage.unavailable",
+          "message": "context usage is unavailable",
+          "retryable": true
+        },
+        "in_reply_to": 6
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 541,
+      "message": {
+        "id": 9,
+        "type": "thread_catch_up",
+        "ts": "2026-10-16T12:30:08.137Z",
+        "payload": {
+          "conversation_id": "344a8baa-a386-43eb-9f9b-273f97c5334e",
+          "epoch": "",
+          "version": 0
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 553,
+      "message": {
+        "id": 12,
+        "type": "thread_items",
+        "ts": "2026-10-16T12:30:08.14934Z",
+        "payload": {
+          "conversation_id": "344a8baa-a386-43eb-9f9b-273f97c5334e",
+          "epoch": "0d0edc73a57f2ea25d2bd96eda9b261f",
+          "version": 0,
+          "items": [],
+          "final": true,
+          "lower_order": 0,
+          "upper_order": 1,
+          "continuation": 0,
+          "older_exists": false
+        },
+        "in_reply_to": 9
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 641,
+      "message": {
+        "id": 10,
+        "type": "mcp_status_request",
+        "ts": "2026-10-16T12:30:08.237Z",
+        "payload": {
+          "conversation_id": "344a8baa-a386-43eb-9f9b-273f97c5334e"
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 641,
+      "message": {
+        "id": 11,
+        "type": "request_session_settings",
+        "ts": "2026-10-16T12:30:08.237Z",
+        "payload": {
+          "conversation_id": "344a8baa-a386-43eb-9f9b-273f97c5334e"
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 642,
+      "message": {
+        "id": 13,
+        "type": "error",
+        "ts": "2026-10-16T12:30:08.237821Z",
+        "payload": {
+          "code": "mcp_status.unavailable",
+          "message": "MCP status is unavailable",
+          "retryable": true
+        },
+        "in_reply_to": 10
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 642,
+      "message": {
+        "id": 14,
+        "type": "session_settings",
+        "ts": "2026-10-16T12:30:08.237806Z",
+        "payload": {
+          "session_id": "01ef0891-82b3-452d-8cbd-340d444674f2",
+          "model": "",
+          "effort": "",
+          "yolo": false,
+          "permission_mode": "",
+          "used_tokens": 0,
+          "window_tokens": 200000
+        },
+        "conversation_id": "344a8baa-a386-43eb-9f9b-273f97c5334e",
+        "session_id": "01ef0891-82b3-452d-8cbd-340d444674f2"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 642,
+      "message": {
+        "id": 15,
+        "type": "session_settings",
+        "ts": "2026-10-16T12:30:08.237806Z",
+        "payload": {
+          "session_id": "01ef0891-82b3-452d-8cbd-340d444674f2",
+          "model": "",
+          "effort": "",
+          "yolo": false,
+          "permission_mode": "",
+          "used_tokens": 0,
+          "window_tokens": 200000,
+          "capabilities": {
+            "interrupt": true,
+            "mid_turn_input": true,
+            "slash_commands": true,
+            "mcp_servers": true,
+            "context_usage_detail": true,
+            "effort_levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "permission_modes": [
+              "default",
+              "acceptEdits",
+              "plan",
+              "auto",
+              "dontAsk"
+            ],
+            "attachment_types": [
+              "*/*"
+            ],
+            "models": []
+          },
+          "memory_search": {
+            "availability": "unknown",
+            "providers": []
+          }
+        },
+        "in_reply_to": 11,
+        "conversation_id": "344a8baa-a386-43eb-9f9b-273f97c5334e",
+        "session_id": "01ef0891-82b3-452d-8cbd-340d444674f2"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 673,
+      "message": {
+        "id": 12,
+        "type": "archive_conversation",
+        "ts": "2026-10-16T12:30:08.269Z",
+        "payload": {
+          "conversation_id": "344a8baa-a386-43eb-9f9b-273f97c5334e"
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 678,
+      "message": {
+        "id": 16,
+        "type": "conversation_updated",
+        "ts": "2026-10-16T12:30:08.274407Z",
+        "payload": {
+          "id": "344a8baa-a386-43eb-9f9b-273f97c5334e",
+          "is_promoted": false,
+          "is_archived": true,
+          "is_muted": false,
+          "read_up_to": 0,
+          "name": null,
+          "cwd": "/recorded/workspace",
+          "workspace_label": null,
+          "last_used_at": "2026-10-16T12:30:08.123379Z",
+          "agent": "claude",
+          "last_shown_version": 0
+        },
+        "in_reply_to": 12
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 679,
+      "message": {
+        "id": 13,
+        "type": "list_conversations",
+        "ts": "2026-10-16T12:30:08.275Z",
+        "payload": {}
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 679,
+      "message": {
+        "id": 17,
+        "type": "conversations",
+        "ts": "2026-10-16T12:30:08.275394Z",
+        "payload": {
+          "conversations": [
+            {
+              "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+              "name": null,
+              "is_promoted": true,
+              "current_session_id": "77777777-7777-4777-8777-777777777777",
+              "is_archived": false,
+              "is_muted": false,
+              "read_up_to": 0,
+              "latest_entry_id": 0,
+              "archived_at": null,
+              "cwd": "/recorded/workspace",
+              "workspace_label": null,
+              "last_message_ts": "2026-01-01T00:00:00Z",
+              "last_used_at": "2026-01-01T00:00:00Z",
+              "agent": "claude"
+            },
+            {
+              "id": "344a8baa-a386-43eb-9f9b-273f97c5334e",
+              "name": null,
+              "is_promoted": false,
+              "current_session_id": "01ef0891-82b3-452d-8cbd-340d444674f2",
+              "is_archived": true,
+              "is_muted": false,
+              "read_up_to": 0,
+              "latest_entry_id": 0,
+              "archived_at": "2026-10-16T12:30:08.26978Z",
+              "cwd": "/recorded/workspace",
+              "workspace_label": null,
+              "last_message_ts": "2026-10-16T12:30:08.123379Z",
+              "last_used_at": "2026-10-16T12:30:08.123379Z",
+              "agent": "claude",
+              "last_shown_version": 0
+            }
+          ]
+        },
+        "in_reply_to": 13
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 823,
+      "message": {
+        "id": 14,
+        "type": "unarchive_conversation",
+        "ts": "2026-10-16T12:30:08.419Z",
+        "payload": {
+          "conversation_id": "344a8baa-a386-43eb-9f9b-273f97c5334e"
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 829,
+      "message": {
+        "id": 18,
+        "type": "conversation_updated",
+        "ts": "2026-10-16T12:30:08.42533Z",
+        "payload": {
+          "id": "344a8baa-a386-43eb-9f9b-273f97c5334e",
+          "is_promoted": false,
+          "is_archived": false,
+          "is_muted": false,
+          "read_up_to": 0,
+          "name": null,
+          "cwd": "/recorded/workspace",
+          "workspace_label": null,
+          "last_used_at": "2026-10-16T12:30:08.123379Z",
+          "agent": "claude",
+          "last_shown_version": 0
+        },
+        "in_reply_to": 14
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 830,
+      "message": {
+        "id": 15,
+        "type": "list_conversations",
+        "ts": "2026-10-16T12:30:08.426Z",
+        "payload": {}
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 830,
+      "message": {
+        "id": 19,
+        "type": "conversations",
+        "ts": "2026-10-16T12:30:08.426348Z",
+        "payload": {
+          "conversations": [
+            {
+              "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+              "name": null,
+              "is_promoted": true,
+              "current_session_id": "77777777-7777-4777-8777-777777777777",
+              "is_archived": false,
+              "is_muted": false,
+              "read_up_to": 0,
+              "latest_entry_id": 0,
+              "archived_at": null,
+              "cwd": "/recorded/workspace",
+              "workspace_label": null,
+              "last_message_ts": "2026-01-01T00:00:00Z",
+              "last_used_at": "2026-01-01T00:00:00Z",
+              "agent": "claude"
+            },
+            {
+              "id": "344a8baa-a386-43eb-9f9b-273f97c5334e",
+              "name": null,
+              "is_promoted": false,
+              "current_session_id": "01ef0891-82b3-452d-8cbd-340d444674f2",
+              "is_archived": false,
+              "is_muted": false,
+              "read_up_to": 0,
+              "latest_entry_id": 0,
+              "archived_at": null,
+              "cwd": "/recorded/workspace",
+              "workspace_label": null,
+              "last_message_ts": "2026-10-16T12:30:08.123379Z",
+              "last_used_at": "2026-10-16T12:30:08.123379Z",
+              "agent": "claude",
+              "last_shown_version": 0
+            }
+          ]
+        },
+        "in_reply_to": 15
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 908,
+      "message": {
+        "id": 16,
+        "type": "request_session_settings",
+        "ts": "2026-10-16T12:30:08.504Z",
+        "payload": {
+          "conversation_id": "344a8baa-a386-43eb-9f9b-273f97c5334e"
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 908,
+      "message": {
+        "id": 17,
+        "type": "request_context_usage",
+        "ts": "2026-10-16T12:30:08.504Z",
+        "payload": {
+          "conversation_id": "344a8baa-a386-43eb-9f9b-273f97c5334e"
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 908,
+      "message": {
+        "id": 18,
+        "type": "request_model_list",
+        "ts": "2026-10-16T12:30:08.504Z",
+        "payload": {
+          "conversation_id": "344a8baa-a386-43eb-9f9b-273f97c5334e"
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 908,
+      "message": {
+        "id": 19,
+        "type": "request_system_prompt",
+        "ts": "2026-10-16T12:30:08.504Z",
+        "payload": {
+          "conversation_id": "344a8baa-a386-43eb-9f9b-273f97c5334e"
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 909,
+      "message": {
+        "id": 20,
+        "type": "session_settings",
+        "ts": "2026-10-16T12:30:08.505112Z",
+        "payload": {
+          "session_id": "01ef0891-82b3-452d-8cbd-340d444674f2",
+          "model": "",
+          "effort": "",
+          "yolo": false,
+          "permission_mode": "",
+          "used_tokens": 0,
+          "window_tokens": 200000,
+          "capabilities": {
+            "interrupt": true,
+            "mid_turn_input": true,
+            "slash_commands": true,
+            "mcp_servers": true,
+            "context_usage_detail": true,
+            "effort_levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "permission_modes": [
+              "default",
+              "acceptEdits",
+              "plan",
+              "auto",
+              "dontAsk"
+            ],
+            "attachment_types": [
+              "*/*"
+            ],
+            "models": []
+          },
+          "memory_search": {
+            "availability": "unknown",
+            "providers": []
+          }
+        },
+        "in_reply_to": 16,
+        "conversation_id": "344a8baa-a386-43eb-9f9b-273f97c5334e",
+        "session_id": "01ef0891-82b3-452d-8cbd-340d444674f2"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 909,
+      "message": {
+        "id": 21,
+        "type": "error",
+        "ts": "2026-10-16T12:30:08.505343Z",
+        "payload": {
+          "code": "model_list.unavailable",
+          "message": "model list is unavailable",
+          "retryable": true
+        },
+        "in_reply_to": 18
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 909,
+      "message": {
+        "id": 22,
+        "type": "error",
+        "ts": "2026-10-16T12:30:08.505257Z",
+        "payload": {
+          "code": "context_usage.unavailable",
+          "message": "context usage is unavailable",
+          "retryable": true
+        },
+        "in_reply_to": 17
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 910,
+      "message": {
+        "id": 23,
+        "type": "system_prompt",
+        "ts": "2026-10-16T12:30:08.505385Z",
+        "payload": {
+          "session_prompt_status": "matches"
+        },
+        "in_reply_to": 19
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 912,
+      "message": {
+        "id": 20,
+        "type": "thread_catch_up",
+        "ts": "2026-10-16T12:30:08.508Z",
+        "payload": {
+          "conversation_id": "344a8baa-a386-43eb-9f9b-273f97c5334e",
+          "epoch": "0d0edc73a57f2ea25d2bd96eda9b261f",
+          "version": 0
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 934,
+      "message": {
+        "id": 24,
+        "type": "thread_items",
+        "ts": "2026-10-16T12:30:08.529556Z",
+        "payload": {
+          "conversation_id": "344a8baa-a386-43eb-9f9b-273f97c5334e",
+          "epoch": "0d0edc73a57f2ea25d2bd96eda9b261f",
+          "version": 0,
+          "items": [],
+          "final": true,
+          "lower_order": 0,
+          "upper_order": 1,
+          "continuation": 0,
+          "older_exists": false
+        },
+        "in_reply_to": 20
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 974,
+      "message": {
+        "id": 21,
+        "type": "mcp_status_request",
+        "ts": "2026-10-16T12:30:08.570Z",
+        "payload": {
+          "conversation_id": "344a8baa-a386-43eb-9f9b-273f97c5334e"
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 975,
+      "message": {
+        "id": 22,
+        "type": "request_session_settings",
+        "ts": "2026-10-16T12:30:08.571Z",
+        "payload": {
+          "conversation_id": "344a8baa-a386-43eb-9f9b-273f97c5334e"
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 975,
+      "message": {
+        "id": 25,
+        "type": "error",
+        "ts": "2026-10-16T12:30:08.571453Z",
+        "payload": {
+          "code": "mcp_status.unavailable",
+          "message": "MCP status is unavailable",
+          "retryable": true
+        },
+        "in_reply_to": 21
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 975,
+      "message": {
+        "id": 26,
+        "type": "session_settings",
+        "ts": "2026-10-16T12:30:08.571437Z",
+        "payload": {
+          "session_id": "01ef0891-82b3-452d-8cbd-340d444674f2",
+          "model": "",
+          "effort": "",
+          "yolo": false,
+          "permission_mode": "",
+          "used_tokens": 0,
+          "window_tokens": 200000,
+          "capabilities": {
+            "interrupt": true,
+            "mid_turn_input": true,
+            "slash_commands": true,
+            "mcp_servers": true,
+            "context_usage_detail": true,
+            "effort_levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "permission_modes": [
+              "default",
+              "acceptEdits",
+              "plan",
+              "auto",
+              "dontAsk"
+            ],
+            "attachment_types": [
+              "*/*"
+            ],
+            "models": []
+          },
+          "memory_search": {
+            "availability": "unknown",
+            "providers": []
+          }
+        },
+        "in_reply_to": 22,
+        "conversation_id": "344a8baa-a386-43eb-9f9b-273f97c5334e",
+        "session_id": "01ef0891-82b3-452d-8cbd-340d444674f2"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 1041,
+      "message": {
+        "id": 23,
+        "type": "delete_conversation",
+        "ts": "2026-10-16T12:30:08.637Z",
+        "payload": {
+          "conversation_id": "344a8baa-a386-43eb-9f9b-273f97c5334e"
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 1048,
+      "message": {
+        "id": 27,
+        "type": "conversation_deleted",
+        "ts": "2026-10-16T12:30:08.644263Z",
+        "payload": {
+          "id": "344a8baa-a386-43eb-9f9b-273f97c5334e"
+        },
+        "in_reply_to": 23
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 1049,
+      "message": {
+        "id": 24,
+        "type": "list_conversations",
+        "ts": "2026-10-16T12:30:08.645Z",
+        "payload": {}
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 1049,
+      "message": {
+        "id": 28,
+        "type": "conversations",
+        "ts": "2026-10-16T12:30:08.645488Z",
+        "payload": {
+          "conversations": [
+            {
+              "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+              "name": null,
+              "is_promoted": true,
+              "current_session_id": "77777777-7777-4777-8777-777777777777",
+              "is_archived": false,
+              "is_muted": false,
+              "read_up_to": 0,
+              "latest_entry_id": 0,
+              "archived_at": null,
+              "cwd": "/recorded/workspace",
+              "workspace_label": null,
+              "last_message_ts": "2026-01-01T00:00:00Z",
+              "last_used_at": "2026-01-01T00:00:00Z",
+              "agent": "claude"
+            }
+          ]
+        },
+        "in_reply_to": 24
+      },
+      "connection": 1
+    }
+  ]
+}

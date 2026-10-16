@@ -56,7 +56,7 @@ export function createThreadRuntime(deps: {
   }
   let disposed = false
   let held: StampedDaemonEvent[] = [], frameHandle: number | undefined
-  let selected: { host: string; chat: string; generation: symbol; cancel?: () => void } | undefined
+  let selected: { host: string; chat: string; generation: symbol; cancel?: () => void; configurationRefreshSession?: string } | undefined
   // There is no legacy route: any selected host and conversation draws through the item view.
   const isThread = (host: string | null, chat: string | null): boolean => host !== null && chat !== null
   const live = (host: string, chat: string) => {
@@ -165,6 +165,8 @@ export function createThreadRuntime(deps: {
       if (!selected || event.serverId !== selected.host) return false
       const binding = lives.get(key(selected.host, selected.chat))?.getState().binding
       // Each contextBridge listener receives its own clone; object identity cannot prove admission.
+      if (binding && event.envelopeConversationId !== undefined) return event.envelopeConversationId === binding.conversationId &&
+        (!('conversationId' in event) || event.conversationId === binding.conversationId)
       if (!binding?.sessionId || event.envelopeSessionId !== binding.sessionId) return false
       return 'conversationId' in event ? event.conversationId === binding.conversationId
         : event.type === 'sessionSettingsUpdated' && event.sessionId === binding.sessionId
@@ -276,10 +278,29 @@ export function createThreadRuntime(deps: {
     if (event.type === 'threadReply' || event.type === 'threadUpdate' || event.type === 'threadQueryFailed' || event.type === 'threadRepairNeeded') {
       query.input({ type: 'daemon', event }); return
     }
+    const opening = selected?.host === host ? selected : undefined
+    const selectedLive = opening && lives.get(key(host, opening.chat))
+    const previousSettings = selectedLive && selectThreadReadings(selectedLive.getState(), 'runConfigReceived')[0]
     for (const store of lives.values()) {
       store.getState().dispatch({ type: 'daemon', event })
       if (event.type === 'sessionError' && selectThreadReadings(store.getState(), 'sessionError').includes(event))
         sends.getState().endFeedback(host, event.conversationId)
+    }
+    // Child activation withdraws the prior configuration and vocabulary before
+    // publishing current transient state. Revalidate both once for the selected
+    // bound session in this opening. An absent initial reply never triggers a
+    // request, and repeated withdrawals cannot create a retry loop.
+    if (opening && selectedLive && previousSettings && event.type === 'sessionStateCleared' &&
+        event.family === 'session_settings' && event.envelopeConversationId === opening.chat &&
+        typeof event.envelopeSessionId === 'string' && event.envelopeSessionId !== '' &&
+        event.envelopeSessionId === selectedLive.getState().binding?.sessionId &&
+        opening.configurationRefreshSession !== event.envelopeSessionId &&
+        selectThreadReadings(selectedLive.getState(), 'runConfigReceived').length === 0) {
+      opening.configurationRefreshSession = event.envelopeSessionId
+      try {
+        deps.send({ type: 'requestSessionSettings', serverId: host, payload: { conversation_id: opening.chat } })
+        deps.send({ type: 'requestModelList', serverId: host, payload: { conversation_id: opening.chat } })
+      } catch { deps.log({ event: 'thread-live-state', code: 'configuration-refresh-failed' }) }
     }
   }
 }

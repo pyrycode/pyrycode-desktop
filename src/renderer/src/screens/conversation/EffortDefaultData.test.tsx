@@ -237,3 +237,9 @@ describe('#1651 — effortDefaultToApply reads the conversation agent\'s row', (
     expect(effortDefaultToApply({ ...APPLIES, model: GRADED.value, models: MERGED, agent: 'codex' })).toBeNull()
   })
 })
+
+it('waits for the addressed configuration before deciding that effort is unset', () => {
+  const input = { conversationId: 'chat', appliedFor: null, sessionId: 'session', effort: '', model: 'graded',
+    models: models([GRADED]), remembered: REMEMBERED, configurationReady: false }
+  expect(effortDefaultToApply(input)).toBeNull()
+})

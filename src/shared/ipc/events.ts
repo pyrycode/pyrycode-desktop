@@ -1860,6 +1860,8 @@ type BaseDaemonEvent =
  * comparands and fail open on unusable input so uncertain identity cannot silently remove a row.
  */
 interface DaemonEventTimestamp {
+  /** Supplied envelope route; never inferred from a session tag. */
+  envelopeConversationId?: string
   /** Producing envelope session; distinct from any payload sessionId. */
   envelopeSessionId?: string | null
   /** Supplied wire correlation; existing request settlement remains main-owned. */

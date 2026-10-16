@@ -30,6 +30,8 @@ export interface FakeRelayForwarder {
 }
 ```
 
+The listener binds explicitly to `127.0.0.1`, the same IPv4 loopback address returned in `url`; it does not rely on an unspecified IPv6/wildcard bind to serve IPv4 dials. HTTP upgrade failures still fail setup without a retry.
+
 `startFakeRelayForwarder()` resolves once the server is **listening** (so the returned `url` is dial-ready). The `start*` prefix matches the codebase's existing `startRelay`/`startBlackHole` test-helper naming.
 
 The consumer appends the leg path itself: `${url}/v1/client` for the real client (its `url` is caller-supplied — `relayConnection.ts` dials it verbatim), `${url}/v1/server` for the fake daemon.

@@ -547,6 +547,8 @@ export interface Envelope {
   /** Producing session: omission, explicit no-session null, or a nonempty ID. */
   session_id?: string | null
   session_state_cleared?: boolean
+  /** Explicit conversation route, independent of the producing session. */
+  conversation_id?: string
 }
 
 export type WireRole = 'user' | 'assistant'

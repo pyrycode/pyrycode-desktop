@@ -1,4 +1,4 @@
-import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
+import { test, expect, encodePairingPayload } from './fixtures/clientScenario'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
 // The credential-light real-daemon tier (#439) driving the CREATE-CHANNEL path — the Channels-tree
@@ -111,7 +111,10 @@ test('real daemon creates a promoted, named channel in its default workspace ove
   await pairFromUnpairedLaunch(page, payload)
 
   const rows = page.locator('.channel-list__row')
-  const sections = page.locator('.channel-list__section')
+  // Preserve the two conversation trees; Apps is a third, independently tested tree.
+  const sections = page.locator('.channel-list__section').filter({
+    has: page.getByRole('button', { name: /^(Channels|Chats)$/, exact: true })
+  })
   const renameControl = page.locator('.channel-list__rename')
   const saveControl = page.locator('.channel-list__save')
   const createChannel = page.getByRole('button', { name: CREATE_CHANNEL_NAME })

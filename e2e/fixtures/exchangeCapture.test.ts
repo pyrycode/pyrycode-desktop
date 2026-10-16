@@ -28,3 +28,22 @@ describe('test-build exchange capture', () => {
     expect(() => capture.take()).toThrow('Exchange capture exceeded its limit')
   })
 })
+
+it('retains the actual complete application envelope, including routing and future metadata', () => {
+  const capture = createExchangeCapture(); capture.begin()
+  const message = { id: 9, type: 'turn_state', ts: 'stamp', payload: { conversation_id: 'chat', state: 'idle' },
+    conversation_id: 'chat', session_id: 'session', future_metadata: { supplied: true } }
+  capture.observe('daemon', Buffer.from(JSON.stringify(message)))
+  expect(capture.take()[0].message).toEqual(message)
+})
+
+it('captures the observed transport close at its exact application-message prefix', () => {
+  const capture = createExchangeCapture(); capture.begin()
+  const connection = capture.openConnection()
+  capture.observe('client', bytes('list_conversations'), connection)
+  capture.closeConnection(4413)
+  capture.openConnection()
+  const result = capture.takeConnections()
+  expect(result.closures).toEqual([{ before: 1, connection: 1, code: 4413 }])
+  expect(result.connections).toBe(2)
+})

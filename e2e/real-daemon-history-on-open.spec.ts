@@ -94,9 +94,32 @@ test('a real daemon lazily fills a served gap after more than 200 entries writte
         await clean.locator('.channel-list__row-open').filter({ hasText: channel }).click()
         const history = clean.locator('.conversation__thread')
         await expect(history).toContainText(closedPosts.at(-1)!, { timeout: 45_000 })
-        await history.press('Home')
-        await expect.poll(() => cleanApp.evaluate(() => (globalThis as any).__threadPageAsks.includes('thread_page'))).toBe(true)
+        const coverage = () => clean.evaluate(async ({ serverId, conversationId }) => {
+          const result = await window.pyry.chatHistory({ operation: 'readThread', serverId, conversationId })
+          return result.status === 'stored' && result.snapshot.kind === 'daemon-items'
+            ? result.snapshot.thread.ranges[0]?.start : undefined
+        }, { serverId: daemon.pairFields.server, conversationId })
+        await expect.poll(coverage).toBeDefined()
+        // Queries default to 50 public rows; these posts also create divider rows.
+        // One older page cannot cover all 205 posts. Each trusted upward input
+        // must make progress; no automatic paging or retry can satisfy this walk.
+        for (let step = 0; step < 12 && await history.getByText(baseline, { exact: true }).count() === 0; step++) {
+          const before = await coverage()
+          const asks = await cleanApp.evaluate(() => (globalThis as any).__threadPageAsks.filter((type: string) => type === 'thread_page').length)
+          await history.evaluate(el => { el.scrollTop = 0 })
+          await history.press('ArrowUp')
+          await expect.poll(() => cleanApp.evaluate(() => (globalThis as any).__threadPageAsks.filter((type: string) => type === 'thread_page').length)).toBe(asks + 1)
+          await expect.poll(coverage).toBeLessThan(before!)
+        }
         await expect(history).toContainText(baseline, { timeout: 45_000 })
+        const transcript = await history.innerText()
+        let previous = transcript.indexOf(baseline)
+        for (const text of closedPosts) {
+          const position = transcript.indexOf(text)
+          expect(position).toBeGreaterThan(previous)
+          expect(transcript.indexOf(text, position + text.length)).toBe(-1)
+          previous = position
+        }
         expect(await cleanApp.evaluate(() => (globalThis as any).__threadPageAsks.includes('legacy'))).toBe(false)
       })
       await testInfo.attach('thread-saved-history-evidence', { contentType: 'application/json',

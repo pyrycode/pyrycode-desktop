@@ -17,7 +17,7 @@ const roots: string[] = []
 const owners: ReturnType<typeof createHistoryDatabase>[] = []
 afterEach(async () => { owners.splice(0).forEach(db => db.close()); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
 
-it('fresh protected traversal reaches every fragmented saved identity including opening omissions without writes', async () => {
+it.each([false, true])('fresh protected traversal reaches every fragmented saved identity including opening omissions without writes (invalidation %s)', async invalidation => {
   const { fresh, source, api, writer } = await cache()
   api.acceptEpoch('a', 'c', 'e')
   for (let id = 0; id < 650; id++) api.applyUpdate('a', { type: 'thread_item_added', payload: {
@@ -36,13 +36,20 @@ it('fresh protected traversal reaches every fragmented saved identity including 
     expect(runtime.items.getState().snapshot('a', 'c')!.items).toHaveLength(201)
     const slice = () => runtime.items.getState().hosts.get('a')!.get('c')!
     for (let n = 0; n < 10 && slice().residency?.traversal !== null; n++) {
+      if (invalidation && n === 2) {
+        const { items, ranges, arrivalOrder, ...metadata } = expected
+        void items; void ranges; void arrivalOrder
+        expect((await storage.execute({ operation: 'mutateThread', serverId: 'a', conversationId: 'c', change: {
+          metadata, acceptEpoch: false, items: [], removeIds: [], ranges: [] } })).status).toBe('ok')
+      }
       runtime.query('older', 'a')
       await new Promise(resolve => setTimeout(resolve, 0))
     }
     expect(slice().snapshot).toEqual(expected)
     expect(new Set(slice().snapshot.items.map(i => i.id)).size).toBe(650)
     expect(slice().restored).toBe(slice().snapshot)
-    expect(writes).toEqual(['openThreadPage', 'newestThreadPage', 'beforeThreadPage', 'beforeThreadPage', 'beforeThreadPage'])
+    if (!invalidation) expect(writes).toEqual(['openThreadPage', 'newestThreadPage', 'beforeThreadPage', 'beforeThreadPage', 'beforeThreadPage'])
+    expect(writes.every(operation => ['openThreadPage', 'newestThreadPage', 'beforeThreadPage'].includes(operation))).toBe(true)
     const tokenPage = await storage.execute({ operation: 'newestThreadPage', serverId: 'a', conversationId: 'c', limit: 1 })
     expect(tokenPage.status).toBe('page')
     if (tokenPage.status !== 'page' || !tokenPage.page.continuation) throw Error('missing token')

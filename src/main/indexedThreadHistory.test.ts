@@ -33,6 +33,76 @@ const ask = (operation: string, extra: object = {}, serverId = 'Host', conversat
   ({ operation, serverId, ...(operation === 'removeServer' ? {} : { conversationId }), ...extra })
 const put = (s: { serverId: string; conversationId: string } = snapshot()) => ask('replaceThread', { snapshot: s }, s.serverId, s.conversationId)
 const newest = (limit = 2) => ask('newestThreadPage', { limit })
+it.each(['metadata', 'movement', 'removal', 'replacement'] as const)('rebases protected traversal after %s without losing moved identities', async change => {
+  const h = setup(), s = snapshot(0)
+  const items = Array.from({ length: 61 }, (_, id) => ({ id, kind: 'future', rev: 1, order: id,
+    shown: id % 3 === 0, content: { text: `saved-${id}` } }))
+  const fixture = { ...s, thread: { ...s.thread, items, arrivalOrder: items.map(i => i.id) } }
+  await h.store.execute(put(fixture))
+  await page(h.store, ask('openThreadPage', { limit: 10 }))
+  let p = await page(h.store, newest(10))
+  p = await page(h.store, ask('beforeThreadPage', { limit: 10, continuation: p.continuation }))
+  expect(typeof p.recovery).toBe('string')
+  const visited = new Map(p.items.map(i => [i.id, i]))
+  const changed = { ...items[1], rev: 2, order: 1000, content: { text: 'moved-and-cleared' } }
+  const expected = change === 'movement' ? items.map(i => i.id === 1 ? changed : i)
+    : change === 'removal' ? items.filter(i => i.id !== p.items[0].id)
+    : change === 'replacement' ? [...items.slice(0, 30).filter(i => i.id !== 1), changed, ...items.slice(30)] : items
+  const replacement = { ...fixture, thread: { ...fixture.thread, items: expected, arrivalOrder: expected.map(i => i.id) } }
+  if (change === 'replacement') await h.store.execute(put(replacement))
+  else await h.store.execute(owned(fixture, { items: change === 'movement' ? [changed] : [],
+    removeIds: change === 'removal' ? [p.items[0].id] : [] }))
+  // Ordinary old-generation requests keep rejecting even though a recovery capability exists.
+  expect(await h.store.execute(ask('beforeThreadPage', { limit: 10, continuation: p.continuation })))
+    .toEqual({ status: 'error', code: 'invalid-request' })
+  h.database.close()
+  const fresh = h.fresh()
+  for (let attempts = 0; attempts < 20 && p.continuation !== null; attempts++) {
+    p = await page(fresh.store, ask('beforeThreadPage', { limit: 10, continuation: p.continuation, recovery: p.recovery }))
+    for (const i of p.items) visited.set(i.id, i)
+  }
+  expect(p.continuation).toBeNull()
+  for (const i of expected) expect(visited.get(i.id)).toEqual(i)
+})
+
+it.each(['epoch-roundtrip', 'reset', 'delete', 'unpair'] as const)('rejects recovery capability substitution, wrong scopes and %s recreation', async lifecycle => {
+  const h = setup(), s = snapshot()
+  await h.store.execute(put(s))
+  await page(h.store, ask('openThreadPage', { limit: 2 }))
+  const p = await page(h.store, newest())
+  const request = ask('beforeThreadPage', { limit: 2, continuation: p.continuation, recovery: p.recovery })
+  await h.store.execute(owned(s, {}))
+  expect(await h.store.execute({ ...request, continuation: 'YQ' })).toEqual({ status: 'error', code: 'invalid-request' })
+  expect(await h.store.execute({ ...request, conversationId: 'other' })).toEqual({ status: 'error', code: 'invalid-request' })
+  if (lifecycle === 'epoch-roundtrip') {
+    const other = { ...s, thread: { ...s.thread, epoch: 'other' } }
+    await h.store.execute(put(other))
+  } else if (lifecycle === 'reset') await h.store.execute(owned(s, { resetId: 'new-reset' }))
+  else await h.store.execute(ask(lifecycle === 'delete' ? 'removeConversation' : 'removeServer'))
+  await h.store.execute(put(s))
+  expect(await h.store.execute(request)).toEqual({ status: 'error', code: 'invalid-request' })
+})
+
+it('bounds each demand during repeated invalidation and completes the identity pass once writes settle', async () => {
+  const h = setup(), s = snapshot(0), items = Array.from({ length: 35 }, (_, id) => ({ id, rev: 1, kind: 'future', order: id }))
+  const fixture = { ...s, thread: { ...s.thread, items, arrivalOrder: items.map(i => i.id) } }
+  await h.store.execute(owned(fixture, { items }))
+  let p = await page(h.store, newest(4))
+  for (let n = 0; n < 5; n++) {
+    await h.store.execute(owned(fixture))
+    p = await page(h.store, ask('beforeThreadPage', { limit: 4, continuation: p.continuation, recovery: p.recovery }))
+    expect(p.items.length).toBeLessThanOrEqual(4)
+  }
+  const reached = new Map<number, unknown>(p.items.map(value => [value.id, value]))
+  for (let n = 0; n < 20 && p.continuation !== null; n++) {
+    p = await page(h.store, ask('beforeThreadPage', { limit: 4, continuation: p.continuation, recovery: p.recovery }))
+    for (const value of p.items) reached.set(value.id, value)
+  }
+  expect(p.continuation).toBeNull()
+  expect(reached.size).toBe(items.length)
+  for (const value of items) expect(reached.get(value.id)).toEqual(value)
+})
+
 it('bounded opening selects shown, active and recorded dependencies after fresh reopen', async () => {
   const h = setup(), s = snapshot(0)
   const items: ThreadSnapshot['items'] = [
@@ -130,6 +200,24 @@ it('cold opening payload work stays bounded as unrelated older, hidden and range
     expect(decrypt.mock.calls.length).toBeLessThanOrEqual(408)
     console.info('traversal-work', JSON.stringify({ unrelated, fixtureItems: items.length, selected: 200,
       structural, records, payloads, decrypts: decrypt.mock.calls.length, coldMs: performance.now() - traversing }))
+    for (const depth of [1, 4, 8]) {
+      let positioned = await page(fresh.store, newest(20))
+      for (let n = 0; n < depth; n++) positioned = await page(fresh.store,
+        ask('beforeThreadPage', { limit: 20, continuation: positioned.continuation }))
+      expect(await fresh.store.execute(depth === 4 ? put(fixture) : owned(fixture))).toEqual({ status: 'ok' })
+      structural = 0; records = 0; payloads = 0; decrypt.mockClear()
+      const recovering = performance.now()
+      const recovered = await page(fresh.store, ask('beforeThreadPage', { limit: 20,
+        continuation: positioned.continuation, recovery: positioned.recovery }))
+      expect(recovered.items.length).toBeLessThanOrEqual(20)
+      expect(payloads).toBe(recovered.items.length)
+      expect(records).toBeLessThanOrEqual(payloads + 5)
+      expect(decrypt.mock.calls.length).toBeLessThanOrEqual(2 * payloads + 7)
+      expect(structural).toBeLessThan(2000)
+      console.info('recovery-work', JSON.stringify({ unrelated, fixtureItems: items.length, depth, replacement: depth === 4,
+        selected: recovered.items.length, structural, records, payloads, decrypts: decrypt.mock.calls.length,
+        recoveryMs: performance.now() - recovering }))
+    }
     vi.restoreAllMocks(); return result
   }
   expect(await measure(500)).toEqual(await measure(10))

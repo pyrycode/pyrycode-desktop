@@ -86,3 +86,9 @@ Sizing: one deliverable; forecast 245 production + 390 test/helper + 100 plan/lo
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-16
+
+## Revisions
+
+2026-10-16: Same-epoch full replacement of an indexed scope rebuilds its authenticated indexes inside the existing full replacement transaction. Recovery consequently does not pay full-snapshot conversion after replacement. Full reads preserve optional arrival metadata exactly; bounded mutable pages always expose their authenticated placement arrival positions, including positions synthesized by the existing conversion. Owned mutations publish arrival metadata once they use those positions. The initial retained-scope opening conversion remains separately measured. Correction to Files read: `useThreadScrollPin` is in `src/renderer/src/screens/conversation/ConversationScreen.tsx`, not a separate file.
+
+Final lifecycle coverage names: `rebases protected traversal after %s without losing moved identities`; `cold opening payload work stays bounded as unrelated older, hidden and range history grows` (depths 1/4/8, metadata and replacement); `bounds each demand during repeated invalidation and completes the identity pass once writes settle`; `rejects recovery capability substitution, wrong scopes and %s recreation` (epoch round trip/reset/delete/unpair); `echoes only the traversal recovery capability and retries classified failures without spinning`; existing held-page success and delayed local-error cleanup matrices; `fresh protected traversal reaches every fragmented saved identity including opening omissions without writes (invalidation %s)`; `invalidated saved traversal scrolls independently offline` / `invalidated saved traversal scrolls independently while server reply is held`; packaged `saved-recovery` stage. The mounted invalidation removes boundary 50 while anchoring surviving row 51. No hydration write, network-page or read-ack assertion was removed.

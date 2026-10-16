@@ -1,5 +1,9 @@
 import { EventEmitter } from 'node:events'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createHistoryDatabase } from './historyDatabase'
 import { createAppUpdateController, registerAppUpdate, selectAppUpdateEligibility, createQuitDrain } from './appUpdate'
 import { validateUpdateVersion, isAppUpdateAction } from '../shared/ipc/appUpdate'
 import { createConnectionRegistry } from './connectionRegistry'
@@ -7,6 +11,9 @@ import type { DaemonConnection } from './daemonConnection'
 import { createChatHistoryStore } from './chatHistoryStore'
 import { createSecureStore } from './secureStore'
 import { createDiagnosticLog } from './diagnosticLog'
+
+const historyOwners: { root: string; database: ReturnType<typeof createHistoryDatabase> }[] = []
+afterEach(() => { for (const { root, database } of historyOwners.splice(0)) { database.close(); rmSync(root, { recursive: true, force: true }) } })
 
 function fixture(isPackaged = true, platform = 'win32') {
   const updater = Object.assign(new EventEmitter(), {
@@ -183,12 +190,15 @@ it.each(['throw', 'event', 'late event', 'during drain'])('exits after %s instal
   const bytes = new Map<string, Uint8Array>()
   let release!: () => void
   const writing = new Promise<void>(resolve => { release = resolve })
+  const encryption = { isAvailable: () => true, encrypt: (value: Uint8Array) => value, decrypt: (value: Uint8Array) => value }
   const secureStore = createSecureStore({
-    encryption: { isAvailable: () => true, encrypt: value => value, decrypt: value => value },
-    persistence: { read: async name => bytes.get(name) ?? null, delete: async name => { bytes.delete(name) },
-      write: async (name, value) => { await writing; bytes.set(name, value) } }
+    encryption,
+    persistence: { read: async name => { await writing; return bytes.get(name) ?? null }, delete: async name => { bytes.delete(name) },
+      write: async (name, value) => { bytes.set(name, value) } }
   })
-  const history = createChatHistoryStore({ secureStore, log: createDiagnosticLog({ sink: { write: () => {} } }) })
+  const root = mkdtempSync(join(tmpdir(), 'history-update-')), database = createHistoryDatabase({ userDataPath: root })
+  historyOwners.push({ root, database })
+  const history = createChatHistoryStore({ secureStore, encryption, database, log: createDiagnosticLog({ sink: { write: () => {} } }) })
   const snapshot = { version: 1, kind: 'timeline', serverId: 'host', conversationId: 'chat',
     items: [{ kind: 'assistantText', turnId: 'turn', text: 'final buffered reply' }],
     prependedRows: 0, coverage: { status: 'unknown' } }
@@ -200,7 +210,7 @@ it.each(['throw', 'event', 'late event', 'during drain'])('exits after %s instal
   f.beforeInstall.mockImplementation(drain)
   f.onInstallFailure.mockImplementation(() => {
     expect(quitDrained).toBe(true)
-    expect(bytes.size).toBe(1)
+    expect(database.transaction(db => db.prepare('SELECT count(*) AS n FROM legacy_scopes').get())).toEqual({ n: 1 })
     expect(f.updater.autoInstallOnAppQuit).toBe(false)
     exited = true
   })

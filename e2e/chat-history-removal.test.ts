@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { createHistoryDatabase } from '../src/main/historyDatabase'
 import { createConversationListStore, selectExclusiveConversationIdsFor } from '../src/renderer/src/store/conversationListStore'
 import { createThreadItemStore } from '../src/renderer/src/store/threadItemStore'
 import { createChatHistoryWriter } from '../src/renderer/src/store/chatHistoryWriter'
@@ -9,6 +13,13 @@ import { createSecureStore } from '../src/main/secureStore'
 import type { ChatHistoryRequest, ChatHistoryResult } from '../src/shared/chatHistory'
 import type { StampedDaemonEvent } from '../src/shared/ipc/events'
 import type { ConversationSummary } from '../src/shared/wire/types'
+
+const owners: { root: string; database: ReturnType<typeof createHistoryDatabase> }[] = []
+afterEach(() => { for (const { root, database } of owners.splice(0)) { database.close(); rmSync(root, { recursive: true, force: true }) } })
+function diskOwner() {
+  const root = mkdtempSync(join(tmpdir(), 'history-removal-')), database = createHistoryDatabase({ userDataPath: root })
+  owners.push({ root, database }); return database
+}
 
 const row = (id: string): ConversationSummary => ({ id, name: id, cwd: '/', is_promoted: false,
   is_archived: false, last_message_ts: '', last_used_at: '', workspace_label: null })
@@ -50,6 +61,8 @@ describe('history removal across process stores', () => {
     let entered = false
     let release = () => {}
     const barrier = new Promise<void>(resolve => { release = resolve })
+    const encryption = { isAvailable: () => true, encrypt: (bytes: Uint8Array) => bytes.map(b => b ^ 173), decrypt: (bytes: Uint8Array) => bytes.map(b => b ^ 173) }
+    const database = diskOwner()
     const secureStore = createSecureStore({
       encryption: { isAvailable: () => true, encrypt: bytes => bytes.map(b => b ^ 173),
         decrypt: bytes => bytes.map(b => b ^ 173) },
@@ -59,9 +72,12 @@ describe('history removal across process stores', () => {
           blobs.set(name, bytes)
         }, delete: async name => { blobs.delete(name) } }
     })
-    const fresh = () => createChatHistoryStore({ secureStore, log: { event: () => {} } })
+    const fresh = () => { database.close(); return createChatHistoryStore({ secureStore, encryption, database, log: { event: () => {} } }) }
     const store = fresh()
-    const h = harness(request => store.execute(request))
+    const h = harness(async request => {
+      if (hold) { hold = false; entered = true; await barrier }
+      return store.execute(request)
+    })
     const read = (serverId: string, conversationId: string) => fresh().execute({
       operation: 'readThread', serverId, conversationId })
     try {
@@ -110,13 +126,15 @@ describe('history removal across process stores', () => {
   it.each([false, true])('removes an omitted cached thread only on confirmation (storage failure=%s)', async failRemoval => {
     const blobs = new Map<string, Uint8Array>()
     let fail = false
+    const encryption = { isAvailable: () => true, encrypt: (bytes: Uint8Array) => bytes.map(b => b ^ 173), decrypt: (bytes: Uint8Array) => bytes.map(b => b ^ 173) }
+    const database = diskOwner()
     const secureStore = createSecureStore({
       encryption: { isAvailable: () => true, encrypt: bytes => bytes.map(b => b ^ 173), decrypt: bytes => bytes.map(b => b ^ 173) },
       persistence: { read: async name => blobs.get(name) ?? null,
         write: async (name, bytes) => { if (fail) throw new Error('private storage detail'); blobs.set(name, bytes) },
         delete: async name => { if (fail) throw new Error('private storage detail'); blobs.delete(name) } }
     })
-    const fresh = () => createChatHistoryStore({ secureStore, log: { event: () => {} } })
+    const fresh = () => { database.close(); return createChatHistoryStore({ secureStore, encryption, database, log: { event: () => {} } }) }
     const store = fresh()
     const h = harness(request => store.execute(request))
     const read = () => fresh().execute({ operation: 'readThread', serverId: 'a', conversationId: 'chat' })
@@ -135,6 +153,7 @@ describe('history removal across process stores', () => {
     await h.writer.flush()
     expect(await read()).toMatchObject({ status: 'stored' })
     fail = failRemoval
+    if (fail) database.transaction(db => db.exec("CREATE TRIGGER fail_remove BEFORE DELETE ON thread_scopes BEGIN SELECT RAISE(ABORT, 'private'); END"))
     h.deleted('chat')
     await h.writer.flush()
     if (failRemoval) {
@@ -143,6 +162,7 @@ describe('history removal across process stores', () => {
       expect(h.log).not.toHaveBeenCalledWith({ event: 'history-writer-result', code: 'conversation-removed' })
       expect(JSON.stringify(h.log.mock.calls)).not.toContain('private')
       fail = false
+      database.transaction(db => db.exec('DROP TRIGGER fail_remove'))
       h.deleted('chat')
     }
     await h.writer.stop()
@@ -151,6 +171,8 @@ describe('history removal across process stores', () => {
 
   it('forgets omitted held items before same-session re-pair and saves only fresh receipts', async () => {
     const blobs = new Map<string, Uint8Array>()
+    const encryption = { isAvailable: () => true, encrypt: (bytes: Uint8Array) => bytes.map(b => b ^ 173), decrypt: (bytes: Uint8Array) => bytes.map(b => b ^ 173) }
+    const database = diskOwner()
     const secureStore = createSecureStore({
       encryption: { isAvailable: () => true, encrypt: bytes => bytes.map(b => b ^ 173),
         decrypt: bytes => bytes.map(b => b ^ 173) },
@@ -158,7 +180,7 @@ describe('history removal across process stores', () => {
         write: async (name, bytes) => { blobs.set(name, bytes) },
         delete: async name => { blobs.delete(name) } }
     })
-    const fresh = () => createChatHistoryStore({ secureStore, log: { event: () => {} } })
+    const fresh = () => { database.close(); return createChatHistoryStore({ secureStore, encryption, database, log: { event: () => {} } }) }
     const store = fresh()
     const h = harness(request => store.execute(request))
     try {

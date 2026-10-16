@@ -280,7 +280,7 @@ it('adds the receipt-start index atomically and uses it without walking receipt 
   h.encryption.decrypt = decrypt; const fresh = h.fresh()
   expect(await fresh.store.newestPage(pageRequest())).toMatchObject({ status: 'newest-page' })
   fresh.database.transaction(db => {
-    expect(db.pragma('user_version', { simple: true })).toBe(4)
+    expect(db.pragma('user_version', { simple: true })).toBe(5)
     expect(db.prepare('SELECT identity FROM legacy_scopes').get()).toEqual(identity)
     const plan = db.prepare("EXPLAIN QUERY PLAN SELECT payload FROM legacy_records WHERE scope = ? AND kind = 'receipt-id' AND ordinal = 0 AND entry_id >= ? ORDER BY entry_id, parent LIMIT 1").all('scope', 0)
     expect(JSON.stringify(plan)).toContain('legacy_receipt_start')
@@ -399,7 +399,7 @@ it('migrates version-1 ownership keys atomically without changing payloads or sn
   h.encryption.decrypt = decrypt
   expect(await fresh.store.execute(read())).toEqual({ status: 'stored', snapshot: parseChatHistorySnapshot(snapshot()) })
   fresh.database.transaction(db => {
-    expect(db.pragma('user_version', { simple: true })).toBe(4)
+    expect(db.pragma('user_version', { simple: true })).toBe(5)
     expect(db.prepare('SELECT identity FROM legacy_scopes').get()).toEqual(original)
     expect(db.prepare('SELECT typeof(server) AS server, typeof(conversation) AS conversation FROM legacy_scopes').get())
       .toEqual({ server: 'blob', conversation: 'blob' })

@@ -63,14 +63,35 @@ detached inputs, limits and coordinates. Read-ID cases round-trip zero/safe maxi
 omitted fields and reject invalid values. Attribution cases round-trip parented/older parentless
 rows and reject malformed parents; `toolGroups.test.tsx` checks restored grouping.
 [`chatHistoryStore.test.ts`](../../../src/main/chatHistoryStore.test.ts) uses real
-temporary files with injected reversible encryption to cover fresh-instance
-reads, empty-versus-missing records, host separation, retained unlisted timelines,
+temporary SQLite/protected-source files with injected reversible encryption to cover
+fresh-instance reads, empty-versus-missing records, host separation, retained unlisted timelines,
 held overlapping writes/removals and preservation after read/write/delete failures.
 These tests exercise the storage seams without proving the OS keychain adapter.
 [`chatHistoryHandler.test.ts`](../../../src/main/chatHistoryHandler.test.ts)
 covers membership, rejected requests before record access, ordering and contained
-failures for the original six operations; the daemon-cache tests below cover the
-additive `readThread`/`replaceThread` operations.
+failures. `invalidates queued conversation work while allowing fresh identical
+coordinates` includes a stale list replacement as well as conversation requests;
+the daemon-cache tests below cover `readThread`/`replaceThread`.
+
+[`chatHistoryMigration.test.ts`](../../../src/main/chatHistoryMigration.test.ts)
+tests activated storage with real disk, fresh owners and reversible protection.
+Its 21 cases were present and passed in the counted Linux unit run below:
+
+| Named case (parameterized variants included) | What it establishes |
+| --- | --- |
+| `imports both exact formats once, preserves newer indexed content and never reopens the source after restart` | Exact parser-normalized formats/lists, ownership, existing indexed precedence, no source access after completion and no fixture plaintext in history files. |
+| `rolls back an interrupted two-format import and retries without duplicates` | Neither family nor completion survives a failed import; retry succeeds. |
+| `classifies an import %s failure and rolls back both families before queued retry` | List insertion, marker insertion and outer COMMIT fail as writes; source/committed peers survive and fresh-owner reads match after retry. |
+| `preserves a stored list with version %s across reads and mutations` | Safe-integer 9 remains unsupported; malformed 1.5/string versions stay unreadable across reads/replacement/removals, preserving ciphertext and both families. |
+| `keeps invalid destination list decoding unreadable before importing either family` | Complete destination validation precedes mutation; a raw JSON error cannot become a write error merely because another family needs importing. |
+| `classifies an outer %s replacement commit failure and preserves the committed snapshot` | Both families roll back successful nested replacements when the enclosing COMMIT fails. |
+| `preserves an unreadable %s source and recovers without poisoning the queue` | Invalid, unsupported-version and decrypt-failing sources stay intact; later work recovers. |
+| `retries retirement after commit without replaying removed records, even with reused identities` | Commit-before-cleanup interruption, restart, deletion and fresh replacements cannot replay the retained source. |
+| `orders a held import before %s removal and rejects queued stale saves after identical reuse` | Conversation deletion and credential-first host forgetting serialize import, reject stale work and preserve equal-id peers. |
+| `drains accepted import before close and rejects later admission` | Shutdown waits for admitted storage and refuses later calls. |
+| `preserves committed records and source when database admission or encryption is unavailable` | Unsupported schema/protection failure preserves originals and permits recovery. |
+| `commits a saturated receipt replacement through handler admission and preserves it across fresh owners` | Full receipt replacement and queued reads settle with exact persisted content. |
+| `keeps detached Promise backend execution callable` | The synchronous transaction seam does not add a `this` dependency to existing Promise methods. |
 
 [`indexedLegacyHistory.test.ts`](../../../src/main/indexedLegacyHistory.test.ts)
 uses real temporary SQLite databases with reversible test encryption. Fresh
@@ -142,8 +163,8 @@ The [verifier verdict for the paging change](https://github.com/pyrycode/pyrycod
 records 10,319 unit tests executed/passed, 0 failed and 3 skipped, including all
 26 backend cases, on `de25c375f42755f5da20a4c4003c790e9525522a`. Its fake-transport
 gate recorded 428 executed/passed, 0 failed and 3 skipped. These callable
-main-process operations require no real-Claude or visual acceptance; application
-binding and page consumers remain separate work.
+main-process operations require no real-Claude or visual acceptance. Full indexed
+storage is now active; page IPC, renderer consumers and partial writes remain #1931.
 
 ### Native runtime and packaged proof
 
@@ -154,12 +175,24 @@ used after switching ABIs. Production packaging sets `npmRebuild: true` and
 `asarUnpack: node_modules/better-sqlite3/**`; a Node import alone cannot prove the
 packaged adapter loads.
 
+Prepare host Node before unit gates, then prepare Electron again before the ordinary
+app's Playwright gate. `npm install` or a successful Node gate does not establish
+Electron readiness. An isolated packaged smoke rebuilds its own adapter copy and
+cannot certify the ordinary application's ABI preparation. The activation review
+reproduced host Node 25.8.0 / ABI 141 loading an adapter that Electron 33.4.11 /
+Node 20.18.3 / ABI 130 rejected. The unchanged full suite passed after the Electron
+rebuild; local verifier runner preparation was tracked by #2038, separately from
+the managed runner repair in #2018.
+
 On Linux/macOS, `npm run check:history-native -- /tmp/history-native-proof` packages
 an isolated entrypoint, launches the packaged Electron app and writes `runtime.stdout`
 and `runtime.stderr` beneath the supplied scratch directory. It uses the actual
-`electronSecretEncryption`, commits, closes and reopens the database, compares
-parser-normalized content structurally, checks persisted sentinels and reports
-versions, packaged/asar/native-unpacked flags, static stage and nonzero test counts.
+`electronSecretEncryption` through activated `createChatHistoryStore`, imports
+both protected formats, closes/reopens the database and compares parser-normalized
+content structurally. A 500-receipt by 200-id fixture exercises 100,000 memberships,
+full replacement and exact fresh reopen. It checks all history-directory files for
+fixture plaintext and reports versions, packaged/asar/native-unpacked flags,
+static stage and nonzero test counts.
 Failure or missing/all-skipped evidence is nonzero. It adds no release channel.
 
 [`history-native.spec.ts`](../../../e2e/history-native.spec.ts) includes
@@ -170,13 +203,64 @@ through normal manager admission. On macOS follow the approved Electron-launch
 route from the project instructions. Other platforms explicitly skip this case;
 direct smoke invocation rejects them before packaging imports or scratch creation.
 [`historyNativePlatform.test.ts`](../../../src/main/historyNativePlatform.test.ts)
-pins Windows rejection. Windows execution and NSIS packaging were not run for this
-ticket; existing NSIS x64/arm64 targets remain unchanged.
+pins Windows rejection. Run the native proof on the operating system running the
+ticket; opposite-OS scheduling is outside scope. Existing NSIS x64/arm64 targets
+remain unchanged.
 
-The [final verifier review](https://github.com/pyrycode/pyrycode-desktop/pull/1996#issuecomment-6189261285)
+The [activation verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2019#issuecomment-6208451299)
+and dispatcher gate 8 record Linux x64 acceptance on
+`2af705788086ec1339f0b271a891da19b18e956f` (2026-10-16):
+
+| Run or included module | Executed | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| Full unit suite, 420 passing files | 10,247 | 10,247 | 0 | 30 inherited |
+| Migration module, included above | 21 | 21 | 0 | 0 |
+| Protected store module, included above | 14 | 14 | 0 | 0 |
+| Handler admission module, included above | 7 | 7 | 0 | 0 |
+| Daemon-item history module, included above | 6 | 6 | 0 | 0 |
+| Removal/unpair integration module, included above | 6 | 6 | 0 | 0 |
+| Daemon-item cache integration module, included above | 5 | 5 | 0 | 0 |
+| Update draining module, included above | 15 | 15 | 0 | 0 |
+| Complete configured Linux Playwright suite | 435 | 435 | 0 | 10 existing |
+| Packaged production-encryption case, included above | 1 | 1 | 0 | 0 |
+
+The named `packaged protected history commits and reopens with production encryption`
+case is present and passed. The verifier inspected both attachments and raw
+`/tmp/pyry-history-native-pjNuvq/runtime.stdout` / `runtime.stderr`: Electron
+33.4.11, embedded Node 20.18.3, better-sqlite3 12.4.1, `gnome_libsecret`,
+packaged/asar/unpacked true and `stage: complete`. Exact two-format import/reopen,
+full replacement/fresh reopen and plaintext rejection passed; saturated replacement
+took 3,877 ms. The report stderr attachment is empty; raw stderr retains
+system-bus/GPU diagnostics with successful counted completion.
+
+The full fake gate ran both configured projects with four concurrent worker slots,
+zero retries/flaky results, no filters and no global errors, after Electron
+preparation. All 15 `thread-activation.spec.ts` cases, both indexed quit/window
+cases named below and `local list read failures stay beside the saved host` are
+present and passed. The ten skips are seven retired legacy scenarios and three
+macOS-only checks; skips establish no execution proof. macOS is outside this Linux
+ticket's verification scope. No live-Claude spec changed or live run was required.
+Verifier artifacts are retained under `/tmp/verifier-2019/current-2af70578/`;
+full report SHA256 is `1c4b5faf5de7b9c65324dd9a476467fefcdc3b820cb07b058aa53bcf3f3fcabe`.
+
+Historical activation failures retain their status. The initial Linux gate on
+`54d7010a` executed 434: 421 passed, 13 failed, 10 skipped; its ABI diagnostic rerun
+executed/passed 13, failed/skipped 0 and did not replace the complete gate. The
+later Linux focused run on `41fbd1f4` executed 19: 18 passed, one inspection-context
+failure, zero skips/retries; the unchanged case passed alone (1/1) and in the final
+focused group (19/19), both with zero failures/skips. #2035 records that intermittent
+inspection failure without claiming its cause repaired. Earlier Mac capture
+`d89f50d5` remains 438 executed, 437 passed, one failed, one skipped; abandoned final
+task `a1e15a53baa351db3fb77b5e6f613e289d8b4e878d0911e6b9c20b748afa55bf`
+on `109888c4` was settled interrupted with no results and drained custody. Neither
+that interrupted task nor a passing earlier revision proves final Mac acceptance.
+The [activation plan](../../specs/architecture/1975-activate-indexed-history.md#revisions)
+retains the full chronology, including earlier failed ABI captures.
+
+Earlier backend-only proof from the [final verifier review](https://github.com/pyrycode/pyrycode-desktop/pull/1996#issuecomment-6189261285)
 confirmed retained production-encryption artifacts from candidate
 `f2ef9815571c2ce773a0d736e0ec32d0f26b776a`, whose backend/native/dependency/packaging
-files match the reviewed head. The named packaged case above is present and passed
+files matched that review's head. The named packaged case above was present and passed
 on both platforms, with `packaged`, `asar` and `unpacked` all true:
 
 | Platform/architecture | Electron | Embedded Node | better-sqlite3 | Encryption backend | Executed | Passed | Failed | Skipped |
@@ -201,7 +285,7 @@ later supplied verifier gate 6 reports 414 executed, 413 passed, 1 failed, 3 ski
 `connect roster Agents appear before history and keep identity through live and historical launches`
 are individually listed as passed. Its aggregate counts do not identify the native
 case, so the retained per-platform artifacts above establish that proof. No live
-Claude test is required for this unbound storage backend.
+Claude test was required for that backend-only change.
 
 ## Recording and removal
 
@@ -234,8 +318,11 @@ It holds list or item writes, confirms deletion with later stale captures, and
 awaits flush/stop before fresh-service reads. Same-host peers and another host's
 equal id survive. Omission, empty lists and memory cleanup retain cached records;
 only confirmation removes them. Failed cleanup preserves content without a success
-diagnostic. Its same-session re-pair must save only fresh items from an omitted
-scope: clearing every holder manually or restarting first would mask the bug.
+diagnostic when the database deletion fails. Inject that SQL failure against
+`thread_scopes` for authoritative fixtures: a trigger on legacy scopes would never
+fire and would test successful deletion instead of rollback. Its same-session
+re-pair must save only fresh items from an omitted scope: clearing every holder
+manually or restarting first would mask the bug.
 
 [`daemonItemHistory.test.ts`](../../../src/main/daemonItemHistory.test.ts) uses the
 existing protected filesystem seam and fresh storage services to check coexistence
@@ -246,6 +333,32 @@ Malformed IPC/disk metadata, bounded inert JSON, missing optional availability a
 unavailable encryption cases check classified failures and preservation of data.
 Arrival-order rejection fixtures include missing, duplicate, unknown and invalid
 ids; diagnostics remain content-free and inert keys cannot affect object prototypes.
+
+Activated-store tests must hold the operation they intend to order. A source
+collection write barrier no longer holds an indexed replacement: store tests hold
+source import, handler tests hold membership and writer integration tests hold
+writer admission. SQLite triggers establish actual mutation failure/rollback.
+Classified source-retirement failure is a separate post-commit path, covered by
+the migration module; it cannot use the assertion that prior database content
+must survive every `remove-failed` result.
+
+[`indexed-history-lifecycle.spec.ts`](../../../e2e/indexed-history-lifecycle.spec.ts)
+executes `indexed history drains a buffered thread replacement on quit and restores
+it offline` and `indexed history drains a buffered thread replacement on window and
+restores it offline`. Both are present and passed in the 435-executed Linux gate
+above (zero failed, ten existing skips). Each pauses the writer timer, proves the
+tail rendered while storage still holds the baseline, then closes without advancing
+time. Exact tail/checkpoint restoration offline proves graceful draining. Linux
+window close exits/relaunches; the macOS same-process reactivation branch was not
+executed in this Linux run. The main-only close regression separately checks
+admitted import drain and rejected late calls.
+
+Full replacement decrypts old evidence and encrypts every replacement membership;
+row count alone understates its work. Saturated receipt storage can exceed a
+five-second observer deadline. Polling successful saves without admission/failure
+evidence cannot diagnose a lost write. The migration and packaged fixtures instead
+assert classified completion, queued/fresh-owner reads and exact content, while
+the packaged run records elapsed replacement time.
 
 ## Restoration
 
@@ -285,7 +398,8 @@ These supplied-state tests cover cache preparation and local hydration.
 reconnect, interrupted recovery, epoch replacement and cleanup. Its counted final
 fake-suite results are recorded in the [activation plan](../../specs/architecture/1908-thread-activation.md#manual-completion-shared-fake-migration-and-client-regressions).
 Existing legacy browser/liveness proofs below do not establish daemon-item live
-acceptance. Production uses the protected collection, not indexed partial paging.
+acceptance. Production uses complete indexed snapshots; bounded pages remain
+main-only until #1931 activates consumers and partial writers.
 
 [`savedTimelineRestorer.test.ts`](../../../src/renderer/src/store/savedTimelineRestorer.test.ts)
 retains direct legacy `beginLocalTimelineRead` store-admission tests, including

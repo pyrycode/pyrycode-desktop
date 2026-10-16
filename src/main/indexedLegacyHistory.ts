@@ -255,10 +255,12 @@ export function createIndexedLegacyHistory(deps: {
     if (JSON.stringify(comparable(canonical)) !== JSON.stringify(comparable(decoded))) throw INVALID_CHAT_HISTORY
     return snapshot
   }
-  return {
+  const api = {
     newestPage: (value: unknown): Promise<LegacyHistoryPageResult> => page(value, false),
     beforePage: (value: unknown): Promise<LegacyHistoryPageResult> => page(value, true),
-    async execute(value: unknown): Promise<ChatHistoryResult> {
+    async execute(value: unknown): Promise<ChatHistoryResult> { return api.executeSync(value) },
+    /** Main-only synchronous seam: the caller must throw classified errors to roll back its outer transaction. */
+    executeSync(value: unknown): ChatHistoryResult {
       const report = (result: ChatHistoryResult): ChatHistoryResult => {
         log.event({ event: 'history-storage-result', code: result.status === 'error' ? result.code : result.status })
         return result
@@ -311,4 +313,5 @@ export function createIndexedLegacyHistory(deps: {
       }
     }
   }
+  return api
 }

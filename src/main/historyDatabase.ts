@@ -14,8 +14,8 @@ export function createHistoryDatabase({ userDataPath }: { userDataPath: string }
     const db = new Database(path)
     try {
       const version = db.pragma('user_version', { simple: true })
-      if (version !== 4) {
-        if (version !== 0 && version !== 1 && version !== 2 && version !== 3) throw UNSUPPORTED_CHAT_HISTORY_VERSION
+      if (version !== 5) {
+        if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4) throw UNSUPPORTED_CHAT_HISTORY_VERSION
       }
       if (version === 0) {
         const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()
@@ -78,6 +78,11 @@ export function createHistoryDatabase({ userDataPath }: { userDataPath: string }
               PRIMARY KEY(scope, kind, ordinal), UNIQUE(scope, kind, arrival));
             CREATE INDEX IF NOT EXISTS thread_ranges ON thread_records(scope, kind, range_start, range_end);
             PRAGMA user_version = 4;`)
+        }
+        if (db.pragma('user_version', { simple: true }) === 4) {
+          db.exec(`CREATE TABLE IF NOT EXISTS history_import (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), retired INTEGER NOT NULL CHECK(retired IN (0, 1)));
+            CREATE TABLE IF NOT EXISTS history_lists (server BLOB PRIMARY KEY, payload BLOB NOT NULL);
+            PRAGMA user_version = 5;`)
         }
         return run(db)
       })()

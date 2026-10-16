@@ -2,7 +2,7 @@
 
 Baseline: Desktop `008f468f95acc70a568b4ea41f5ade9e5cc80927`, including
 PR #2036 (`834400252ca7a9c8d9d68d43fc521b7d8be3d2c4`). This inventory describes
-work in progress; a planned recording is not evidence of a successful capture.
+26 source files: 28 active cases, plus the permission scenario from PR #2036, for 29 active replay cases. One pre-existing system-prompt reset fixme is excluded. The final capture and replay results below distinguish executed evidence from exclusions.
 
 The original live test bodies remain the assertion source. Replay may supply
 captured daemon messages and explicit recorded scenario inputs. It must not
@@ -14,7 +14,7 @@ with a recording. Fresh verification must execute the original live assertions.
 The orchestrator confirmed `held:manual-client-replay` on Desktop #1662 (model
 handover), #1929 (orchestrator app integration), #2046 (history-on-open baseline),
 and #2050 (idle daemon history queries). Holds stay until the migration merges.
-A hold does not mean that this migration has satisfied a ticket's acceptance.
+Core #3502 and #3508 are held prerequisites. A hold alone does not establish ticket acceptance; #1662 and #1929 remain separate feature work.
 Unrelated storage and fake-suite work remains under its existing owners.
 
 ## Scenarios
@@ -22,7 +22,7 @@ Unrelated storage and fake-suite work remains under its existing owners.
 | Original live file (under `e2e/`) | Client assertion scope | Additional live proof retained |
 | --- | --- | --- |
 | `real-claude.spec.ts` | UI chat creation and two successive streamed replies | Real Claude liveness and real transport |
-| `real-claude-attachment.spec.ts` | Native attachment selection, upload payload, returned description | Real image interpretation and native file dialog |
+| `real-claude-attachment.spec.ts` | Native attachment selection, upload payload, returned description | Real image interpretation and daemon upload/retrieval; the existing picker stub remains |
 | `real-claude-codex-channel.spec.ts` | Claude/Codex model selection and low-effort channel creation | Dedicated Codex login and actual model/effort announcement |
 | `real-claude-effort-default.spec.ts` | Applied effort, preference confirmation, profile restart, chat recall, channel choice | Actual running model settings |
 | `real-claude-interrupt.spec.ts` | Running affordance, interrupt request, quiescence and stable content | A genuinely running Claude child stops |
@@ -64,10 +64,7 @@ existing Codex channel test. Neither can be closed on replay results alone.
 
 ## Baseline repairs found by live execution
 
-Core #3502 restores authenticated cold/idle query demand and keeps a joined
-view alive until its connection generation retires. The unchanged two-turn
-Claude check and history reopen acceptance run against that source-stamped
-isolated candidate before its merge. Desktop maps the daemon's native reset
+Core #3502 is satisfied by merged PR #3505: authenticated cold/idle query demand keeps a joined view alive until its connection generation retires. The unchanged two-turn Claude check and history reopen acceptance pass against that source-stamped implementation. Desktop maps the daemon's native reset
 cause to the existing session divider presentation.
 
 The history test now obtains its conversation ID from the real conversation
@@ -93,12 +90,11 @@ original scope/provenance assertions and add the current protocol cases.
 Capture retains the complete decrypted JSON envelope after validation, including
 forward-compatible metadata. Replay compares every outgoing envelope field
 except fresh request identity and timestamp, and rebinds client upload/message
-identities once. It never regenerates missing daemon metadata. Earlier
-exploratory recordings must be replaced by new captures after these fixes.
+identities once. It never regenerates missing daemon metadata. Only successful complete captures are eligible; failed exploratory captures remain private diagnostics.
 
 The independently merged core PR #3505 (`4871e083`) superseded the parallel
 prerequisite PR #3507; live two-turn and history acceptance pass on the merged
-implementation. Final captures use its isolated, clean, source-stamped binary.
+implementation. Core PR #3509 then adds #3508's intermediate Send now state. Final captures use the isolated, clean, source-stamped `58f46aa5` binary containing both fixes; the installed application daemon is unchanged.
 
 A live agent turn returned the complete marker, but Desktop rejected the
 protocol's combined field-change/suffix pair because the suffix keeps the final
@@ -119,3 +115,35 @@ user row without queue actions. Every original Send now assertion, including
 the release-file ordering, remains. Successful live-only assertions also mark
 causal checkpoints: offline waits for their actual recorded message prefix but
 never executes or claims the filesystem/OS proof.
+
+Observed push-overload closes are recorded at the exact application-message prefix with their actual WebSocket code. Replay forwards every preceding encrypted frame before reproducing that local close; explicit application reconnects and profile relaunches still come from the shared scenario. Capture adapters remain separate build inputs.
+
+The evidence observers also retain native identity semantics: queue markers include an ordered same-revision suffix, and a completed permission turn is counted once even when reconnect returns its item again. These repairs preserve every original matcher and strengthen the meaning of completion. An AST audit retains all 1,028 original expect expressions, plus all 1,036 from merged baseline `aebee62f`.
+
+
+The queue-drop scenario positively observes its native turn completion and rendered
+assistant before checking the original absence and settled-row assertions. The
+previous absence-only gate could run before the final assistant arrived. Reset
+and permission menu input can reopen only across an observed connection change
+and only before any menu activation was dispatched. No mutation is retried.
+Question answers and refusals bind their fresh answer token once; every choice,
+answer field and subsequent token reuse remains checked.
+
+Saved restoration can finish between an ordered field update and its text suffix.
+The store retains that pending companion only when the exact admitted live item
+wins the merge; a replacement item invalidates it. This integrates with the
+saved/live restoration fixes merged in PR #2058.
+
+## Validation evidence
+
+On October 16, all 29 active cases passed guarded offline replay in 76.172 seconds,
+with zero forbidden executable launch attempts, zero failures and one pre-existing
+fixme. Every committed recording is byte-identical to a successful actual capture;
+source identities are retained per recording rather than rewritten to the merge
+commit. Fresh live verification and the final default-suite results are recorded
+in the live runbook.
+
+The dedicated Codex scenario's provider warning retains the path of its isolated
+test config. It contains no credential or config contents. The configured Claude
+credential is passed only to the live subprocess environment. No credential file
+is copied into a fixture or a production build.

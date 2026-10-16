@@ -67,6 +67,16 @@ export function parseInboundMessage(
 ): InboundDaemonMessage | null
 ```
 
+## Supplied live-state routing
+
+The decoder validates an optional top-level `conversation_id` as a nonempty string
+and rejects a conflicting payload conversation route. Main retains the admitted
+route as `envelopeConversationId` across preload IPC. This is the live-state
+destination; the envelope session may identify its producing source. Older
+messages without that route retain the bound-session provenance checks. Capture
+observes complete validated application JSON before payload narrowing, through a
+separate build adapter; the normal application never imports the recorder.
+
 ## Complete live thread updates
 
 `thread_item_added`, `thread_item_changed` and `thread_text_append` return a

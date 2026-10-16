@@ -1,111 +1,47 @@
 # Recorded daemon exchanges
 
-`npm run e2e:recorded` runs Desktop against messages captured from a real daemon
-running real Claude. The committed permission scenario also runs in the normal
-`npm run e2e` suite. Replay starts only the existing local fake relay and encrypted
-fake daemon. It needs no daemon executable, Claude executable or login.
+The normal `npm run e2e` suite runs every eligible real-client scenario through the actual Desktop application using captured daemon messages. `npm run e2e:recorded` runs the same 29 active scenarios under an executable launch guard. Neither path needs a Claude login, a Claude executable, a daemon executable or a running daemon. The one pre-existing system-prompt reset fixme remains visible and excluded from the successful count.
 
-This tier currently covers creating a chat, sending a tool request, showing the
-permission, arming and confirming Allow once, dismissing the permission, and
-rendering the completed assistant reply. The real capture additionally proves
-that the tool creates its witness file only after confirmation.
-
-The recordings do not yet replace the other live scenarios. In particular, the
-existing two-turn live test remains the complete connection check. Session grants,
-denial, interrupt, queue, reconnect, settings and saved history retain their current
-live coverage. This change does not alter the dispatcher's live gate or its floor.
-The daemon's own live suite is the intended eventual recording producer. This
-Desktop implementation supplies the consumer format and a repeatable local producer.
+The scenario inventory, protected tickets and live-only proof boundaries are in [client-replay-migration.md](client-replay-migration.md). The original live specs remain the shared assertion source; the replay wrapper imports them rather than copying their assertions.
 
 ## Replay contract
 
-`e2e/recordings/permission-allow.json` is a versioned application-message capture.
-Its provenance identifies Desktop's source commit, the daemon source revision and
-executable checksum, Claude version, capture time and accepted capabilities.
-The recorded executable was built from daemon revision
-`07b6b35e14aad0de688326fb36d81c54303c691c`. Its Go build reports a modified tree
-because the scratch checkout contains the test executable. The executable checksum
-identifies the actual producer. No application daemon was replaced.
+Each `e2e/recordings/*.json` identifies its source Desktop commit, daemon source revision and binary checksum, Claude version, capture time and authenticated capabilities. Version 2 also records sequential authenticated connection lifetimes and explicit test-side causal checkpoints. Observed retryable transport closes carry their actual close code and message prefix; replay forwards every preceding frame before closing the local socket. Version 1 remains readable for older captures from PR #2036.
 
-Replay uses native thread mode. It never invokes the test publisher that converts
-older event scripts into thread items. Every actual outgoing request must match
-the recorded type and complete payload. Only generated conversation, session,
-message, modal, epoch and device identities are rebound. The fresh approval nonce
-is also rebound. Text, permission choices, routes, cursors and extra fields remain
-part of the comparison. Request IDs in replies follow the actual client request.
+Replay uses the normal Desktop build, native thread mode, the existing encrypted fake daemon and a local forwarding relay. It never invokes the older event-to-thread publisher. Every outgoing envelope field and complete payload must match. Only fresh request IDs/timestamps and explicitly bound opaque identities vary. The same identity binds once across requests, replies and connections. Text, permission choices, routes, cursors and unknown extra fields remain part of the comparison.
 
-User actions are ordered barriers. Background queries may arrive in a different
-order before the next action. A query consumes one matching request from that
-step. It cannot borrow a later response. Daemon frames retain their recorded order
-and wait for every earlier request. Missing, duplicate, extra or changed requests
-fail the test, including failures after the final visible assertion. Diagnostics
-contain counts and provenance, never request payloads.
+Seven named read-only queries may reorder within an action. Every other request is an ordered barrier, including read marks. A query cannot borrow a future reply. Daemon frames retain recorded order and wait for all preceding requests, captured connection transitions and explicit test-side checkpoints. Missing, duplicate, extra or changed requests fail even after the final visible assertion. Diagnostics report counts and source provenance without payloads.
 
-Only the named read-only queries may reorder. Every other captured command is an
-exact action barrier, including background read-mark publication. Commands absent
-from the recording fail. Handshake frames, rekey controls and multipart payloads
-are rejected. Replay does
-not simulate elapsed network time or establish timing, rekey or reconnect coverage.
-Extending those behaviours requires explicit format support and new real captures.
+`scenarioEffect` marks an external test action before capture executes it. Replay releases only the subsequent actual recorded frames. `liveProof` executes the original filesystem, registry or process assertions during capture/live runs; replay waits for the exact recorded prefix at their successful checkpoint. Offline success does not establish those physical facts.
 
-## Capture a replacement
+## Capture every scenario
 
-Commit the source being exercised first so the capture identifies reproducible
-code. Use an isolated test daemon and the existing configured test login.
-Never supply credentials through command arguments or chat.
+Commit the source first. Build an isolated daemon with Go VCS metadata from clean source, then use the configured dedicated test login. Credentials belong only in the execution environment, never command arguments or chat. The Codex scenario also requires its isolated test login.
 
 ```sh
 PYRY_BIN=/absolute/path/to/test/pyry \
-PYRY_RECORDING_OUTPUT=/absolute/path/to/new-candidate.json \
+PYRY_CLIENT_RECORDING_DIR=/absolute/path/to/new-candidates \
 npm run e2e:recordings:capture
 ```
 
-The selected daemon needs `interactive` and `thread`, plus the remote stdio
-permission support used by the live fixture. Normal live-test prerequisites
-apply. On macOS request approved execution outside the Codex sandbox before
-running any command that launches Electron.
+The output directory must be new and outside the checkout. The runner discovers all real specs, runs every eligible case once without retries, then captures the original permission scenario. It rejects missing files, skipped eligible cases, failures, dirty source and incomplete provenance. Failed runs remain private review evidence and never become eligible fixtures. On macOS, approve execution outside the sandbox before launching Electron.
 
-The runner builds the separate capture configuration, executes one controlled
-real scenario with no retries, then restores the normal build in `finally`.
-It checks that the normal main bundle has no recorder. The normal build never
-imports the capture adapter. A runtime environment variable cannot enable it.
-Do not package or launch other tests from the capture build.
+The runner builds a separate recorder configuration and always restores the normal build. It checks the normal main bundle for recorder absence. The normal build never imports recorder code, and no runtime flag can enable it. Packaging includes only the normal output and package metadata.
 
-Only decrypted application messages enter the bounded memory recorder. Handshake
-early data, pairing tokens and Noise keys never enter it. Capture writes a new
-file with private permissions only after the UI flow and real file-effect checks
-pass. Existing files are never overwritten. Workspace paths and fresh approval
-nonces are normalized. Credential field names, known credential patterns and the
-actual configured Claude credential values are rejected. This is suitable for the
-controlled scenario, not arbitrary personal conversations. Inspect a candidate
-before committing it. No raw capture is attached to test reports.
+The bounded recorder retains complete decrypted application JSON after envelope validation. Handshake early data, pairing tokens, Noise keys and rekey controls never enter fixtures. New files use private permissions. Only fixture-owned workspace paths and approval nonces are normalized; application messages are not synthesized. Credential field names, known secret patterns and configured credential values are rejected. Review every candidate before committing it.
 
-## Verify against a current daemon
+## Verify live drift
 
 ```sh
 PYRY_BIN=/absolute/path/to/test/pyry npm run e2e:recordings:verify
 ```
 
-This performs the shared UI scenario with real Claude, then restores the normal
-build. It replays both the committed recording and the new candidate without
-Claude credentials. It compares their request contracts, allowing fresh IDs and
-background query reordering within a step. Changed choices, text, query cursors,
-missing queries or a changed recovery action fail verification. The final output
-contains the current producer identity and hashes of both recordings. Verification
-never replaces the committed fixture. Review an explicit replacement when it fails.
+Verification makes fresh captures through real Claude and the daemon, including every original live-only assertion. It restores the normal build, replays both committed and fresh captures under the executable guard, checks equal scenario counts and compares complete outgoing request contracts. Fresh opaque IDs and the named read-only query ordering may vary; changed commands, payloads, query cursors or causal order fail. Verification never replaces committed fixtures. Review and capture an explicit replacement after understanding drift.
 
-This is a semantic check through the same UI assertions. It does not require
-Claude to produce byte-identical timing, generated identifiers or progress updates.
-Offline success proves Desktop behaviour for the captured protocol. Only an
-executed live verification establishes behaviour with the selected current daemon.
-Both explicit tiers reject an all-skipped run. No full-suite live result is implied.
+The report gives equivalent-scope live and replay counts and durations. Provider text and timing need not be byte-identical. A live failure is preserved as a failure; offline success cannot overrule it.
 
-## Known initial-history refusal
+## Live checks remain required
 
-The captured daemon can return `thread.query_failed` for a new chat's initial
-history query because the thread view is unloaded. The scenario uses Desktop's
-existing Retry action while permission keeps the conversation active. The real
-capture and offline replay include that action, and the fixture records its use.
-This test proves permission handling and completion after recovery. It does not
-certify healthy initial history loading or fix the daemon. A daemon change that
-removes the refusal should produce a reviewed replacement recording.
+`npm run e2e:real:gate` executes all current real scenarios and rejects an all-skipped run. Keep the existing encryption, transport, rekey, native integration and protected-storage checks: replay validates Desktop against captured application messages, while fresh live execution proves current provider/daemon behavior and physical effects. Do not use a recorded file to satisfy a tool filesystem or operating-system assertion.
+
+The offline runner removes provider credentials and daemon paths, traps CLI names, and preloads a child-process guard throughout its Node/Electron tree. It rejects shell execution and absolute or relative Claude/daemon paths before launch. Successful guarded runs report `forbiddenLaunchAttempts: 0`. Guard denial tests cover direct and shell-based launch attempts.

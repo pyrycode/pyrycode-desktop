@@ -111,7 +111,9 @@ The pending-send store supplies local rows before acceptance. An authoritative
 `user_message` settles a row only when both `content.device_id` and
 `content.message_id` match the captured pair in the exact host/conversation.
 Equal text, a peer device's equal message ID and another host cannot settle it.
-After acceptance, only daemon content supplies the row. Terminal or hidden items
+After acceptance, only daemon content supplies the row. Explicit native `written`
+status displays one user row without queue actions while awaiting the eventual
+echo or placement; it does not assert final delivery. Terminal or hidden items
 can settle a send even when they are the first observed revision.
 
 Queued actions use genuine `content.queued_msg_id` handles with owning coordinates.
@@ -122,10 +124,18 @@ roster. Stop retains the recorded agent and owning-host capability checks.
 ## Live controls and read publication
 
 Only the owning summary's `current_session_id` binds live state. Admitted readings
-also require host, conversation and envelope-session provenance. Durable items,
+also require the owning host and conversation. A validated top-level
+`conversation_id` routes newer supplied live state independently of the producing
+`session_id` (which may identify a daemon-wide source). Without that route the
+existing bound-session provenance check remains. Payload route conflicts fail
+admission. Durable items,
 saved restoration and session-transition markers cannot choose the current live
 session. The selected host's projection supplies existing model, effort, context,
 MCP and other configuration readers. Off-screen hosts keep separate live state.
+An admitted withdrawal of held settings permits one settings/model refresh per
+selected bound session and opening; missing initial replies are not retried.
+Effort recall waits for a non-null configuration reading before treating an empty
+effort as unset. Native reset causes map to the existing divider presentation.
 
 The prompt slot reuses existing permission, consent and questionnaire components.
 Replies retain the original host and prompt object. Session replacement and

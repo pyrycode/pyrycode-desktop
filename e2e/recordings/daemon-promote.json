@@ -1,17 +1,17 @@
 {
   "format": "pyrycode.daemon-exchange",
-  "version": 1,
+  "version": 2,
   "source": {
-    "capturedAt": "2026-10-16T09:36:20.645Z",
-    "desktopRevision": "0e7a40165643772bb419555b30865c618e5952ff",
-    "daemonRevision": "5442746b96920558987621d0e2c1ca6bb320fcea",
-    "daemonBinarySha256": "223693b27514576960d1fd895ccf0188c133b454c1d0440037385a49a8c5d500",
+    "capturedAt": "2026-10-16T11:57:28.487Z",
+    "desktopRevision": "327cbc173f2e288d9e018fcb3bebfe8055db84e8",
+    "daemonRevision": "58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf",
+    "daemonBinarySha256": "5f5b3b9ce42eda74024637f4929dd720d36c1226ce6e370eb62fbe9e6b22f7c0",
     "claudeVersion": "not-spawned"
   },
   "scenario": {
     "id": "daemon-promote",
     "inputs": {
-      "nonce": 1792143380111
+      "nonce": 1792151848506
     },
     "workspace": "/recorded/workspace"
   },
@@ -21,51 +21,61 @@
     "stop_background_task",
     "thread"
   ],
-  "deviceId": "3ff0ec9f942365cfb1e52d636f1e50eb3a44dc9ffe82d004814f2ae859fc2b4f",
+  "deviceId": "9b8570742b4c13917298dcbfea8fc7fa994c6966a70ece75efe0d1da12eccf53",
+  "devices": [
+    "9b8570742b4c13917298dcbfea8fc7fa994c6966a70ece75efe0d1da12eccf53"
+  ],
+  "barriers": [],
+  "closures": [],
   "wire": [
     {
       "direction": "client",
-      "atMs": 124,
+      "atMs": 292,
       "message": {
         "id": 2,
         "type": "list_conversations",
-        "ts": "2026-10-16T09:36:20.531Z",
+        "ts": "2026-10-16T11:57:28.946Z",
         "payload": {}
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 136,
+      "atMs": 306,
       "message": {
         "id": 2,
         "type": "turn_state",
-        "ts": "2026-10-16T09:36:20.208937Z",
+        "ts": "2026-10-16T11:57:28.573401Z",
         "payload": {},
+        "conversation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "session_id": "77777777-7777-4777-8777-777777777777",
         "session_state_cleared": true
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 136,
+      "atMs": 306,
       "message": {
         "id": 3,
         "type": "turn_state",
-        "ts": "2026-10-16T09:36:20.208937Z",
+        "ts": "2026-10-16T11:57:28.573401Z",
         "payload": {
           "conversation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
           "state": "idle"
         },
+        "conversation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "session_id": "77777777-7777-4777-8777-777777777777"
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 136,
+      "atMs": 307,
       "message": {
         "id": 4,
         "type": "conversations",
-        "ts": "2026-10-16T09:36:20.540914Z",
+        "ts": "2026-10-16T11:57:28.958681Z",
         "payload": {
           "conversations": [
             {
@@ -87,29 +97,31 @@
           ]
         },
         "in_reply_to": 2
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "client",
-      "atMs": 209,
+      "atMs": 378,
       "message": {
         "id": 3,
         "type": "promote_conversation",
-        "ts": "2026-10-16T09:36:20.616Z",
+        "ts": "2026-10-16T11:57:29.032Z",
         "payload": {
           "conversation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
           "name": "Untitled",
           "cwd": "/recorded/workspace"
         }
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 213,
+      "atMs": 384,
       "message": {
         "id": 5,
         "type": "conversation_updated",
-        "ts": "2026-10-16T09:36:20.62063Z",
+        "ts": "2026-10-16T11:57:29.038218Z",
         "payload": {
           "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
           "is_promoted": true,
@@ -123,25 +135,27 @@
           "agent": "claude"
         },
         "in_reply_to": 3
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "client",
-      "atMs": 214,
+      "atMs": 385,
       "message": {
         "id": 4,
         "type": "list_conversations",
-        "ts": "2026-10-16T09:36:20.621Z",
+        "ts": "2026-10-16T11:57:29.039Z",
         "payload": {}
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 215,
+      "atMs": 385,
       "message": {
         "id": 6,
         "type": "conversations",
-        "ts": "2026-10-16T09:36:20.62155Z",
+        "ts": "2026-10-16T11:57:29.039423Z",
         "payload": {
           "conversations": [
             {
@@ -163,7 +177,8 @@
           ]
         },
         "in_reply_to": 4
-      }
+      },
+      "connection": 1
     }
   ]
 }

@@ -40,7 +40,7 @@ duplicate, unknown or invalid ids is rejected.
 Full live additions and `batch.applyItems(items, version)` use each item's `rev`,
 independently of reply arrival time or conversation version. A newer revision
 replaces the whole held item, removing omitted optional fields; equal/older
-revisions preserve held content. A kind conflict requests repair even when the
+revisions preserve held content, except strict text-only prefix growth at the same revision with every other field equal. A kind conflict requests repair even when the
 incoming revision is older. A delayed reply cannot roll back newer live content,
 and receiving an older item cannot regress the held conversation version.
 
@@ -84,7 +84,12 @@ tracked separately in the [live runbook](live-e2e-runbook.md#current-real-claude
 ## Exact-base changes, appends and inert JSON
 
 `applyUpdate(hostId, update)` accepts changes/appends only when the item exists,
-its held `rev` equals `base_rev`, and the target `rev` increases. Any own `id` or
+its held `rev` equals `base_rev`, and the target `rev` increases. An ordered
+field-change followed by its text suffix may share the same target revision and
+conversation version: that suffix is admitted once only for the immediately
+matching item/revision/version. Intervening full data, certification or repair
+invalidates the companion. A delayed saved merge preserves it only when the exact
+admitted live item wins the merge; a restored replacement invalidates it. Any own `id` or
 `kind` entry in `changes` is incompatible, even if its value is unchanged. Changes
 replace supplied own fields shallowly: omission preserves the held field, while
 empty strings, false, zero and null replace it. `content` replaces its whole value,

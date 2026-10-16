@@ -1,17 +1,17 @@
 {
   "format": "pyrycode.daemon-exchange",
-  "version": 1,
+  "version": 2,
   "source": {
-    "capturedAt": "2026-10-16T09:36:19.078Z",
-    "desktopRevision": "0e7a40165643772bb419555b30865c618e5952ff",
-    "daemonRevision": "5442746b96920558987621d0e2c1ca6bb320fcea",
-    "daemonBinarySha256": "223693b27514576960d1fd895ccf0188c133b454c1d0440037385a49a8c5d500",
+    "capturedAt": "2026-10-16T11:57:13.194Z",
+    "desktopRevision": "327cbc173f2e288d9e018fcb3bebfe8055db84e8",
+    "daemonRevision": "58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf",
+    "daemonBinarySha256": "5f5b3b9ce42eda74024637f4929dd720d36c1226ce6e370eb62fbe9e6b22f7c0",
     "claudeVersion": "not-spawned"
   },
   "scenario": {
     "id": "daemon-conversation-lifecycle",
     "inputs": {
-      "nonce": 1792143377127
+      "nonce": 1792151833212
     },
     "workspace": "/recorded/workspace"
   },
@@ -21,51 +21,61 @@
     "stop_background_task",
     "thread"
   ],
-  "deviceId": "7960827371b56e233ce8c37f5e11b09b695ea1a08578ff9a43267cc1dedde012",
+  "deviceId": "3cf0b549c16f3c0e3f41904530d381dc757a53602fb5c5acf5a6986c762d6f38",
+  "devices": [
+    "3cf0b549c16f3c0e3f41904530d381dc757a53602fb5c5acf5a6986c762d6f38"
+  ],
+  "barriers": [],
+  "closures": [],
   "wire": [
     {
       "direction": "client",
-      "atMs": 161,
+      "atMs": 285,
       "message": {
         "id": 2,
         "type": "list_conversations",
-        "ts": "2026-10-16T09:36:18.299Z",
+        "ts": "2026-10-16T11:57:13.646Z",
         "payload": {}
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 178,
+      "atMs": 297,
       "message": {
         "id": 2,
         "type": "turn_state",
-        "ts": "2026-10-16T09:36:17.252173Z",
+        "ts": "2026-10-16T11:57:13.276665Z",
         "payload": {},
+        "conversation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "session_id": "77777777-7777-4777-8777-777777777777",
         "session_state_cleared": true
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 179,
+      "atMs": 297,
       "message": {
         "id": 3,
         "type": "turn_state",
-        "ts": "2026-10-16T09:36:17.252173Z",
+        "ts": "2026-10-16T11:57:13.276665Z",
         "payload": {
           "conversation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
           "state": "idle"
         },
+        "conversation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         "session_id": "77777777-7777-4777-8777-777777777777"
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 179,
+      "atMs": 298,
       "message": {
         "id": 4,
         "type": "conversations",
-        "ts": "2026-10-16T09:36:18.313047Z",
+        "ts": "2026-10-16T11:57:13.656405Z",
         "payload": {
           "conversations": [
             {
@@ -87,58 +97,62 @@
           ]
         },
         "in_reply_to": 2
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "client",
-      "atMs": 345,
+      "atMs": 471,
       "message": {
         "id": 3,
         "type": "create_conversation",
-        "ts": "2026-10-16T09:36:18.483Z",
+        "ts": "2026-10-16T11:57:13.832Z",
         "payload": {
           "is_promoted": false,
           "name": null,
           "cwd": null
         }
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 368,
+      "atMs": 500,
       "message": {
         "id": 5,
         "type": "conversation_created",
-        "ts": "2026-10-16T09:36:18.506007Z",
+        "ts": "2026-10-16T11:57:13.861199Z",
         "payload": {
-          "id": "98e64ee7-e7bf-4a89-929e-374f01514823",
+          "id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6",
           "is_promoted": false,
           "cwd": "/recorded/workspace",
           "workspace_label": null,
           "name": null,
-          "last_used_at": "2026-10-16T09:36:18.501982Z",
+          "last_used_at": "2026-10-16T11:57:13.855498Z",
           "agent": "claude"
         },
         "in_reply_to": 3
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "client",
-      "atMs": 368,
+      "atMs": 501,
       "message": {
         "id": 4,
         "type": "list_conversations",
-        "ts": "2026-10-16T09:36:18.506Z",
+        "ts": "2026-10-16T11:57:13.862Z",
         "payload": {}
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 369,
+      "atMs": 502,
       "message": {
         "id": 6,
         "type": "conversations",
-        "ts": "2026-10-16T09:36:18.507235Z",
+        "ts": "2026-10-16T11:57:13.862421Z",
         "payload": {
           "conversations": [
             {
@@ -158,10 +172,10 @@
               "agent": "claude"
             },
             {
-              "id": "98e64ee7-e7bf-4a89-929e-374f01514823",
+              "id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6",
               "name": null,
               "is_promoted": false,
-              "current_session_id": "daee1625-0bdd-411a-b73f-c2e34aa69867",
+              "current_session_id": "62c870ce-c881-47f6-8f48-853e7bba8b58",
               "is_archived": false,
               "is_muted": false,
               "read_up_to": 0,
@@ -169,112 +183,142 @@
               "archived_at": null,
               "cwd": "/recorded/workspace",
               "workspace_label": null,
-              "last_message_ts": "2026-10-16T09:36:18.501982Z",
-              "last_used_at": "2026-10-16T09:36:18.501982Z",
+              "last_message_ts": "2026-10-16T11:57:13.855498Z",
+              "last_used_at": "2026-10-16T11:57:13.855498Z",
               "agent": "claude"
             }
           ]
         },
         "in_reply_to": 4
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "client",
-      "atMs": 374,
+      "atMs": 506,
       "message": {
         "id": 5,
         "type": "request_session_settings",
-        "ts": "2026-10-16T09:36:18.512Z",
+        "ts": "2026-10-16T11:57:13.867Z",
         "payload": {
-          "conversation_id": "98e64ee7-e7bf-4a89-929e-374f01514823"
+          "conversation_id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6"
         }
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "client",
-      "atMs": 374,
+      "atMs": 506,
       "message": {
         "id": 6,
         "type": "request_context_usage",
-        "ts": "2026-10-16T09:36:18.512Z",
+        "ts": "2026-10-16T11:57:13.867Z",
         "payload": {
-          "conversation_id": "98e64ee7-e7bf-4a89-929e-374f01514823"
+          "conversation_id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6"
         }
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "client",
-      "atMs": 375,
+      "atMs": 506,
       "message": {
         "id": 7,
         "type": "request_model_list",
-        "ts": "2026-10-16T09:36:18.513Z",
+        "ts": "2026-10-16T11:57:13.867Z",
         "payload": {
-          "conversation_id": "98e64ee7-e7bf-4a89-929e-374f01514823"
+          "conversation_id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6"
         }
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "client",
-      "atMs": 375,
+      "atMs": 507,
       "message": {
         "id": 8,
         "type": "request_system_prompt",
-        "ts": "2026-10-16T09:36:18.513Z",
+        "ts": "2026-10-16T11:57:13.868Z",
         "payload": {
-          "conversation_id": "98e64ee7-e7bf-4a89-929e-374f01514823"
+          "conversation_id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6"
         }
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 376,
+      "atMs": 507,
       "message": {
         "id": 7,
         "type": "error",
-        "ts": "2026-10-16T09:36:18.513544Z",
+        "ts": "2026-10-16T11:57:13.868309Z",
         "payload": {
           "code": "model_list.unavailable",
           "message": "model list is unavailable",
           "retryable": true
         },
         "in_reply_to": 7
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 376,
+      "atMs": 507,
       "message": {
         "id": 8,
         "type": "system_prompt",
-        "ts": "2026-10-16T09:36:18.513598Z",
+        "ts": "2026-10-16T11:57:13.868394Z",
         "payload": {
           "session_prompt_status": "matches"
         },
         "in_reply_to": 8
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 376,
+      "atMs": 508,
       "message": {
         "id": 9,
         "type": "session_settings",
-        "ts": "2026-10-16T09:36:18.513434Z",
+        "ts": "2026-10-16T11:57:13.868428Z",
         "payload": {},
-        "session_id": "daee1625-0bdd-411a-b73f-c2e34aa69867",
+        "conversation_id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6",
+        "session_id": "62c870ce-c881-47f6-8f48-853e7bba8b58",
         "session_state_cleared": true
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 376,
+      "atMs": 508,
       "message": {
         "id": 10,
         "type": "session_settings",
-        "ts": "2026-10-16T09:36:18.513434Z",
+        "ts": "2026-10-16T11:57:13.868428Z",
         "payload": {
-          "session_id": "daee1625-0bdd-411a-b73f-c2e34aa69867",
+          "session_id": "62c870ce-c881-47f6-8f48-853e7bba8b58",
+          "model": "",
+          "effort": "",
+          "yolo": false,
+          "permission_mode": "",
+          "used_tokens": 0,
+          "window_tokens": 200000
+        },
+        "conversation_id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6",
+        "session_id": "62c870ce-c881-47f6-8f48-853e7bba8b58"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 508,
+      "message": {
+        "id": 11,
+        "type": "session_settings",
+        "ts": "2026-10-16T11:57:13.868428Z",
+        "payload": {
+          "session_id": "62c870ce-c881-47f6-8f48-853e7bba8b58",
           "model": "",
           "effort": "",
           "yolo": false,
@@ -312,101 +356,115 @@
           }
         },
         "in_reply_to": 5,
-        "session_id": "daee1625-0bdd-411a-b73f-c2e34aa69867"
-      }
+        "conversation_id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6",
+        "session_id": "62c870ce-c881-47f6-8f48-853e7bba8b58"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 508,
+      "message": {
+        "id": 9,
+        "type": "thread_catch_up",
+        "ts": "2026-10-16T11:57:13.869Z",
+        "payload": {
+          "conversation_id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6",
+          "epoch": "",
+          "version": 0
+        }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 376,
+      "atMs": 508,
       "message": {
-        "id": 11,
+        "id": 12,
         "type": "error",
-        "ts": "2026-10-16T09:36:18.513702Z",
+        "ts": "2026-10-16T11:57:13.868648Z",
         "payload": {
           "code": "context_usage.unavailable",
           "message": "context usage is unavailable",
           "retryable": true
         },
         "in_reply_to": 6
-      }
-    },
-    {
-      "direction": "client",
-      "atMs": 378,
-      "message": {
-        "id": 9,
-        "type": "thread_catch_up",
-        "ts": "2026-10-16T09:36:18.516Z",
-        "payload": {
-          "conversation_id": "98e64ee7-e7bf-4a89-929e-374f01514823",
-          "epoch": "",
-          "version": 0
-        }
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 379,
+      "atMs": 530,
       "message": {
-        "id": 12,
-        "type": "error",
-        "ts": "2026-10-16T09:36:18.516725Z",
+        "id": 13,
+        "type": "thread_items",
+        "ts": "2026-10-16T11:57:13.890686Z",
         "payload": {
-          "code": "thread.query_failed",
-          "message": "thread query could not complete",
-          "retryable": true
+          "conversation_id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6",
+          "epoch": "973ba5851f0325235aa7fc7562a56857",
+          "version": 0,
+          "items": [],
+          "final": true,
+          "lower_order": 0,
+          "upper_order": 1,
+          "continuation": 0,
+          "older_exists": false
         },
         "in_reply_to": 9
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "client",
-      "atMs": 445,
+      "atMs": 604,
       "message": {
         "id": 10,
         "type": "mcp_status_request",
-        "ts": "2026-10-16T09:36:18.583Z",
+        "ts": "2026-10-16T11:57:13.965Z",
         "payload": {
-          "conversation_id": "98e64ee7-e7bf-4a89-929e-374f01514823"
+          "conversation_id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6"
         }
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "client",
-      "atMs": 445,
+      "atMs": 604,
       "message": {
         "id": 11,
         "type": "request_session_settings",
-        "ts": "2026-10-16T09:36:18.583Z",
+        "ts": "2026-10-16T11:57:13.965Z",
         "payload": {
-          "conversation_id": "98e64ee7-e7bf-4a89-929e-374f01514823"
+          "conversation_id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6"
         }
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 445,
+      "atMs": 605,
       "message": {
-        "id": 13,
+        "id": 14,
         "type": "error",
-        "ts": "2026-10-16T09:36:18.583463Z",
+        "ts": "2026-10-16T11:57:13.965988Z",
         "payload": {
           "code": "mcp_status.unavailable",
           "message": "MCP status is unavailable",
           "retryable": true
         },
         "in_reply_to": 10
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 445,
+      "atMs": 605,
       "message": {
-        "id": 14,
+        "id": 15,
         "type": "session_settings",
-        "ts": "2026-10-16T09:36:18.583453Z",
+        "ts": "2026-10-16T11:57:13.965974Z",
         "payload": {
-          "session_id": "daee1625-0bdd-411a-b73f-c2e34aa69867",
+          "session_id": "62c870ce-c881-47f6-8f48-853e7bba8b58",
           "model": "",
           "effort": "",
           "yolo": false,
@@ -444,30 +502,33 @@
           }
         },
         "in_reply_to": 11,
-        "session_id": "daee1625-0bdd-411a-b73f-c2e34aa69867"
-      }
+        "conversation_id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6",
+        "session_id": "62c870ce-c881-47f6-8f48-853e7bba8b58"
+      },
+      "connection": 1
     },
     {
       "direction": "client",
-      "atMs": 478,
+      "atMs": 637,
       "message": {
         "id": 12,
         "type": "archive_conversation",
-        "ts": "2026-10-16T09:36:18.616Z",
+        "ts": "2026-10-16T11:57:13.998Z",
         "payload": {
-          "conversation_id": "98e64ee7-e7bf-4a89-929e-374f01514823"
+          "conversation_id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6"
         }
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 484,
+      "atMs": 642,
       "message": {
-        "id": 15,
+        "id": 16,
         "type": "conversation_updated",
-        "ts": "2026-10-16T09:36:18.622463Z",
+        "ts": "2026-10-16T11:57:14.003026Z",
         "payload": {
-          "id": "98e64ee7-e7bf-4a89-929e-374f01514823",
+          "id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6",
           "is_promoted": false,
           "is_archived": true,
           "is_muted": false,
@@ -475,29 +536,32 @@
           "name": null,
           "cwd": "/recorded/workspace",
           "workspace_label": null,
-          "last_used_at": "2026-10-16T09:36:18.501982Z",
-          "agent": "claude"
+          "last_used_at": "2026-10-16T11:57:13.855498Z",
+          "agent": "claude",
+          "last_shown_version": 0
         },
         "in_reply_to": 12
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "client",
-      "atMs": 485,
+      "atMs": 642,
       "message": {
         "id": 13,
         "type": "list_conversations",
-        "ts": "2026-10-16T09:36:18.623Z",
+        "ts": "2026-10-16T11:57:14.003Z",
         "payload": {}
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 485,
+      "atMs": 643,
       "message": {
-        "id": 16,
+        "id": 17,
         "type": "conversations",
-        "ts": "2026-10-16T09:36:18.623325Z",
+        "ts": "2026-10-16T11:57:14.004006Z",
         "payload": {
           "conversations": [
             {
@@ -517,47 +581,50 @@
               "agent": "claude"
             },
             {
-              "id": "98e64ee7-e7bf-4a89-929e-374f01514823",
+              "id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6",
               "name": null,
               "is_promoted": false,
-              "current_session_id": "daee1625-0bdd-411a-b73f-c2e34aa69867",
+              "current_session_id": "62c870ce-c881-47f6-8f48-853e7bba8b58",
               "is_archived": true,
               "is_muted": false,
               "read_up_to": 0,
               "latest_entry_id": 0,
-              "archived_at": "2026-10-16T09:36:18.616678Z",
+              "archived_at": "2026-10-16T11:57:13.999032Z",
               "cwd": "/recorded/workspace",
               "workspace_label": null,
-              "last_message_ts": "2026-10-16T09:36:18.501982Z",
-              "last_used_at": "2026-10-16T09:36:18.501982Z",
-              "agent": "claude"
+              "last_message_ts": "2026-10-16T11:57:13.855498Z",
+              "last_used_at": "2026-10-16T11:57:13.855498Z",
+              "agent": "claude",
+              "last_shown_version": 0
             }
           ]
         },
         "in_reply_to": 13
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "client",
-      "atMs": 627,
+      "atMs": 787,
       "message": {
         "id": 14,
         "type": "unarchive_conversation",
-        "ts": "2026-10-16T09:36:18.765Z",
+        "ts": "2026-10-16T11:57:14.148Z",
         "payload": {
-          "conversation_id": "98e64ee7-e7bf-4a89-929e-374f01514823"
+          "conversation_id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6"
         }
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 632,
+      "atMs": 792,
       "message": {
-        "id": 17,
+        "id": 18,
         "type": "conversation_updated",
-        "ts": "2026-10-16T09:36:18.769757Z",
+        "ts": "2026-10-16T11:57:14.153062Z",
         "payload": {
-          "id": "98e64ee7-e7bf-4a89-929e-374f01514823",
+          "id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6",
           "is_promoted": false,
           "is_archived": false,
           "is_muted": false,
@@ -565,29 +632,32 @@
           "name": null,
           "cwd": "/recorded/workspace",
           "workspace_label": null,
-          "last_used_at": "2026-10-16T09:36:18.501982Z",
-          "agent": "claude"
+          "last_used_at": "2026-10-16T11:57:13.855498Z",
+          "agent": "claude",
+          "last_shown_version": 0
         },
         "in_reply_to": 14
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "client",
-      "atMs": 632,
+      "atMs": 792,
       "message": {
         "id": 15,
         "type": "list_conversations",
-        "ts": "2026-10-16T09:36:18.770Z",
+        "ts": "2026-10-16T11:57:14.153Z",
         "payload": {}
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 632,
+      "atMs": 793,
       "message": {
-        "id": 18,
+        "id": 19,
         "type": "conversations",
-        "ts": "2026-10-16T09:36:18.770647Z",
+        "ts": "2026-10-16T11:57:14.153832Z",
         "payload": {
           "conversations": [
             {
@@ -607,10 +677,10 @@
               "agent": "claude"
             },
             {
-              "id": "98e64ee7-e7bf-4a89-929e-374f01514823",
+              "id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6",
               "name": null,
               "is_promoted": false,
-              "current_session_id": "daee1625-0bdd-411a-b73f-c2e34aa69867",
+              "current_session_id": "62c870ce-c881-47f6-8f48-853e7bba8b58",
               "is_archived": false,
               "is_muted": false,
               "read_up_to": 0,
@@ -618,119 +688,108 @@
               "archived_at": null,
               "cwd": "/recorded/workspace",
               "workspace_label": null,
-              "last_message_ts": "2026-10-16T09:36:18.501982Z",
-              "last_used_at": "2026-10-16T09:36:18.501982Z",
-              "agent": "claude"
+              "last_message_ts": "2026-10-16T11:57:13.855498Z",
+              "last_used_at": "2026-10-16T11:57:13.855498Z",
+              "agent": "claude",
+              "last_shown_version": 0
             }
           ]
         },
         "in_reply_to": 15
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "client",
-      "atMs": 712,
+      "atMs": 871,
       "message": {
         "id": 16,
         "type": "request_session_settings",
-        "ts": "2026-10-16T09:36:18.850Z",
+        "ts": "2026-10-16T11:57:14.232Z",
         "payload": {
-          "conversation_id": "98e64ee7-e7bf-4a89-929e-374f01514823"
+          "conversation_id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6"
         }
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "client",
-      "atMs": 712,
+      "atMs": 871,
       "message": {
         "id": 17,
         "type": "request_context_usage",
-        "ts": "2026-10-16T09:36:18.850Z",
+        "ts": "2026-10-16T11:57:14.232Z",
         "payload": {
-          "conversation_id": "98e64ee7-e7bf-4a89-929e-374f01514823"
+          "conversation_id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6"
         }
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "client",
-      "atMs": 712,
+      "atMs": 871,
       "message": {
         "id": 18,
         "type": "request_model_list",
-        "ts": "2026-10-16T09:36:18.850Z",
+        "ts": "2026-10-16T11:57:14.232Z",
         "payload": {
-          "conversation_id": "98e64ee7-e7bf-4a89-929e-374f01514823"
+          "conversation_id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6"
         }
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "client",
-      "atMs": 712,
+      "atMs": 871,
       "message": {
         "id": 19,
         "type": "request_system_prompt",
-        "ts": "2026-10-16T09:36:18.850Z",
+        "ts": "2026-10-16T11:57:14.232Z",
         "payload": {
-          "conversation_id": "98e64ee7-e7bf-4a89-929e-374f01514823"
+          "conversation_id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6"
         }
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 713,
+      "atMs": 871,
       "message": {
-        "id": 19,
+        "id": 20,
         "type": "error",
-        "ts": "2026-10-16T09:36:18.850914Z",
+        "ts": "2026-10-16T11:57:14.232412Z",
         "payload": {
           "code": "model_list.unavailable",
           "message": "model list is unavailable",
           "retryable": true
         },
         "in_reply_to": 18
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 713,
+      "atMs": 871,
       "message": {
-        "id": 20,
+        "id": 21,
         "type": "system_prompt",
-        "ts": "2026-10-16T09:36:18.850958Z",
+        "ts": "2026-10-16T11:57:14.232438Z",
         "payload": {
           "session_prompt_status": "matches"
         },
         "in_reply_to": 19
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 713,
-      "message": {
-        "id": 21,
-        "type": "session_settings",
-        "ts": "2026-10-16T09:36:18.850899Z",
-        "payload": {
-          "session_id": "daee1625-0bdd-411a-b73f-c2e34aa69867",
-          "model": "",
-          "effort": "",
-          "yolo": false,
-          "permission_mode": "",
-          "used_tokens": 0,
-          "window_tokens": 200000
-        },
-        "session_id": "daee1625-0bdd-411a-b73f-c2e34aa69867"
-      }
-    },
-    {
-      "direction": "daemon",
-      "atMs": 713,
+      "atMs": 871,
       "message": {
         "id": 22,
         "type": "session_settings",
-        "ts": "2026-10-16T09:36:18.850899Z",
+        "ts": "2026-10-16T11:57:14.232349Z",
         "payload": {
-          "session_id": "daee1625-0bdd-411a-b73f-c2e34aa69867",
+          "session_id": "62c870ce-c881-47f6-8f48-853e7bba8b58",
           "model": "",
           "effort": "",
           "yolo": false,
@@ -768,101 +827,115 @@
           }
         },
         "in_reply_to": 16,
-        "session_id": "daee1625-0bdd-411a-b73f-c2e34aa69867"
-      }
+        "conversation_id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6",
+        "session_id": "62c870ce-c881-47f6-8f48-853e7bba8b58"
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 714,
+      "atMs": 871,
       "message": {
         "id": 23,
         "type": "error",
-        "ts": "2026-10-16T09:36:18.851051Z",
+        "ts": "2026-10-16T11:57:14.232441Z",
         "payload": {
           "code": "context_usage.unavailable",
           "message": "context usage is unavailable",
           "retryable": true
         },
         "in_reply_to": 17
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "client",
-      "atMs": 715,
+      "atMs": 873,
       "message": {
         "id": 20,
         "type": "thread_catch_up",
-        "ts": "2026-10-16T09:36:18.853Z",
+        "ts": "2026-10-16T11:57:14.234Z",
         "payload": {
-          "conversation_id": "98e64ee7-e7bf-4a89-929e-374f01514823",
-          "epoch": "",
+          "conversation_id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6",
+          "epoch": "973ba5851f0325235aa7fc7562a56857",
           "version": 0
         }
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 716,
+      "atMs": 884,
       "message": {
         "id": 24,
-        "type": "error",
-        "ts": "2026-10-16T09:36:18.854172Z",
+        "type": "thread_items",
+        "ts": "2026-10-16T11:57:14.245399Z",
         "payload": {
-          "code": "thread.query_failed",
-          "message": "thread query could not complete",
-          "retryable": true
+          "conversation_id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6",
+          "epoch": "973ba5851f0325235aa7fc7562a56857",
+          "version": 0,
+          "items": [],
+          "final": true,
+          "lower_order": 0,
+          "upper_order": 1,
+          "continuation": 0,
+          "older_exists": false
         },
         "in_reply_to": 20
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "client",
-      "atMs": 778,
+      "atMs": 936,
       "message": {
         "id": 21,
         "type": "mcp_status_request",
-        "ts": "2026-10-16T09:36:18.916Z",
+        "ts": "2026-10-16T11:57:14.297Z",
         "payload": {
-          "conversation_id": "98e64ee7-e7bf-4a89-929e-374f01514823"
+          "conversation_id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6"
         }
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "client",
-      "atMs": 778,
+      "atMs": 936,
       "message": {
         "id": 22,
         "type": "request_session_settings",
-        "ts": "2026-10-16T09:36:18.916Z",
+        "ts": "2026-10-16T11:57:14.297Z",
         "payload": {
-          "conversation_id": "98e64ee7-e7bf-4a89-929e-374f01514823"
+          "conversation_id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6"
         }
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 779,
+      "atMs": 937,
       "message": {
         "id": 25,
         "type": "error",
-        "ts": "2026-10-16T09:36:18.916927Z",
+        "ts": "2026-10-16T11:57:14.297854Z",
         "payload": {
           "code": "mcp_status.unavailable",
           "message": "MCP status is unavailable",
           "retryable": true
         },
         "in_reply_to": 21
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 779,
+      "atMs": 937,
       "message": {
         "id": 26,
         "type": "session_settings",
-        "ts": "2026-10-16T09:36:18.916905Z",
+        "ts": "2026-10-16T11:57:14.29784Z",
         "payload": {
-          "session_id": "daee1625-0bdd-411a-b73f-c2e34aa69867",
+          "session_id": "62c870ce-c881-47f6-8f48-853e7bba8b58",
           "model": "",
           "effort": "",
           "yolo": false,
@@ -900,51 +973,56 @@
           }
         },
         "in_reply_to": 22,
-        "session_id": "daee1625-0bdd-411a-b73f-c2e34aa69867"
-      }
+        "conversation_id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6",
+        "session_id": "62c870ce-c881-47f6-8f48-853e7bba8b58"
+      },
+      "connection": 1
     },
     {
       "direction": "client",
-      "atMs": 844,
+      "atMs": 1003,
       "message": {
         "id": 23,
         "type": "delete_conversation",
-        "ts": "2026-10-16T09:36:18.982Z",
+        "ts": "2026-10-16T11:57:14.364Z",
         "payload": {
-          "conversation_id": "98e64ee7-e7bf-4a89-929e-374f01514823"
+          "conversation_id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6"
         }
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 850,
+      "atMs": 1009,
       "message": {
         "id": 27,
         "type": "conversation_deleted",
-        "ts": "2026-10-16T09:36:18.987938Z",
+        "ts": "2026-10-16T11:57:14.369842Z",
         "payload": {
-          "id": "98e64ee7-e7bf-4a89-929e-374f01514823"
+          "id": "893c049d-a3bb-4aff-b2a2-377ea3a704c6"
         },
         "in_reply_to": 23
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "client",
-      "atMs": 850,
+      "atMs": 1009,
       "message": {
         "id": 24,
         "type": "list_conversations",
-        "ts": "2026-10-16T09:36:18.988Z",
+        "ts": "2026-10-16T11:57:14.370Z",
         "payload": {}
-      }
+      },
+      "connection": 1
     },
     {
       "direction": "daemon",
-      "atMs": 851,
+      "atMs": 1010,
       "message": {
         "id": 28,
         "type": "conversations",
-        "ts": "2026-10-16T09:36:18.989232Z",
+        "ts": "2026-10-16T11:57:14.370814Z",
         "payload": {
           "conversations": [
             {
@@ -966,7 +1044,8 @@
           ]
         },
         "in_reply_to": 24
-      }
+      },
+      "connection": 1
     }
   ]
 }

@@ -110,8 +110,8 @@ There is no CI (by policy), so before shipping run the gate locally:
 ```bash
 npm run build            # typecheck + build main/preload/renderer
 npm test                 # unit tests
-npm run e2e              # fake-transport Playwright suite (the default tier)
-npm run e2e:recorded    # captured real-daemon permission flow, no Claude login needed
+npm run e2e              # default suite: fake transport + all captured client scenarios
+npm run e2e:recorded     # all 29 captured client scenarios under the offline launch guard
 npm run e2e:real-claude  # real-daemon + real-claude UI liveness
 npm run e2e:real:gate    # the same specs, exit-code-safe (non-zero if nothing ran)
 ```
@@ -121,10 +121,14 @@ in-process, content-blind **local** fake relay; it is gated out of `npm run e2e`
 cleanly** when `claude`, `pyry`, or the credential is missing — `ANTHROPIC_API_KEY`, or
 `CLAUDE_CODE_OAUTH_TOKEN` plus a readable `~/.claude.json`.
 
-The default suite includes the recorded permission flow. See
-[recorded daemon exchanges](docs/recorded-tests.md) for capture, live verification,
-request matching and coverage limits. Existing live requirements remain in place
-until their scenarios have verified recorded replacements.
+The default suite includes all 29 captured client scenarios and needs no Claude
+credential or running daemon. `PYRY_BIN=/absolute/path/to/test/pyry npm run
+e2e:recordings:verify` makes fresh live captures, replays committed and fresh
+fixtures, checks the complete outgoing request contracts and reports equivalent
+scope timings. See [recorded daemon exchanges](docs/recorded-tests.md) for capture,
+verification and the [scenario inventory](docs/client-replay-migration.md).
+Encryption interoperability, real transport, protected storage, native integration
+and physical tool effects retain their live checks.
 
 See the [live e2e runbook](docs/knowledge/features/live-e2e-runbook.md)
 § Current real-claude gate state for the current pass/fail state, the full prerequisite list, the

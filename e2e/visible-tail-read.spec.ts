@@ -2,6 +2,7 @@ import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { ElectronApplication, Page } from '@playwright/test'
 import type { Envelope } from '../src/shared/wire/types'
+import { focusVisibleTailWindow } from './fixtures/visibleTailFocus'
 
 // Scripted history is published as thread catch-up/pages by the shared fake daemon.
 test.use({ scriptedHistory: true })
@@ -27,7 +28,7 @@ async function settle(page: Page) {
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
 }
 async function focus(app: ElectronApplication, page: Page) {
-  await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.show(); w.focus() })
+  await focusVisibleTailWindow(app)
   await page.evaluate(() => {
     delete (document as any).hasFocus
   })

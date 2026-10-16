@@ -181,8 +181,10 @@ validation, serialization and protected record work stay bounded as unrelated
 history grows` compares 10/1,000 items: each revision has three decrypts, three
 encrypts and equal item-serialization counts, with fewer than 40 extra reads/writes
 for logarithmic sequence work. `coalesces shared protected paths into one write per
-path in an owned batch` uses 400 items: each final path is written once. Rewriting
-shared paths per item previously stalled the visible-tail browser setup.
+path in an owned batch` checks one write per final path for 400 items. See the
+[focus classification](development-verification-layout-and-input.md#visible-tail-focus-reliability):
+batching resolved the observed timeout even in isolation; native-focus scheduling
+remains unproven. Keep this regression and the read spec.
 
 `e2e/daemon-item-cache.test.ts` compares separate, coalesced and held-failure saves
 through protected disk/reopen. It covers saved/pending repair and unfinished fences,
@@ -221,9 +223,11 @@ remain failed in the [plan](../../specs/architecture/2044-owned-thread-changes.m
 fractional ordering missed bounded append work, and an exploratory packaged run
 rejected `basic_text` until the existing admitted secret service was supplied.
 The earlier full fake run with 434 passed, 1 failed, 3 skipped hit teardown context
-loss tracked by [#2054](https://github.com/pyrycode/pyrycode-desktop/issues/2054)
-(Backlog, priority:low). Final counted passes supersede those candidates; no
-assertion, timeout, retry, skip or suite configuration was weakened.
+loss repaired by [#2054](e2e-harness-context-recovery.md#disconnected-delivery-observations-and-cleanup),
+with separate controlled recovery proof and counted Linux verification; the upstream
+trigger and original cleanup execution remain unconfirmed. Final counted passes
+supersede those candidates; no assertion, timeout, retry, skip or suite configuration
+was weakened.
 
 ### Bounded legacy page regressions
 

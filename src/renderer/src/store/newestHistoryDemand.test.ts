@@ -3,7 +3,6 @@ import { createConversationTimelineStore } from './conversationTimelineStore'
 import { parseChatHistorySnapshot } from '@shared/chatHistory'
 import type { HistoryTimelineEntry } from '@shared/ipc/events'
 import { createNewestHistoryDemand } from './newestHistoryDemand'
-import { readSavedTimeline } from './savedTimelineRestorer'
 import { retryHistoryPage, selectHistoryFailure } from '../screens/conversation/historyRetry'
 
 function harness() {
@@ -222,17 +221,6 @@ it('Retry resends a failed newest cursor at held atStart and rejects stale owner
   retryHistoryPage(deps, open, 'a', failure)
   expect(h.deps.sendCommand).toHaveBeenCalledTimes(2)
   expect(h.deps.sendCommand.mock.calls[1][0].payload.cursor).toBe('')
-})
-
-it('the owned async reader settles before sending and cancellation suppresses completion', async () => {
-  const h = harness()
-  let finish: (value: { status: 'missing' }) => void = () => {}
-  const reader = readSavedTimeline({ timelines: h.store, log: vi.fn(), read: () =>
-    new Promise(resolve => { finish = resolve }) }, 'a', 'c')
-  h.sync()
-  expect(h.deps.sendCommand).not.toHaveBeenCalled()
-  h.navigate(null); reader.cancel(); finish({ status: 'missing' }); await reader.done
-  expect(h.deps.sendCommand).not.toHaveBeenCalled()
 })
 
 it('a newest page preserves the oldest cursor and every complete receipt', () => {

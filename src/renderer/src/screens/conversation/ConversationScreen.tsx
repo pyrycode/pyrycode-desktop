@@ -12,7 +12,6 @@ import { useReadObservation, type ThreadReadInputs } from '../../store/conversat
 import type { ThreadSnapshot } from '../../store/threadItemStore'
 import { threadTaskPresentations, type ThreadTaskInputs } from './threadTaskPresentation'
 import { taskLinked, threadItemPresentations, threadQueueHandle, actOnThreadQueue, type ThreadSendInputs } from './threadItemPresentation'
-import { historyGapId } from '@shared/chatHistory'
 import { agentSwitchStore, type AgentSwitchStatus } from '../../store/agentSwitchStore'
 import { useReplySuggestionStore, selectReplySuggestion, visibleReplySuggestion } from '../../store/replySuggestionStore'
 import { useSessionFactsStore, selectSessionFactsFor } from '../../store/sessionFactsStore'
@@ -44,7 +43,7 @@ import { StreamingAssistantMarkdown } from './StreamingAssistantMarkdown'
 import { MARKDOWN_OPEN_FAILED_NOTICE, MarkdownReaderView, useMarkdownReader } from './MarkdownReader'
 import { PyryMark } from '../../theme/PyryMark'
 import type { Message } from './messageViewModel'
-import type { QueuedItem, ConversationCreatedPayload, WireResetHandoff, WireAgent, MemorySearchPayload } from '@shared/wire/types'
+import type { ConversationCreatedPayload, WireResetHandoff, WireAgent, MemorySearchPayload } from '@shared/wire/types'
 import type { ModelRefusalEvent, RelayLinkStatus } from '@shared/ipc/events'
 import { sessionStore, useSessionStore, initialSessionState, selectStatusFor, type ConnectionStatus } from '../../store/sessionStore'
 import { canRespondToPromptNow, usePromptResponseAvailability } from './promptResponseAvailability'
@@ -54,16 +53,12 @@ import { canRespondToPromptNow, usePromptResponseAvailability } from './promptRe
 import { useTimelineStore } from '../../store/timelineStore'
 import { useCollapseToolUsesPrefStore, selectCollapseToolUses } from '../../store/collapseToolUsesPrefStore'
 import {
-  type ConversationSlice, type HistoryRequestState,
   conversationTimelineStore,
   useConversationTimelineStore,
-  selectPrependedRowsFor,
   selectTimelineFor,
   type ConversationTimelineState
 } from '../../store/conversationTimelineStore'
-import { historyAskDeps, requestOlderHistory, requestGapHistory } from '../../store/historyPageBridge'
 import { historyRetryDeps, retryHistoryPage, selectHistoryFailure } from './historyRetry'
-import { useQueueStore, selectBacklogFor } from '../../store/queueStore'
 import {
   activeConversationStore,
   useActiveConversationStore,
@@ -77,7 +72,6 @@ import {
 import { useReportedContextStore, selectReportedContextFor } from '../../store/reportedContextStore'
 import { contextTokenSource } from './contextTokenSource'
 import {
-  type BackgroundAgentTimeline,
   useBackgroundTaskRosterStore,
   selectLiveTaskCountFor
 } from '../../store/backgroundTaskRosterStore'
@@ -85,7 +79,6 @@ import { TopOverlay } from './TopOverlay'
 import { useUsagePillDismissalStore, usagePillDismissalStore } from '../../store/usagePillDismissalStore'
 import {
   initialTimelineState,
-  openBubbleIndex,
   type ThreadItem,
   type TimelineState,
   type TurnPhase,
@@ -139,7 +132,6 @@ import { contextUsagePercent, contextUsageStep } from './contextUsage'
 import {
   useRunConfigStore,
   selectSnapshot,
-  selectMidTurnInputSupported,
   selectMcpServersSupported,
   sessionSupports
 } from '../../store/runConfigStore'
@@ -156,14 +148,10 @@ import {
   useConversationListStore,
   selectConversationAgentFor
 } from '../../store/conversationListStore'
-import { dropQueuedMessage } from './dropQueuedMessage'
-import { sendQueuedNow } from './sendQueuedNow'
-import { foldQueuedRows, type QueuedRowHandle } from './foldQueuedRows'
-import { groupToolRows, withProvisionalAgents } from './groupToolRows'
+import type { QueuedRowHandle } from './foldQueuedRows'
 import { foldToolRuns, type ToolRun } from './foldToolRuns'
 import { appendMessageQuote, copyMessageText } from './copyMessageText'
 import { formatMessageTime } from './messageTime'
-import { turnStatsByItemIndex } from './turnStats'
 import { AttachmentFileIcon } from './AttachmentFileIcon'
 import { isImageAttachmentName } from './attachmentIsImage'
 import { BubbleAttachmentImage, ThreadAttachmentScopeContext } from './BubbleAttachmentImage'
@@ -201,7 +189,7 @@ import { EditChatDialogView, requestRenameConversation } from '../channels/EditC
 // whose lifetime has to be the dialog's open lifetime. It imports nothing from this directory, so this
 // is the one-way seam `EditChatDialog` already crosses, not a cycle.
 import { EditChannelDialog } from '../channels/EditChannelDialog'
-import { BackgroundTaskPanelView, BackgroundTaskPanel } from './BackgroundTaskPanel'
+import { BackgroundTaskPanelView } from './BackgroundTaskPanel'
 import type { RendererCommand } from '@shared/ipc/commands'
 
 // The conversation shell: a scrollable message thread above a pinned composer,
@@ -223,7 +211,6 @@ const selectNothingHeld = (): null => null
 // #1260: the same treatment for the prepended-row count, and for `selectOpenTimelineFor`'s reason rather
 // than for symmetry — `''` is an ordinary key in the timeline holder, so `?? ''` could read another
 // conversation's count as the open one's. Module-level so the memoised binding's identity is stable.
-const selectNoPrependedRows = (): number => 0
 
 /**
  * #758: the selector that binds the chat pane to the OPEN conversation's own retained timeline — the
@@ -291,15 +278,7 @@ export function ConversationScreen({
   // `??` and not `||`: an empty-string id must survive as an ordinary key rather than collapse into
   // "nothing open" (the :281 / :1955 spelling this file already uses).
   const openConversationId = activeConversation?.id ?? null
-  const pendingBatch = useQuestionBatchStore(s =>
-    openConversationId === null ? undefined : selectBatchFor(openConversationId)(s))
-  const hasPermissionSurface = useModalStore(s => openConversationId !== null &&
-    (selectHasOutstandingFor(openConversationId)(s) || s.rejectionOwners.some(owner =>
-      owner.conversationId === openConversationId && s.rejections.includes(owner.modalId))))
   const actionsAvailable = useConversationActionAvailability(openConversationId)
-  // #1726: the open session's `mid_turn_input` reading, a boolean slice so other snapshot fields re-render
-  // nothing. The snapshot is the open conversation's (cleared on switch), so it gates that thread alone.
-  const midTurnInput = useRunConfigStore(selectMidTurnInputSupported)
   // A useMemo-stable selector per id (the BackgroundTaskPanel.tsx:342 idiom) so a fresh closure per render
   // does not churn the subscription. NOTHING wraps, copies, maps or derives the result inside the
   // subscription, which is what keeps the selector's return Object.is-stable: a write for ANOTHER
@@ -355,15 +334,11 @@ export function ConversationScreen({
   const offline = useSessionStore(s => selectedHost !== null && s.statuses.get(selectedHost)?.type !== 'connected')
   const heldSlice = useConversationTimelineStore(s => openConversationId === null ? undefined : s.timelines.get(openConversationId))
   const ownSlice = heldSlice?.serverId === selectedHost ? heldSlice : undefined
-  const backgroundAgents = useBackgroundTaskRosterStore(s => openConversationId === null || ownSlice === undefined
-    ? undefined : s.agentTimeline.get(openConversationId))
   const openTimeline = selectedHost !== null && ownSlice === undefined ? null : heldTimeline
   const localStatus = authoritative ? threadRestoring ? 'loading' : 'loaded'
     : ownSlice?.localRead ?? (ownSlice === undefined ? 'loading' : 'loaded')
   const coverage = ownSlice?.coverage ?? (ownSlice?.history?.status === 'loaded'
     ? ownSlice.history : ownSlice?.restored?.coverage)
-  const olderSaved = offline && localStatus === 'loaded' &&
-    !(coverage && 'atStart' in coverage && coverage.atStart)
   // The absent-slice branch is WRITTEN OUT. `selectTimelineFor(id) ?? initialTimelineState` is banned at
   // every read site (conversationTimelineStore.ts:44-49) because it collapses "nothing is held for this
   // conversation" into "observed, nothing in the thread" with no type error and no failing test; the
@@ -429,67 +404,6 @@ export function ConversationScreen({
     const status = openConversationId === null ? undefined : s.statuses.get(openConversationId)
     return status?.serverId === selectedHost ? status : undefined
   })
-  // #1009: the open conversation's queued backlog, read HERE rather than one level down. #1009's own reason
-  // was the scroll pin: the backlog was a REGION between the thread and the composer, so its appearance and
-  // growth shrank `.conversation__thread`'s viewport, and the pin's re-assert below is a dep-free layout
-  // effect that runs on THIS component's renders. Read one level down (the shape this was until #1009), a
-  // `queue_state` push re-rendered that leaf alone, the viewport shrank with no re-assert, and a thread
-  // resting at the bottom was left short of it until something unrelated re-rendered this screen — 132px with
-  // a two-item backlog, measured on the failing e2e before the fix.
-  //
-  // #1214 KEPT THE READ AND CHANGED WHAT IT FEEDS. There is no region any more: the backlog folds into the
-  // timeline below, so this value is now an INPUT to what the thread draws rather than a sibling of it. Both
-  // reasons to read it here still hold — the fold needs it at this level, and a queue_state still re-renders
-  // this screen and re-asserts the pin (see useThreadScrollPin's inventory for what that re-assert now covers).
-  //
-  // The two neighbouring store-bound leaves are documented as deliberately NOT hoisted (ComposerSlot's
-  // question batch, ComposerErrorSlotControl's connection status) and this read is not a reversal of either.
-  // Both of those arguments are about traffic this screen has no use for — a keystroke in the question panel,
-  // a connection-status flap — where waking the timeline buys nothing. A queue snapshot is the opposite on all
-  // three axes: it is operator-paced (a message enqueued behind a busy turn, or dropped), the screen NEEDS the
-  // render because the fold below is what draws the snapshot at all (and, before #1214, because the event
-  // changed the height of a region this screen laid out around a pin it owns), and it
-  // is free for every other conversation — selectBacklogFor hands back the same array reference (or the shared
-  // EMPTY_BACKLOG) when another conversation's snapshot lands, so `Object.is` short-circuits and nothing here
-  // re-renders. The useMemo-stable selector per id is the timeline read's own idiom, for its reason: a fresh
-  // closure per render would churn the subscription.
-  //
-  // `?? ''` and NOT selectOpenTimelineFor's branch-to-a-null-selector treatment, which is the opposite ruling
-  // one read above. That branch exists because `''` is an ordinary key in the timeline holder, so the sentinel
-  // could render another conversation's thread as this one's. The queue store is written only by queueBridge
-  // from a decoded conversation_id, and selectBacklogFor falls back to the shared EMPTY_BACKLOG for a key it
-  // does not hold, so the sentinel selects nothing and reads as an empty backlog — which is the correct render
-  // with no conversation open. Carried verbatim from the retired control (BackgroundTaskPanel's read too).
-  const selectOpenBacklog = useMemo(
-    () => selectBacklogFor(openConversationId ?? ''),
-    [openConversationId]
-  )
-  const queuedBacklog = useQueueStore(selectOpenBacklog)
-  // A disconnect retains received queues; a local read cannot borrow the id-only queue cache.
-  const visibleQueued = selectedHost !== null && (ownSlice === undefined || ownSlice.localRead !== undefined)
-    ? EMPTY_QUEUED : queuedBacklog
-  // #1213: the two timeline writes the queued-row drop needs, so cancelling a message takes its optimistic
-  // echo out of the thread as well as its queued row. They are the SAME pair the Composer writes the echo
-  // through (#756) — the flat store for the open thread, the keyed holder for the conversation it was sent
-  // to — and both identities are stable, so selecting them here adds no re-render churn (the argument
-  // `Composer`'s own reads already make). Read at the container rather than inside the view that draws the
-  // row: `Timeline` stays pure props-in/markup-out and store-free, as it has been since #203 (and as the
-  // deleted `QueuedBacklog` was until #1214 folded its rows into it).
-  const dispatchTimeline = useTimelineStore((s) => s.dispatch)
-  const dispatchTimelineFor = useConversationTimelineStore((s) => s.dispatchFor)
-  const onDropQueued = useCallback((queuedMsgId: number, messageId: string | undefined): void => {
-    if (openConversationId === null || connectedConversationHostNow(openConversationId) === null) return
-    dropQueuedMessage(openConversationId, queuedMsgId, messageId, {
-      diagnose: window.pyry.sendDiagnostic,
-      sendCommand: sendConversationCommand,
-      dispatch: dispatchTimeline,
-      dispatchFor: dispatchTimelineFor
-    })
-  }, [openConversationId, selectedHost, dispatchTimeline, dispatchTimelineFor])
-  const onSendQueuedNow = useCallback((queuedMsgId: number): void => {
-    if (openConversationId === null || connectedConversationHostNow(openConversationId) === null) return
-    sendQueuedNow(openConversationId, queuedMsgId, { sendCommand: sendConversationCommand })
-  }, [openConversationId, selectedHost])
   // #177: the Run configuration sheet's open/closed state — a single-value screen-local boolean →
   // useState, never the store (ADR 0006). It resets to closed on remount for free, so the sheet
   // never reopens itself across a screen remount. #962 retired the StatusRow trigger that used to sit
@@ -526,20 +440,9 @@ export function ConversationScreen({
   // nothing outside this screen reads it and it must not survive a remount (ADR 0006), so a re-entered
   // thread starts pinned again, which is the correct reading. The two handles go to Timeline as one prop.
   // #602: `followBottom` re-arms that pin and goes to the Composer, the thread's sibling under this body.
-  // #1260: the count behind the thread's row keys. A second, narrow subscription rather than a field on
-  // the slice above, because it changes only when a served page lands and is `Object.is`-stable on every
-  // other write — so it wakes this screen strictly less often than the timeline read already does.
-  const selectOpenPrependedRows = useMemo(
-    () =>
-      openConversationId === null
-        ? selectNoPrependedRows
-        : selectPrependedRowsFor(openConversationId),
-    [openConversationId]
-  )
-  const prependedRows = useConversationTimelineStore(selectOpenPrependedRows)
   const authoritativeRows = useMemo(() => authoritativeSnapshot
     ? [...authoritativeSnapshot.items, ...(localSend?.pending ?? [])] : undefined, [authoritativeSnapshot, localSend])
-  const threadPin = useThreadScrollPin(openConversationId, authoritative ? 0 : prependedRows, !authoritative, authoritativeRows,
+  const threadPin = useThreadScrollPin(openConversationId, authoritativeRows,
     authoritative ? () => { if (selectedHost !== null) threadRuntime.query('older', selectedHost) } : undefined)
   const { scrollPin, followBottom, paneRef } = threadPin
   // #1579: every open asks for fresh MCP status, from the handler rather than a mount effect so one open
@@ -612,21 +515,6 @@ export function ConversationScreen({
         <p className="conversation__banner" role="status">{MARKDOWN_OPEN_FAILED_NOTICE}</p>
       )}
       </div>
-      {/* #1214: the backlog goes INTO the thread. `queue_state` is still daemon state held verbatim by
-          queueStore and never written through the timeline reducer — the fold is render-time, per
-          foldQueuedRows' header — but the two row lists are now joined before they are drawn, so a message
-          sent mid-turn draws once. `queuedBacklog` is the same read #1009 hoisted here, unmoved; the drop
-          closure below is #1213's, unchanged, only re-hung on this prop.
-          sendConversationCommand stays dereferenced INSIDE the click closure (interaction time, never
-          render), which is what keeps a container smoke render bridge-free; the null-id guard is
-          belt-and-braces, since a populated row implies an active id (the daemon queues under real ids).
-          The drop's two clocks — the echo leaves at the click (#1213), the queued item leaves on the
-          daemon's next snapshot (#296 AC3) — now land on ONE row, so between them the message is drawn as
-          an unmatched tail row for a relay round trip. Accepted, bounded and deliberately undefended: see
-          the plan's § Design 8, which names why every alternative reverses a shipped ruling. */}
-      {/* #1604: the message area — the thread plus the Top overlay pinned over its top edge. Always
-          rendered, so the overlay (Re-pair above all) still shows when an offline host leaves the
-          Timeline nothing to draw; the region then stays empty rather than missing. */}
       <div className="conversation__message-area">
       {authoritative && !daemonOutdated && authoritativeSnapshot === null && queryState?.type === 'loading' && <p role="status">Loading messages…</p>}
       {authoritative && !daemonOutdated && authoritativeSnapshot === null && queryState?.type === 'failed' && <ComposerHistoryFailure retryable
@@ -662,54 +550,8 @@ export function ConversationScreen({
           }} />}
           <ThreadPromptSlot host={selectedHost} conversationId={openConversationId} />
         </>} />}
-      {!authoritative && (!offline || items.length > 0 || visibleQueued.length > 0 || pendingBatch !== undefined || hasPermissionSurface) && <Timeline
-        key={openConversationId}
-        items={items}
-        gapState={ownSlice}
-        onRetryGap={failure => {
-          if (activeConversation !== null && selectedHost !== null) retryHistoryPage(historyRetryDeps, activeConversation, selectedHost, failure)
-        }}
-        rowKeys={thread.rowKeys}
-        rowArrivalOrder={thread.rowArrivalOrder}
-        localEchoes={thread.localEchoes}
-        foldTools={collapseToolUses}
-        backgroundAgents={backgroundAgents}
-        onReply={replyToMessage}
-        scrollPin={scrollPin}
-        trailing={(pendingBatch || hasPermissionSurface) && <QuestionHistorySlot conversationId={openConversationId} />}
-        // #1260: NEGATED, so the first held row's key is minus the number of rows history has already
-        // put ahead of it. A prepend of N lowers this by N while every surviving row's index rises by N,
-        // which is what leaves their keys — and therefore React's identity for them — unmoved.
-        firstRowKey={-prependedRows}
-        queued={visibleQueued}
-        olderSaved={olderSaved}
-        saved={offline || ownSlice?.localRead !== undefined}
-        onOpenMarkdownPath={reader.open}
-        onOpenHostedApp={onOpenHostedApp}
-        agent={openAgent}
-        onDropQueued={actionsAvailable ? onDropQueued : undefined}
-        midTurnInput={midTurnInput}
-        // #1726: the drop closure's gate and guard, verbatim, so Send now is disabled exactly when the drop
-        // control is. No timeline write: the message is being delivered, so its echo stays true.
-        onSendQueuedNow={actionsAvailable ? onSendQueuedNow : undefined}
-      />}
       {authoritative && !daemonOutdated && authoritativeSnapshot === null && <ThreadPromptSlot host={selectedHost} conversationId={openConversationId} />}
       <TopOverlayControl onRepairHost={onRepairHost} threadLive={authoritative ? threadLive : undefined} />
-      {/* #581: the background-task panel, reading the roster store itself, so only the conversation id goes
-          down; with no active conversation the id is null and the panel reads "never observed". It mounts
-          no data path — the roster bridge is already app-wide in App.tsx.
-          #1634: a non-modal drawer pinned over the right of THIS region (Figma 565:2966 spans exactly the
-          message area), the last child so it paints above the Top overlay. `turnRunning` is the stop
-          control's own gate, so the drawer yields exactly the Escape the composer will act on. */}
-      {!authoritative && panelOpen && (
-        <BackgroundTaskPanel
-          conversationId={activeConversation?.id ?? null}
-          turnRunning={isTurnRunning(phase)}
-          serverId={selectedHost}
-          agent={openAgent}
-          onClose={() => setPanelOpen(false)}
-        />
-      )}
       </div>
       {/* #962/#967: the region between the thread and the status area is EMPTY, and that emptiness is the
           design (Figma 102:4 stacks the message area straight onto the input area). #493's api-retry,
@@ -966,7 +808,7 @@ function measureThreadChrome(pane: HTMLElement): void {
  * dependency array it already runs after every render, so "jump to the bottom now" and "stay pinned while
  * the reply streams" are not two behaviours: both are consequences of the flag being `true`.
  */
-function useThreadScrollPin(conversationId: string | null, prependedRows: number, legacyHistory = true, presentation?: object, onOlder?: () => void): ThreadPin {
+function useThreadScrollPin(conversationId: string | null, presentation?: object, onOlder?: () => void): ThreadPin {
   const ref = useRef<HTMLDivElement>(null)
   const paneRef = useRef<HTMLDivElement>(null)
   const following = useRef(true)
@@ -989,7 +831,6 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
   const topAnchor = useRef<{
     row: Element
     top: number
-    prependedRows: number
     presentation?: object
     conversationId: string | null
   } | null>(null)
@@ -1051,7 +892,7 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
     const row = candidates[lo] ?? null
     topAnchor.current = row !== null
       ? { row, top: row.getBoundingClientRect().top - threadTop,
-          prependedRows, presentation, conversationId }
+          presentation, conversationId }
       : null
   }
 
@@ -1140,7 +981,7 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
     const anchor = topAnchor.current
     if (el !== null && !following.current && anchor !== null &&
         anchor.conversationId === conversationId &&
-        (presentation === undefined ? prependedRows > anchor.prependedRows : presentation !== anchor.presentation) &&
+        presentation !== anchor.presentation &&
         anchor.row.parentElement === el) {
       // Preserve the surviving visible row at zero and during middle-of-thread gap insertion:
       // short threads include unused viewport space that is not part of the inserted content.
@@ -1221,41 +1062,10 @@ function useThreadScrollPin(conversationId: string | null, prependedRows: number
   }, [])
 
   const demandHistory = (el: HTMLDivElement): void => {
-    if (!legacyHistory) {
-      if (connectedConversationHostNow(conversationId) === null) return
-      following.current = false
-      rememberTop(el)
-      if (isNearTop({ scrollOffset: el.scrollTop, viewportHeight: el.clientHeight, contentHeight: el.scrollHeight })) onOlder?.()
-      return
-    }
-    // Measure before the input scrolls: crossing into the band needs a new input.
     if (connectedConversationHostNow(conversationId) === null) return
-    if (conversationId === null) return
-    const viewport = el.getBoundingClientRect()
-    const top = Math.max(viewport.top, paneRef.current?.querySelector('.conversation__top-chrome')?.getBoundingClientRect().bottom ?? viewport.top)
-    const bottom = Math.min(viewport.bottom, paneRef.current?.querySelector('.conversation__input-chrome')?.getBoundingClientRect().top ?? viewport.bottom)
-    const marker = Array.from(el.querySelectorAll<HTMLElement>('[data-history-gap]')).reverse().find(node => {
-      const rect = node.getBoundingClientRect()
-      return rect.height > 0 && rect.bottom > top && rect.top < bottom
-    })
-    if (marker !== undefined) {
-      following.current = false
-      rememberTop(el)
-      const gap = conversationTimelineStore.getState().timelines.get(conversationId)?.gaps?.find(g =>
-        String(historyGapId(g)) === marker.dataset.historyGap)
-      if (gap !== undefined) requestGapHistory(historyAskDeps, conversationId, historyGapId(gap))
-      return
-    }
-    const nearTop = isNearTop({ scrollOffset: el.scrollTop,
-      viewportHeight: el.clientHeight, contentHeight: el.scrollHeight })
-    if (nearTop) following.current = false
+    following.current = false
     rememberTop(el)
-    const host = connectedConversationHostNow(conversationId)
-    if (host !== null && threadRuntime.isThread(host, conversationId)) {
-      if (nearTop) threadRuntime.query('older', host)
-      return
-    }
-    requestOlderHistory(historyAskDeps, conversationId, nearTop)
+    if (isNearTop({ scrollOffset: el.scrollTop, viewportHeight: el.clientHeight, contentHeight: el.scrollHeight })) onOlder?.()
   }
 
   const readUpward = (el: HTMLDivElement): void => {
@@ -1364,40 +1174,6 @@ function MessageBubble({ message }: { message: Message }): JSX.Element {
   )
 }
 
-// #203: the structured-stream timeline view — the single thread surface since #179 retired the coarse
-// MessageThread. Pure props-in/markup-out (exported so tests server-render an injected ThreadItem[]
-// with no store, no IPC). Maps items → rows 1:1 in array order; the reducer already coalesced deltas
-// into the tail assistantText, so the view never merges. Carries both the user's echo (userText) and
-// the daemon's structured reply, so arrival order interleaves them into one continuous thread.
-//
-// Empty items → the pre-first-message empty state (#277), not null: a fresh thread now reads as a
-// purposeful invitation rather than a blank gap between the top bar and the composer. EmptyThread is a
-// distinct surface from the thread scroll region, so an empty timeline never renders a thread container.
-// #601: `scrollPin` carries the container's two DOM handles for the scroll region — the node ref and the
-// scroll handler. OPTIONAL so the 30 existing `<Timeline` render sites pass nothing, get `undefined` for
-// both attributes (legal no-ops under renderToStaticMarkup) and stay green untouched — the same
-// no-edit-cascade reason #286's since-removed `now` prop was optional. Timeline itself stays pure
-// props-in / markup-out — it holds no scroll state and reads no layout; both handles are written out
-// explicitly below rather than spread, so the both-or-neither wiring is visible in the markup.
-// #690 removed `now`: the sessionBoundary row was its only consumer and that row no longer draws a
-// relative time, so this subtree is once again a pure function of `items` with no clock in it at all.
-//
-// #1214: `queued` and `onDropQueued` FOLD THE DAEMON'S BACKLOG INTO THIS LIST. A message sent while claude
-// is working used to draw twice — the composer's unconditional optimistic echo here, and a second,
-// near-identical row in the `.conversation__queued` region below the thread, which this ticket deletes.
-// `foldQueuedRows` joins the two on #1213's `message_id` correlation and yields one row per message; the
-// contract, including what an unmatched item does, lives on that function and is not restated here.
-//
-// BOTH ARE OPTIONAL, for exactly the reason `scrollPin` above already records: a required prop is a
-// 72-site edit cascade in ConversationScreen.test.tsx alone, seven times the size table's call-site
-// ceiling. Absent `queued` folds against an empty backlog and yields today's rows byte-for-byte, so every
-// existing render site stays green untouched. `onDropQueued` is optional on the same terms and is what a
-// row's drop control calls; a render that supplies queued rows without it draws them undroppable rather
-// than throwing, which is the honest degradation for a view whose container owns the conversation id.
-//
-// Timeline is still pure props-in / markup-out: the fold is a pure function of content, snapshots and local facts, evaluated
-// during render, holding no state between renders. That is what makes a replacement snapshot free (see
-// foldQueuedRows) and what keeps this subtree server-renderable with no store and no bridge.
 export function SavedTimelineNotice({ status }: {
   status: 'loading' | 'loaded' | 'failed'
 }): JSX.Element {
@@ -1405,266 +1181,6 @@ export function SavedTimelineNotice({ status }: {
     : status === 'loading' ? 'Loading saved messages…'
       : 'Offline. Showing saved messages.'
   return <p className="conversation__banner" role="status">{text}</p>
-}
-
-export function Timeline({
-  items,
-  backgroundAgents,
-  rowKeys,
-  rowArrivalOrder,
-  localEchoes,
-  foldTools = false,
-  scrollPin,
-  queued,
-  onDropQueued,
-  midTurnInput = false,
-  onSendQueuedNow,
-  firstRowKey = 0,
-  gapState, onRetryGap,
-  olderSaved = false,
-  saved = false,
-  onOpenMarkdownPath,
-  agent,
-  trailing,
-  onReply,
-  onOpenHostedApp
-}: {
-  trailing?: ReactNode
-  gapState?: Pick<ConversationSlice, 'gaps' | 'display' | 'history'>
-  onRetryGap?: (failure: Extract<HistoryRequestState, { status: 'failed' }>) => void
-  items: readonly ThreadItem[]
-  backgroundAgents?: ReadonlyMap<string, BackgroundAgentTimeline>
-  rowKeys?: TimelineState['rowKeys']
-  rowArrivalOrder?: TimelineState['rowArrivalOrder']
-  localEchoes?: TimelineState['localEchoes']
-  /** Presentation only; absent or false retains ordinary tool rows. */
-  foldTools?: boolean
-  scrollPin?: ThreadScrollPin
-  queued?: readonly QueuedItem[]
-  onDropQueued?: (queuedMsgId: number, messageId: string | undefined) => void
-  /** #1726: the session's `mid_turn_input` reading — a queued row draws Send now only when true. Optional
-   *  and defaulting to false for `queued`'s reason, so every existing render site is byte-identical. */
-  midTurnInput?: boolean
-  /** #1726: what Send now calls; absent draws it disabled, exactly as `onDropQueued` does the drop. */
-  onSendQueuedNow?: (queuedMsgId: number) => void
-  /** #1260: the key the FIRST item row gets; each row after it counts up from there. Optional and
-   *  defaulting to 0, for `scrollPin`'s and `queued`'s reason — the existing render sites pass nothing
-   *  and get today's keys byte-for-byte. See the row map below for what a caller passes and why. */
-  firstRowKey?: number
-  olderSaved?: boolean
-  saved?: boolean
-  /** #1627: opens the in-app reader for a markdown link in a settled assistant reply. Optional for the
-   *  `onDropQueued` reason: absent, such a link keeps its plain-text rendering. */
-  onOpenMarkdownPath?: (path: string) => void
-  onOpenHostedApp?: (serverId: string, appId: string) => void
-  /** #1656: the open conversation's agent, named by the banner and stopped-turn rows. Optional for the
-   *  `scrollPin` reason: absent reads Claude, so the existing render sites stay byte-identical. */
-  agent?: WireAgent
-  onReply?: (role: 'user' | 'assistant', text: string) => void
-}): JSX.Element {
-  const ordinaryRows = foldQueuedRows(items, queued ?? EMPTY_QUEUED, localEchoes, rowKeys)
-  const projectedItems = withProvisionalAgents(ordinaryRows.map(row => row.item), backgroundAgents)
-  const rows = [...ordinaryRows, ...projectedItems.slice(ordinaryRows.length).map(item => ({ item, itemIndex: -1, queued: null }))]
-  const provisionalIndices = new Set(rows.map((_, index) => index).slice(ordinaryRows.length))
-  // Stats use source item indices; projection may move waiting echoes.
-  const turnStats = turnStatsByItemIndex(items)
-  // #1872: the open main thread bubble streams even when a subagent's tool calls trail it.
-  const openBubble = openBubbleIndex(items)
-  const [expandedTools, setExpandedTools] = useState<ReadonlySet<number | string>>(() => new Set())
-  const toggleTool = useCallback((key: number | string): void => {
-    setExpandedTools(previous => {
-      const next = new Set(previous)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
-  }, [])
-  const [expandedRuns, setExpandedRuns] = useState<ReadonlySet<number | string>>(() => new Set())
-  const agentNodes = useRef(new Map<number | string, HTMLDivElement>())
-  const agentKeys = useRef(new Map<number, number | string>())
-  const [revealAgent, setRevealAgent] = useState<{ key: number | string } | null>(null)
-  useEffect(() => {
-    if (revealAgent === null) return
-    agentNodes.current.get(revealAgent.key)?.scrollIntoView({ block: 'center' })
-    setRevealAgent(null)
-  }, [revealAgent])
-  const projection = groupToolRows(rows.map((row) => row.item), backgroundAgents,
-    rows.map(row => {
-      const key = rowKeys?.[row.itemIndex] ?? firstRowKey + row.itemIndex
-      return row.itemIndex === -1 ? Infinity : rowArrivalOrder?.get(key) ?? key
-    }), -firstRowKey, provisionalIndices,
-    rows.map(row => rowKeys?.[row.itemIndex] ?? firstRowKey + row.itemIndex))
-  const identities = new Map<string, number>()
-  for (const entry of backgroundAgents?.values() ?? []) {
-    if (entry.confirmed && entry.identity !== undefined && !identities.has(entry.toolCallId)) identities.set(entry.toolCallId, entry.identity)
-  }
-  const rowKeyAt = (index: number): number | string => {
-    const row = rows[index]
-    const ordinaryKey = rowKeys?.[row?.itemIndex ?? index] ?? firstRowKey + (row?.itemIndex ?? index)
-    const identity = row?.item.kind === 'toolCall' && row.item.name === 'Agent' ? identities.get(row.item.toolUseId) : undefined
-    if (identity === undefined) return ordinaryKey
-    const previous = agentKeys.current.get(identity)
-    if (previous !== undefined) return previous
-    const key = provisionalIndices.has(index) ? `agent-${identity}` : ordinaryKey
-    agentKeys.current.set(identity, key)
-    return key
-  }
-  const drawn = projection.filter((group) => {
-    const item = rows[group.index]?.item
-    return !(foldTools && item?.kind === 'banner' && item.level === 'info') &&
-      (item?.kind !== 'turnBoundary' || stoppedTurnText(item) !== null)
-  })
-  const runs = foldTools ? foldToolRuns(rows.map((row) => row.item), drawn) : []
-  const runByMember = new Map(runs.flatMap((run) => run.members.map((index) => [index, run] as const)))
-  const runByStart = new Map(runs.map((run) => [run.index, run]))
-  const runIsExpanded = (run: ToolRun) => run.members.some((index) => expandedRuns.has(rowKeyAt(index)))
-  const expandedRunStarts = new Set(runs.filter(runIsExpanded).map((run) => run.index))
-  const hiddenRows = new Set(projection.filter((group) => {
-    if (group.marker) return false
-    const run = runByMember.get(group.index)
-    return group.ancestors.some((index) => {
-      const ancestorRun = runByMember.get(index)
-      return !expandedTools.has(rowKeyAt(index)) ||
-        (ancestorRun !== undefined && !expandedRunStarts.has(ancestorRun.index))
-    }) || (run !== undefined && !expandedRunStarts.has(run.index))
-  }).map((group) => group.index))
-  // Hidden descendants stay mounted; undrawn rows are skipped when joining tool rows.
-  const visible = drawn.filter((group) => group.marker || !hiddenRows.has(group.index))
-  const joins = new Map(visible.map((group, index) => {
-    const previous = visible[index - 1]
-    const next = visible[index + 1]
-    const above = previous?.depth === group.depth ? rows[previous.index]?.item : undefined
-    const below = next?.depth === group.depth ? rows[next.index]?.item : undefined
-    return [group.index, [
-      (!previous?.marker && above?.kind === 'toolCall' || runByStart.has(group.index)) && 'tool-group-row--joined-above',
-      !next?.marker && below?.kind === 'toolCall' && 'tool-group-row--joined-below'
-    ].filter(Boolean).join(' ')]
-  }))
-  const gapRows = new Map<number, ReactNode[]>()
-  const sourcePositions = new Map(rows.map((row, index) => [rowKeys?.[row.itemIndex] ?? firstRowKey + row.itemIndex, index]))
-  const displayed = (gapState?.display ?? []).flatMap(d => {
-    const index = d.rowKey === undefined ? undefined : sourcePositions.get(d.rowKey)
-    return index === undefined ? [] : [{ id: d.id, lastId: d.lastId ?? d.id, index }]
-  })
-  let lastPosition = -1
-  const earlierPositions = displayed.map(d => (lastPosition = Math.max(lastPosition, d.index)))
-  for (const gap of gapState?.gaps ?? []) {
-    // Binary search retained contributions; large IDs never size a walk or allocation.
-    let low = 0, high = displayed.length
-    while (low < high) {
-      const middle = Math.floor((low + high) / 2)
-      if (displayed[middle].lastId < gap.newerId) low = middle + 1
-      else high = middle
-    }
-    let index = displayed[low]?.index
-    if (index === undefined) {
-      low = 0; high = displayed.length
-      while (low < high) {
-        const middle = Math.floor((low + high) / 2)
-        if (displayed[middle].id <= (gap.olderId ?? -1)) low = middle + 1
-        else high = middle
-      }
-      index = low === 0 ? rows.length : earlierPositions[low - 1] + 1
-    }
-    const gapId = historyGapId(gap)
-    const projected = projection.find(group => group.index === index && !group.marker)
-    if (projected && hiddenRows.has(index)) index = projected.ancestors.find(ancestor => !hiddenRows.has(ancestor)) ?? runByMember.get(index)?.index ?? index
-    const failure = gapState?.history?.status === 'failed' && gapState.history.gapId === gapId ? gapState.history : null
-    const pending = gapState?.history?.status === 'requested' && gapState.history.gapId === gapId
-    const marker = <div key={`gap-${gapId}`} data-history-gap={gapId}>
-      {failure !== null ? <ComposerHistoryFailure retryable={failure.retryable && onRetryGap !== undefined}
-        onRetry={() => onRetryGap?.(failure)} /> :
-        <p className="conversation__banner" role={pending ? 'status' : undefined}>
-          {pending ? 'Loading earlier messages…' : 'Load earlier messages'}
-        </p>}
-    </div>
-    gapRows.set(index, [...(gapRows.get(index) ?? []), marker])
-  }
-  const renderGroup = (group: (typeof projection)[number]): ReactNode => {
-    const row = rows[group.index]
-    if (!row) return null
-    const key = rowKeyAt(group.index)
-    const hidden = !group.marker && hiddenRows.has(group.index)
-    if (group.marker && row.item.kind === 'toolCall') {
-      const launchId = row.item.toolUseId
-      const historicalDescription = [...(backgroundAgents?.values() ?? [])]
-        .find(entry => entry.historyOnly && entry.toolCallId === launchId)?.description
-      return (
-        <button key={`agent-marker${key}`} type="button" className="agent-start-marker"
-          onClick={() => setRevealAgent({ key })}>
-          <span className={`conversation-status-dot ${group.running ? 'agent-start-marker__running' : 'agent-start-marker__finished'}`} aria-hidden="true" />
-          <span className="agent-start-marker__state">{group.running ? 'Agent started, still working' : 'Agent finished'}</span>
-          <span aria-hidden="true">·</span>
-          <span className="agent-start-marker__description">{(historicalDescription ?? toolHeadlineRuns(row.item).subject ?? '').slice(0, 4096)}</span>
-          <span className="agent-start-marker__action">Go to agent ↓</span>
-        </button>
-      )
-    }
-    if (row.item.kind !== 'toolCall') {
-      const rowKey = row.itemIndex !== -1 ? key : `q${row.queued?.queuedMsgId ?? group.index}`
-      const content = <TimelineRow key={rowKey}
-        item={row.item} readRowKey={typeof rowKey === 'number' ? rowKey : undefined} delivery={localEchoes?.find(e => e.rowKey === rowKeys?.[row.itemIndex])?.delivery} queued={row.queued} onDropQueued={onDropQueued} turnStats={turnStats.get(row.itemIndex)}
-        midTurnInput={midTurnInput} onSendQueuedNow={onSendQueuedNow}
-        onOpenMarkdownPath={onOpenMarkdownPath} agent={agent}
-        onOpenHostedApp={onOpenHostedApp}
-        onReply={onReply}
-        inProgress={!saved && row.item.kind === 'assistantText' &&
-          (row.itemIndex === items.length - 1 || (row.itemIndex === openBubble && !row.item.parentToolUseId))} />
-      // Keep attributed text mounted through collapse and late-owner history regrouping.
-      if (row.item.kind === 'assistantText' && row.item.parentToolUseId) return (
-        <div key={rowKey} className={`tool-group-row tool-group-row--depth-${group.depth}`} hidden={hidden}>
-          {content}
-        </div>
-      )
-      return content
-    }
-    const content = (
-      <TimelineToolRow
-        item={row.item}
-        rowKey={key}
-        count={group.hasChildren || group.background ? group.count : undefined}
-        background={group.background}
-        running={group.background ? group.running : !saved && group.running}
-        expanded={expandedTools.has(key)}
-        onToggle={toggleTool}
-      />
-    )
-    // Origin-relative identity survives history prepends and display regrouping. Keep hidden
-    // descendants mounted so their own result expansion survives an outer collapse.
-    const run = runByStart.get(group.index)
-    const expanded = expandedRunStarts.has(group.index)
-    return [
-      run && <div key={`run${key}`} className={`tool-group-row tool-run${expanded ? ' tool-group-row--joined-below' : ''}`}>
-        <ToolRunHeader run={run} expanded={expanded} onToggle={() => setExpandedRuns((previous) => {
-          const next = new Set(previous)
-          if (run.members.some((index) => previous.has(rowKeyAt(index)))) {
-            for (const index of run.members) next.delete(rowKeyAt(index))
-          } else next.add(key)
-          return next
-        })} />
-      </div>,
-      <div key={provisionalIndices.has(group.index) || row.itemIndex !== -1 ? key : `q${row.queued?.queuedMsgId ?? group.index}`}
-        ref={node => { if (node) agentNodes.current.set(key, node); else agentNodes.current.delete(key) }}
-        className={`tool-group-row tool-group-row--depth-${group.depth} ${joins.get(group.index) ?? ''}`} hidden={hidden}>
-        {content}
-      </div>
-    ]
-  }
-  return (
-    <div className="conversation__thread" ref={scrollPin?.ref} onScroll={scrollPin?.onScroll}
-      aria-label="Conversation history" tabIndex={0} onWheel={scrollPin?.onWheel} onKeyDown={scrollPin?.onKeyDown}>
-      {rows.length === 0 && !trailing && <EmptyThread />}
-      {olderSaved && <p className="conversation__banner">Older messages require a connection.</p>}
-      {projection.flatMap(group => {
-        const content = renderGroup(group)
-        // Keep rows and markers in one keyed sibling list across prepends and Agent regrouping.
-        return [...(!group.marker ? gapRows.get(group.index) ?? [] : []),
-          ...(Array.isArray(content) ? content : [content])]
-      })}
-      {gapRows.get(rows.length)}
-      {trailing}
-    </div>
-  )
 }
 
 type ThreadItemsProps = {
@@ -1684,7 +1200,7 @@ type ThreadItemsProps = {
   onReply?: (role: 'user' | 'assistant', text: string) => void
   onOpenMarkdownPath?: (path: string) => void
 }
-/** Explicit presentation seam; the ordinary app keeps selecting the legacy Timeline. */
+/** The authoritative item presentation used by the app and supplied-item fixtures. */
 export function ThreadItemsTimeline(props: ThreadItemsProps): JSX.Element {
   const s = props.snapshot
   return <ThreadItemsView key={JSON.stringify([s.hostId, s.conversationId, s.epoch])} {...props} />
@@ -1714,7 +1230,7 @@ function ThreadItemsView({ pin, snapshot, readInputs, sendInputs, taskInputs, tr
   }, [snapshot.hostId, snapshot.conversationId])
   // Completed older pages change the immutable item list without necessarily advancing the watermark.
   const visibleItems = useMemo(() => [...snapshot.items, ...pending], [snapshot.items, pending])
-  const localPin = useThreadScrollPin(snapshot.conversationId, 0, false, visibleItems, onOlder)
+  const localPin = useThreadScrollPin(snapshot.conversationId, visibleItems, onOlder)
   const scrollPin = pin?.scrollPin ?? localPin.scrollPin
   const paneRef = localPin.paneRef
   useReadObservation(null, false, pin?.paneRef ?? paneRef, scrollPin.ref, readInputs && { ...readInputs, snapshot })
@@ -1825,13 +1341,10 @@ function ThreadItemsView({ pin, snapshot, readInputs, sendInputs, taskInputs, tr
     {tasks.length > 0 && activeTaskCount === 0 && <button type="button" className="composer-status__tasks"
       aria-expanded={backgroundTasksOpen} onClick={() => onBackgroundTasksOpenChange?.(!backgroundTasksOpen)}>Background tasks</button>}
     </div>}
-    {backgroundTasksOpen && <BackgroundTaskPanelView entry={null} suppliedTasks={tasks} turnRunning={turnRunning} onClose={() => onBackgroundTasksOpenChange?.(false)}
+    {backgroundTasksOpen && <BackgroundTaskPanelView suppliedTasks={tasks} turnRunning={turnRunning} onClose={() => onBackgroundTasksOpenChange?.(false)}
       onStopTask={taskId => taskInputs?.onStopTask?.(snapshot.hostId, snapshot.conversationId, taskId)} />}
   </div></ThreadAttachmentScopeContext.Provider>
 }
-
-// The stable empty backlog for a `<Timeline>` render that passes none.
-const EMPTY_QUEUED: readonly QueuedItem[] = []
 
 // The accessible name on the message copy control — a CLIENT-OWNED constant, beside
 // DROP_QUEUED_LABEL's precedent below. Never interpolated with the message text: `Copy: ${text}` would
@@ -2013,8 +1526,7 @@ const DROP_QUEUED_LABEL = 'Drop queued message'
 // `queued !== null` means. Before this ticket "no delivered row can reach this button" was structural
 // (only QueuedBacklog rendered it); it is now a condition, so it is asserted directly in the renderer
 // spec rather than left to the shape of the file. The compensating structural guard is one level up:
-// foldQueuedRows marks `userText` items alone, so no daemon-authored row can acquire this control no
-// matter what a `queue_state` claims.
+// Only authoritative queued user items receive an actionable handle.
 function QueuedRowDrop({
   queued,
   onDropQueued
@@ -2102,9 +1614,9 @@ export function stoppedTurnText(item: {
 }
 
 // #1214: `queued` is the row's not-yet-run state, non-null exactly while the daemon reports this row's
-// message queued. Only the `userText` arm reads it — foldQueuedRows can mark no other kind — and the
+// message queued. Only the `userText` arm reads it, and the
 // whole visual difference is that arm's fork.
-const TimelineRow = memo(function TimelineRow({
+export const TimelineRow = memo(function TimelineRow({
   item,
   readRowKey,
   inProgress,
@@ -3742,15 +3254,6 @@ export function isTurnRunning(phase: TurnPhase): boolean {
 export function isStatusIconTurning(phase: TurnPhase, state: WorkingIndicatorState | null): boolean {
   return isTurnRunning(phase) || state === 'sending' || state === 'waiting'
 }
-
-// #1214 DELETED `QueuedBacklog` AND ITS `.conversation__queued` REGION. #294 drew the backlog as a
-// separate dimmed tail below the thread, which meant a message sent mid-turn was drawn twice — once as
-// the composer's optimistic echo in the timeline and once here. The rows are now folded into the thread
-// (foldQueuedRows → Timeline → TimelineRow's userText arm), so there is one row per message and the
-// "waiting" treatment is a modifier on that row rather than a container around a copy of it. Everything
-// this view owned survived the move: the queued thread role, the reused right-aligned user bubble, the
-// 50% bubble dimming and the drop control itself (QueuedRowDrop, above). The queued action column
-// now stays fully opaque beside that bubble. `DROP_QUEUED_LABEL` moved with the control.
 
 // A stable id tying the dialog's aria-labelledby to its title element.
 const STATUS_SHEET_TITLE_ID = 'status-sheet-title'

@@ -7,14 +7,17 @@ binding yet.
 
 ## Buffered replacements
 
-With optional `threads`, the writer observes changed owned daemon snapshots in the
-same queue, excluding the private hydration marker from saves. Removing a held
+The writer requires `threads` and `lists` and queues only `daemon-items` and `list`
+snapshots for `replaceThread` and `replaceList`. Lists require the matching host's
+`conversationsReceived` receipt; item snapshots carry their authoritative scope.
+The private hydration marker is excluded from saves. Removing a held
 thread discards its pending replacement; memory cleanup alone does not erase disk.
-Confirmed deletion discards both formats' pending replacements, suppresses later
+Confirmed deletion discards pending item replacements, suppresses later
 captures and invalidates the thread's reads/held state. Successful unpair clears
 every held thread for that host, including off-screen scopes and pending reads;
 failure resumes buffered work. `stop()` detaches this observer and awaits owned
-removal/flush work. Production composition supplies the runtime item store as
+removal/flush work. There is no legacy timeline observer or frame-flush dependency.
+Production composition supplies the runtime item store as
 `threads`; its protected restore and query ownership are described in the
 [thread runtime](thread-runtime.md#restore-recovery-and-cleanup). Local pending
 sends and session prompts are not durable cache content.
@@ -27,21 +30,27 @@ It also compares the final candidate with the last successful save: a burst that
 changes a saved value and then returns to it needs no replacement. Comparing only
 successive queued values misses that case.
 
-Detached pending snapshots survive navigation, host switches, disconnects and
-holder eviction with their original coordinates. Eviction drops observation and
-comparison metadata, never the pending save or the disk record. The eleventh
-received conversation can therefore evict the first before its timer runs without
-losing the first conversation's captured snapshot.
+Detached pending snapshots retain their original coordinates across navigation,
+host switches and disconnects. Removing an authoritative holder cancels its pending
+item replacement and comparison state, without deleting its disk record. A write
+already in flight remains ordered by the drain.
 
 Confirmed deletion shares this serial drain with replacements. It discards the
 exact conversation's buffered replacements, filters its entry from buffered host lists
 without reordering peers, and waits behind any already in-flight write. A per-host
-deleted-id set suppresses subsequent timeline/daemon-item captures and filters delayed list
+deleted-id set suppresses subsequent daemon-item captures and filters delayed list
 captures for the writer's lifetime, including retained holder mutations and shutdown.
 Stale captures therefore cannot overwrite the queued removal or recreate successfully
-removed records. Each removal attempt clears comparison state for that timeline and
+removed records. Each removal attempt clears comparison state for that item scope and
 host list; removal itself is not skipped by replacement deduplication. Successful
 unpair resets suppression for fresh same-server re-pairing.
+
+Removal entries use `[host, 'removeConversation', id]`, distinct from the item
+snapshot's `[host, 'daemon-items', id]` key. Confirmation cancels the snapshot key
+before queueing removal. Reusing that key would let a later holder clear cancel
+the queued disk deletion. Successful unpair also advances the host generation;
+completion of an older in-flight save may not restore its successful-comparison
+state. Otherwise fresh identical content after re-pairing could be suppressed.
 
 ## Protected collection
 
@@ -87,13 +96,8 @@ work or background pruning is involved.
 
 ## Window close and app quit
 
-The mounted `writer.stop()` first calls its injected `flushTimeline` while the
-per-fold observer remains attached, settling accepted deltas even when their frame
-has not run. Detaching first loses accepted text on window close. Repeated stops
-skip this settlement hook; injected writers without it keep their existing behavior.
-It then unsubscribes the list/timeline and optional thread observers, daemon events
-and host-removal notifications,
-waits for already-started host removals to settle, then cancels the timer and drains
+`writer.stop()` unsubscribes the required list and authoritative item observers,
+daemon events and host-removal notifications. It waits for already-started host removals to settle, then cancels the timer and drains
 buffered and in-flight replacements and confirmed conversation removals in order.
 Deletion suppression remains active throughout the flush. Unsubscribing alone
 could acknowledge close before failed
@@ -118,4 +122,3 @@ main handler and lifecycle listener. Reconnect adds no listeners.
 The guarantee covers graceful close/quit. Abrupt process termination cannot drain
 renderer buffers; atomic file replacement still protects the last complete
 collection. Flushing never adds a completion boundary to a partial answer.
-

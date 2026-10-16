@@ -1877,6 +1877,52 @@ describe('the local send window stages — Sending, then Waiting for Claude (#17
   })
 })
 
+describe('reduceTimeline — parent attribution', () => {
+  it('results resolve by own id and never erase a known parent or add an orphan', () => {
+    const opened = reduceTimeline(initialTimelineState, {
+      type: 'toolUse', turnId: 't', toolUseId: 'c', name: 'Read', inputSummary: '', parentToolUseId: 'p'
+    })
+    const resolved = reduceTimeline(opened, {
+      type: 'toolResult', turnId: 't', toolUseId: 'c', isError: false, resultSummary: 'done'
+    })
+    expect(resolved.items).toHaveLength(1)
+    expect(resolved.items[0]).toMatchObject({ toolUseId: 'c', parentToolUseId: 'p', result: { resultSummary: 'done' } })
+    expect(reduceTimeline(resolved, {
+      type: 'toolResult', turnId: 't', toolUseId: 'missing', parentToolUseId: 'p', isError: false, resultSummary: ''
+    })).toBe(resolved)
+  })
+
+  it('can learn a missing parent from a result without accepting a conflicting parent', () => {
+    const use: ThreadEvent = { type: 'toolUse', turnId: 't', toolUseId: 'c', name: 'Read', inputSummary: '' }
+    const result: ThreadEvent = {
+      type: 'toolResult', turnId: 't', toolUseId: 'c', parentToolUseId: 'p', isError: false, resultSummary: 'done'
+    }
+    expect(reduceTimeline(reduceTimeline(initialTimelineState, use), result).items[0])
+      .toMatchObject({ parentToolUseId: 'p', result: { resultSummary: 'done' } })
+    expect(reduceTimeline(reduceTimeline(initialTimelineState, { ...use, parentToolUseId: 'known' }), result).items[0])
+      .toMatchObject({ parentToolUseId: 'known', result: { resultSummary: 'done' } })
+  })
+
+  it('coalesces only adjacent deltas with equal parent and turn and preserves the first stamp', () => {
+    let state = initialTimelineState
+    let createdAt = 12
+    for (const [text, parentToolUseId, turnId] of [
+      ['main', undefined, 't'], ['a', 'a', 't'], [' grows', 'a', 't'],
+      ['b', 'b', 't'], ['main', undefined, 't'], [' grows', undefined, 't'],
+      ['new turn', 'a', 'next']
+    ] as const) state = reduceTimeline(state, {
+      type: 'assistantDelta', turnId, seq: 0, text, parentToolUseId, createdAt: createdAt++
+    })
+    expect(state.items).toEqual([
+      { kind: 'assistantText', turnId: 't', text: 'main', parentToolUseId: undefined, createdAt: 12 },
+      { kind: 'assistantText', turnId: 't', text: 'a grows', parentToolUseId: 'a', createdAt: 13 },
+      { kind: 'assistantText', turnId: 't', text: 'b', parentToolUseId: 'b', createdAt: 15 },
+      { kind: 'assistantText', turnId: 't', text: 'main grows', parentToolUseId: undefined, createdAt: 16 },
+      { kind: 'assistantText', turnId: 'next', text: 'new turn', parentToolUseId: 'a', createdAt: 18 }
+    ])
+  })
+})
+
 describe('session error transient notice', () => {
   const error = (code = 'session.blocked'): ThreadEvent => ({ type: 'sessionError', code })
   const pending = reduceTimeline(initialTimelineState, { type: 'userText', text: 'kept', messageId: 'm1' })

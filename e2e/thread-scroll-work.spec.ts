@@ -152,8 +152,18 @@ test('gaps, long hidden runs and target changes preserve a valid anchor and clea
     if (decodeEnvelope(inbound).type === 'list_conversations') return [seedConversationsFrame()]
     return []
   } }, { onLaunched: async app => instrument(await app.firstWindow()) })
+  const feedStarted = Date.now()
   for (let i = 0; i < 100; i++) { daemon.pushFrame(delta(`row-${i}`, 0, `History row ${i}`)); daemon.pushFrame(end(`row-${i}`)) }
-  await expect(page.locator('[data-thread-role="assistant"]').last()).toContainText('History row 99')
+  const assistants = page.locator('[data-thread-role="assistant"]')
+  // Sending is not receipt. Observe every committed row before mutating geometry;
+  // keep the bounded-work counters disabled throughout this initial feed.
+  await expect(assistants.locator('.bubble__markdown')).toHaveText(
+    Array.from({ length: 100 }, (_, i) => `History row ${i}`), { timeout: 15_000 })
+  await expect(assistants.locator('.bubble__cursor')).toHaveCount(0)
+  const rendered = await assistants.locator('.bubble__markdown').allTextContents()
+  await test.info().attach('feed-readiness', { body: JSON.stringify({
+    elapsedMs: Date.now() - feedStarted, count: rendered.length, tail: rendered.at(-1)
+  }), contentType: 'application/json' })
   await settle(page)
   // DOM-only adversarial geometry: flex gaps have positive height, hidden rectangles
   // reset to viewport zero. Neither may become the remembered row.

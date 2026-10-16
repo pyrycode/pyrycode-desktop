@@ -5,7 +5,6 @@ import { reduceTimeline, initialTimelineState, type ThreadEvent, type TimelineSt
 import { createConversationTimelineStore, selectTimelineFor } from './conversationTimelineStore'
 import { isConversationUnread } from './conversationUnread'
 import { reduceHistoryPage } from './historyPageBridge'
-import { foldQueuedRows } from '../screens/conversation/foldQueuedRows'
 
 const receipt = (messageId = 'phone-1', conversationId = 'background', daemonTs?: string): DaemonEvent => ({
   type: 'messageReceived', daemonTs,
@@ -108,10 +107,6 @@ describe('live user receipts', () => {
     store.getState().dispatchFor('background', translated())
     expect(selectTimelineFor('background')(store.getState())?.items[0]).toBe(row)
     const items = selectTimelineFor('background')(store.getState())?.items ?? []
-    const folded = foldQueuedRows(items, [{ queued_msg_id: 1, message_id: 'phone-1', text: 'Daemon version', ts: '' }], selectTimelineFor('background')(store.getState())?.localEchoes)
-    expect(folded).toHaveLength(1)
-    expect(folded[0].item).toBe(row)
-    expect(folded[0].queued?.messageId).toBe('phone-1')
     const entry: HistoryTimelineEntry = { id: 1, ts: '2026-01-13T13:55:00Z', event: {
       type: 'messageReceived', message: { message_id: 'phone-1', role: 'user', text: 'History version' }
     } }

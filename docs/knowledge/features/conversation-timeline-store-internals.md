@@ -26,20 +26,12 @@ synchronous/no-op behavior. `onBeforeTimelineMutation` flushes pending deliverie
 before an unbatched action's injected read as well as its setter. Flushing only at
 the setter would let `beginLocalTimelineRead` replace a slice based on stale state.
 
-`subscribeTimelineWrites` observes each changed staged fold, carrying its explicit
-arrival host, and ordinary unbatched publications. It excludes the batch's final
-rendering publication. The mounted `createChatHistoryWriter` selects this channel;
-injected writers without it retain their ordinary subscription fallback. Observing
-only the final state loses intermediate equal-conversation-id host replacements;
-consulting the receipt then loses ownership because preload receipts last only
-through delivery. Explicit null cannot borrow a subsequent boundary's receipt.
-
-The writer's mounted `flushTimeline` hook settles accepted deliveries on the first
-`stop` while its per-fold observer is still attached. It then detaches observers,
-awaits pending removals and the existing storage drain, and resolves before preload
-acknowledges window-close shutdown. Repeated stops do not flush newly arriving
-work. Without the optional hook, injected writers keep their synchronous behavior.
-See [protected history](chat-history.md#protected-row-identities-and-saving).
+`subscribeTimelineWrites` remains a producer primitive for observing changed
+staged folds with captured arrival hosts, excluding the final batch publication.
+The protected-history writer no longer subscribes to it or to ordinary legacy
+publications. Its shutdown path also has no `flushTimeline` dependency; it drains
+received lists and authoritative item snapshots. Direct frame/bridge tests remain.
+See [protected history](chat-history.md#received-state-admission-and-ownership).
 
 ## The translator + binding (`src/renderer/src/store/timelineBridge.ts`)
 
@@ -242,15 +234,15 @@ hole silently.
 
 `timelineFrames.test.ts` injects a deterministic scheduler to cover publication
 counts, first-frame delivery, per-event sidecars/grouping, interleaved hosts,
-history joins, ordering and stale callbacks. Writer cases restore detached durable
-fragments and stop with/without a saved prefix before releasing the frame.
+history joins, ordering and stale callbacks. Exclusive legacy frame-persistence
+cases were removed with the history writer branch; producer assertions remain.
 
 Controlled-clock browser tests must observe daemon delivery before releasing the
 next animation frame; waiting for rendered delta text while the clock is paused
 deadlocks. Keep the history writer's 200ms save buffered when testing removal.
-For close coverage, hold the frame throughout real BrowserWindow shutdown:
-releasing it first cannot detect loss of accepted deltas. Protected-snapshot
-seeding must follow the opening page's buffered save or shutdown can overwrite it.
+Protected-snapshot seeding must follow the opening page's buffered save or
+shutdown can overwrite it. Authoritative shutdown/restart coverage belongs to
+the [history cache tests](chat-history-testing.md#recording-and-removal).
 
 The mounted burst case counts rendered Timeline fibers from before twelve
 separate-task deliveries with increasing durable ids: zero commits before release,
@@ -392,8 +384,9 @@ emitting the request-correlated page. Empty/all-skipped pages retain exact ids,
 opaque cursor and `atStart` without implying an empty conversation. Row counts
 and high-water alone cannot prove coverage. `recordHistoryPage` deduplicates exact
 receipts and expires oldest whole receipts to bound both count and aggregate ids
-at 100,000, rebuilding exact coverage/highest id before writer capture. An oversized
-page clears served provenance while still settling the pager and allowing saves.
+at 100,000, rebuilding exact coverage/highest id in the retained legacy store.
+An oversized page clears served provenance while still settling the pager.
+These mutations no longer schedule renderer history saves.
 
 The legacy row-only bridge can suppress a fully covered nonempty page. The mounted
 bridge passes typed entries to contribution admission even for such pages:
@@ -653,15 +646,13 @@ the terminal and assert immutable evidence and roster/turn-state isolation. Brow
 [verification](conversation-shell-tool-row-header-groups.md#verification) supplies
 interaction and reader-position evidence that static renderer units cannot produce.
 
-`readSavedTimeline` snapshots contain no task frames; Agent reconstruction remains
-memory-only from daemon pages. Protected snapshots retain display contributions,
-served receipts and client row keys/allocation, including reserved placement boundaries, through
-[restoration](chat-history.md#protected-row-identities-and-saving). Persisting an
-allocator does not persist lifecycle or live state. Automatic newest-page requests
-remain with [#1815](https://github.com/pyrycode/pyrycode-desktop/issues/1815).
-Restoration and reconciliation create no download demand. Protected known-gap
-metadata restores markers and resume positions for fresh reader input; lifecycle
-Agent evidence itself establishes no served-id gap. See [the opening ask](#the-opening-ask-1259).
+Legacy saved timelines contain no task frames; retained Agent reconstruction
+from raw daemon pages is memory-only. Their shared format still admits display
+contributions, receipts and row allocation, but production `readSavedTimeline`
+requests only daemon items and does not hydrate this legacy holder. See
+[the runtime restore contract](chat-history.md#received-state-admission-and-ownership).
+Legacy reconciliation itself creates no download demand; lifecycle Agent evidence
+establishes no served-id gap. See [the opening ask](#the-opening-ask-1259).
 
 ### Error handling — every row fails open
 

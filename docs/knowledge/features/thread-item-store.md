@@ -149,12 +149,18 @@ uses `threadHistoryCodec.page` admission before constructing the resident snapsh
 complete snapshot membership is not inferred from it. Production opening requests
 200 shown identities plus active/dependency closure. Optional `availabilityStart`
 retains availability ownership outside selected ranges; continuation and the sparse
-id-to-arrival-position map stay in separate slice `residency`. They confer no
-progress or write authority. User-driven older saved-page traversal remains #2042.
+id-to-arrival-position map stay in separate slice `residency`. Its separate
+`traversal` is undefined before the first newest held-page read, a string for the
+next before-page token, and null when that pass is exhausted. Opening's continuation
+alone cannot enumerate hidden items omitted inside/after its shown window, and an
+old active dependency cannot stand in for visited content. These values confer no
+progress or write authority.
 
-`beginLocalRead(hostId, conversationId)` provides the narrowly scoped disk hydration
-seam. A held scope returns null; an absent one receives a one-shot `complete`,
-`fail`, `cancel` handle owned by a private process-local token. Initial epoch
+`beginLocalRead(hostId, conversationId, heldPage = false)` provides the narrowly
+scoped disk hydration seam. Default opening refuses a held scope. Explicit
+`heldPage = true` requires a held scope and refuses another pending read; it permits
+repeatable hydration without rotating the slice generation. The one-shot `complete`,
+`fail`, `cancel` handle belongs to a private process-local token. Initial epoch
 admission and same-owner publication preserve that token. While the read is pending,
 a full live addition can establish the first epoch; a patch cannot supply its missing
 base. Cancellation, a superseding read, explicit reset (even with the same epoch
@@ -175,8 +181,21 @@ numeric ties and unordered items remain stable across revision changes. Timestam
 never order items. Kind conflicts keep the admitted item and require repair;
 a different saved epoch cannot replace the admitted epoch.
 
+Held-page completion merges against the current resident snapshot, including facts
+admitted before the read started. It unions the page's sparse arrival positions with
+the resident map before deriving numeric placement and first-arrival ties; opening
+closure can precede content that has not yet been visited. Higher compatible full
+revisions win, admitted facts win ties, and whole-item replacement preserves optional
+field clears. Hidden/unordered facts and overlapping dependencies stay unique by id.
+An exact admitted live winner also retains its append companion through hydration.
+Resident metadata, repair, checkpoint, unfinished progress and availability boundary
+remain authoritative; only supplied saved ranges are unioned. An old page cannot
+roll back newer progress or certify the holes between fragmented ranges. The next
+opaque token may fail after a concurrent write; that failure retains admitted content
+and requires explicit retry without automatic recovery (#2064).
+
 The pending token records received progress observations, not item payload history.
-Hydration folds their exact completion intervals, ranges and boundary readings over
+Opening restoration folds their exact completion intervals, ranges and boundary readings over
 saved metadata using the [owned-mutation rules](../decisions/0014-authenticated-owned-thread-mutations.md).
 Saved checkpoint, applied/unfinished progress, repair and intact ranges survive
 unless admitted completion actually covers the obligation. A higher live scalar
@@ -365,8 +384,8 @@ The [thread runtime](thread-runtime.md) supplies production subscriptions and ma
 query state, older demand and retry into the existing conversation controls.
 Production navigation opens this coordinator for both existing and newly created
 chats. Legacy newest-history demand and history recovery callers are unhooked.
-[#1931](https://github.com/pyrycode/pyrycode-desktop/issues/1931) owns bounded local
-paging over this network-demand contract.
+The runtime's [independent saved traversal](thread-runtime.md#independent-saved-traversal)
+uses this network-demand contract without giving the coordinator disk-read ownership.
 
 ### Reply certification and recovery
 
@@ -412,6 +431,13 @@ Repeated demand during an active page does not queue a duplicate page. Dispatch
 uses exclusive `before_order` at the lower boundary of the newest continuous
 certified range (`ranges.at(-1).start`); an earlier disjoint range cannot bridge the
 gap. Without a certified boundary no page is sent.
+
+The runtime consumes saved held pages before adding new older network demand,
+independently of pending/failed network state. Hydrating `[100,200)` alongside
+`[900,1000)` leaves the next network `before_order` at 900. Short/empty local pages
+and null local continuation add no certificate, advance no checkpoint, clear no
+repair and do not overwrite older availability. Local exhaustion is separate from
+daemon exhaustion, resident display and read acknowledgement; hydration emits no save.
 
 A page marker must have `upper_order === before_order` and numeric
 `continuation === lower_order`. Commit only supplied `[lower_order, upper_order)`;

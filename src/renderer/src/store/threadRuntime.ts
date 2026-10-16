@@ -45,9 +45,10 @@ export function createThreadRuntime(deps: {
     /** Hosts whose current connection completed an accepted `thread` handshake. */
     liveRevision: number; linked: ReadonlySet<string>; saved: ReadonlySet<string>
     queries: ReadonlyMap<string, ThreadQueryState>
+    localQueries: ReadonlyMap<string, ThreadQueryState>
     complete: ReadonlyMap<string, { epoch: string; version: number }>
     restoring: ReadonlySet<string>
-  }>(() => ({ liveRevision: 0, linked: new Set(), saved: new Set(), queries: new Map(), complete: new Map(), restoring: new Set() }))
+  }>(() => ({ liveRevision: 0, linked: new Set(), saved: new Set(), queries: new Map(), localQueries: new Map(), complete: new Map(), restoring: new Set() }))
   const lives = new Map<string, ReturnType<typeof createThreadLiveState>>()
   const isLinked = (host: string): boolean => state.getState().linked.has(host)
   const setLinked = (host: string, linked: boolean): void => {
@@ -56,7 +57,40 @@ export function createThreadRuntime(deps: {
   }
   let disposed = false
   let held: StampedDaemonEvent[] = [], frameHandle: number | undefined
-  let selected: { host: string; chat: string; generation: symbol; cancel?: () => void; configurationRefreshSession?: string } | undefined
+  let selected: { host: string; chat: string; generation: symbol; cancel?: () => void; configurationRefreshSession?: string;
+    local?: { generation: symbol; cancel: () => void } } | undefined
+  function localState(host: string, chat: string, value: ThreadQueryState): void {
+    state.setState(s => ({ localQueries: new Map(s.localQueries).set(key(host, chat), value) }))
+  }
+  function cancelLocal(): void {
+    if (!selected) return
+    selected.local?.cancel(); selected.local = undefined
+    localState(selected.host, selected.chat, { type: 'idle' })
+  }
+  function demandLocal(type: 'older' | 'retry', host: string): boolean {
+    const target = selected
+    if (disposed || !target || target.host !== host) return false
+    const slice = items.getState().hosts.get(host)?.get(target.chat)
+    const status = state.getState().localQueries.get(key(host, target.chat))
+    if (target.local || state.getState().restoring.has(key(host, target.chat))) return false
+    if (type === 'retry' && status?.type !== 'failed') { query.input({ type, serverId: host }); return isLinked(host) }
+    if (status?.type === 'failed' && type !== 'retry') return false
+    if (!slice?.residency || slice.residency.traversal === null) { query.input({ type, serverId: host }); return isLinked(host) }
+    const continuation = slice.residency.traversal
+    const read = readSavedTimeline({ threads: items, read: deps.read, log: deps.log }, host, target.chat,
+      continuation === undefined ? { operation: 'newestThreadPage' } : { operation: 'beforeThreadPage', continuation })
+    const job = { generation: slice.generation, cancel: read.cancel }
+    target.local = job; localState(host, target.chat, { type: 'loading', purpose: 'older' })
+    // Selection and store lifecycle jointly own both admission and failure presentation.
+    void read.done.then(code => {
+      if (disposed || selected !== target || target.local !== job ||
+        items.getState().hosts.get(host)?.get(target.chat)?.generation !== job.generation) return
+      target.local = undefined
+      localState(host, target.chat, code === 'stored' || code === undefined ? { type: 'idle' }
+        : { type: 'failed', purpose: 'older', reason: code, retryable: true })
+    })
+    return true
+  }
   // There is no legacy route: any selected host and conversation draws through the item view.
   const isThread = (host: string | null, chat: string | null): boolean => host !== null && chat !== null
   const live = (host: string, chat: string) => {
@@ -113,6 +147,8 @@ export function createThreadRuntime(deps: {
     sync()
   }
   const offItems = items.subscribe(() => {
+    if (selected?.local && items.getState().hosts.get(selected.host)?.get(selected.chat)?.generation !== selected.local.generation)
+      cancelLocal()
     for (const [host, chats] of items.getState().hosts) for (const chat of chats.keys()) {
       const snapshot = items.getState().snapshot(host, chat)
       if (!snapshot || !isThread(host, chat)) continue
@@ -129,19 +165,20 @@ export function createThreadRuntime(deps: {
     if (offer) refusals.getState().observe(offer)
   }
   function remove(host: string, chat: string): void {
-    if (selected?.host === host && selected.chat === chat) { selected.cancel?.(); selected = undefined; query.cancelHost(host) }
+    if (selected?.host === host && selected.chat === chat) { cancelLocal(); selected.cancel?.(); selected = undefined; query.cancelHost(host) }
     items.getState().deleteConversation(host, chat); sends.getState().deleteConversation(host, chat); refusals.getState().remove(host, chat); taskStops.getState().remove(host, chat)
     lives.get(key(host, chat))?.getState().dispatch({ type: 'dispose' }); lives.delete(key(host, chat))
     conversationReadRouteStore.getState().select(host, chat, null)
     state.setState(s => {
-      const complete = new Map(s.complete), saved = new Set(s.saved), queries = new Map(s.queries), restoring = new Set(s.restoring)
+      const complete = new Map(s.complete), saved = new Set(s.saved), queries = new Map(s.queries), restoring = new Set(s.restoring), localQueries = new Map(s.localQueries)
       complete.delete(key(host, chat)); saved.delete(key(host, chat)); queries.delete(key(host, chat))
       restoring.delete(key(host, chat))
-      return { complete, saved, queries, restoring }
+      localQueries.delete(key(host, chat))
+      return { complete, saved, queries, restoring, localQueries }
     })
   }
   function removeHost(host: string): void {
-    if (selected?.host === host) { selected.cancel?.(); selected = undefined }
+    if (selected?.host === host) { cancelLocal(); selected.cancel?.(); selected = undefined }
     query.cancelHost(host)
     const prefix = '[' + JSON.stringify(host) + ','
     for (const [id, store] of lives) if (id.startsWith(prefix)) {
@@ -154,6 +191,7 @@ export function createThreadRuntime(deps: {
       return { linked, saved: new Set([...s.saved].filter(id => !id.startsWith(prefix))),
         restoring: new Set([...s.restoring].filter(id => !id.startsWith(prefix))),
         queries: new Map([...s.queries].filter(([id]) => !id.startsWith(prefix))),
+        localQueries: new Map([...s.localQueries].filter(([id]) => !id.startsWith(prefix))),
         complete: new Map([...s.complete].filter(([id]) => !id.startsWith(prefix))) }
     })
   }
@@ -185,17 +223,19 @@ export function createThreadRuntime(deps: {
       observeReports(host, row.id)
     },
     open(host: string, chat: string) {
+      cancelLocal()
       selected?.cancel?.()
       if (selected) query.input({ type: 'sync', serverId: selected.host, conversationId: null, connected: isLinked(selected.host) })
       const target: NonNullable<typeof selected> = { host, chat, generation: Symbol() }
       selected = target
       return { done: restore(target), cancel() {
         if (selected !== target) return
+        cancelLocal()
         target.cancel?.(); selected = undefined
         query.input({ type: 'sync', serverId: host, conversationId: null, connected: isLinked(host) })
       } }
     },
-    query: (type: 'older' | 'retry', serverId: string) => query.input({ type, serverId }),
+    query: demandLocal,
     event(event: StampedDaemonEvent) {
       if (disposed || event.serverId === null) return
       if (deps.frame && event.type === 'threadUpdate' && event.update.type === 'thread_text_append') {
@@ -213,6 +253,7 @@ export function createThreadRuntime(deps: {
     },
     suspend() {
       flush()
+      cancelLocal()
       selected?.cancel?.(); selected = undefined
       for (const host of state.getState().linked) query.cancelHost(host)
       state.setState({ linked: new Set() })
@@ -222,13 +263,14 @@ export function createThreadRuntime(deps: {
       }
     },
     dispose() {
+      cancelLocal()
       disposed = true
       if (frameHandle !== undefined) deps.frame?.cancel(frameHandle)
       frameHandle = undefined; held = []
       selected?.cancel?.(); selected = undefined; query.dispose(); offItems(); offRemoval()
       for (const [host, chats] of items.getState().hosts) for (const chat of chats.keys()) conversationReadRouteStore.getState().select(host, chat, null)
       for (const store of lives.values()) store.getState().dispatch({ type: 'dispose' })
-      lives.clear(); state.setState({ linked: new Set() }); items.getState().clearAll(); sends.getState().dispose()
+      lives.clear(); state.setState({ linked: new Set(), localQueries: new Map() }); items.getState().clearAll(); sends.getState().dispose()
     }
   }
   function flush(): void {

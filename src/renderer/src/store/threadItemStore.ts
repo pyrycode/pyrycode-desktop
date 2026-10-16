@@ -19,7 +19,7 @@ export type ThreadApplyResult =
   | { type: 'repair'; hostId: string; conversationId: string; epoch: string; throughVersion: number;
       reason: 'missing' | 'base' | 'incompatible' | 'kind' | 'coverage' }
 type Slice = { appendCompanion?: { id: number; rev: number; version: number }; snapshot: ThreadSnapshot; restored?: ThreadSnapshot; owned?: OwnedThreadChanges; generation: symbol; uncommittedVersion: number; byId: ReadonlyMap<number, HeldItem>;
-  availabilityStart?: number; residency?: { continuation: string | null; arrivalPositions: ReadonlyMap<number, number> } }
+  availabilityStart?: number; residency?: { continuation: string | null; traversal?: string | null; arrivalPositions: ReadonlyMap<number, number> } }
 type Batch = {
   applyItems: (items: readonly ThreadItem[], version: number) => readonly ThreadApplyResult[]
   commit: (certificate: ThreadBatchCertificate) => ThreadApplyResult
@@ -28,7 +28,7 @@ type Batch = {
 export interface ThreadItemStore {
   hosts: ReadonlyMap<string, ReadonlyMap<string, Slice>>
   snapshot: (hostId: string, conversationId: string) => ThreadSnapshot | null
-  beginLocalRead: (hostId: string, conversationId: string) => {
+  beginLocalRead: (hostId: string, conversationId: string, heldPage?: boolean) => {
     complete: (snapshot: ThreadSnapshot | ThreadHistoryPage | null) => void
     fail: () => void
     cancel: () => void
@@ -162,8 +162,9 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
     return {
       hosts: new Map(),
       snapshot: (host, conversation) => read(host, conversation)?.snapshot ?? null,
-      beginLocalRead(host, conversation) {
-        if (read(host, conversation)) return null
+      beginLocalRead(host, conversation, heldPage = false) {
+        const initial = read(host, conversation)
+        if (heldPage ? !initial || reads.get(host)?.has(conversation) : initial) return null
         const token: { progress: RestoreProgress[] } = { progress: [] }, scopes = reads.get(host) ?? new Map()
         scopes.set(conversation, token); reads.set(host, scopes)
         const current = (): boolean => reads.get(host)?.get(conversation) === token
@@ -197,8 +198,18 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
                 if (stored && stored.kind !== item.kind) incompatible = true
                 if (!stored || stored.kind !== item.kind || item.rev >= stored.rev) byId.set(id, item)
               }
-              const progress = restoredProgress(snapshot, token.progress, availabilityStart)
-              snapshot = progress.snapshot; availabilityStart = progress.availabilityStart
+              if (heldPage) {
+                snapshot = { ...admitted.snapshot, ranges: rangesUnion([...admitted.snapshot.ranges, ...snapshot.ranges]) }
+                availabilityStart = admitted.availabilityStart
+                // Saved positions can be sparse, and opening's closure may precede unvisited content.
+                const positions = new Map(admitted.residency?.arrivalPositions)
+                page?.items.forEach((item, index) => positions.set(item.id, arrivals?.[index] ?? index))
+                const stable = [...byId].sort(([a], [b]) => (positions.get(a) ?? Infinity) - (positions.get(b) ?? Infinity))
+                byId.clear(); stable.forEach(([id, item]) => byId.set(id, item))
+              } else {
+                const progress = restoredProgress(snapshot, token.progress, availabilityStart)
+                snapshot = progress.snapshot; availabilityStart = progress.availabilityStart
+              }
               snapshot = detach({ ...snapshot, items: ordered(byId), arrivalOrder: [...byId.keys()],
                 ...(incompatible ? { repair: { fromVersion: snapshot.checkpoint,
                   throughVersion: Math.max(snapshot.version, snapshot.repair?.throughVersion ?? 0) } } : {}) })
@@ -211,7 +222,9 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
             publish(host, conversation, { snapshot, restored: snapshot, appendCompanion, generation: admitted?.generation ?? Symbol(),
               uncommittedVersion: snapshot.uncommittedVersion ?? 0, byId, availabilityStart,
               ...(page ? { residency: { continuation: page.continuation,
-                arrivalPositions: new Map(page.items.map((item, index) => [item.id, arrivals?.[index] ?? index])) } } : {}) })
+                ...(heldPage ? { traversal: page.continuation } : {}),
+                arrivalPositions: new Map([...(admitted?.residency?.arrivalPositions ?? []),
+                  ...page.items.map((item, index): [number, number] => [item.id, arrivals?.[index] ?? index])]) } } : {}) })
             log?.event({ event: 'thread-items-restored', code: 'stored' })
           },
           fail: end, cancel: end

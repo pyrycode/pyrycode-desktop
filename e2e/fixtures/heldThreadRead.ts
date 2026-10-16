@@ -3,13 +3,13 @@ import { isTransientContextLoss, NOT_YET_AVAILABLE, readMainProcess } from './ma
 
 // A lost acknowledgement does not tell us whether registration ran. Confirm the actual
 // handler before activation; only conclusive absence permits another guarded installation.
-export async function installHeldThreadRead(app: Pick<ElectronApplication, 'evaluate'>) {
+export async function installHeldThreadRead(app: Pick<ElectronApplication, 'evaluate'>, operation = 'openThreadPage', skip = 0) {
   const evidence = { installationAttempts: 0, inspectionAttempts: 0, contextLosses: 0 }
   for (let attempt = 0; attempt < 2; attempt++) {
     let lost = false
     evidence.installationAttempts++
     try {
-      await app.evaluate(({ ipcMain }) => {
+      await app.evaluate(({ ipcMain }, { operation, skip }) => {
         const state = globalThis as any
         const handlers = (ipcMain as any)._invokeHandlers as Map<string, Function>
         const original = handlers.get('pyry:chat-history')
@@ -22,7 +22,8 @@ export async function installHeldThreadRead(app: Pick<ElectronApplication, 'eval
         if (original === undefined) throw new Error('Missing chat history handler')
         const marker = { original, handler: undefined as Function | undefined, phase: 'armed' }
         const handler = async (event: unknown, request: { operation: string }) => {
-          const hold = request.operation === 'openThreadPage' && marker.phase === 'armed'
+          const matches = request.operation === operation && marker.phase === 'armed'
+          const hold = matches && skip-- <= 0
           if (hold) marker.phase = 'held' // Claim before awaiting the original; concurrent reads delegate.
           const result = await original(event, request)
           if (hold) {
@@ -39,7 +40,7 @@ export async function installHeldThreadRead(app: Pick<ElectronApplication, 'eval
         ipcMain.handle('pyry:chat-history', handler)
         state.heldThreadReads = 0
         state.__heldThreadRead = marker
-      })
+      }, { operation, skip })
     } catch (error) {
       if (!isTransientContextLoss(error)) throw new Error('Held thread read installation failed')
       lost = true

@@ -21,6 +21,77 @@ const windowFrames = (request: Envelope, chat: string, text: string, epoch = 'ep
       : { lower_order: 0, upper_order: 30, continuation: 0, older_exists: false }) }, request.id)
 ]
 
+for (const offline of [false, true]) test(`unchanged saved traversal scrolls independently ${offline ? 'offline' : 'while server reply is held'}`, async ({ launchPairedApp }, testInfo) => {
+  const requests: Envelope[] = []
+  let hold = false
+  const first = await launchPairedApp({ threadMode: 'native', buildReplyFrames: bytes => {
+    const request = decodeEnvelope(bytes); requests.push(request)
+    if (request.type === 'list_conversations') return [seedConversationsFrame(SEEDED_ROW)]
+    return request.type === 'thread_catch_up' && !hold ? windowFrames(request, SEEDED_ROW.id, 'Traversal seed') : []
+  } })
+  await expect(first.page.getByText('Traversal seed', { exact: true })).toBeVisible()
+  await expect.poll(() => first.page.evaluate(async id => {
+    const r = await window.pyry.chatHistory({ operation: 'readThread', serverId: 'fake-daemon', conversationId: id })
+    return r.status
+  }, SEEDED_ROW.id)).toBe('stored')
+  await first.page.evaluate(async id => {
+    const items = Array.from({ length: 650 }, (_, n) => ({ id: n, rev: 1, kind: 'assistant_message',
+      order: n < 100 ? n + 100 : n < 200 ? n + 800 : null, shown: n < 250, active: n === 0,
+      status: 'finished', session: 'session', summary: '', content: { text: `Traversal saved ${n}` } }))
+    const r = await window.pyry.chatHistory({ operation: 'replaceThread', serverId: 'fake-daemon', conversationId: id,
+      snapshot: { version: 1, kind: 'daemon-items', serverId: 'fake-daemon', conversationId: id, thread: {
+        hostId: 'fake-daemon', conversationId: id, epoch: 'epoch', items, arrivalOrder: items.map(i => i.id),
+        version: 20, checkpoint: 20, repair: null, olderAvailable: true,
+        ranges: [{ start: 100, end: 200 }, { start: 900, end: 1000 }] } } })
+    if (r.status !== 'ok') throw Error('seed failed')
+    await window.pyry.chatHistory({ operation: 'openThreadPage', serverId: 'fake-daemon', conversationId: id, limit: 200 })
+  }, SEEDED_ROW.id)
+  await first.app.close(); hold = true
+  const acknowledgements = requests.filter(r => r.type === 'mark_conversation_read').length
+  if (offline) await first.forwarder.close()
+  const resumed = await launchPairedApp({ threadMode: 'native' }, { reuseUserDataDir: first.userDataDir,
+    onLaunched: async app => {
+      await installHeldThreadRead(app, 'beforeThreadPage', 2)
+      await app.evaluate(({ ipcMain }) => {
+        ;(globalThis as any).savedReads = 0
+        ipcMain.on('pyry:diagnostic', (_event, record) => {
+          if (record.event === 'history-timeline-restore' && record.code === 'stored') (globalThis as any).savedReads++
+        })
+      })
+    } })
+  const { page } = resumed
+  await page.getByText(SEEDED_ROW.name!, { exact: true }).first().click()
+  if (!offline) await expect.poll(() => requests.filter(r => r.type === 'thread_catch_up').length).toBe(2)
+  await expect(page.locator('[data-read-row="249"]')).toBeVisible()
+  const scroller = page.locator('.conversation__thread')
+  await scroller.press('Home')
+  await expect.poll(() => scroller.evaluate(el => el.scrollTop)).toBeLessThan(10)
+  for (let n = 0; n < 3; n++) {
+    await scroller.press('ArrowUp')
+    await expect.poll(() => resumed.app.evaluate(() => (globalThis as any).savedReads)).toBe(n + 2)
+  }
+  const anchor = page.locator('[data-read-row="50"]')
+  await anchor.evaluate(el => el.scrollIntoView({ block: 'start' }))
+  await scroller.hover(); await page.mouse.wheel(0, -1)
+  await expect.poll(() => resumed.app.evaluate(() => (globalThis as any).heldThreadReads)).toBe(1)
+  const offset = () => anchor.evaluate(el => el.getBoundingClientRect().top)
+  for (let n = 0; n < 5; n++) await page.mouse.wheel(0, -1)
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  const before = await offset()
+  expect(await resumed.app.evaluate(() => (globalThis as any).heldThreadReads)).toBe(1)
+  await resumed.app.evaluate(({ ipcMain }) => ipcMain.emit('test:release-thread-read'))
+  await expect(page.locator('[data-read-row="1"]')).toHaveCount(1)
+  await expect.poll(offset).toBeCloseTo(before, 0)
+  await expect(page.locator('[data-read-row]')).toHaveCount(250)
+  expect(requests.filter(r => r.type === 'thread_page')).toHaveLength(0)
+  expect(requests.filter(r => r.type === 'mark_conversation_read')).toHaveLength(acknowledgements)
+  await page.screenshot({ path: testInfo.outputPath('saved-traversal-held.png') })
+  await first.forwarder.close()
+  await expect(page.getByText('Offline. Showing saved messages.', { exact: true })).toBeVisible()
+  await scroller.press('Home')
+  await expect(page.locator('[data-read-row="1"]')).toHaveCount(1)
+})
+
 test('initial thread loading and Retry stay below the header and recover on click', async ({ launchPairedApp }) => {
   const requests: Envelope[] = []
   const { page, daemon } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {

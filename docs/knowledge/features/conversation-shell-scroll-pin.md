@@ -19,7 +19,7 @@ release following synchronously when `scrollTop > 0`, before native scrolling st
 Waiting for `onScroll` would let a render or row-growth observation re-pin during the
 input-to-scroll interval and interrupt Chromium's animated movement. Untrusted input
 does not release intent; keys targeted at descendant controls retain their behavior.
-At zero, input leaves following unchanged unless connected history demand deliberately
+At zero, input leaves following unchanged unless accepted history demand deliberately
 releases it; see [User demand and prepend position](#user-demand-and-prepend-position).
 
 The 4px bottom tolerance allows rounding while already following. A released reader
@@ -518,11 +518,12 @@ focused ArrowUp/PageUp/Home call `readUpward` before native scrolling. That help
 snapshots the offset and releases following when upward range exists, independently
 of host availability, then calls `demandHistory`.
 
-`demandHistory` requires a connected conversation host, releases following and
-remembers the visible anchor. When `isNearTop` holds it calls the supplied `onOlder`
-callback; production routes that through the [thread runtime](thread-runtime.md)'s
-query coordinator. The band includes zero through `HISTORY_ASK_BAND_VIEWPORTS` (2)
-thread viewport heights, using measured `clientHeight`. Merely entering the band,
+`demandHistory` releases following and remembers the visible anchor independently
+of connectivity. When `isNearTop` holds it calls the supplied `onOlder` callback;
+production routes that through the [thread runtime](thread-runtime.md#independent-saved-traversal),
+which consumes saved held pages before dispatching new older network demand.
+Offline, pending and failed server state cannot block this local path. The band
+includes zero through `HISTORY_ASK_BAND_VIEWPORTS` (2) thread viewport heights, using measured `clientHeight`. Merely entering the band,
 programmatic movement, page arrival and reconnect cannot ask for another batch.
 There is no legacy visible-gap scan, gap-priority request or history-store request
 from this hook. Retained anchor filtering for `data-history-gap` is a geometry rule,
@@ -530,10 +531,15 @@ not a paging route.
 
 `ThreadItemsTimeline` keeps empty content in the same focusable scroll region
 (`tabIndex={0}`, client-owned label `Conversation history`); an early `EmptyThread`
-return would make first-page input unreachable. At zero, an offline short thread
-has no upward range and preserves following. Connected upward demand deliberately
-releases it and remembers the anchor even if paging admission rejects a request.
-Descendant-control keys do not enter this path.
+return would make first-page input unreachable. The callback reports whether local
+demand started or network demand is eligible. At zero with no accepted demand,
+`demandHistory` restores prior following intent; a short offline thread with no
+remaining saved demand must still follow later intrinsic row growth. Removing only
+the connectivity guard would release that intent on a no-op. Accepted saved demand
+releases following and keeps the anchor even offline. Repeated input during a local
+read coalesces; local failure requires explicit Retry. Descendant-control keys do
+not enter this path. The four short-offline no-op regressions and both mounted
+saved-traversal cases passed in the [counted Linux gate](chat-history-testing-restoration.md#counted-unchanged-saved-traversal-validation).
 
 Chromium suppresses native anchoring at exactly zero. Stable item keys and releasing
 following cannot alone preserve that reader's place. The pin remembers the first

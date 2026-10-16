@@ -9,12 +9,53 @@ import { createThreadItemStore } from '../src/renderer/src/store/threadItemStore
 import { createChatHistoryWriter } from '../src/renderer/src/store/chatHistoryWriter'
 import { createConversationListStore } from '../src/renderer/src/store/conversationListStore'
 import { readSavedTimeline } from '../src/renderer/src/store/savedTimelineRestorer'
+import { createThreadRuntime } from '../src/renderer/src/store/threadRuntime'
 import { createHistoryDatabase } from '../src/main/historyDatabase'
 import type { ChatHistoryRequest, ChatHistoryResult } from '../src/shared/chatHistory'
 
 const roots: string[] = []
 const owners: ReturnType<typeof createHistoryDatabase>[] = []
 afterEach(async () => { owners.splice(0).forEach(db => db.close()); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
+
+it('fresh protected traversal reaches every fragmented saved identity including opening omissions without writes', async () => {
+  const { fresh, source, api, writer } = await cache()
+  api.acceptEpoch('a', 'c', 'e')
+  for (let id = 0; id < 650; id++) api.applyUpdate('a', { type: 'thread_item_added', payload: {
+    conversation_id: 'c', epoch: 'e', version: 20, item: { id, rev: 1, kind: 'assistant_message',
+      order: id < 100 ? id + 100 : id < 200 ? id + 800 : null, shown: id < 250,
+      active: id === 0, summary: '', content: { text: `saved-${id}` } } } })
+  api.beginBatch('a', 'c', 'e')!.commit({ fromVersion: 0, version: 20,
+    ranges: [{ start: 100, end: 200 }, { start: 900, end: 1000 }], olderAvailable: true })
+  await writer.stop()
+  const expected = source.getState().snapshot('a', 'c')!, storage = fresh(), writes: string[] = []
+  const runtime = createThreadRuntime({ send: () => { throw Error('offline') }, log: () => {}, read: request => {
+    writes.push(request.operation); return storage.execute(request)
+  } })
+  try {
+    await runtime.open('a', 'c').done
+    expect(runtime.items.getState().snapshot('a', 'c')!.items).toHaveLength(201)
+    const slice = () => runtime.items.getState().hosts.get('a')!.get('c')!
+    for (let n = 0; n < 10 && slice().residency?.traversal !== null; n++) {
+      runtime.query('older', 'a')
+      await new Promise(resolve => setTimeout(resolve, 0))
+    }
+    expect(slice().snapshot).toEqual(expected)
+    expect(new Set(slice().snapshot.items.map(i => i.id)).size).toBe(650)
+    expect(slice().restored).toBe(slice().snapshot)
+    expect(writes).toEqual(['openThreadPage', 'newestThreadPage', 'beforeThreadPage', 'beforeThreadPage', 'beforeThreadPage'])
+    const tokenPage = await storage.execute({ operation: 'newestThreadPage', serverId: 'a', conversationId: 'c', limit: 1 })
+    expect(tokenPage.status).toBe('page')
+    if (tokenPage.status !== 'page' || !tokenPage.page.continuation) throw Error('missing token')
+    const token = tokenPage.page.continuation
+    const reopened = fresh()
+    expect((await reopened.execute({ operation: 'beforeThreadPage', serverId: 'a', conversationId: 'c', limit: 1, continuation: token })).status).toBe('page')
+    await reopened.execute({ operation: 'replaceThread', serverId: 'a', conversationId: 'c', snapshot: {
+      version: 1, kind: 'daemon-items', serverId: 'a', conversationId: 'c', thread: expected } })
+    expect(await reopened.execute({ operation: 'beforeThreadPage', serverId: 'a', conversationId: 'c', limit: 1, continuation: token }))
+      .toEqual({ status: 'error', code: 'unreadable' })
+    expect(slice().snapshot).toEqual(expected)
+  } finally { runtime.dispose() }
+}, 30000)
 
 async function cache(intercept?: (request: ChatHistoryRequest, execute: () => Promise<ChatHistoryResult>) => Promise<ChatHistoryResult>) {
   const root = await mkdtemp(join(tmpdir(), 'thread-restart-')); roots.push(root)

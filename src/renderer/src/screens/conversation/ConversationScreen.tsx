@@ -236,7 +236,9 @@ export function ConversationScreen({
     : null, [authoritativeSnapshot, liveInput.sessionId, liveInput.activity.turnRunning, localSend?.reportsClearedThrough])
   const taskStops = useStore(threadRuntime.taskStops, s => s.entries)
   const queryKey = JSON.stringify([selectedHost, openConversationId])
-  const queryState = useStore(threadRuntime.state, s => s.queries.get(queryKey))
+  const networkQueryState = useStore(threadRuntime.state, s => s.queries.get(queryKey))
+  const localQueryState = useStore(threadRuntime.state, s => s.localQueries.get(queryKey))
+  const queryState = localQueryState && localQueryState.type !== 'idle' ? localQueryState : networkQueryState
   const complete = useStore(threadRuntime.state, s => s.complete.get(queryKey))
   const threadRestoring = useStore(threadRuntime.state, s => s.restoring.has(queryKey))
   const threadConnection = useSessionStore(s => selectedHost === null ? undefined : s.statuses.get(selectedHost))
@@ -323,7 +325,7 @@ export function ConversationScreen({
   const authoritativeRows = useMemo(() => authoritativeSnapshot
     ? [...authoritativeSnapshot.items, ...(localSend?.pending ?? [])] : undefined, [authoritativeSnapshot, localSend])
   const threadPin = useThreadScrollPin(openConversationId, authoritativeRows,
-    authoritative ? () => { if (selectedHost !== null) threadRuntime.query('older', selectedHost) } : undefined)
+    authoritative ? () => selectedHost !== null && threadRuntime.query('older', selectedHost) : undefined)
   const { scrollPin, followBottom, paneRef } = threadPin
   // #1579: every open asks for fresh MCP status, from the handler rather than a mount effect so one open
   // is one request. The sheet shows this same `activeConversation`. #1494: the overflow menu's item and the
@@ -404,7 +406,7 @@ export function ConversationScreen({
       {authoritative && authoritativeSnapshot && <ThreadItemsTimeline snapshot={authoritativeSnapshot} pin={threadPin}
         standaloneStatus={false}
         backgroundTasksOpen={panelOpen} onBackgroundTasksOpenChange={setPanelOpen}
-        onOlder={() => { if (selectedHost !== null) threadRuntime.query('older', selectedHost) }}
+        onOlder={() => selectedHost !== null && threadRuntime.query('older', selectedHost)}
         readInputs={threadSummary ? { row: threadSummary, readerOpen,
           completeThrough: complete?.epoch === authoritativeSnapshot.epoch ? complete.version : 0 } : undefined}
         sendInputs={{ midTurnInput: liveInput.runConfig?.midTurnInput === true, diagnose: window.pyry.sendDiagnostic, local: selectedHost !== null && openConversationId !== null && localSend !== null
@@ -689,7 +691,7 @@ function measureThreadChrome(pane: HTMLElement): void {
  * dependency array it already runs after every render, so "jump to the bottom now" and "stay pinned while
  * the reply streams" are not two behaviours: both are consequences of the flag being `true`.
  */
-function useThreadScrollPin(conversationId: string | null, presentation?: object, onOlder?: () => void): ThreadPin {
+function useThreadScrollPin(conversationId: string | null, presentation?: object, onOlder?: () => boolean | void): ThreadPin {
   const ref = useRef<HTMLDivElement>(null)
   const paneRef = useRef<HTMLDivElement>(null)
   const following = useRef(true)
@@ -968,10 +970,14 @@ function useThreadScrollPin(conversationId: string | null, presentation?: object
   }, [])
 
   const demandHistory = (el: HTMLDivElement): void => {
-    if (connectedConversationHostNow(conversationId) === null) return
+    const wasFollowing = following.current
     following.current = false
     rememberTop(el)
-    if (isNearTop({ scrollOffset: el.scrollTop, viewportHeight: el.clientHeight, contentHeight: el.scrollHeight })) onOlder?.()
+    if (isNearTop({ scrollOffset: el.scrollTop, viewportHeight: el.clientHeight, contentHeight: el.scrollHeight })) {
+      const accepted = onOlder ? onOlder() !== false : false
+      // A short offline thread with no saved demand still follows later intrinsic row growth.
+      if (!accepted && el.scrollTop === 0) following.current = wasFollowing
+    }
   }
 
   const readUpward = (el: HTMLDivElement): void => {

@@ -40,7 +40,10 @@ static stage and nonzero test counts. An 801-item authoritative fixture opens th
 last 200 shown items despite 500 hidden items, retaining one hidden active item
 and two evidence ranges. It records first conversion separately, closes the database,
 then checks exact partial content, checkpoint and opaque continuation through a
-fresh owner while measuring cold opening.
+fresh owner while measuring cold opening. A separate fresh owner then enumerates
+all newest/before held windows, including opening omissions, and compares exact
+content/order with 801 unique identities alongside the opening and saturated
+persistence assertions.
 Failure or missing/all-skipped evidence is nonzero. It adds no release channel.
 
 [`history-native.spec.ts`](../../../e2e/history-native.spec.ts) includes
@@ -54,6 +57,44 @@ direct smoke invocation rejects them before packaging imports or scratch creatio
 pins Windows rejection. Run the native proof on the operating system running the
 ticket; opposite-OS scheduling is outside scope. Existing NSIS x64/arm64 targets
 remain unchanged.
+
+### Counted unchanged saved traversal validation
+
+The [post-merge verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/2066#issuecomment-6217180444)
+records Linux x64 on 2026-10-16 at `8fa5f23fc349c11d1564dfbb54d3ece845a74636`:
+full units **9,228 executed/passed, 0 failed, 3 skipped**; complete configured
+Playwright gate 8 **466 executed/passed, 0 failed, 4 skipped**. The named
+`packaged protected history commits and reopens with production encryption` case
+is explicitly present and passed: **1 executed, 1 passed, 0 failed, 0 skipped**.
+Both mounted held-reply/offline traversal cases also passed; see
+[counted restoration evidence](chat-history-testing-restoration.md#counted-unchanged-saved-traversal-validation)
+for suite configuration, historical repaired failures and scope.
+
+The verifier inspected `/tmp/pyry-history-native-n6DVpj/runtime.stdout` and
+`runtime.stderr`: Electron 33.4.11 / Node 20.18.3 / better-sqlite3 12.4.1,
+production `gnome_libsecret`, packaged/ASAR/native-unpacked true, stage complete.
+The 801-item fresh-opening/exact-traversal fixture and 100,000-membership persistence
+fixture passed. Conversion took **3,840 ms**, cold opening **110 ms**. Raw stderr
+contains system-bus/GPU/network-service diagnostics without failed storage assertions.
+This is recorded packaged production-protection evidence, not a fresh live run.
+Other operating systems and real Claude are outside this ticket's scope.
+
+The existing indexed opening counter fixture additionally measures a 200-item
+newest held page, resetting its counters after opening. The builder's
+[implementation measurements](../../specs/architecture/2063-saved-thread-traversal.md#validation-evidence)
+separate selected records/payloads/decrypts, authenticated structure and conversion:
+
+| Fixture items | Opening records / payloads / decrypts | Opening structural reads | Opening cold / conversion ms | Traversal records / payloads / decrypts | Traversal structural reads / cold ms |
+| ---: | --- | ---: | --- | --- | --- |
+| 262 | 206 / 202 / 408 | 1,583 | 369.2 / 2,716.8 | 203 / 200 / 403 | 282 / 255.1 |
+| 1,242 | 206 / 202 / 408 | 1,992 | 408.6 / 13,706.5 | 202 / 200 / 402 | 262 / 164.4 |
+
+The final verifier confirms the same 200 selected traversal payloads and 403/402
+decrypts; current unit cold-opening times were 317/458 ms and traversal times
+180/168 ms. Selected work stays bounded as unrelated history increases;
+authenticated structure work may grow logarithmically. Import/conversion is paid
+separately and can scale with saved history. These timings establish no latency
+threshold. Counting payloads/decrypts alone would miss repeated structural work.
 
 ### Counted bounded-opening validation
 

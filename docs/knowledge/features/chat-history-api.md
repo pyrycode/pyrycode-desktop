@@ -92,6 +92,33 @@ version changes too, allowing retry. Migration preserves strings already stored 
 recover surrogate distinctions lost during earlier TEXT binding. Future schema
 additions require explicit versioned migrations; snapshot `version: 1` is unchanged.
 
+The owner also admits schema 6. The first authoritative backend operation on
+schema 5 validates every saved authoritative scope through the old protected
+decoder and complete snapshot admission, creates `thread_payloads`, rewrites
+headers/placements/ranges and sets version 6 in the same transaction. Earlier
+supported schemas chain through schema 5 first. This one-time conversion retains
+each scope owner as its initial protected generation, preserving old continuations.
+Corrupt input, unavailable protection, conversion or later operation failure leaves
+the last commit intact and permits retry; no version marker commits ahead of
+conversion. Legacy/list-only operations need not initiate this protected upgrade.
+
+In schema 6, `thread_scopes.identity` is the stable owner. Item lookup uses
+`thread_payloads(scope, item_id)`; its protected envelope binds owner, epoch, id,
+revision and the exact admitted item, independently of held/range positions or
+continuation generation. A protected item placement in `thread_records` binds all
+selection indexes and `{ id, rev, digest }`, where `digest` is SHA-256 of the exact
+item ciphertext. Reading verifies lookup revision, digest and protected payload
+facts. Headers bind the owner and exact coordinates; placements and ranges bind
+the header's current generation. Binding only the stable owner would permit replay
+of older protected placements/evidence after replacement. See
+[the binding decision](../decisions/0013-stable-protected-thread-bindings.md).
+
+Full replacement preserves the owner, rotates generation and rewrites placement
+and evidence records. It reuses exact ciphertext for unchanged items in the same
+epoch; changed items or a changed epoch receive new payloads. This remains a full
+snapshot validation/replacement, not an incremental write. Scope removal cascades
+to placements, ranges and payloads; recreation receives a new owner and generation.
+
 Before its first operation, the application store checks completion, then decrypts
 and validates the entire version-1 secure-store collection, including duplicate
 identities, through shared snapshot admission. It validates addressed destination
@@ -142,8 +169,9 @@ returns `missing`; saved-empty returns a page with empty items and null continua
 Following continuations on an unchanged snapshot traverses held items backwards
 exactly once, with each window internally in held order.
 
-Each page decodes only the protected header, selected items and relevant ranges in
-one synchronous transaction. Ranges are the saved ranges containing selected
+After conversion, each page decodes only the protected header, selected item
+placements and their directly looked-up payloads, and relevant ranges in one
+synchronous transaction. Ranges are the saved ranges containing selected
 nonnegative safe-integer orders (`start <= order < end`), plus the newest saved
 range as an anchor even for empty/unordered windows, once each in saved range order.
 Protected per-item range membership selects evidence and verifies containment;
@@ -155,11 +183,12 @@ Neither the full reader nor complete item/range/arrival arrays are loaded. Share
 snapshot as complete; full reads retain aggregate and complete-membership validation.
 
 The base64url continuation protects exactly `{ format: 'daemon-items', identity,
-before }` through `SecretEncryption`. `identity` is the durable committed UUID;
+before }` through `SecretEncryption`. `identity` is the protected generation UUID;
 `before` is a positive safe-integer exclusive held ordinal. Exact scoped lookup and
-the validated header bind that UUID to host, conversation and epoch in the same
-transaction. Fresh-instance reopen retains validity; every replacement, including
-identical or empty content, rotates the UUID. Deletion/recreation cannot revive it.
+the validated header bind that generation to host, conversation and epoch in the
+same transaction. Migration alone and fresh-instance reopen retain validity;
+every replacement, including identical or empty content, rotates generation
+without necessarily re-encrypting item payloads. Deletion/recreation cannot revive it.
 These tokens are local positions, separate from daemon cursors.
 
 Compact token plaintext is at most 101 ASCII bytes, independent of coordinate/epoch
@@ -169,9 +198,11 @@ protection overhead fails without returning an inadmissible token. Copying owner
 and epoch strings into the token would break traversal for valid long surrogate
 strings after JSON/protection expansion. See [page failures](chat-history-results.md#bounded-page-results).
 
-Full indexed storage and collection import are active. Page IPC, reader activation
-and partial writes remain #1931. Local continuation/exhaustion never certifies daemon
-completeness or changes saved checkpoint, repair or availability.
+Authoritative full operations and collection import use the migrated layout.
+Owned incremental writes remain #2044; partial restoration and navigation remain
+\#2041/#2042. These page
+operations introduce no renderer page IPC. Local continuation/exhaustion never
+certifies daemon completeness or changes saved checkpoint, repair or availability.
 
 ### Main-only bounded legacy pages
 

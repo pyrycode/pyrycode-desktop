@@ -220,6 +220,7 @@ for (const closeCode of [4421, 4401]) {
     expect(withButton).toEqual(atRest)
     await expect(page.locator('.composer-status button', { hasText: COMPOSER_RECONNECT_BUTTON_COPY })).toHaveCount(0)
     await expect(reconnect).toHaveClass('top-overlay-pill top-overlay-pill--error')
+    await page.screenshot({ path: `/tmp/builder-2076/reconnect-${closeCode}-800.png` })
     await reconnect.click()
     await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
     await expect.poll(() => recoveryCounts(app)).toEqual({

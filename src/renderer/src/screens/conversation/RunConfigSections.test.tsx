@@ -195,7 +195,7 @@ describe('RunConfigView — Model rows from the published list (#975)', () => {
     const markup = renderToStaticMarkup(
       <RunConfigView {...base} models={PUBLISHED} onChange={(): void => undefined} />
     )
-    expect(markup).toContain('role="button"')
+    expect(tagWithClass(markup, 'run-config__model-row')).toContain('type="button"')
     for (const row of PUBLISHED_ROWS.filter(row => row.value !== 'default')) {
       const reselected = renderToStaticMarkup(
         <RunConfigView {...base} model={row.value} models={PUBLISHED} />
@@ -226,7 +226,7 @@ describe('RunConfigView — Model rows from the published list (#975)', () => {
   it('shows the concrete identifier the value resolves to on the second line (AC4)', () => {
     const markup = renderToStaticMarkup(<RunConfigView {...base} models={PUBLISHED} />)
     for (const row of PUBLISHED_ROWS.filter(row => row.value !== 'default')) {
-      expect(markup).toContain(`<p class="run-config__model-descriptor">${row.resolved_model}</p>`)
+      expect(markup).toContain(`<span class="run-config__model-descriptor">${row.resolved_model}</span>`)
     }
   })
 
@@ -236,23 +236,18 @@ describe('RunConfigView — Model rows from the published list (#975)', () => {
       droppedModels: 0
     }
     const markup = renderToStaticMarkup(<RunConfigView {...base} models={models} />)
-    expect(markup).toContain('<p class="run-config__model-descriptor"></p>')
+    expect(markup).toContain('<span class="run-config__model-descriptor"></span>')
   })
 
   it('keeps rows operable on handler presence, inert without one (AC5)', () => {
     const operable = renderToStaticMarkup(
       <RunConfigView {...base} models={PUBLISHED} onChange={(): void => undefined} />
     )
-    const row = segmentFor(operable, 'run-config__model-row', 'Wide context')
-    expect(row).toContain('role="button"')
-    expect(row).toContain('tabindex="0"')
-    const inert = segmentFor(
-      renderToStaticMarkup(<RunConfigView {...base} models={PUBLISHED} />),
-      'run-config__model-row',
-      'Wide context'
-    )
-    expect(inert).not.toContain('role="button"')
-    expect(inert).not.toContain('tabindex')
+    const row = tagWithClass(operable, 'run-config__model-row')
+    expect(row).toContain('type="button"')
+    expect(row).not.toContain('disabled')
+    const inert = tagWithClass(renderToStaticMarkup(<RunConfigView {...base} models={PUBLISHED} />), 'run-config__model-row')
+    expect(inert).toContain('disabled=""')
   })
 })
 
@@ -317,8 +312,8 @@ describe('RunConfigView — Model truncation reports (#975)', () => {
     // Adjacent siblings: the daemon-supplied descriptor CLOSES before the sheet's own words open, so
     // client copy is never inside a daemon-authored node.
     expect(markup).toContain(
-      `<p class="run-config__model-descriptor">${cutRow.resolved_model}</p>` +
-        `<p class="run-config__model-cut">${CUT}</p>`
+      `<span class="run-config__model-descriptor">${cutRow.resolved_model}</span>` +
+        `<span class="run-config__model-cut">${CUT}</span>`
     )
   })
 
@@ -350,7 +345,7 @@ describe('RunConfigView — Model truncation reports (#975)', () => {
     )
     // The words appear inside the daemon's own node, verbatim — but the sheet's marker ELEMENT does
     // not exist. Structural on purpose: not.toContain(CUT) would fail on a CORRECT render here.
-    expect(markup).toContain(`<p class="run-config__model-name">${forged.display_name}</p>`)
+    expect(markup).toContain(`<span class="run-config__model-name">${forged.display_name}</span>`)
     expect(markup).not.toContain('run-config__model-cut')
   })
 
@@ -431,8 +426,8 @@ describe('RunConfigView — Model rows render daemon text inertly (#975)', () =>
         }}
       />
     )
-    expect(markup).toContain(`<p class="run-config__model-name">${escaped}</p>`)
-    expect(markup).toContain(`<p class="run-config__model-descriptor">${escaped}</p>`)
+    expect(markup).toContain(`<span class="run-config__model-name">${escaped}</span>`)
+    expect(markup).toContain(`<span class="run-config__model-descriptor">${escaped}</span>`)
   })
 
   it('puts no daemon string in a key, an attribute or any other non-text position', () => {
@@ -904,10 +899,27 @@ describe('RunConfigView — Context window', () => {
 
 // #257: the interactive toggle — the SAME view is inert (#188's read-only markup) with no `onChange`
 // and operable with one. The `node` env cannot fire clicks, so these assert the operable AFFORDANCE in
-// the markup (role/tabindex, dropped aria-readonly); the click → submit behaviour is covered by
-// runSettingsControls.test.ts. Selection markers must still reflect the passed values either way.
+// the markup (native model buttons, effort role/tabindex, dropped aria-readonly). Interaction is
+// covered through the real sheet in Playwright. Selection markers reflect the passed values either way.
 describe('RunConfigView — interactive toggle (#257)', () => {
   const noop = (): void => undefined
+
+  it('uses native model buttons, disabled only when selection is unavailable', () => {
+    for (const onModelSelect of [noop, undefined]) {
+      const markup = renderToStaticMarkup(
+        <RunConfigView model="opus[1m]" effort="high" yolo={false} {...NO_USAGE}
+          models={PUBLISHED} onModelSelect={onModelSelect} />
+      )
+      const buttons = [...markup.matchAll(/<button class="run-config__model-row"[^>]*>/g)]
+      expect(buttons).toHaveLength(2)
+      for (const [tag] of buttons) {
+        expect(tag).toContain('type="button"')
+        expect(tag.includes('disabled=""')).toBe(onModelSelect === undefined)
+        expect(tag).not.toContain('tabindex')
+      }
+      expect(segmentFor(markup, 'run-config__model-row', 'Wide context')).toContain('Current model')
+    }
+  })
 
   it('makes rows/segments/switch operable when onChange is present (AC1/2/3)', () => {
     const markup = renderToStaticMarkup(
@@ -932,11 +944,12 @@ describe('RunConfigView — interactive toggle (#257)', () => {
     expect(segmentFor(markup, 'run-config__effort-segment', '>high<')).toContain('aria-current="true"')
   })
 
-  it('stays inert (identical to #188) when onChange is absent (AC5)', () => {
+  it('stays inert when onChange is absent (AC5)', () => {
     const markup = renderToStaticMarkup(
       <RunConfigView model="opus[1m]" effort="high" yolo={true} {...NO_USAGE} models={PUBLISHED} />
     )
-    // No handler ⇒ literally today's read-only markup: no operable affordance, switch reads-only.
+    // No handler ⇒ disabled model buttons, inert effort segments and a read-only switch.
+    expect(tagWithClass(markup, 'run-config__model-row')).toContain('disabled=""')
     expect(markup).not.toContain('role="button"')
     expect(markup).not.toContain('tabindex')
     expect(markup).toContain('aria-readonly="true"')
@@ -1525,7 +1538,7 @@ describe('RunConfigSections (container)', () => {
 // #1651 — a MERGED list: PUBLISHED_ROWS are Claude's (untagged, as a daemon sending no tags writes them),
 // then one Codex row per family. The first Codex row shares a Claude row's `value`, so a match that ignored
 // the agent would answer with the Claude row.
-describe('#1651 — the sheet offers only the conversation agent\'s rows', () => {
+describe('merged sheet with agent-scoped offerings', () => {
   const CODEX_ROWS: readonly WireModelOption[] = [
     modelRow({ value: 'haiku', display_name: 'Vendor shared value', resolved_model: 'vendor-6-shared',
       effort_levels: ['low', 'medium', 'high', 'xhigh'], agent: 'codex' }),
@@ -1539,19 +1552,20 @@ describe('#1651 — the sheet offers only the conversation agent\'s rows', () =>
         announced={{ model: 'vendor-6-shared', truncated: false }} />
     )
 
-  it('lists only Claude rows on a Claude conversation, byte-identical to an untagged list', () => {
+  it('lists both agents on a Claude conversation and preserves untagged selection', () => {
     const untagged = renderToStaticMarkup(
       <RunConfigView model="haiku" effort="" yolo={false} {...NO_USAGE} models={PUBLISHED}
         announced={{ model: 'vendor-6-shared', truncated: false }} />
     )
-    expect(sheet(undefined, 'haiku')).toBe(untagged)
-    expect(sheet('claude', 'haiku')).toBe(untagged)
+    expect(sheet(undefined, 'haiku')).toBe(sheet('claude', 'haiku'))
+    expect(untagged).not.toContain('Vendor shared value')
+    expect(sheet('claude', 'haiku')).toContain('Vendor shared value')
   })
 
-  it('lists only Codex rows, display_name verbatim and in the daemon\'s order, on a Codex conversation', () => {
+  it('lists both agents with display_name verbatim in daemon order on a Codex conversation', () => {
     const markup = sheet('codex', 'haiku')
     const names = [...markup.matchAll(/run-config__model-name">([^<]*)</g)].map((m) => m[1])
-    expect(names).toEqual(['Vendor shared value', 'Vendor face'])
+    expect(names).toEqual([...PUBLISHED_ROWS.filter(row => row.value !== 'default').map(row => row.display_name), 'Vendor shared value', 'Vendor face'])
     expect(segmentFor(markup, 'run-config__model-row', 'Vendor shared value')).toContain('Current model')
     expect(markup.split('Current model').length - 1).toBe(1)
   })
@@ -1583,11 +1597,12 @@ describe('#1651 — the sheet offers only the conversation agent\'s rows', () =>
     expect(running('claude')).toContain('run-config__running-value">Quick tier<')
   })
 
-  it('reads an agent with no rows as the empty list', () => {
+  it('lists Claude choices even when the conversation agent has no rows', () => {
     const markup = renderToStaticMarkup(
       <RunConfigView model="" effort="" yolo={false} {...NO_USAGE} models={PUBLISHED} agent="codex" />
     )
-    expect(markup).toContain(MODELS_EMPTY)
+    expect(markup).not.toContain(MODELS_EMPTY)
+    expect(markup).toContain('run-config__model-row')
   })
 })
 

@@ -1,9 +1,10 @@
 # Live e2e runbook — the manual operator gate for the Phase-1 round-trip
 
 This runbook covers operator prerequisites, the Phase-1 production-relay round-trip
-([#13](https://github.com/pyrycode/pyrycode-desktop/issues/13)) and the current automated
-real-daemon gate. The operator supplies credentials and infrastructure; agents record
-supplied evidence. The local real-* tier and production-relay check exercise different paths.
+([#13](https://github.com/pyrycode/pyrycode-desktop/issues/13)) and explicit
+real-daemon acceptance. Desktop's automatic live gate is retired; required fresh live
+scenarios remain operator-owned before merge. The operator supplies credentials and infrastructure;
+agents record supplied evidence. The local real-* tier and production-relay check exercise different paths.
 
 - [Prerequisites](#prerequisites-daemon--relay-side), including the dedicated Codex sign-in.
 - [Build, pair and send](#1-build--launch-the-app-ac1-first-half): the milestone operator recipe.
@@ -24,7 +25,7 @@ The operator supplies the daemon, the relay endpoint, and the credentials at run
 
 ### Dedicated Codex sign-in for the local real-* tier
 
-Codex coverage is default-off in `RealDaemonOptions`; only the Luna spec opts in with
+Codex coverage is default-off in `RealDaemonOptions`; the Luna creation and handover specs opt in with
 `codexCapture: true`. Other specs keep their existing gates, environment and arguments,
 without Codex probing or provisioning. The operator supplies Codex >=0.156.1 on PATH and
 a persistent dedicated sign-in outside both the runner's `~/.codex` and production `~/.pyry`:
@@ -113,6 +114,38 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 - **Real-daemon fixture paths must be canonical.** The fixture resolves its temporary daemon home before deriving the workspace path, daemon cwd argument, and registry seed cwd. On macOS, `/tmp` resolves to `/private/tmp`; mixing them makes one workspace appear as two groups. The seeded subdirectory remains distinct, and the short control-socket path is unchanged ([#1674](https://github.com/pyrycode/pyrycode-desktop/issues/1674)).
 
 ## Current real-claude gate state
+
+### Claude-to-Luna handover acceptance (#1662)
+
+**Pending under `held:live-handover` as of October 16.** The operator must establish a fresh
+fact in Claude, switch that same conversation to GPT-6 Luna at Low through the real footer
+and confirmation, then obtain a completed answer requiring the pre-switch fact without
+restating it. Before merge, require a fresh current-main run with executed/passed/failed/skipped
+counts and the named test present and passed. Keep same-attempt daemon revision, owning host
+and unchanged conversation ID, published model row, correlated outgoing/incoming terminals and
+answer, saved/applied Low settings and the published Luna footer name. No successful answer
+or footer evidence for this exact scenario is available to record yet.
+
+The dispatcher report for historical Linux run `2026-10-14T14-51-41-455Z` records
+28 executed, 27 passed, 1 failed, 1 skipped on feature `f276e0219bf1` merged with main
+`93bf8128f759`. **`real Claude conversation hands over to GPT-6 Luna at Low effort and
+Luna answers with the pre-switch fact` failed**, on daemon `0.40.1`, in 14.4s; the same-tree
+rerun supplied no pass. The named `real GPT-6 Luna channel replies with Low effort from
+creation` executed and passed in that run, proving creation rather than handover. The
+system-prompt Reset case was skipped without a recorded reason. Earlier full/focused
+handover failures remain failures; the historical base collected zero tests and establishes
+neither a comparison nor handover acceptance.
+
+The [latest verifier review](https://github.com/pyrycode/pyrycode-desktop/pull/1846#issuecomment-6219617302)
+passed Linux implementation `49ed9418` with main `be2afa3f`: the configured application gate
+executed/passed 488 tests, 0 failed, 4 existing skips, 0 retries or flaky results. The recorded
+new-Luna-channel case was present and passed; the handover case was not run in that gate.
+The repaired live handover spec collected 1 case, **0 executed**. Neither those results nor
+the successful captures below provide a named handover pass. The retired automatic gate
+will not supply the missing operator acceptance; retain the hold until the exact fresh
+scenario and its counted, same-attempt evidence succeed.
+
+### Production-thread capture evidence
 
 As of October 16, the current production-thread assertions have actual live
 capture evidence. Desktop `8bd3abb9` executed all 28 active real scenarios and the
@@ -324,14 +357,45 @@ and after completion are required, never Default. It attaches `daemon-revision` 
 The [current gate record](#current-real-claude-gate-state) contains the named live pass and
 its daemon and combined-delivery identities.
 
-On the provisioned gate machine, after the scoped fixture/picker checks and build, use:
+[`e2e/real-claude-luna-handover.spec.ts`](../../../e2e/real-claude-luna-handover.spec.ts)
+adds **`real Claude conversation hands over to GPT-6 Luna at Low effort and Luna answers
+with the pre-switch fact`**. It establishes a fresh random code word in a completed Claude
+turn, acknowledges saved/applied Low, picks the daemon's published Luna row in the footer
+and confirms. A fresh owning-host list must establish Codex under the original conversation
+ID, followed by incoming settings. The next question omits the code word; a completed Luna
+reply must contain it. Final readback requires the picked raw model and saved/applied Low,
+and the footer must read the published Luna name. The exact single switch command includes
+the owning `serverId`, model and supported Low effort; no conversation may be created.
+
+The pure [`completedHandoverReply`](../../../e2e/fixtures/lunaHandoverProof.ts) proof handles
+legacy deltas and thread full items, revision patches and text appends. Completion belongs
+to the settings-authoritative host/conversation/session/agent and the same epoch/turn as
+fresh post-send assistant activity. History alone cannot establish a reply; mismatched base
+revisions, repeated revisions, nested items and reset lifetimes cannot supply or duplicate
+its text. Successful Codex terminals may carry empty optional `outcome`/`terminal_reason`;
+the proof still requires `end_turn`, nonempty correlated text and no error/category.
+An observer that accepts only literal `success`/`completed` would reject those valid replies.
+
+The spec synchronously records events in the page and unsubscribes in `finally`. Preserve
+`daemon-revision`, `published-model-row` and `handover-answer` attachments from the passing
+attempt. The answer attachment includes the test-owned token, both correlated replies and
+terminals, conversation identity, settings and Luna footer. `handover-attempt` also retains
+revision, commands/events, settings and footer samples on failure; its presence alone
+establishes no pass. Record the actual correct answer only after successful operator execution.
+See [current handover status](#claude-to-luna-handover-acceptance-1662).
+
+On the provisioned operator machine, after the scoped fixture/picker checks and build,
+run the scenario required by the ticket:
 
 ```bash
 npx playwright test --config playwright.real-claude.config.ts e2e/real-claude-codex-channel.spec.ts --reporter=json
+npx playwright test --config playwright.real-claude.config.ts e2e/real-claude-luna-handover.spec.ts --reporter=json
 ```
 
-The combined PR also needs the dispatcher's full real-* gate. On macOS, request approved
-execution outside the sandbox before any Electron launch. Inspect the named result and
+Run on the ticket's operating system; macOS is outside #1662's Linux verification scope.
+For macOS tickets, request approved execution outside the sandbox before any Electron launch.
+The normal dispatcher gate runs fake transport and captured clients; required fresh live
+acceptance uses an explicit operator run. Inspect the named result and
 attachments, not exit status alone; a configured home does not establish a usable sign-in.
 
 | Opted-in prerequisite or error | Meaning |
@@ -352,9 +416,9 @@ scenario cannot satisfy live acceptance even when every other spec passes.
 See [automation and operator gates](live-e2e-runbook-automation.md) for dispatcher
 configuration, failure routing, `npm run e2e:real:gate` and the production-relay
 `live-drive.mjs` recipe. The real-* tier uses a local test relay; production-relay
-verification remains an operator check. The latest report has 28 declared tests and
-27 runnable when Codex is provisioned, excluding the known system-prompt case. A count
-floor alone cannot establish that the named Luna scenario passed.
+verification remains an operator check. Counts depend on the source and selected suite;
+use each report's named results. A count floor, collection, an all-skip exit or a recorded
+new-channel pass cannot establish fresh Claude-to-Luna handover.
 
 ## Cross-references
 

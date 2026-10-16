@@ -104,14 +104,16 @@ See [Run configuration store](run-config-store.md) for the full data-path design
 ## Run configuration Model/Effort/YOLO sections (#188)
 
 **Writes require the conversation's owning host to be connected (#1380).**
-`useSessionSettingsConnected` resolves unambiguous ownership through
-`serverIdForOpenConversation` and reads that host in `SessionState.statuses`.
+`useSessionSettingsConnected` uses `useConversationHost`: matching selected pane coordinates
+take precedence over the flattened list, with `serverIdForOpenConversation` as the fallback.
+It reads that host in `SessionState.statuses`.
 Missing or ambiguous ownership, missing status, and every non-connected status
 fail closed; neither the global last status nor another connected host enables a write.
 An addressable session ID remains required.
 
-The sheet withholds `onChange` while unavailable: model rows and effort segments
-lose their button semantics, and YOLO retains `aria-readonly="true"`. Held values
+The sheet withholds `onChange` and `onModelSelect` while unavailable: model rows remain
+native disabled buttons, effort segments lose their button semantics, and YOLO retains
+`aria-readonly="true"`. Held values
 remain readable alongside the existing connection indication, including in a
 sheet opened before disconnect. Composer model, effort and permission-mode views
 likewise receive no `onSelect`, retaining their labels without chevrons and
@@ -282,10 +284,11 @@ security review (PASS).
 
 ## Run configuration Model section, daemon-published rows (#975)
 
-`ModelSection` renders the active conversation's agent-filtered, non-default rows from
+`ModelSection` renders both agents' published non-default rows for the active conversation from
 [Model-list store](model-list-store.md), in published order. It omits every raw `value === 'default'`
 row, while keeping the other rows' `display_name` and `resolved_model` text unchanged. No model catalog,
-descriptor or family vocabulary is maintained in the sheet.
+descriptor or family vocabulary is maintained in the sheet. There are no agent headers, synthesized
+rows or deduplication; the daemon supplies newest-per-family choices.
 
 **`RunConfigSections` takes the conversation id as a prop, not a store read.** The container
 previously had only `sessionIdStore`'s *session* id in scope — a different identifier that keys
@@ -303,12 +306,14 @@ them apart as two different sentences in two different elements (`RUN_CONFIG_MOD
 convention for the identical pair. Neither renders an empty control or a stale menu.
 
 **Model marking shares the footer's decision.** `RunConfigView` calls `composerModelMenuModel` and
-passes its `currentId` to `ModelSection`. Production supplies `modelLayers` identical to the footer:
+passes its positional `currentId` to `ModelSection`. Production supplies `modelLayers` identical to the footer:
 pending-over-confirmed `picked`, `snapshot?.model ?? null` for `stored`, and the conversation's own
 announcement. The optional pure-view prop defaults to no pick, its `model` prop as stored, and its
 announcement prop; production supplies all layers explicitly.
 
-A pick, otherwise an explicit saved model other than `''` or `'default'`, marks by exact raw `value`.
+A pick, otherwise an explicit saved model other than `''` or `'default'`, marks the first own-agent
+row with that exact raw `value`. Both explicit and inherited matching remain agent-scoped.
+
 An unmatched explicit choice marks nothing. With no pick, saved `''` or `'default'` inherits: match the
 announcement by raw value, raw resolution, then non-empty value-family, in that order. One candidate wins,
 zero advances, and multiple candidates stop with nothing marked. Before an announcement, Claude marks
@@ -320,24 +325,56 @@ inherited snapshot can render `Model`. Neither surface offers a Default row or e
 See [Composer model menu](composer-model-menu.md#composermodelmenumodel-one-pure-function-deciding-all-three-renderings)
 for complete label rules and why Claude's `settings.json` can override the published recommendation.
 
-**Writes still round-trip the raw row value.** A click submits `row.value` verbatim; the optimistic
-write store holds that same string for exact explicit-choice marking. Announcement matching never
-changes the saved/picked model or writes an announced identifier. Existing pending, rejection and
-read-only behavior remains on the shared settings path above.
+**Native activation retains the actual row.** Each model row is a `button type="button"`;
+pointer, Enter and Space reach the same selection callback and confirmation guards.
+Without a callback the row is disabled and cannot take focus. Phrasing-content spans and
+the existing row-class button reset preserve the name, descriptor, radio and focus styling.
+Production supplies `onModelSelect` to `RunConfigView`, routing
+through `selectConnectedModel(conversationId, row)` after click-time connection/session checks.
+An own-agent pick uses `changeConnectedSetting` with `row.value` verbatim. An other-agent pick opens
+the existing confirmation for that row without any write or switch command; an absent row agent
+means Claude. The click-time agent lookup receives `conversationHostNow(conversationId)`,
+so a selected Codex conversation remains Codex even when another host publishes the same ID
+as Claude. Confirmation rechecks the active owning pane and sends once. Static view callers
+without `onModelSelect` retain the raw model callback through `onChange`; effort/YOLO keep their
+existing callbacks. Announcement matching never writes an announced identifier.
 
-**Since #1651, the rows are also filtered by agent.** Once the daemon advertises `multi_agent`,
-`model_list` is one merged list, and `ModelSection` renders `modelRowsFor(entry, agent)` with
-`value === 'default'` excluded. An absent row agent counts as Claude; the remaining rows retain the
-daemon's order. An agent with no rows reads the identical `RUN_CONFIG_MODELS_EMPTY_COPY` sentence the no-rows
-case already used; the frame-level partial notice still reports the whole entry's drops regardless of
-which agent they belong to. `RunConfigSections` (the container) resolves the agent through
-`useConversationAgent`, a `useMemo`-stable hook over an exported pure selector,
-`selectAgentForConversation(conversationId)`, that resolves the owning host exactly as
-`useSessionSettingsConnected` does and then reads
-[`selectConversationAgentFor`](conversation-list-store.md#which-agent-runs-a-conversation-since-1649)
-from it — a null id or an unattributable owner answers Claude. `RunConfigView` threads the result down
-through a new `agent?: WireAgent` prop (absent = Claude, so every pre-#1651 view test is the Claude
-path unchanged) to `RunningModelSection`, `ModelSection` and `EffortSection` alike.
+**Listing and lookup have different scopes.** `ModelSection` filters only raw `value === 'default'`
+from the merged list. Its marker compares stringified visible-row positions, matching the footer's
+option IDs, so equal raw values across agents remain separately clickable. An empty merged visible
+list reads `RUN_CONFIG_MODELS_EMPTY_COPY`; the frame-level partial notice reports the whole entry's
+drops. `RunConfigSections` resolves the conversation agent through `useConversationAgent` and its
+memoised `selectAgentForConversation(conversationId, host)`, where `host` comes from
+`useConversationHost`, also used by `useSessionSettingsConnected`. Selected pane coordinates
+outrank ambiguous flattened ownership; the agent is read from that host with
+`selectConversationAgentFor`. A null id or unattributable owner
+answers Claude. `RunConfigView` passes that agent to current-model matching, `RunningModelSection`
+and `EffortSection`, without narrowing the displayed model rows. `publishedRowFor`, `effortRowFor`
+and permission capability lookups remain scoped to that agent.
+
+**Only confirmed pending switches mark the target row.** Production passes
+`usePendingAgentSwitchRow(conversationId)` separately from settings layers; it requires pending
+status for this conversation and its current owning `serverId` from the reactive
+`useConversationHost` subscription. Colliding IDs retain selected-host pending; changing the
+selected host under the same ID removes a foreign overlay. The shared model decision compares
+retained agent, raw value, display name and resolution before returning a visible-row position.
+Opening/Cancel leave the current marker unchanged. Switch marks the picked presentation and changes
+the footer label; further other-agent picks are suppressed. Effort and permission offerings continue
+using outgoing settings and agent while pending. Refusal/abandonment removes this overlay and restores
+the underlying reading. See [pending presentation](composer-model-menu.md#confirmed-switch-presentation-and-success-1662).
+
+**Authoritative success invalidates outgoing readings.** A fresh owning-host list establishing the
+target agent settles pending. `onSucceeded` clears that conversation's outgoing announcement;
+`onActiveSucceeded` separately resets settings overlays/errors, clears the outgoing snapshot and
+permission polling, and requests incoming settings only for the active owning pane. This is the
+merged [#1845 settings repair](run-settings-write-store.md#settings-lifetime-on-agent-switch), no
+longer an outstanding dependency. Neither settings cleanup nor announcement cleanup substitutes
+for the other: each can independently hide the incoming model. Cancel, refusal and abandonment
+preserve the outgoing settings and announcement; success while navigated away preserves the newly
+active pane's settings. Once new settings arrive, the footer uses the incoming label and all
+capability offerings use the incoming agent. Both agents' model rows remain visible, with the
+incoming row marked. [Picker verification and pending live acceptance](composer-model-menu.md#testing)
+record the proof boundary and exact operator hand-over scenario.
 
 **\#1656 threads the same `agent` value into `YoloSection` and `ContextWindowSection` too, but for copy,
 not filtering.** The YOLO caption ("Claude runs commands without asking for confirmation. Use

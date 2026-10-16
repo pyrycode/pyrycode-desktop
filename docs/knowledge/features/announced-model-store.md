@@ -63,6 +63,7 @@ export interface AnnouncedModelState { announced: ReadonlyMap<string, AnnouncedM
 export type AnnouncedModelStore = AnnouncedModelState & {
   setAnnouncedModel: (s: AnnouncedModelSnapshot) => void
   clearAnnouncedModel: () => void   // #593 — whole-map clear since #1146, returns initialAnnouncedModelState by reference
+  clearAnnouncedModelFor: (conversationId: string) => void // #1662 — authoritative agent-switch success
 }
 
 createAnnouncedModelStore(init?)             // vanilla createStore — one isolated instance per test (DI seam)
@@ -87,10 +88,9 @@ and `Record<string, …>` forbidden**, on [`conversationActivityStore`](conversa
 rule: a `Record` swap produces no type error, so `__proto__`, `constructor` and `''` have to be exercised
 as three unremarkable keys by a dedicated test rather than relied on by inspection.
 
-Named setters rather than a reducer — the two mutations ("record the latest announcement" and, since
-\#593, "clear when the pairing that scoped it ends") are independent whole-value writes that neither read
-prior state nor constrain each other's ordering, so a discriminated-union action set would still be
-ceremony without benefit. `setAnnouncedModel` replaces one conversation's record wholesale and touches no
+Named setters rather than a reducer: record the latest announcement, clear the pairing's map, or
+clear one conversation on authoritative agent-switch success. Copy-on-write setters keep unrelated
+records stable without a second action reducer. `setAnnouncedModel` replaces one conversation's record wholesale and touches no
 other key: no merge, no coercion, no validation. Copy-on-write — clone the outer map, set the one key,
 return a fresh state — and the map is read **inside** the `set` updater rather than through `getState()`
 outside it, so two frames arriving back-to-back cannot interleave. Memory changed with #1146 from O(1) to
@@ -116,6 +116,16 @@ that survives a pairing switch and is then attributed to the next daemon. Return
 `initialAnnouncedModelState` **by reference** is what makes the copy-on-write write path load-bearing
 rather than stylistic: an in-place mutator would poison that module-shared constant and hand one
 pairing's announcements to the next, with no type error — pinned by a test.
+
+`clearAnnouncedModelFor(conversationId)` clones the map and deletes only that key, leaving all
+other held records `Object.is`-identical. The switch store's required `onSucceeded` callback invokes
+it only after a fresh owning-host list establishes the pending target agent, including success
+while navigated away. Opening, Cancel, refusal, unchanged/foreign lists, session transitions and
+abandonment retain the outgoing announcement; new announcements remain accepted afterward.
+This cleanup is independent of the active pane's settings reset: an old announcement can outrank
+the incoming saved model even without any settings write, so resetting settings alone cannot repair
+the footer. See [switch outcomes](switch-agent-request.md#renderer-outcomes-and-lifetime) and
+[model presentation](composer-model-menu.md#confirmed-switch-presentation-and-success-1662).
 
 ### The data path (`src/renderer/src/store/announcedModelBridge.ts`)
 
@@ -233,7 +243,7 @@ and no second branch downstream.
   fixed before commit; see that spec for the surviving cases. The key itself stops at the map: never
   copied into a held record, never rendered, and never a filename, cache key, lookup path, attribute, URL,
   or log field.
-- **Cleared on unpair, since #593 — and, since [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141), only on unpair.**
+- **Whole-map clear on unpair since #593; per-conversation clear on authoritative agent-switch success since #1662.**
   The store is pairing-scoped — nothing on a fresh pairing re-asserts an announcement, the next one
   arrives only with the next turn's init line — so it is a member of
   [`clearPairingScopedState`](paired-shell.md)'s shared set rather than cleared at the call site. #588

@@ -301,6 +301,21 @@ the pin's resize observer, and captured native geometry methods serve the test o
 Read-observer work and oracle reads therefore do not inflate the hook counts. Positive
 rendered-height growth precedes the scroll assertions; setup costs are excluded.
 
+The Growing-row setup also requires exactly `size + 1` committed assistant rows and the
+`Growing row` tail within the local 15-second feed allowance, before resetting work counters.
+Its readiness attachment records size, committed count, tail and elapsed time. In the
+[#1662 investigation](../../specs/architecture/1662-merged-model-pickers.md#revisions--2026-10-16-selected-host-rework),
+the original four-case subset ran 4 executed, 3 passed, 1 failed, 0 skipped. A same-attempt
+control retained the five-second rejection, then observed the row at 5,339ms and rethrew
+the original failure. This establishes delayed setup completion without identifying its
+precise latency mechanism. The shipping barrier retains geometry bounds, held/following
+positions, membership/observer counts and cleanup; diagnostic listeners do not ship.
+The [October 16 verifier](https://github.com/pyrycode/pyrycode-desktop/pull/1846#issuecomment-6219617302)
+confirms both scroll cases present and passed in the complete Linux gate at `49ed9418`:
+488 executed/passed, 0 failed, 4 existing skips, 0 retries or flaky results. In particular,
+`scroll lookup and same-row growth stay bounded on short and long threads` executed and
+passed. The later pass does not erase the controlled failure.
+
 The second case checks gaps, long hidden and zero-height runs, immediate expansion before
 resize delivery, row addition/replacement/removal and hook teardown/remount. Its streamed
 arrival adds a new assistant row; unchanged-membership growth is proved by the first case.

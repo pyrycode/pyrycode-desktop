@@ -1,5 +1,6 @@
+import { scenarioNonce } from './fixtures/clientScenario'
 import { type Page } from '@playwright/test'
-import { test, expect, encodePairingPayload, type SpawnedDaemon } from './fixtures/realDaemon'
+import { test, expect, encodePairingPayload, type SpawnedDaemon } from './fixtures/clientScenario'
 import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
@@ -319,7 +320,7 @@ test('real claude applies a stored system prompt at a spawn, and a save never re
   // Per-run nonces defeat reply caching, and here they do one thing more: the MARKER carries one, so no
   // row from an earlier turn or an earlier RUN can satisfy the positive assertion. Distinct message
   // prompts so a stale row cannot be mistaken for a later turn's.
-  const runNonce = Date.now()
+  const runNonce = scenarioNonce()
   const marker = `${MARKER_STEM}${runNonce}`
   // A spec-authored non-secret literal. It is saved into the prompt editor and NEVER sent as a message.
   // The second sentence is load-bearing: without it a model reads a terse question as licence to answer
@@ -397,7 +398,7 @@ test.fixme(
   async ({ relay, daemon, page }) => {
     test.setTimeout(SPEC_TIMEOUT_MS)
 
-    const runNonce = Date.now()
+    const runNonce = scenarioNonce()
     const marker = `${MARKER_STEM}${runNonce}`
     const storedPrompt =
       `Begin every reply with the exact token ${marker} before any other text. ` +

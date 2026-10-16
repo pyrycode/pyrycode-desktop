@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test'
+process.env.PYRY_CLIENT_MODE = 'live'
 
 // The real-claude e2e config (#252) — run ONLY via `npm run e2e:real-claude`, part of the operator's
 // pre-ship gate. It matches every `real-*` spec, which the default playwright.config.ts (the

@@ -1,5 +1,6 @@
+import { scenarioNonce } from './fixtures/clientScenario'
 import { type Page } from '@playwright/test'
-import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
+import { test, expect, encodePairingPayload } from './fixtures/clientScenario'
 import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
@@ -128,7 +129,7 @@ test('real claude restarts on Reset session and the turn stream survives it', as
 
   // Per-run nonces defeat reply caching; the replies' CONTENT is never asserted on, only their arrival.
   // Two distinct prompts so a stale row from the first turn cannot be mistaken for the second's.
-  const runNonce = Date.now()
+  const runNonce = scenarioNonce()
   const firstMessage = `Reply with the single word ready. run=${runNonce}-a`
   const secondMessage = `Reply with the single word ready. run=${runNonce}-b`
 

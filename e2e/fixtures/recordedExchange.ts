@@ -7,7 +7,8 @@ export type Recording = {
   format: 'pyrycode.daemon-exchange'
   version: 1
   source: { capturedAt: string; desktopRevision: string; daemonRevision: string; daemonBinarySha256: string; claudeVersion: string }
-  scenario: { id: 'permission-allow'; prompt: string; expectedReply: string; allowLabel: string; historyRetry: boolean }
+  scenario: { id: string; prompt?: string; expectedReply?: string; allowLabel?: string; historyRetry?: boolean;
+    inputs?: { nonce: number }; workspace?: string }
   capabilities: string[]
   deviceId: string
   wire: RecordedEntry[]
@@ -43,11 +44,15 @@ export function parseRecording(text: string): Recording {
   if (!object(source) || !nonempty(source.capturedAt) || !Number.isFinite(Date.parse(source.capturedAt)) ||
       !/^[a-f0-9]{40}$/.test(String(source.desktopRevision)) || !/^[a-f0-9]{40}$/.test(String(source.daemonRevision)) ||
       !/^[a-f0-9]{64}$/.test(String(source.daemonBinarySha256)) || !nonempty(source.claudeVersion) ||
-      !object(scenario) || scenario.id !== 'permission-allow' || !nonempty(scenario.prompt) ||
-      !nonempty(scenario.expectedReply) || !nonempty(scenario.allowLabel) || typeof scenario.historyRetry !== 'boolean' ||
+      !object(scenario) || !nonempty(scenario.id) || !/^[a-z][a-z0-9-]*$/.test(scenario.id) ||
       !Array.isArray(capabilities) || !capabilities.every(nonempty) || !capabilities.includes('thread') ||
       !capabilities.includes('interactive') || !nonempty(deviceId) || !Array.isArray(wire) ||
       wire.length === 0 || wire.length > 5000 || !object(wire[0]) || wire[0].direction !== 'client') return invalid()
+  if (scenario.id === 'permission-allow') {
+    if (!nonempty(scenario.prompt) || !nonempty(scenario.expectedReply) || !nonempty(scenario.allowLabel) ||
+        typeof scenario.historyRetry !== 'boolean') return invalid()
+  } else if (!object(scenario.inputs) || !Number.isSafeInteger(scenario.inputs.nonce) ||
+      Number(scenario.inputs.nonce) <= 0 || scenario.workspace !== undefined && !nonempty(scenario.workspace)) return invalid()
   assertRecordingSafe(value)
   const clientIds = new Set<number>()
   const daemonIds = new Set<number>()

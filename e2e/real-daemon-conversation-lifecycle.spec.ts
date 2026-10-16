@@ -1,4 +1,4 @@
-import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
+import { test, expect, encodePairingPayload } from './fixtures/clientScenario'
 import { mintChatInWorkspace } from './fixtures/mintChatRow'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 

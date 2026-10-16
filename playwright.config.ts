@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test'
+process.env.PYRY_CLIENT_MODE = 'replay'
 import { availableParallelism } from 'node:os'
 
 // E2E harness config. Playwright only scans `e2e/` — never `src/` — which is one

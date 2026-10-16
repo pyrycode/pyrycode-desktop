@@ -1,5 +1,6 @@
+import { scenarioNonce } from './fixtures/clientScenario'
 import { type Page } from '@playwright/test'
-import { test, expect, encodePairingPayload, type SpawnedDaemon } from './fixtures/realDaemon'
+import { test, expect, encodePairingPayload, type SpawnedDaemon } from './fixtures/clientScenario'
 import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
@@ -199,7 +200,7 @@ test('real claude: the Channel info sheet shows the daemon’s own MCP servers',
   await watchMcp(page)
   await createChat(page)
   const conversationId = await createdChatId(page)
-  await spawnChild(page, `What is 2 plus 2? run=${Date.now()}`)
+  await spawnChild(page, `What is 2 plus 2? run=${scenarioNonce()}`)
 
   // The operator's own route to the sheet. Opening it is what sends `mcp_status_request`.
   const beforeOpen = (await readMcp(page, conversationId)).reports.length

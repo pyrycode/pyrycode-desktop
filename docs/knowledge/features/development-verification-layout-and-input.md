@@ -464,6 +464,78 @@ Inspect retained reports before requesting another run: a stale refinement
 summary can omit subsequently available complete-suite evidence. A targeted pass
 alone does not prove full-composition reliability or erase the historical failures.
 
+### Visible-tail native acknowledgement verification
+
+The [diagnosis with original/rerun log identities](https://github.com/pyrycode/pyrycode-desktop/issues/2074#issuecomment-6221656181)
+and [verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/2075#issuecomment-6222009186)
+distinguish two historical failures of `committed folded tails require focus,
+uncovered viewport and a closed reader` in `visible-tail-read.spec.ts`:
+
+- The #2072 gate at `20fd3f8bc5` failed after 1464ms at `focus`'s initial native
+  `app.evaluate`, before read assertions, with `Execution context was destroyed`.
+  The unchanged retry-0 rerun passed in 3644ms through target 38. Launch-fate showed
+  a running app, exit 0, no signal and clean teardown. The confirmed defect was
+  unhandled ambiguous setup acknowledgement; whether show/focus executed before
+  loss, renderer navigation/crash and the upstream inspector trigger remain unproven.
+- The earlier #2043 occurrence instead waited 5000ms for target 37 after `end(37)`,
+  observing 36 (6778ms total); its unchanged rerun passed. Preserve `b345232b`'s
+  queued-scroll drain before that completion and the exact target assertion.
+  The later focus-evaluation failure does not establish a common upstream cause
+  or show that the scroll repair failed. No external prerequisite was demonstrated.
+
+The diagnosis links portable bundles `99a483213866ece7b6eedddf2be895c8aeb3f9706ab790e4591ee4012421d7f1`
+(#2072) and `74069c5b59158442f6b2badee74cdbde4b6b0fb0658af234b4d6d7a0d10e5aae`
+(#2043), original SHA-256 records and full original/rerun log paths. Builder copies
+were retained under `/tmp/builder-2074/evidence-{2072,2043}/`. These observations
+are separate from the preceding genuine-document-focus timeout investigation.
+
+The [guarded helper and callback coverage](e2e-harness-context-recovery.md#native-window-setup)
+confirm effects before recovery can resend controls. The controlled
+`npm test -- e2e/fixtures/visibleTailFocus.test.ts` baseline ran **19 executed,
+2 passed, 17 failed, 0 skipped** against the extracted original setup; the repaired
+run recorded **19 executed/passed, 0 failed/skipped**. Failures were at the intended
+acknowledgement/confirmation boundary. Logs are `/tmp/builder-2074/fault-before.log`
+and `fault-after.log`. Injected faults prove recovery semantics, without reproducing
+the unknown upstream trigger.
+
+Linux x64 browser evidence at implementation
+`3c7d9ed72f877ab7687f92584941374962941853` (including main `2eafa533b9d4`)
+used these commands, with the existing configured two workers:
+
+```sh
+npx playwright test e2e/visible-tail-read.spec.ts --grep 'committed folded tails require focus, uncovered viewport and a closed reader' --repeat-each=20 --retries=0 --reporter=json --output=/tmp/builder-2074/focused-results
+npx playwright test e2e/visible-tail-read.spec.ts --retries=0 --reporter=json --output=/tmp/builder-2074/spec-results
+```
+
+| Run | Executed | Passed | Failed | Skipped | Configured / actual workers |
+| --- | --- | --- | --- | --- | --- |
+| Named scenario repetition | 20 | 20 | 0 | 0 | 2 / 2 |
+| Complete visible-tail spec | 7 | 7 | 0 | 0 | 2 / 1 (one serial file) |
+| Complete configured verifier gate | 492 | 492 | 0 | 4 | 2 / 2 |
+
+Both builder reports, `/tmp/builder-2074/focused.json` and `spec.json`, contain the
+exact named scenario present/passed, zero flaky results, only retry index 0 and no
+report errors. Matching `.stderr` files are empty; output directories above retain
+artifacts. All 27 launch-fate attachments across 28 launches show running at outcome,
+exit 0, no signal and no teardown failures, with no fake-daemon setup-failure attachments.
+
+The complete Linux gate at `3f1ec3ac384789dc74c297f6a26bcd1a9ea5874a`,
+2026-10-16, ran `npx playwright test --reporter=json`: the exact named case passed
+in 3038ms, retry 0, and all seven visible-tail cases passed. The table's full-gate
+counts have zero flaky results and report errors, with zero retries. Retained report:
+`/work/Projects/pyrycode-desktop-agents/logs/verifier-gate_#2074_8.log`, alongside
+`verifier-gate_#2074.pass.json`. Only plan evidence changed after the builder's tested
+implementation. The four existing skips are three macOS-only badge/window cases and
+the independent system-prompt-reset fixme. The unit gate includes all 19 focus faults
+present/passed: **9,337 executed/passed, 0 failed, 3 skipped**, 404 passing files.
+
+These recorded passes preserve genuine document focus, every read target and
+committed-content check, blur/visibility/reader/chrome exclusions, processing/commit
+barriers, scroll drains and observer lifecycle assertions. Timeouts, worker configuration
+and skips remain unchanged, without fixed sleeps or assertion weakening. No production
+or visual behavior changed; provider/live-Claude checks are not required. Other operating
+systems are outside this Linux ticket's verification scope.
+
 ### Composer native setup verification
 
 The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1838#issuecomment-6030292632)

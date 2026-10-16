@@ -1,4 +1,4 @@
-import { scenarioNonce, scenarioDaemonRevision, scenarioDesktopRevision, scenarioInput, liveProof, scenarioEffect, scenarioMode } from './fixtures/clientScenario'
+import { scenarioNonce, scenarioEffect } from './fixtures/clientScenario'
 import { type Page } from '@playwright/test'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'

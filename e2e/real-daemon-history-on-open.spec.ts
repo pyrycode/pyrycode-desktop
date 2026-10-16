@@ -1,4 +1,4 @@
-import { scenarioNonce, scenarioDaemonRevision, scenarioDesktopRevision, scenarioInput, liveProof, scenarioEffect, scenarioMode } from './fixtures/clientScenario'
+import { scenarioNonce, scenarioDaemonRevision, liveProof, scenarioEffect } from './fixtures/clientScenario'
 import { execFile } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
@@ -6,7 +6,7 @@ import { readFile } from 'node:fs/promises'
 import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/clientScenario'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 import { NOT_YET_AVAILABLE, readMainProcess } from './fixtures/mainProcessRead'
-import { daemonIdentity } from './fixtures/daemonVersion'
+
 import { watchPhaseReconnect, readPhaseReconnect } from './fixtures/phaseReconnectEvidence'
 
 // Channel posts append daemon-owned assistant entries without starting a Claude turn.

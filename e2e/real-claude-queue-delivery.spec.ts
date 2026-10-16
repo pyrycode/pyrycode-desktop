@@ -1,15 +1,15 @@
-import { scenarioNonce, scenarioDaemonRevision, scenarioDesktopRevision, scenarioInput, liveProof, scenarioEffect, scenarioMode } from './fixtures/clientScenario'
-import { execFile } from 'node:child_process'
+import { scenarioNonce, scenarioDaemonRevision, liveProof, scenarioEffect } from './fixtures/clientScenario'
+
 import { existsSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { promisify } from 'node:util'
+
 import type { Page } from '@playwright/test'
 import { COMMAND_CHANNEL, type RendererCommand } from '../src/shared/ipc/commands'
 import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/clientScenario'
 import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
-import { daemonIdentity } from './fixtures/daemonVersion'
+
 import { createQueueTurnEvidence } from './fixtures/queueTurnEvidence'
 
 // The dispatcher owns credentialed execution. Keep the old drop-only case alongside these

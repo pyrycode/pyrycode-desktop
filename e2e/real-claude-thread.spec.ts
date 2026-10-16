@@ -1,10 +1,10 @@
-import { scenarioNonce, scenarioDaemonRevision, scenarioDesktopRevision, scenarioInput, liveProof, scenarioEffect, scenarioMode } from './fixtures/clientScenario'
+import { scenarioNonce, scenarioDaemonRevision, scenarioDesktopRevision } from './fixtures/clientScenario'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/clientScenario'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 import { confirmCreateChat } from './fixtures/confirmCreateChat'
-import { daemonIdentity } from './fixtures/daemonVersion'
+
 import { watchPhaseReconnect, readPhaseReconnect } from './fixtures/phaseReconnectEvidence'
 
 // Credentialed execution and revision/count artifacts belong to the dispatcher's live gate.

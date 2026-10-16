@@ -1,4 +1,5 @@
-import { scenarioNonce, scenarioDaemonRevision, scenarioDesktopRevision, scenarioInput, liveProof, scenarioEffect, scenarioMode } from './fixtures/clientScenario'
+import { installPermissionModeEvidence } from './fixtures/permissionModeEvidence'
+import { scenarioDaemonRevision, scenarioInput, liveProof, scenarioMode } from './fixtures/clientScenario'
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { promisify } from 'node:util'
@@ -40,32 +41,7 @@ test('operator bypass stays confirmed through a no-op write, then the menu retur
     await writeFile(note, `${witness}\n`, { mode: 0o600 })
   })
   await withIsolatedElectronApp(async ({ page }) => {
-    await page.evaluate(() => {
-      const proof: Proof = { readings: [], acks: [], turns: [], modals: [], tools: [], off: () => {} }
-      proof.off = window.pyry.onDaemonEvent(event => {
-        if (event.type === 'runConfigReceived') {
-          const { conversationId, sessionId, permissionMode } = event
-          proof.readings.push({ conversationId, sessionId, permissionMode, ackCount: proof.acks.length })
-        }
-        if (event.type === 'sessionSettingsUpdated') proof.acks.push(event.sessionId)
-        if (event.type === 'turnEnd') proof.turns.push(event.conversationId!)
-        const supplied = event.type === 'threadReply' && event.reply.type === 'thread_items' ? event.reply.payload.items
-          : event.type === 'threadUpdate' && event.update.type === 'thread_item_added' ? [event.update.payload.item] : []
-        for (const item of supplied) {
-          if (item.kind === 'turn_end' && item.parent === undefined && 'conversationId' in event) proof.turns.push(event.conversationId!)
-          if (item.kind === 'tool_call' && item.content !== null && typeof item.content === 'object' &&
-              !Array.isArray(item.content) && 'name' in item.content && 'conversationId' in event)
-            proof.tools.push({ conversationId: event.conversationId!, read: item.content.name === 'Read' })
-        }
-        if (event.type === 'modalShown' && event.class === 'permission') proof.modals.push({
-          // The daemon's title is "Permission required"; its prompt carries the tool name.
-          conversationId: event.conversationId, read: event.prompt === 'Read',
-          allow: event.options.find(option => option.id === 'allow_once')?.label ?? null
-        })
-        if (event.type === 'toolUse') proof.tools.push({ conversationId: event.conversationId, read: event.name === 'Read' })
-      })
-      ;(window as DriveWindow).permissionProof = proof
-    })
+    await page.evaluate(installPermissionModeEvidence)
     const proof = () => page.evaluate(() => {
       const { off: _off, ...value } = (window as DriveWindow).permissionProof
       return value

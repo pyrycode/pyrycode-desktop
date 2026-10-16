@@ -1,4 +1,3 @@
-import { scenarioNonce, scenarioDaemonRevision, scenarioDesktopRevision, scenarioInput, liveProof, scenarioEffect, scenarioMode } from './fixtures/clientScenario'
 import { test, expect, encodePairingPayload } from './fixtures/clientScenario'
 import { mintChatInWorkspace } from './fixtures/mintChatRow'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'

@@ -42,7 +42,7 @@ export function parseRecording(text: string): Recording {
   if (Buffer.byteLength(text) > 2_000_000) invalid()
   let value: unknown
   try { value = JSON.parse(text) } catch { return invalid() }
-  if (!object(value) || value.format !== 'pyrycode.daemon-exchange' || ![1, 2].includes(Number(value.version))) return invalid()
+  if (!object(value) || value.format !== 'pyrycode.daemon-exchange' || (value.version !== 1 && value.version !== 2)) return invalid()
   const { source, scenario, capabilities, deviceId, wire } = value
   if (!object(source) || !nonempty(source.capturedAt) || !Number.isFinite(Date.parse(source.capturedAt)) ||
       !/^[a-f0-9]{40}$/.test(String(source.desktopRevision)) || !/^[a-f0-9]{40}$/.test(String(source.daemonRevision)) ||

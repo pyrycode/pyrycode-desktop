@@ -1,4 +1,4 @@
-import { scenarioNonce, scenarioDaemonRevision, scenarioDesktopRevision, scenarioInput, liveProof, scenarioEffect, scenarioMode } from './fixtures/clientScenario'
+import { scenarioNonce, liveProof } from './fixtures/clientScenario'
 import { type Locator, type Page } from '@playwright/test'
 import { readdir } from 'node:fs/promises'
 import { test, expect, encodePairingPayload } from './fixtures/clientScenario'

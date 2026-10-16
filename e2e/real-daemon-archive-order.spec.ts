@@ -1,10 +1,10 @@
-import { scenarioNonce, scenarioDaemonRevision, scenarioDesktopRevision, scenarioInput, liveProof, scenarioEffect, scenarioMode } from './fixtures/clientScenario'
-import { execFile } from 'node:child_process'
+import { scenarioDaemonRevision, liveProof } from './fixtures/clientScenario'
+
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { promisify } from 'node:util'
+
 import { test, expect, encodePairingPayload } from './fixtures/clientScenario'
-import { daemonIdentity } from './fixtures/daemonVersion'
+
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
 test.use({ spawnClaude: false, seedPromoted: true })

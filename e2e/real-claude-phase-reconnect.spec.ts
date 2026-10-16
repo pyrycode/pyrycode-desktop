@@ -1,14 +1,14 @@
-import { scenarioNonce, scenarioDaemonRevision, scenarioDesktopRevision, scenarioInput, liveProof, scenarioEffect, scenarioMode } from './fixtures/clientScenario'
-import { execFile } from 'node:child_process'
+import { scenarioNonce, scenarioDaemonRevision, liveProof, scenarioEffect } from './fixtures/clientScenario'
+
 import { existsSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { connect, createServer, type Socket } from 'node:net'
 import { join } from 'node:path'
-import { promisify } from 'node:util'
+
 import { test, expect, encodePairingPayload } from './fixtures/clientScenario'
 import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
-import { daemonIdentity } from './fixtures/daemonVersion'
+
 import { watchPhaseReconnect, readPhaseReconnect, stopPhaseReconnect, hasRunningPhaseLabel } from './fixtures/phaseReconnectEvidence'
 
 // Dispatcher-owned live acceptance: PYRY_BIN must contain pyrycode#2718,

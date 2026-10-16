@@ -1,11 +1,11 @@
-import { scenarioNonce, scenarioDaemonRevision, scenarioDesktopRevision, scenarioInput, liveProof, scenarioEffect, scenarioMode } from './fixtures/clientScenario'
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
+import { scenarioNonce, scenarioDaemonRevision } from './fixtures/clientScenario'
+
+
 import { type Page } from '@playwright/test'
 import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/clientScenario'
 import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
-import { daemonIdentity } from './fixtures/daemonVersion'
+
 import type { DaemonEvent } from '../src/shared/ipc/events'
 import { waitForEffortProof, type EffortEvidence, type EffortIntent, type EffortReading as Reading } from './fixtures/effortProof'
 

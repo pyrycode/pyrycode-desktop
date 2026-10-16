@@ -99,6 +99,8 @@ describe('recorded daemon exchange', () => {
   it('requires a supported successful capture with correlated replies and no handshake or fragments', () => {
     for (const change of [
       (r: any) => { r.version = 2 },
+      (r: any) => { r.version = '1' },
+      (r: any) => { r.version = '2' },
       (r: any) => { r.source.daemonRevision = '' },
       (r: any) => { r.wire[0].direction = 'other' },
       (r: any) => { r.wire[1].message.in_reply_to = 999 },

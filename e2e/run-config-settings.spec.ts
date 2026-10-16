@@ -295,11 +295,9 @@ test('run-config sheet: model / effort / YOLO round-trip with a rejected model c
   // so nothing the client sends provokes it. This is the one push this spec makes.
   daemon.pushFrame(modelListFrame())
 
-  // THE BUG, STATED AS AN ASSERTION. role="button" is present ONLY when a session id gated the
-  // handler on. On the parent commit this times out: the app asked for a screen snapshot, that reply
-  // carries no session id, and the spec no longer manufactures one -- so the controls render inert
-  // read-only markup and every click below is a no-op. This is desktop#491 exactly.
-  await expect(modelRow(OPUS_ROW)).toHaveAttribute('role', 'button', { timeout: ROUNDTRIP_TIMEOUT_MS })
+  // The native model button is enabled only when a session id gates the handler on. A screen
+  // snapshot carries no session id, so that reply alone must leave the controls inert (#491).
+  await expect(modelRow(OPUS_ROW)).toBeEnabled({ timeout: ROUNDTRIP_TIMEOUT_MS })
 
   // #975 AC1/AC4 — one row per published entry, in the daemon's published order, labelled with the
   // entry's display name, each second line carrying the concrete identifier that entry's value

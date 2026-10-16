@@ -1,5 +1,7 @@
 import { sendConversationCommand } from './conversationActionAvailability'
 import { useMemo } from 'react'
+import { useStore } from 'zustand'
+import { agentSwitchStore, openAgentSwitch } from '../../store/agentSwitchStore'
 import { composerModelMenuModel, type ComposerModelLayers } from './ComposerModelMenu'
 import { selectDisplayedEffort } from './ComposerEffortMenu'
 import type { WireAgent, WireModelOption } from '@shared/wire/types'
@@ -29,11 +31,12 @@ import { changeSetting, isAddressableSessionId } from './runSettingsControls'
 import { contextUsagePercent } from './contextUsage'
 import {
   useConversationListStore,
+  conversationListStore,
   selectConversations,
   selectConversationAgentFor,
   type ConversationListState
 } from '../../store/conversationListStore'
-import { connectedConversationHostNow, useConversationActionAvailability, useConversationHost } from './conversationActionAvailability'
+import { connectedConversationHostNow, conversationHostNow, useConversationActionAvailability, useConversationHost } from './conversationActionAvailability'
 import { serverIdForOpenConversation } from './unpairAction'
 
 /** Subscribe to the conversation's owner, never the last host whose status changed. */
@@ -78,6 +81,27 @@ export function changeConnectedSetting(conversationId: string | null, change: Se
     { sessionId, sendCommand: sendConversationCommand, dispatch: runSettingsWriteStore.getState().dispatch },
     change
   )
+}
+
+/** Pending presentation is scoped to this conversation and its current owning host. */
+export function usePendingAgentSwitchRow(conversationId: string | null): WireModelOption | null {
+  const serverId = useConversationHost(conversationId)
+  return useStore(agentSwitchStore, s => {
+    const status = conversationId === null ? undefined : s.statuses.get(conversationId)
+    return status?.type === 'pending' && status.serverId === serverId ? status.row : null
+  })
+}
+
+/** Route the actual published row using the current binding at click time. */
+export function selectConnectedModel(conversationId: string | null, row: WireModelOption): void {
+  if (conversationId === null || !sessionSettingsConnected(conversationId) ||
+    !isAddressableSessionId(selectSessionId(sessionIdStore.getState()))) return
+  const agent = selectAgentForConversation(conversationId, conversationHostNow(conversationId))(conversationListStore.getState())
+  if ((row.agent ?? 'claude') === agent) {
+    changeConnectedSetting(conversationId, { field: 'model', value: row.value })
+  } else {
+    openAgentSwitch(conversationId, row)
+  }
 }
 
 // The Run configuration sheet's Model / Effort / YOLO sections (Figma node 20-100 subtree
@@ -147,8 +171,8 @@ function rowAgent(row: WireModelOption): WireAgent {
   return row.agent ?? 'claude'
 }
 
-/** #1651 — the rows one agent offers, in the daemon's order: the only rows a conversation's model lists may
- *  show. Nothing is reordered or deduped; `[]` when no list has arrived. */
+/** The rows one agent offers for matching and effort lookup, in the daemon's order.
+ * Nothing is reordered or deduped; `[]` when no list has arrived. */
 export function modelRowsFor(
   models: ModelListEntry | null | undefined,
   agent: WireAgent
@@ -315,6 +339,8 @@ export function RunConfigView({
   usedTokens,
   windowTokens,
   onChange,
+  onModelSelect,
+  pendingSwitchRow = null,
   errorField,
   pending,
   announced,
@@ -328,6 +354,8 @@ export function RunConfigView({
   usedTokens: number
   windowTokens: number
   onChange?: (change: SettingsChange) => void
+  onModelSelect?: (row: WireModelOption) => void
+  pendingSwitchRow?: WireModelOption | null
   errorField?: SettingsChange['field'] | null
   pending?: ReturnType<typeof selectPendingFields>
   announced?: AnnouncedModel | null
@@ -337,10 +365,11 @@ export function RunConfigView({
 }): JSX.Element {
   const selectedModel = composerModelMenuModel(models, modelLayers ?? {
     picked: '', stored: model, announced: announced?.model ?? ''
-  }, agent)?.currentId ?? null
+  }, agent, pendingSwitchRow)?.currentId ?? null
   // #975/#976: the submitted string is a published row's `value` — or, for effort, a published level —
   // VERBATIM, never normalised on the way out, which is the half of the round-trip these lines own.
-  const onModel = onChange ? (value: string): void => onChange({ field: 'model', value }) : undefined
+  const onModel = onModelSelect ?? (onChange
+    ? (row: WireModelOption): void => onChange({ field: 'model', value: row.value }) : undefined)
   const onEffort = onChange ? (level: string): void => onChange({ field: 'effort', value: level }) : undefined
   const onYolo = onChange ? (next: boolean): void => onChange({ field: 'yolo', value: next }) : undefined
   // The marking is independent of operability: the view marks whatever it is told. In production the
@@ -356,7 +385,6 @@ export function RunConfigView({
       <ModelSection
         model={selectedModel}
         models={models}
-        agent={agent}
         onSelect={onModel}
         error={errorField === 'model'}
         busy={pending?.model}
@@ -467,22 +495,19 @@ function RunningModelSection({
 function ModelSection({
   model,
   models,
-  agent,
   onSelect,
   error,
   busy
 }: {
   model: string | null
   models?: ModelListEntry | null
-  agent: WireAgent
-  onSelect?: (value: string) => void
+  onSelect?: (row: WireModelOption) => void
   error?: boolean
   busy?: boolean
 }): JSX.Element {
   const entry = models ?? null
-  // #1651: only the conversation's own agent's rows. An agent offering none reads the empty sentence; the
-  // frame-level partial notice above still reports the entry's own drops.
-  const rows = modelRowsFor(entry, agent).filter(row => row.value !== 'default')
+  // Listing spans both agents; matching and offerings remain scoped separately.
+  const rows = (entry?.models ?? []).filter(row => row.value !== 'default')
   return (
     <>
       <p className="status-sheet__section-header">Model</p>
@@ -506,25 +531,21 @@ function ModelSection({
           <p className="run-config__model-empty">{RUN_CONFIG_MODELS_EMPTY_COPY}</p>
         ) : (
           rows.map((row, index) => {
-            // EXACT EQUALITY, and the whole of the selection rule: no substring, no prefix, no case
-            // fold, no trim, anywhere on this path. It is also the half of the round-trip this line
-            // owns — the row submits its `value` verbatim, the optimistic overlay holds that same
-            // string, and this comparison re-selects the row it came from. The moment either side
-            // normalises, the two stop being the same string.
-            const isSelected = row.value === model
+            // Selection is the shared decision's visible row position. The click retains
+            // the actual row so equal raw values across agents cannot change routing.
+            const isSelected = String(index) === model
             // The daemon's report that it cut this row's own text. `null` and `[]` say the identical
             // thing per the wire contract, so the test is on length rather than on presence.
             const isCut = (row.truncated_fields?.length ?? 0) > 0
-            // onSelect present ⇒ the row is an operable button submitting its published `value`.
-            // Absent ⇒ #188's inert row (no role/tabindex/handler). Click is the baseline affordance;
-            // keyboard activation (Enter/Space) is a deliberate non-goal here.
+            // Native activation shares the same row callback for pointer, Enter and Space.
+            // Without a callback, disabled rows retain their reading and cannot take focus.
             return (
-              <div
+              <button
                 className="run-config__model-row"
                 key={index}
-                role={onSelect ? 'button' : undefined}
-                tabIndex={onSelect ? 0 : undefined}
-                onClick={onSelect ? () => onSelect(row.value) : undefined}
+                type="button"
+                disabled={!onSelect}
+                onClick={onSelect ? () => onSelect(row) : undefined}
               >
                 {isSelected ? (
                   // The filled M3 radio. Its accessible name lets a screen reader announce which model
@@ -537,22 +558,22 @@ function ModelSection({
                 ) : (
                   <span className="run-config__radio" aria-hidden="true" />
                 )}
-                <div className="run-config__model-text">
-                  <p className="run-config__model-name">{row.display_name}</p>
+                <span className="run-config__model-text">
+                  <span className="run-config__model-name">{row.display_name}</span>
                   {/* The concrete identifier this row's `value` resolves to right now, so the operator
                       can see what an alias means BEFORE the first turn rather than inferring it from an
                       announcement after it. Rendered unconditionally: an empty one is a present, empty
                       line, inventing no distinction the wire does not carry. It is not reliably
                       populated — a row may carry the literal `<unmeasured>`, which renders escaped and
                       verbatim, because it is what the daemon said. */}
-                  <p className="run-config__model-descriptor">{row.resolved_model}</p>
+                  <span className="run-config__model-descriptor">{row.resolved_model}</span>
                   {/* The cut marker is a SIBLING ELEMENT holding a client-owned constant, never text
                       concatenated into a daemon-authored node: `{row.display_name}{isCut && ' (cut)'}`
                       would fuse the two into one node, and a label ending in those same words would
                       then be indistinguishable from the sheet's own claim. */}
-                  {isCut ? <p className="run-config__model-cut">{RUN_CONFIG_CUT_COPY}</p> : null}
-                </div>
-              </div>
+                  {isCut ? <span className="run-config__model-cut">{RUN_CONFIG_CUT_COPY}</span> : null}
+                </span>
+              </button>
             )
           })
         )}
@@ -876,6 +897,7 @@ export function RunConfigSections({ conversationId }: { conversationId: string |
   )
   const reported = useReportedContextStore(selectReported)
   const agent = useConversationAgent(conversationId)
+  const pendingSwitchRow = usePendingAgentSwitchRow(conversationId)
 
   const effective = selectEffectiveSettings(snapshot, writeState)
   // #558: derived from the SAME writeState reference in the SAME render pass as `effective` — that is
@@ -919,6 +941,8 @@ export function RunConfigSections({ conversationId }: { conversationId: string |
       usedTokens={contextTokens.usedTokens}
       windowTokens={contextTokens.windowTokens}
       onChange={onChange}
+      onModelSelect={onChange ? row => selectConnectedModel(conversationId, row) : undefined}
+      pendingSwitchRow={pendingSwitchRow}
       errorField={errorField}
       pending={pending}
       announced={announced}

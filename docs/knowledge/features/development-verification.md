@@ -29,6 +29,43 @@ On the client, trace the actual inbound parser rather than trusting an old symbo
 A shared model-row lookup can govern behaviour as well as display text.
 Read all callers before broadening what an empty identifier means.
 
+## Replay native storage prerequisite
+
+Node and Electron require different `better-sqlite3` native addon ABIs. Rebuild
+for Electron after installation or a Node rebuild before replay; the
+[replay contract](../../recorded-tests.md#replay-contract) describes the command
+and startup diagnostic. A missing Electron addon can look like captured-contract
+drift: unavailable history storage makes a restarted profile send a fresh
+`thread_catch_up` cursor. Diagnose native storage before changing recorded
+requests or query ordering. The replay fixture checks an in-memory database in
+each opened Electron main process, including relaunches, before device binding.
+The probe proves addon load/open/query/close, not protected-profile persistence.
+History IPC cannot substitute for this pre-pair check because it requires paired
+host membership.
+
+The [effort-default verifier evidence](https://github.com/pyrycode/pyrycode-desktop/pull/2071#issuecomment-6220345807)
+records Linux x64 results for #2069. Failed unchanged-main evidence remains failed:
+**1 executed, 0 passed, 1 failed, 0 skipped**, zero forbidden launches. At request
+41 on connection 2, actual `thread_catch_up` used epoch `""` / version 0 instead
+of the recorded saved epoch / version 14, followed by worker exit 7. Rebuilding
+SQLite for Electron made the identical archived app/capture pass: **1 executed,
+1 passed, 0 failed, 0 skipped**, zero forbidden launches. The
+[plan's evidence paths](../../specs/architecture/2069-replay-native-storage.md#validation-evidence)
+retain `baseline-native.log`, `historical-main-recorded.log` and the successful
+`native-ready.log` under `/tmp/builder-2069/`.
+
+The original focused effort-default scenario was present and passed:
+**1 executed, 1 passed, 0 failed, 0 skipped** (`candidate-focused.log`). Complete
+guarded replay recorded **29 executed, 29 passed, 0 failed, 1 existing
+system-prompt-reset fixme**, zero retries and zero forbidden launches
+(`recorded-final.log` / `recorded-final.json` in the same evidence directory).
+Effort-default, model-recall and daemon-session-settings were present and passed;
+all 29 exchanges had zero remaining requests. Effort-default matched all 96
+requests and emitted 396 frames with the capture, original assertions, strict
+matcher and causal barriers unchanged. These are recorded offline Linux results;
+current provider behavior and live physical effects are not established, and
+macOS is outside this ticket's verification scope.
+
 ## Owned history mutation evidence
 
 A one-item edit after full replacement can conceal an unbounded production append

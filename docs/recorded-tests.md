@@ -10,6 +10,21 @@ Each `e2e/recordings/*.json` identifies its source Desktop commit, daemon source
 
 Replay uses the normal Desktop build, native thread mode, the existing encrypted fake daemon and a local forwarding relay. It never invokes the older event-to-thread publisher. Every outgoing envelope field and complete payload must match. Only fresh request IDs/timestamps and explicitly bound opaque identities vary. The same identity binds once across requests, replies and connections. Text, permission choices, routes, cursors and unknown extra fields remain part of the comparison.
 
+After installing dependencies or rebuilding SQLite for Node unit tests, run
+`npm run rebuild:electron` before replay. Node and Electron require different
+native addon ABIs; a successful Node unit run does not establish that Electron
+can open SQLite. Replay needs working local storage to restore saved history and
+its catch-up cursor after a profile restart.
+
+On initial launch and every profile relaunch, the shared replay fixture probes
+`better-sqlite3` in Electron's main process before device binding and pairing. It
+loads the application's installed addon, queries an in-memory database and closes
+it. A failed probe produces the static diagnostic
+`Replay requires working Electron SQLite; run npm run rebuild:electron before replay.`
+Loader errors and paths are not exposed. This prerequisite check does not prove
+protected-profile persistence or current provider behavior; see the
+[native-storage diagnosis and Linux replay evidence](knowledge/features/development-verification.md#replay-native-storage-prerequisite).
+
 Seven named read-only queries may reorder within an action. Every other request is an ordered barrier, including read marks. A query cannot borrow a future reply. Daemon frames retain recorded order and wait for all preceding requests, captured connection transitions and explicit test-side checkpoints. Missing, duplicate, extra or changed requests fail even after the final visible assertion. Diagnostics report counts and source provenance without payloads.
 
 `scenarioEffect` marks an external test action before capture executes it. Replay releases only the subsequent actual recorded frames. `liveProof` executes the original filesystem, registry or process assertions during capture/live runs; replay waits for the exact recorded prefix at their successful checkpoint. Offline success does not establish those physical facts.

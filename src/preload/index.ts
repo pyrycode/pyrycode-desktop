@@ -312,7 +312,8 @@ const api = {
    * handle the renderer must call on teardown (#19/#12) so listeners don't accumulate across
    * remounts. The raw IpcRendererEvent (exposing .sender/.ports) is stripped before the
    * listener runs, and removeListener uses the exact handler registered so the handle
-   * removes precisely the listener it added.
+   * removes precisely the listener it added. Complete content updates require the explicit second
+   * argument; passive chrome subscriptions avoid cloning content across contextBridge.
    *
    * StampedDaemonEvent, not DaemonEvent (#1068): every event on this channel now carries the id of
    * the server it came from, and typing the listener on the bare union would leave the field readable
@@ -323,8 +324,11 @@ const api = {
    * accepted (a handler of the supertype accepts the subtype), so all 27 renderer bridges and their
    * tests are untouched and each simply ignores the field until it needs it.
    */
-  onDaemonEvent: (listener: (event: StampedDaemonEvent) => void): (() => void) => {
+  onDaemonEvent: (listener: (event: StampedDaemonEvent) => void, includeThreadUpdates = false): (() => void) => {
     const handler = (_event: IpcRendererEvent, event: StampedDaemonEvent): void => {
+      // Content has one renderer owner. Filter before contextBridge clones it for every chrome
+      // subscription; the runtime explicitly opts in and publishes coherent, ordered batches.
+      if (event.type === 'threadUpdate' && !includeThreadUpdates) return
       const previous = historyReceipt
       historyReceipt = { type: event.type, serverId: event.serverId }
       try { listener(event) } finally { historyReceipt = previous }

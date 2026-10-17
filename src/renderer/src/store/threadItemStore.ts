@@ -26,6 +26,8 @@ type Batch = {
   abandon: () => void
 }
 export interface ThreadItemStore {
+  /** Fold ordered mutations without exposing intermediate snapshots. Never certifies completion. */
+  batch: (run: () => void) => void
   hosts: ReadonlyMap<string, ReadonlyMap<string, Slice>>
   snapshot: (hostId: string, conversationId: string) => ThreadSnapshot | null
   beginLocalRead: (hostId: string, conversationId: string, heldPage?: boolean) => {
@@ -104,7 +106,16 @@ function restoredProgress(saved: ThreadSnapshot, progress: readonly RestoreProgr
 export function createThreadItemStore(log?: { event: (fields: { event: string; code?: string }) => void }) {
   return createStore<ThreadItemStore>((set, get) => {
     const reads = new Map<string, Map<string, { progress: RestoreProgress[] }>>()
-    const read = (host: string, conversation: string): Slice | undefined => get().hosts.get(host)?.get(conversation)
+    let pending: Map<string, Map<string, Slice>> | undefined
+    let copies: Map<ReadonlyMap<number, HeldItem>, Map<number, HeldItem>> | undefined
+    const read = (host: string, conversation: string): Slice | undefined => pending?.get(host)?.get(conversation) ?? get().hosts.get(host)?.get(conversation)
+    function writable(source: ReadonlyMap<number, HeldItem>): Map<number, HeldItem> {
+      const held = copies?.get(source)
+      if (held) return held
+      const next = new Map(source)
+      copies?.set(source, next); copies?.set(next, next)
+      return next
+    }
     function publish(host: string, conversation: string, slice: Slice,
       change: { item?: HeldItem; ranges?: readonly Range[]; acceptEpoch?: boolean; resetId?: string;
         availability?: OwnedThreadChanges['availability']; completion?: OwnedThreadChanges['completion'] } = {}): void {
@@ -120,6 +131,23 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
         slice = { ...slice, owned }
         reads.get(host)?.get(conversation)?.progress.push({ metadata, ranges: owned.ranges,
           completion: owned.completion, availability: owned.availability })
+      }
+      if (pending) {
+        const chats = pending.get(host) ?? new Map<string, Slice>()
+        const previous = chats.get(conversation)?.owned, next = slice.owned
+        if (previous && next && previous.metadata.epoch === next.metadata.epoch && next.resetId === undefined) {
+          const items = new Map(previous.items.map(item => [item.id, item]))
+          next.items.forEach(item => items.set(item.id, item))
+          slice = { ...slice, owned: { ...next, items: [...items.values()],
+            acceptEpoch: previous.acceptEpoch || next.acceptEpoch,
+            ...(previous.resetId === undefined ? {} : { resetId: previous.resetId }),
+            ranges: next.ranges.length ? rangesUnion([...previous.ranges, ...next.ranges]) : previous.ranges,
+            priorProgress: [...previous.priorProgress ?? [], { metadata: previous.metadata,
+              ...(previous.completion === undefined ? {} : { completion: previous.completion }),
+              ...(previous.availability === undefined ? {} : { availability: previous.availability }) }] } }
+        }
+        chats.set(conversation, slice); pending.set(host, chats)
+        return
       }
       const hosts = new Map(get().hosts), conversations = new Map(hosts.get(host))
       conversations.set(conversation, slice)
@@ -140,8 +168,7 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
       const held = slice.byId.get(item.id)
       if (held && held.kind !== item.kind) return repair(host, conversation, slice, version, 'kind')
       const newer = !held || item.rev > held.rev || isSameRevisionTextExtension(held, item)
-      const byId = new Map(slice.byId)
-      if (newer) byId.set(item.id, detach(item))
+      const byId = newer ? writable(slice.byId).set(item.id, detach(item)) : slice.byId
       success(host, conversation, slice, byId, version, live, newer, newer ? byId.get(item.id) : undefined)
       return { type: newer ? 'applied' : 'ignored' }
     }
@@ -154,13 +181,35 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
       if (!slice.appendCompanion && !appendCompanion && !changed && nextVersion === s.version && checkpoint === s.checkpoint && uncommittedVersion === slice.uncommittedVersion) return
       publish(host, conversation, { ...slice, byId, appendCompanion,
         uncommittedVersion, snapshot: Object.freeze({ ...s,
-        items: changed ? ordered(byId) : s.items,
-        arrivalOrder: changed ? Object.freeze([...byId.keys()]) : s.arrivalOrder,
+        items: changed && !pending ? ordered(byId) : s.items,
+        arrivalOrder: changed && !pending ? Object.freeze([...byId.keys()]) : s.arrivalOrder,
         version: nextVersion, checkpoint, uncommittedVersion }) }, { item })
       log?.event({ event: 'thread-items-applied', code: live ? 'live' : 'batch' })
     }
     return {
       hosts: new Map(),
+      batch(run) {
+        if (pending) { run(); return }
+        const staged = new Map<string, Map<string, Slice>>()
+        pending = staged; copies = new Map()
+        try { run() } finally {
+          pending = undefined; copies = undefined
+          if (staged.size) {
+            const hosts = new Map(get().hosts)
+            for (const [host, changes] of staged) {
+              const chats = new Map(hosts.get(host))
+              for (const [chat, slice] of changes) {
+                const previous = chats.get(chat)
+                chats.set(chat, slice.byId === previous?.byId ? slice : { ...slice,
+                  snapshot: Object.freeze({ ...slice.snapshot, items: ordered(slice.byId),
+                    arrivalOrder: Object.freeze([...slice.byId.keys()]) }) })
+              }
+              hosts.set(host, chats)
+            }
+            set({ hosts })
+          }
+        }
+      },
       snapshot: (host, conversation) => read(host, conversation)?.snapshot ?? null,
       beginLocalRead(host, conversation, heldPage = false) {
         const initial = read(host, conversation)
@@ -273,7 +322,7 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
           }
           next = detach({ ...held, content: { ...content, text: content.text + update.payload.text }, rev: u.rev })
         }
-        const byId = new Map(slice.byId)
+        const byId = writable(slice.byId)
         byId.set(held.id, next)
         success(host, conversation, slice, byId, u.version, true, true, next,
           update.type === 'thread_item_changed' ? { id: u.item_id, rev: u.rev, version: u.version } : undefined)
@@ -293,13 +342,15 @@ export function createThreadItemStore(log?: { event: (fields: { event: string; c
           applyItems(items, version) {
             if (!current()) return [{ type: 'stale' }]
             const results: ThreadApplyResult[] = []
-            for (const item of items) {
-              const slice = current()
-              if (!slice) { results.push({ type: 'stale' }); break }
-              const result = applyFull(host, conversation, slice, item, version, false)
-              if (result.type === 'repair') failed = true
-              results.push(result)
-            }
+            get().batch(() => {
+              for (const item of items) {
+                const slice = current()
+                if (!slice) { results.push({ type: 'stale' }); break }
+                const result = applyFull(host, conversation, slice, item, version, false)
+                if (result.type === 'repair') failed = true
+                results.push(result)
+              }
+            })
             return results
           },
           commit(certificate) {

@@ -6,12 +6,13 @@ import type { RendererCommand } from '../../../shared/ipc/commands'
 
 const item = (id = 10, rev = 10, order = id): ThreadItem => ({ id, rev, order,
   kind: 'assistant_message', status: 'running', active: true, shown: true, summary: 'held', content: { text: String(rev) } })
-function setup() {
+function setup(onComplete?: (host: string, conversation: string, epoch: string, version: number) => void) {
   const store = createThreadItemStore(), commands: Extract<RendererCommand, { type: 'queryThread' }>[] = []
   const states: { host: string; conversation: string; state: ThreadQueryState }[] = []
   let id = 0
   const coordinator = createThreadQueryCoordinator({ store, requestId: () => `q${++id}`,
-    sendCommand: command => commands.push(command), onState: (host, conversation, state) => states.push({ host, conversation, state }) })
+    sendCommand: command => commands.push(command), onComplete,
+    onState: (host, conversation, state) => states.push({ host, conversation, state }) })
   const sync = (conversationId: string | null = 'c', connected = true, restorePending = false, serverId = 'h') =>
     coordinator.input({ type: 'sync', serverId, conversationId, connected, restorePending })
   const reply = (request: number, value: ThreadReply, serverId = commands[request].serverId, conversationId = value.payload.conversation_id) =>
@@ -34,6 +35,28 @@ function setup() {
 afterEach(() => vi.useRealTimers())
 
 describe('supplied thread query coordination', () => {
+  it('notifies completed progress once after publishing a coherent live batch, and never certifies repair', () => {
+    const completed = vi.fn(), f = setup(completed)
+    f.sync(); f.batch(); f.window(); completed.mockClear()
+    const published = vi.fn(); f.store.subscribe(published)
+    f.coordinator.batch(() => {
+      for (let id = 21; id <= 40; id++) f.live({ type: 'thread_item_added', payload: {
+        conversation_id: 'c', epoch: 'e', version: id, item: item(id, 1) } })
+      expect(completed).not.toHaveBeenCalled()
+      expect(published).not.toHaveBeenCalled()
+    })
+    expect(completed).toHaveBeenCalledOnce()
+    expect(completed).toHaveBeenCalledWith('h', 'c', 'e', 40)
+    expect(published).toHaveBeenCalledOnce()
+    f.coordinator.batch(() => {
+      f.live({ type: 'thread_text_append', payload: { conversation_id: 'c', epoch: 'e', version: 50,
+        item_id: 999, base_rev: 1, rev: 2, text: 'missing' } })
+    })
+    expect(completed).toHaveBeenCalledOnce()
+    expect(f.snapshot()?.repair).not.toBeNull()
+    f.coordinator.dispose()
+  })
+
   it('defers restore and uses the saved checkpoint on reopening', () => {
     const f = setup(), s = f.store.getState()
     f.sync('c', false); expect(f.commands).toHaveLength(0)

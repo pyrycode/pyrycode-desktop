@@ -18,9 +18,11 @@ import { createThreadTaskStops } from '../screens/conversation/threadTaskPresent
 import { createThreadRefusalActions, threadComposerReports } from '../screens/conversation/threadComposerReports'
 
 const key = (host: string, chat: string) => JSON.stringify([host, chat])
-const MAX_HELD_APPENDS = 256
+const MAX_DRAIN = 128
+const conversationOf = (event: StampedDaemonEvent): string | undefined => event.type === 'conversationDeleted'
+  ? event.id : 'conversationId' in event ? event.conversationId : event.envelopeConversationId ?? undefined
 
-/** Coalesces streamed text appends until the next animation frame (#1887 on the thread route). */
+/** Frame opportunity, raced against a timer so a hidden window still makes progress. */
 export interface ThreadFrameScheduler {
   request: (callback: () => void) => number
   cancel: (handle: number) => void
@@ -56,7 +58,11 @@ export function createThreadRuntime(deps: {
     state.setState(s => { const next = new Set(s.linked); if (linked) next.add(host); else next.delete(host); return { linked: next } })
   }
   let disposed = false
-  let held: StampedDaemonEvent[] = [], frameHandle: number | undefined
+  const owners = new Map<string, { generation?: symbol }>()
+  const listeners = new Set<(event: StampedDaemonEvent) => void>()
+  const emit = (event: StampedDaemonEvent) => { for (const listener of listeners) listener(event) }
+  let held: { event: StampedDaemonEvent; owner?: { generation?: symbol } }[] = [], frameHandle: number | undefined
+  let timer: ReturnType<typeof setTimeout> | undefined, scheduled: symbol | undefined
   let selected: { host: string; chat: string; generation: symbol; cancel?: () => void; configurationRefreshSession?: string;
     local?: { generation: symbol; cancel: () => void } } | undefined
   function localState(host: string, chat: string, value: ThreadQueryState): void {
@@ -147,10 +153,11 @@ export function createThreadRuntime(deps: {
     state.setState(s => { const restoring = new Set(s.restoring); restoring.delete(id); return { restoring } })
     sync()
   }
-  const offItems = items.subscribe(() => {
+  const offItems = items.subscribe((next, previous) => {
     if (selected?.local && items.getState().hosts.get(selected.host)?.get(selected.chat)?.generation !== selected.local.generation)
       cancelLocal()
-    for (const [host, chats] of items.getState().hosts) for (const chat of chats.keys()) {
+    for (const [host, chats] of next.hosts) for (const chat of chats.keys()) {
+      if (chats.get(chat) === previous.hosts.get(host)?.get(chat)) continue
       const snapshot = items.getState().snapshot(host, chat)
       if (!snapshot || !isThread(host, chat)) continue
       sends.getState().settle(snapshot); taskStops.getState().settle(snapshot)
@@ -166,6 +173,7 @@ export function createThreadRuntime(deps: {
     if (offer) refusals.getState().observe(offer)
   }
   function remove(host: string, chat: string): void {
+    retire(host, chat)
     if (selected?.host === host && selected.chat === chat) { cancelLocal(); selected.cancel?.(); selected = undefined; query.cancelHost(host) }
     items.getState().deleteConversation(host, chat); sends.getState().deleteConversation(host, chat); refusals.getState().remove(host, chat); taskStops.getState().remove(host, chat)
     lives.get(key(host, chat))?.getState().dispatch({ type: 'dispose' }); lives.delete(key(host, chat))
@@ -179,6 +187,7 @@ export function createThreadRuntime(deps: {
     })
   }
   function removeHost(host: string): void {
+    retire(host)
     if (selected?.host === host) { cancelLocal(); selected.cancel?.(); selected = undefined }
     query.cancelHost(host)
     const prefix = '[' + JSON.stringify(host) + ','
@@ -199,6 +208,10 @@ export function createThreadRuntime(deps: {
   const offRemoval = subscribeChatHistoryRemoval(host => removed => { if (removed) removeHost(host) })
   return {
     items, sends, refusals, taskStops, state, live, isThread,
+    subscribe(listener: (event: StampedDaemonEvent) => void): () => void {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    },
     acceptsLifecycle(event: StampedDaemonEvent): boolean {
       if (this.acceptsSession(event)) return true
       if (!selected || event.serverId !== selected.host) return false
@@ -224,6 +237,7 @@ export function createThreadRuntime(deps: {
       observeReports(host, row.id)
     },
     open(host: string, chat: string) {
+      if (selected) retire(selected.host, selected.chat)
       cancelLocal()
       selected?.cancel?.()
       if (selected) query.input({ type: 'sync', serverId: selected.host, conversationId: null, connected: isLinked(selected.host) })
@@ -231,6 +245,7 @@ export function createThreadRuntime(deps: {
       selected = target
       return { done: restore(target), cancel() {
         if (selected !== target) return
+        retire(host, chat)
         cancelLocal()
         target.cancel?.(); selected = undefined
         query.input({ type: 'sync', serverId: host, conversationId: null, connected: isLinked(host) })
@@ -239,21 +254,30 @@ export function createThreadRuntime(deps: {
     query: demandLocal,
     event(event: StampedDaemonEvent) {
       if (disposed || event.serverId === null) return
-      if (deps.frame && event.type === 'threadUpdate' && event.update.type === 'thread_text_append') {
-        // An uninterrupted append burst publishes on the next frame, in arrival order with its own
-        // host and conversation; the first append schedules it and later ones never postpone it.
-        held.push(event)
-        // A window whose frames are paused (minimised) still applies a long burst, in order.
-        if (held.length >= MAX_HELD_APPENDS) flush()
-        else if (frameHandle === undefined) frameHandle = deps.frame.request(() => { frameHandle = undefined; flush() })
+      if (deps.frame && (event.type === 'threadUpdate' || held.length > 0)) {
+        // Keep received attribution and FIFO ordering, including control boundaries. Receipt never
+        // drains synchronously: each scheduled task has a finite application budget.
+        let owner: { generation?: symbol } | undefined
+        const chat = conversationOf(event)
+        if (chat !== undefined) {
+          const id = key(event.serverId, chat)
+          const generation = items.getState().hosts.get(event.serverId)?.get(chat)?.generation
+          owner = owners.get(id)
+          if (!owner || (owner.generation !== undefined && owner.generation !== generation) ||
+              event.type === 'threadReply' && event.reply.type === 'thread_reset') {
+            owner = { generation }; owners.set(id, owner)
+            if (event.type === 'threadReply' && event.reply.type === 'thread_reset') owner.generation = undefined
+          }
+        }
+        held.push({ event, owner })
+        schedule()
         return
       }
-      // Any other event is an ordering boundary: earlier appends apply first.
-      flush()
       handle(event)
+      emit(event)
     },
     suspend() {
-      flush()
+      retire()
       cancelLocal()
       selected?.cancel?.(); selected = undefined
       for (const host of state.getState().linked) query.cancelHost(host)
@@ -266,18 +290,69 @@ export function createThreadRuntime(deps: {
     dispose() {
       cancelLocal()
       disposed = true
-      if (frameHandle !== undefined) deps.frame?.cancel(frameHandle)
-      frameHandle = undefined; held = []
+      listeners.clear()
+      retire()
       selected?.cancel?.(); selected = undefined; query.dispose(); offItems(); offRemoval()
       for (const [host, chats] of items.getState().hosts) for (const chat of chats.keys()) conversationReadRouteStore.getState().select(host, chat, null)
       for (const store of lives.values()) store.getState().dispatch({ type: 'dispose' })
       lives.clear(); state.setState({ linked: new Set(), localQueries: new Map() }); items.getState().clearAll(); sends.getState().dispose()
     }
   }
-  function flush(): void {
-    if (frameHandle !== undefined) { deps.frame?.cancel(frameHandle); frameHandle = undefined }
-    // One at a time from the front, so an event that throws leaves the later ones held, not lost.
-    while (held.length > 0) handle(held.shift()!)
+  function unschedule(): void {
+    scheduled = undefined
+    if (frameHandle !== undefined) deps.frame?.cancel(frameHandle)
+    clearTimeout(timer); timer = undefined; frameHandle = undefined
+  }
+  function retire(host?: string, chat?: string): void {
+    held = host === undefined ? [] : held.filter(({ event }) => event.serverId !== host ||
+      chat !== undefined && conversationOf(event) !== chat)
+    for (const id of owners.keys()) if (host === undefined || id === key(host, chat ?? '') ||
+        chat === undefined && id.startsWith('[' + JSON.stringify(host) + ',')) owners.delete(id)
+    unschedule()
+    if (held.length) schedule()
+  }
+  function schedule(continuation = false): void {
+    if (scheduled || disposed || !held.length) return
+    const token = Symbol()
+    scheduled = token
+    const drain = () => {
+      if (disposed || scheduled !== token) return
+      unschedule()
+      let remaining = MAX_DRAIN
+      while (held.length && remaining > 0) {
+        if (held[0].event.type === 'threadUpdate') {
+          const applied: StampedDaemonEvent[] = []
+          query.batch(() => {
+            while (remaining > 0 && held[0]?.event.type === 'threadUpdate') {
+              const entry = held.shift()
+              if (entry) { remaining--; apply(entry, applied) }
+            }
+          })
+          for (const event of applied) emit(event)
+        } else {
+          const entry = held.shift()
+          if (entry) { remaining--; apply(entry) }
+        }
+      }
+      // A chain of animation frames can starve input/timers while React commits long threads.
+      // Continuations must return through the task queue before doing any more application work.
+      schedule(true)
+    }
+    if (!continuation) frameHandle = deps.frame?.request(drain)
+    timer = setTimeout(drain, continuation ? 0 : 50)
+  }
+  function apply({ event, owner }: (typeof held)[number], applied?: StampedDaemonEvent[]): void {
+    const chat = conversationOf(event)
+    if (owner && event.serverId !== null && chat !== undefined) {
+      const host = event.serverId
+      const generation = () => items.getState().hosts.get(host)?.get(chat)?.generation
+      if (owner.generation !== undefined && owner.generation !== generation() &&
+          !(event.type === 'conversationDeleted' && generation() === undefined)) return
+      handle(event)
+      owner.generation = generation()
+    } else handle(event)
+    if (applied) applied.push(event)
+    else emit(event)
   }
   function handle(event: StampedDaemonEvent): void {
     if (disposed || event.serverId === null) return
@@ -369,7 +444,7 @@ const useRuntimeEffect = typeof document === 'undefined' ? useEffect : useLayout
 
 export function useThreadRuntime(): void {
   useRuntimeEffect(() => {
-    const off = window.pyry.onDaemonEvent(threadRuntime.event)
+    const off = window.pyry.onDaemonEvent(threadRuntime.event, true)
     const offProjection = connectThreadLiveProjection(threadRuntime)
     return () => { off(); offProjection(); threadRuntime.suspend() }
   }, [])

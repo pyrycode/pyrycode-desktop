@@ -37,6 +37,6 @@ export function installPermissionModeEvidence(): void {
       allow: event.options.find(option => option.id === 'allow_once')?.label ?? null
     })
     if (event.type === 'toolUse') proof.tools.push({ conversationId: event.conversationId, read: event.name === 'Read' })
-  })
+  }, true)
   ;(window as DriveWindow).permissionProof = proof
 }

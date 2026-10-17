@@ -33,6 +33,12 @@ type Host = { connected: boolean; scope?: Scope; pending?: Pending }
 export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
   const hosts = new Map<string, Host>()
   let disposed = false
+  let completions: Map<string, () => void> | undefined
+  function complete(host: string, chat: string, epoch: string, version: number): void {
+    const notify = () => deps.onComplete?.(host, chat, epoch, version)
+    if (completions) completions.set(JSON.stringify([host, chat]), notify)
+    else notify()
+  }
   const store = () => deps.store.getState()
   const generation = (host: string, id: string) => store().hosts.get(host)?.get(id)?.generation
   function present(host: string, scope: Scope, state: ThreadQueryState): void {
@@ -155,7 +161,7 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
     release(h, p)
     deps.log?.event({ event: 'thread-query-completed', code: p.query.type })
     if (p.query.type === 'thread_catch_up') { s.catchUp = false; s.ready = true; s.recovery = false; s.resetRecovery = false }
-    if (p.query.type === 'thread_catch_up') deps.onComplete?.(host, s.id, v.epoch, v.version)
+    if (p.query.type === 'thread_catch_up') complete(host, s.id, v.epoch, v.version)
     if ('older_exists' in v) s.exhausted = !v.older_exists
     present(host, s, { type: 'idle' }); pump(host, h)
   }
@@ -200,7 +206,7 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
         if (applied.type === 'repair') repair(e.serverId, h, e.conversationId)
         else if (applied.type === 'applied' && h.scope?.id === e.conversationId && h.scope.ready) {
           const snapshot = store().snapshot(e.serverId, e.conversationId)
-          if (snapshot && !snapshot.repair) deps.onComplete?.(e.serverId, e.conversationId, snapshot.epoch, snapshot.checkpoint)
+          if (snapshot && !snapshot.repair) complete(e.serverId, e.conversationId, snapshot.epoch, snapshot.checkpoint)
         }
       } else {
         const snapshot = store().snapshot(e.serverId, e.conversationId)
@@ -232,7 +238,13 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
     if (h?.scope) present(host, h.scope, { type: 'idle' })
   }
   // cancelHost is connection teardown; navigation instead retains an unfinished host slot.
-  return { input, cancelHost, dispose(): void {
+  return { input, cancelHost, batch(run: () => void): void {
+    if (completions) { run(); return }
+    const notifications = new Map<string, () => void>()
+    completions = notifications
+    try { store().batch(run) } finally { completions = undefined }
+    for (const notify of notifications.values()) notify()
+  }, dispose(): void {
     disposed = true
     for (const host of hosts.keys()) cancelHost(host)
   } }

@@ -39,7 +39,7 @@ async function observe(page: Page) {
   })
   await page.evaluate(() => {
     const target = window as unknown as {
-      pyry: { onDaemonEvent: (listener: (event: StampedDaemonEvent) => void) => () => void }
+      pyry: { onDaemonEvent: (listener: (event: StampedDaemonEvent) => void, content?: boolean) => () => void }
       recordLunaProof: (event: ProofEvent) => Promise<void>
       stopLunaProof: () => void
     }
@@ -50,7 +50,7 @@ async function observe(page: Page) {
         // Test observation only; completion is awaited through the proof predicates below.
         void target.recordLunaProof(event)
       }
-    })
+    }, true)
   })
   return {
     settings: () => events.filter((e): e is Extract<ProofEvent, { type: 'runConfigReceived' }> => e.type === 'runConfigReceived'),

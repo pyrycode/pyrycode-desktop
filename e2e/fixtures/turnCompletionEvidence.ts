@@ -16,7 +16,7 @@ export function installTurnCompletionEvidence(): void {
           c.terminal_reason && c.terminal_reason !== 'completed' || c.error_category) continue
       completed.add(JSON.stringify([event.serverId, event.conversationId, update.payload.epoch, item.id]))
     }
-  })
+  }, true)
   ;(window as typeof window & { turnCompletionEvidence: { count: () => number; stop: () => void } })
     .turnCompletionEvidence = { count: () => completed.size, stop: off }
 }

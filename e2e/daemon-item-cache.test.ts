@@ -77,6 +77,37 @@ async function cache(intercept?: (request: ChatHistoryRequest, execute: () => Pr
   return { fresh, source, api, writer }
 }
 
+it('batched admission saves every owned change with identical scalar completion and repair evidence', async () => {
+  const results: unknown[] = []
+  for (const batched of [false, true]) {
+    const { fresh, source, api, writer } = await cache()
+    api.acceptEpoch('a', 'c', 'e')
+    const run = () => {
+      for (let id = 1; id <= 12; id++) api.applyUpdate('a', { type: 'thread_item_added', payload: {
+        conversation_id: 'c', epoch: 'e', version: id, item: { id, rev: 1, kind: 'assistant_message',
+          order: 20 - id, shown: true, active: false, status: 'finished', summary: '', content: { text: `item ${id}` } } } })
+      api.applyUpdate('a', { type: 'thread_item_changed', payload: { conversation_id: 'c', epoch: 'e',
+        version: 13, item_id: 1, base_rev: 1, rev: 2, changes: { order: 0 } } })
+      api.applyUpdate('a', { type: 'thread_text_append', payload: { conversation_id: 'c', epoch: 'e',
+        version: 13, item_id: 1, base_rev: 2, rev: 2, text: ' companion' } })
+      api.requireRepair('a', 'c', 'e', 20)
+      const recovery = api.beginBatch('a', 'c', 'e')!
+      recovery.applyItems([{ id: 15, rev: 1, kind: 'assistant_message', order: 30, shown: true,
+        active: false, status: 'finished', summary: '', content: { text: 'recovered' } }], 20)
+      recovery.commit({ fromVersion: 0, version: 20, ranges: [{ start: 0, end: 31 }], olderAvailable: false })
+      api.requireRepair('a', 'c', 'e', 21)
+    }
+    if (batched) api.batch(run)
+    else run()
+    await writer.flush()
+    const saved = await fresh().execute({ operation: 'readThread', serverId: 'a', conversationId: 'c' })
+    expect(saved).toMatchObject({ status: 'stored', snapshot: { thread: source.getState().snapshot('a', 'c') } })
+    results.push(saved)
+    await writer.stop()
+  }
+  expect(results[1]).toEqual(results[0])
+})
+
 it.each(['separate', 'coalesced', 'held-failure'] as const)('explicit same-epoch reset replaces owned history through %s saves', async mode => {
   let hold = false, release!: (result: ChatHistoryResult) => void
   const { fresh, api, writer } = await cache((_request, execute) => hold ? new Promise(resolve => { release = resolve }) : execute())

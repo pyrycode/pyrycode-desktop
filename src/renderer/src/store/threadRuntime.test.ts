@@ -129,7 +129,7 @@ describe('production thread composition', () => {
     expect(send.mock.calls[1][0]).toMatchObject({ serverId: 'one', query: { type: 'thread_catch_up' } })
     r.dispose()
   })
-  it('defers an uninterrupted append burst to the next frame and flushes it before any other event', async () => {
+  it('folds an append burst on its first frame and orders controls after content', async () => {
     const callbacks: (() => void)[] = []
     const frame = { request: vi.fn((callback: () => void) => callbacks.push(callback)), cancel: vi.fn() }
     const send = vi.fn()
@@ -155,20 +155,21 @@ describe('production thread composition', () => {
     expect(publications).toBe(0)
     callbacks.shift()!()
     expect(text()).toBe('0,1,2,')
-    expect(publications).toBe(3)
-    // A boundary event applies earlier pending appends first and cancels their frame.
+    expect(publications).toBe(1)
+    // Controls wait for a bounded scheduled drain, rather than flushing on receipt.
     append(3)
     r.event({ type: 'disconnected', serverId: 'one' })
+    expect(text()).toBe('0,1,2,')
+    callbacks.shift()!()
     expect(text()).toBe('0,1,2,3,')
-    expect(frame.cancel).toHaveBeenCalledOnce()
     // Teardown cancels a scheduled frame and later callbacks change nothing.
     r.event(connected('one', true)); append(4)
     r.dispose()
-    expect(frame.cancel).toHaveBeenCalledTimes(2)
     callbacks.forEach(callback => callback())
     off()
   })
-  it('applies held appends on suspend and on a burst long enough to outlast paused frames', async () => {
+  it('bounds each drain with paused frames and retires queued appends on suspend', async () => {
+    vi.useFakeTimers()
     const frame = { request: vi.fn(() => 1), cancel: vi.fn() }
     const send = vi.fn()
     const r = createThreadRuntime({ send, read: async () => ({ status: 'missing' }), log: vi.fn(), frame })
@@ -188,12 +189,139 @@ describe('production thread composition', () => {
     for (let i = 0; i < 255; i++) append()
     expect(text()).toBe('')
     append()
+    expect(text()).toHaveLength(0)
+    await vi.advanceTimersByTimeAsync(50)
+    expect(text()).toHaveLength(128)
+    await vi.advanceTimersByTimeAsync(50)
     expect(text()).toHaveLength(256)
     append(); append()
     r.suspend()
-    expect(text()).toHaveLength(258)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(text()).toHaveLength(256)
     r.dispose()
+    vi.useRealTimers()
   })
+  it.each(['navigate', 'cancel', 'reset', 'delete', 'unpair', 'suspend', 'dispose'] as const)(
+    'retires queued work and late callbacks on %s, including reused IDs on another host', async action => {
+      vi.useFakeTimers()
+      const callbacks: (() => void)[] = [], send = vi.fn()
+      const r = createThreadRuntime({ send, read: async () => ({ status: 'missing' }), log: vi.fn(),
+        frame: { request: callback => callbacks.push(callback), cancel: () => {} } })
+      try {
+        r.event(connected('one', true)); r.event(connected('two', true))
+        const opening = r.open('one', 'chat'); await opening.done
+        r.items.getState().acceptEpoch('one', 'chat', 'e')
+        r.event({ type: 'threadUpdate', serverId: 'one', conversationId: 'chat',
+          correlation: { id: 1, ts: '' }, update: { type: 'thread_item_added', payload: {
+            conversation_id: 'chat', epoch: 'e', version: 2, item: { id: 1, rev: 1, kind: 'assistant_message',
+              shown: true, active: false, status: 'finished', summary: '', content: { text: 'departed' } } } } })
+        if (action === 'navigate') await r.open('two', 'chat').done
+        if (action === 'cancel') opening.cancel()
+        if (action === 'reset') r.items.getState().acceptEpoch('one', 'chat', 'e', true)
+        if (action === 'delete') {
+          // Deletion is ordered, but content received after it cannot resurrect the owner.
+          r.event({ type: 'conversationDeleted', serverId: 'one', id: 'chat' })
+        }
+        if (action === 'unpair') beginChatHistoryRemoval('one')(true)
+        if (action === 'suspend') r.suspend()
+        if (action === 'dispose') r.dispose()
+        callbacks.forEach(callback => callback())
+        await vi.advanceTimersByTimeAsync(200)
+        expect(r.items.getState().snapshot('one', 'chat')?.items ?? []).toEqual([])
+        expect(r.items.getState().snapshot('two', 'chat')?.items ?? []).toEqual([])
+      } finally { r.dispose(); vi.useRealTimers() }
+    })
+
+  it('publishes each affected conversation and settles sends once per bounded drain before controls', async () => {
+    vi.useFakeTimers()
+    const send = vi.fn(), r = createThreadRuntime({ send, read: async () => ({ status: 'missing' }),
+      log: vi.fn(), frame: { request: () => 1, cancel: () => {} } })
+    try {
+      r.event(connected('one', true)); await r.open('one', 'chat').done
+      const api = r.items.getState()
+      api.acceptEpoch('one', 'chat', 'e'); api.acceptEpoch('one', 'other', 'e')
+      const settle = vi.spyOn(r.sends.getState(), 'settle'), publications = vi.fn()
+      const off = r.items.subscribe(publications)
+      for (let id = 1; id <= 300; id++) r.event({ type: 'threadUpdate', serverId: 'one', conversationId: 'chat',
+        correlation: { id, ts: '' }, update: { type: 'thread_item_added', payload: {
+          conversation_id: 'chat', epoch: 'e', version: id, item: { id, rev: 1, kind: 'assistant_message',
+            shown: true, active: false, status: 'finished', summary: '', content: { text: 'batch' } } } } })
+      r.event({ type: 'disconnected', serverId: 'one' })
+      expect(publications).not.toHaveBeenCalled()
+      for (const size of [128, 256, 300]) {
+        await vi.advanceTimersToNextTimerAsync()
+        expect(api.snapshot('one', 'chat')?.items).toHaveLength(size)
+        expect(r.state.getState().linked.has('one')).toBe(size < 300)
+      }
+      expect(publications).toHaveBeenCalledTimes(3)
+      expect(settle).toHaveBeenCalledTimes(3) // the unrelated conversation never derives again
+      off()
+    } finally { r.dispose(); vi.useRealTimers() }
+  })
+
+  it('keeps questions, permissions and session replacement behind preceding content with paused frames', async () => {
+    vi.useFakeTimers()
+    const r = createThreadRuntime({ send: () => {}, read: async () => ({ status: 'missing' }), log: vi.fn(),
+      frame: { request: () => 1, cancel: () => {} } })
+    try {
+      r.event(connected('one', true)); await r.open('one', 'chat').done
+      r.summary('one', { id: 'chat', current_session_id: 'A' })
+      r.items.getState().acceptEpoch('one', 'chat', 'e')
+      const seen: number[] = [], live = r.live('one', 'chat')
+      const off = live.subscribe(() => seen.push(r.items.getState().snapshot('one', 'chat')!.items.length))
+      const notified: number[] = []
+      const offEvents = r.subscribe(() => notified.push(r.items.getState().snapshot('one', 'chat')!.items.length))
+      r.event({ type: 'threadUpdate', serverId: 'one', conversationId: 'chat', correlation: { id: 1, ts: '' },
+        update: { type: 'thread_item_added', payload: { conversation_id: 'chat', epoch: 'e', version: 2,
+          item: { id: 1, rev: 1, kind: 'assistant_message', status: 'finished', active: false,
+            shown: true, summary: '', content: { text: 'preceding' } } } } })
+      r.event({ type: 'questionShown', serverId: 'one', conversationId: 'chat', envelopeSessionId: 'A',
+        questionBatchId: 'q', questions: [{ question: 'Choose?', header: 'Choice', options: [{ label: 'First', description: '' }], multi_select: false }] })
+      r.event({ type: 'modalShown', serverId: 'one', conversationId: 'chat', envelopeSessionId: 'A',
+        modalId: 'p', class: 'permission', title: 'Permission', prompt: 'Run?', defaultOptionId: 'deny', options: [{ id: 'deny', label: 'Deny' }] })
+      r.event({ type: 'conversationsReceived', serverId: 'one', conversations: [{ id: 'chat', current_session_id: 'B',
+        name: null, cwd: '/', is_promoted: false, is_archived: false, workspace_label: null, last_used_at: '', last_message_ts: '' }] })
+      expect(seen).toEqual([])
+      await vi.advanceTimersByTimeAsync(50)
+      expect(seen.length).toBeGreaterThanOrEqual(3)
+      expect(seen.every(count => count === 1)).toBe(true)
+      expect(notified).toEqual([1, 1, 1, 1])
+      expect(live.getState().binding?.sessionId).toBe('B')
+      off()
+      offEvents()
+    } finally { r.dispose(); vi.useRealTimers() }
+  })
+
+  it('orders a queued same-epoch reset and fences a late deletion from its replacement owner', async () => {
+    vi.useFakeTimers()
+    const send = vi.fn(), r = createThreadRuntime({ send, read: async () => ({ status: 'missing' }), log: vi.fn(),
+      frame: { request: () => 1, cancel: () => {} } })
+    try {
+      r.event(connected('one', true)); await r.open('one', 'chat').done
+      const api = r.items.getState(); api.acceptEpoch('one', 'chat', 'e')
+      // Refresh the pending request so its generation is the current item owner.
+      r.event(connected('one', true))
+      const request = send.mock.calls.at(-1)![0]
+      const add = (id: number) => r.event({ type: 'threadUpdate', serverId: 'one', conversationId: 'chat',
+        correlation: { id, ts: '' }, update: { type: 'thread_item_added', payload: { conversation_id: 'chat', epoch: 'e',
+          version: id, item: { id, rev: 1, kind: 'assistant_message', status: 'finished', active: false,
+            shown: true, summary: '', content: { text: 'owner' } } } } })
+      add(1)
+      r.event({ type: 'threadReply', serverId: 'one', conversationId: 'chat', requestId: request.requestId,
+        correlation: { id: 2, ts: '' }, reply: { type: 'thread_reset', payload: {
+          conversation_id: 'chat', epoch: 'e', version: 2 } } })
+      add(3)
+      await vi.advanceTimersByTimeAsync(50)
+      expect(api.snapshot('one', 'chat')?.items.map(item => item.id)).toEqual([3])
+      add(4)
+      r.event({ type: 'conversationDeleted', serverId: 'one', id: 'chat' })
+      api.acceptEpoch('one', 'chat', 'e', true)
+      await vi.advanceTimersByTimeAsync(50)
+      expect(api.snapshot('one', 'chat')?.items).toEqual([])
+      expect(r.state.getState().linked.has('one')).toBe(true)
+    } finally { r.dispose(); vi.useRealTimers() }
+  })
+
   it('keeps offline authoritative display separate from current capability and resumes complete progress', async () => {
     const { runtime: r, read, send } = fixture()
     read.mockResolvedValue({ status: 'page', page: { partial: true, metadata: { hostId: 'one', conversationId: 'chat', epoch: 'saved', version: 12, checkpoint: 7,

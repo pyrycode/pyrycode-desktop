@@ -23,6 +23,7 @@ import {
   type ServerConversationSummary
 } from './conversationListStore'
 import { threadRuntime } from './threadRuntime'
+import type { ThreadSnapshot } from './threadItemStore'
 import { threadItemPresentations } from '../screens/conversation/threadItemPresentation'
 import { notificationPreviewFromItems, type NotifyEvent } from './notificationPreview'
 import { pushNotificationPrefStore } from './pushNotificationPrefStore'
@@ -280,11 +281,15 @@ export function notificationRowFor(
  * so PairedShell stays server-renderable. `targets` is the shell's own token map (#1597), created once
  * per mount, so it is stable for the effect's life.
  */
+const notificationItems = (snapshot: ThreadSnapshot) =>
+  threadItemPresentations(snapshot).flatMap(row => row.item ? [row.item] : [])
+const previewItems = new WeakMap<object, ReturnType<typeof notificationItems>>()
+
 export function usePushNotify(targets: NotificationTargets): void {
   useEffect(
     () =>
       subscribePushNotify(
-        window.pyry.onDaemonEvent,
+        threadRuntime.subscribe,
         window.pyry.sendCommand,
         () => pushNotificationPrefStore.getState().pushNotificationsEnabled,
         (serverId, conversationId) =>
@@ -294,8 +299,10 @@ export function usePushNotify(targets: NotificationTargets): void {
           conversationMutedIn(conversationListStore.getState(), serverId, conversationId),
         (event) => {
           const snapshot = event.serverId === null ? null : threadRuntime.items.getState().snapshot(event.serverId, event.conversationId)
-          return snapshot ? notificationPreviewFromItems(threadItemPresentations(snapshot).flatMap(row => row.item ? [row.item] : []), event)
-            : null
+          if (!snapshot) return null
+          const items = previewItems.get(snapshot) ?? notificationItems(snapshot)
+          previewItems.set(snapshot, items)
+          return notificationPreviewFromItems(items, event)
         }
       ),
     [targets]

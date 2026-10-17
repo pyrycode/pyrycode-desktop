@@ -77,7 +77,7 @@ test('remote and timeout resolutions use the Default pill, X and four seconds fr
         Object.assign(window, { resolutionBarrierDelivered: true })
         off()
       }
-    })
+    }, true)
   })
   daemon.pushFrame(frame('assistant_delta', { conversation_id: SEEDED_ROW.id, turn_id: 'barrier', seq: 1, text: 'Local answer acknowledged' }))
   await expect.poll(() => page.evaluate(() =>

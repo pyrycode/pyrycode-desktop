@@ -10,8 +10,6 @@ import {
   COMPOSER_RECONNECT_BUTTON_COPY,
   shouldShowBanner,
   CONNECTION_BANNER_COPY,
-  COMPOSER_ERROR_CHIP_COPY,
-  COMPOSER_ERROR_CHIP_PREFIX_COPY,
   COMPOSER_REPAIR_BUTTON_COPY
 } from './composerSend'
 import { sendMessageCommand, type RendererCommand } from '@shared/ipc/commands'
@@ -234,44 +232,6 @@ describe('shouldShowBanner', () => {
   })
 })
 
-// #797: the error chip's two client-owned strings — the chip copy is one of the three this module owns
-// about the one ConnectionStatus fact (#968 retired the three composerAvailability captions), and the
-// prefix rides with it. Their three-part contract is CONNECTION_BANNER_COPY's, and the pieces that can
-// break silently are pinned here: the apostrophe-free rule (renderToStaticMarkup escapes `'` → `&#x27;`,
-// so an apostrophe makes every toContain on these constants fail without a copy change being suspected),
-// the lexical distinctness from the banner and the re-pair button, and the prefix's trailing space,
-// which is what separates the two runs when a screen reader concatenates them.
-describe('the composer error chip copy (#797)', () => {
-  it('is apostrophe-free, so a server-rendered toContain matches it verbatim', () => {
-    expect(COMPOSER_ERROR_CHIP_COPY).not.toContain("'")
-    expect(COMPOSER_ERROR_CHIP_PREFIX_COPY).not.toContain("'")
-  })
-
-  // Pinned against the actual banner constant — not a hardcoded copy of it — so a future tweak to either
-  // cannot silently collide. The set held the three composer captions too until #968 retired them; the
-  // button that shares this chip's slot is compared in its own describe below.
-  it('is lexically distinct from the banner copy', () => {
-    const others = [CONNECTION_BANNER_COPY]
-    expect(others).not.toContain(COMPOSER_ERROR_CHIP_COPY)
-    for (const other of others) {
-      expect(other).not.toContain(COMPOSER_ERROR_CHIP_COPY)
-      expect(COMPOSER_ERROR_CHIP_COPY).not.toContain(other)
-    }
-  })
-
-  // The trailing space is load-bearing, not incidental formatting: it is the whole separator in the
-  // announced "Error: Host connection down!". An editor's trim would silently degrade that.
-  it('keeps the prefix separated from the copy by its trailing space', () => {
-    expect(COMPOSER_ERROR_CHIP_PREFIX_COPY).toMatch(/ $/)
-    expect(COMPOSER_ERROR_CHIP_PREFIX_COPY.trim()).not.toBe('')
-  })
-})
-
-// #963: the actionable-error button's label — the FIFTH string this module owns about the one
-// ConnectionStatus fact, and the first that is also an ACCESSIBLE NAME (the button has no aria-label, so
-// the visible text is the whole name). The chip describe above pins the same three-part contract for its
-// two strings; this one adds the button's own reason for the apostrophe rule and the distinctness set
-// grows to include the chip copy the button REPLACES in its slot.
 describe('the actionable-error button copy (#963)', () => {
   it('is apostrophe-free, so a server-rendered toContain matches it verbatim', () => {
     expect(COMPOSER_REPAIR_BUTTON_COPY).not.toContain("'")
@@ -281,8 +241,8 @@ describe('the actionable-error button copy (#963)', () => {
   // either cannot silently collide with this label. The set held the three composer captions until #968
   // retired them. The chip copy stays in it even though the two never render together: they occupy the
   // SAME slot, so a reader who sees one and then the other must not read them as the same string.
-  it('is lexically distinct from the chip copy and the banner copy', () => {
-    const others = [COMPOSER_ERROR_CHIP_COPY, CONNECTION_BANNER_COPY]
+  it('is lexically distinct from the connection explanation', () => {
+    const others = [CONNECTION_BANNER_COPY]
     for (const other of others) {
       expect(other).not.toContain(COMPOSER_REPAIR_BUTTON_COPY)
       expect(COMPOSER_REPAIR_BUTTON_COPY).not.toContain(other)

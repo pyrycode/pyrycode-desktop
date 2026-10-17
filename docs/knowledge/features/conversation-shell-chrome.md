@@ -1,6 +1,6 @@
 # Conversation shell — chrome and controls
 
-The screen's structure and the persistent controls around the thread: layout, theme, the back, unpair and re-pair controls, and the connection surfaces in the header.
+The screen's structure and the persistent controls around the thread: layout, theme, the back, unpair and re-pair controls, and the connection feedback in the Top overlay.
 
 Part of [Conversation shell](conversation-shell.md); see that document for what the screen does, its edge cases and its links.
 
@@ -13,10 +13,9 @@ ConversationScreen                         .conversation (full-height containing
 ├── Covered pane                           .conversation__covered (absolute, inset: 0)
 │   ├── Top chrome                         .conversation__top-chrome (level 1)
 │   │   ├── Decorative fade/blur            .conversation__blur (non-interactive)
-│   │   ├── ThreadOverflowMenu              .conversation__overflow (gated on onBack)
+│   │   └── ThreadOverflowMenu              .conversation__overflow (gated on onBack)
 │   │   │   ├── Title/menu row              .conversation__overflow-content
 │   │   │   └── Divider                     .conversation__overflow-rule
-│   │   └── Connection/history notices      (included in measured occupied height)
 │   ├── Message area                       .conversation__message-area (full pane, level 0)
 │   │   ├── Timeline                       .conversation__thread (focusable scroll container)
 │   │   │   └── TimelineRow × N             (stable identities; includes queued rows)
@@ -330,7 +329,7 @@ invoke).
 the component, its mount, and the `.conversation__header` rule — the desktop `Content` frame (Figma
 106:3321) draws a message area straight onto an input area with no header row at all. Explicit host
 removal now lives in
-[Settings](settings-screen-how-it-works.md#the-per-row-unpair-action-1162). Composer Re-pair opens
+[Settings](settings-screen-how-it-works.md#the-per-row-unpair-action-1162). The Top overlay’s Re-pair opens
 [non-destructive recovery](paired-shell-routing.md#host-recovery-and-navigation-lifetime);
 `onUnpaired?` remains only as a compatibility prop on `ConversationScreen`. See
 [#166 codebase notes](../codebase/166.md) for the original control and the
@@ -350,7 +349,7 @@ button in that slot rather than a second surface below the composer. `RepairProm
 `RepairControl` (both formerly exported/module-private from this file) no longer exist;
 `.composer__repair` no longer exists in the stylesheet. See [Conversation shell — composer §
 Actionable-error button](conversation-shell-composer-repair-button.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963)
-for the current shape — `ComposerErrorSlot`/`ComposerErrorSlotControl`, beside `ComposerErrorChip`.
+for the current shape: both recovery actions live in `TopOverlay`/`TopOverlayControl`.
 
 The current `shouldOfferRepair` predicate lives in `composerSend.ts` beside
 `composerAvailability` (see [Composer send](composer-send.md)) and requires an explicit
@@ -368,64 +367,75 @@ Retryable failures and the `unpair`/`not-paired` errors offer neither action.
 
 The button now opens the host's recovery pane without an erase or preliminary confirmation.
 The existing pairing form still requires fingerprint confirmation before saving new credentials.
-`ComposerErrorSlotControl` resolves its status and repair target from the open conversation's server;
+`TopOverlayControl` resolves its status and repair target from the open conversation's server;
 its click delegates to the shell and never invokes `runUnpair`. See
 [the current control](conversation-shell-composer-repair-button.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963)
 and [recovery navigation](paired-shell-routing.md#host-recovery-and-navigation-lifetime).
 
 ## Connection banner (#279)
 
-A third, independent read of the same `ConnectionStatus` slice `composerAvailability` and
-`shouldOfferRepair` already read (see [Composer send](composer-send.md)) — prominent and
-disconnected-only, distinct from both `composerAvailability`'s send gate and the separate, always-on #149
-two-dot Relay/Pyrycode indicator (not built here). Closes the gap where the thread gave no prominent
-disconnected signal. Through [#968](../codebase/968.md), the composer also carried its own muted caption
-above the message box for the same fact; that caption is retired and this banner is now the sole
-announcement of a non-connected state outside the `error` arm's status-row occupant (#797/#963).
+The banner and saved-history band were retired by
+[#2076](https://github.com/pyrycode/pyrycode-desktop/issues/2076).
+`ConnectionBanner`, `ConnectionBannerControl`, `SavedTimelineNotice` and
+`.conversation__banner` are removed. Connection explanations, saved-history loading
+and recovery actions now use the existing `TopOverlay`; neither the header nor the
+composer status row carries connection feedback.
 
-Split from #148 alongside #276/#277/#278; no Figma frame exists (the mobile file draws only the
-connected thread), so the copy and accent are design-doc-sourced defaults, mirroring
-[#277](../codebase/277.md)'s "no Figma frame" justification shape.
+`useOpenConnectionStatus` resolves the open conversation's host and reads its
+`selectStatusFor(serverId)` entry. Missing attribution or an unreported host is
+disconnected; another host's last event cannot supply this pane's status. The
+same hook supplies the composer send gate and the overlay container.
 
-Mirrored the [Re-pair control](#re-pair-control-167-folded-into-the-composer-status-rows-error-slot-by-963)
-split exactly, before that control was retired as a separate surface by #963:
+`connectionNotice(status)` in `composerSend.ts` uses the retained
+`shouldShowBanner(status)` predicate (`status.type !== 'connected'`) and selects
+only client-owned copy:
 
-- **`shouldShowBanner(status: ConnectionStatus): boolean`** — in `composerSend.ts`, beside
-  `composerAvailability`/`shouldOfferRepair`: `status.type !== 'connected'`. True for
-  `disconnected`/`connecting`/`error`; false only for `connected`. Unlike `composerAvailability`, this
-  is **not** an exhaustive per-arm switch — every non-connected arm maps to the same behavior (show the
-  banner), so "show unless connected" is the honest shape, and a hypothetical future 5th
-  `ConnectionStatus` arm defaults to *showing* the banner rather than silently hiding it.
-- **`CONNECTION_BANNER_COPY`** — also in `composerSend.ts`: a single client-owned string constant
-  (`'Cannot reach pyrybox — your messages will not send until the connection is back.'`), lexically
-  distinct from the status row's remaining strings (`COMPOSER_ERROR_CHIP_COPY`, `COMPOSER_REPAIR_BUTTON_COPY`
-  — [#968](../codebase/968.md) retired the three `composerAvailability` hints this was originally argued
-  distinct from) so the prominent banner and the row directly above the message box never read as the
-  same string stacked twice. This is the generic non-connected copy; classified pairing rejection
-  uses the fixed recovery notice described below.
-- **`ConnectionBanner({ status })`** — exported pure view in `ConversationScreen.tsx`. Returns
-  `null` when connected; otherwise a `role="status"` paragraph. `pairing-rejected` selects exactly:
-  "Your pairing has expired or is no longer valid. Enter a new pairing code to reconnect." Other
-  non-connected states use `CONNECTION_BANNER_COPY`. Both are client-owned strings; the view never
-  renders `ConnectionError.message`.
-- **`ConnectionBannerControl()`** — uses `useOpenConnectionStatus`, shared with the composer send
-  gate and repair/error slot. It selects the open conversation's host, falling back to disconnected
-  for missing attribution or an unreported host, never to another server's status. See
-  [Session store](session-store.md#one-slot-per-server-since-1133).
+| State | Explanation |
+| --- | --- |
+| Disconnected, connecting or other error | Cannot reach pyrybox — your messages will not send until the connection is back. |
+| `error.code === 'pairing-rejected'` | Your pairing has expired or is no longer valid. Enter a new pairing code to reconnect. |
+| `error.code === 'update-required'` with `cause === 'daemon'` | The Pyrycode daemon on this host needs an update. Update pyry on the host to reconnect. |
+| Connected | No connection explanation |
 
-Mounted directly above `<Timeline />` — the first thing under the overflow menu's gate since #1061
-deleted the header row that used to precede it — "the top of the thread." Styled
-`.conversation__banner` (`conversation.css`), token-only, following the
-`.modal-rejection` (#249) error-accent idiom: `--color-error` left border over
-`--color-surface-container-high`, sized to body-medium — deliberately a step up from a muted body-small
-caption (the distinction was originally drawn against `.composer__hint`, retired by
-[#968](../codebase/968.md)). It now lives inside the measured top chrome: its height
-adds start-of-history clearance and moves pills below the occupied header while the
-thread viewport continues behind the controls.
+The generic constant keeps its `CONNECTION_BANNER_COPY` name. Error codes and cause
+select the fixed explanation; `ConnectionError.message` is never rendered or logged.
 
-Not security-sensitive: a pure renderer read of already-store-held status, no transport/crypto/socket
-code touched. See [#279 codebase notes](../codebase/279.md) for the full design, the code-review record,
-and the apostrophe-escaping test lesson.
+### Connection and saved-history announcement
+
+One non-dismissible Error pill combines the explanation and restoration facts.
+It has `role="status"`, `aria-live="polite"` and `aria-atomic="true"`; the overlay
+container and recovery buttons add no live region. Thus connection/restoration has
+one announcement, while independent notices such as Markdown-open failure retain
+their own semantics.
+
+The screen passes `savedMessages` only for a selected host that is offline, has no
+daemon-update requirement and has a host/conversation-qualified snapshot with at
+least one `item.shown === true`. Only then does the explanation append
+“Offline. Showing saved messages.” A nonempty snapshot can contain only hidden
+items: checking `items.length` would announce saved content over an empty pane.
+Completed empty and hidden-only reads add no saved-message notice. A daemon that
+lacks `thread` draws no rows, including saved ones, so it cannot make that claim.
+
+`loadingSavedMessages` separately follows the selected host's restoration read.
+“Loading saved messages…” remains in this same pill while the read is pending,
+even if the host connects. Connected state removes the connection explanation and
+offline saved sentence immediately; loading ends when its read settles. These
+inputs reuse the existing restoration ownership and cancellation rather than
+introducing another job or store. In-thread query failures and Retry keep their
+separate roles.
+
+The pills remain in the always-mounted `.conversation__message-area`, over empty
+and saved threads. Order is usage, permission resolution, session error,
+Markdown-open failure, connection/restoration, Reconnect, Re-pair. Recovery uses
+the existing Error pill treatment with no dismiss X. See
+[recovery predicates and routing](conversation-shell-composer-repair-button.md).
+
+The absolute, right-aligned overlay wraps within the conversation pane at the
+800px minimum window width. Its changes do not contribute to measured header
+height or move the message list or composer. The overlay's `pointer-events: none`
+and each pill's `pointer-events: auto` leave gaps available for thread interaction
+and scrolling. See [mounted evidence](conversation-shell-composer-repair-button.md#testing)
+and the [connection-pill design](../../specs/architecture/2076-connection-pills.md).
 
 ## Two-dot Relay/Pyrycode connection-status leg mapping (#330, its render retired from this screen by #962)
 
@@ -444,8 +454,8 @@ for what replaced the row that hosted this indicator.
 
 Two independently-read legs — the relay-socket leg from `relayLinkStore` and the daemon-session leg
 from [session store](session-store.md)'s `ConnectionStatus` — turn into two labelled, colour-coded
-dots. Complements the disconnected-only [Connection banner](#connection-banner-279) — the banner
-announces failure, the dots are the persistent at-a-glance state.
+dots. Complements the [connection explanation pill](#connection-banner-279): the pill
+announces failure, while the dots provide persistent at-a-glance state.
 
 Two exported pure mapping functions turn each leg's raw status into a `{ category, label }` pair —
 `category: 'up' | 'in-progress' | 'down' | 'unknown'` (the fourth member added by

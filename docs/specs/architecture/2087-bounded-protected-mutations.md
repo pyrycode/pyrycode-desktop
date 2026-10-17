@@ -129,3 +129,39 @@ driver's 16-unit turn count. The long-running protected counter fixture uses a
 callbacks, not an elapsed-time threshold. `confirmed %s removal fences stale handler
 admission after bounded progress` also checks host/conversation generations through
 the existing saved-host handler, including credential cleanup and equal IDs on two hosts.
+
+The fixed-width radix maximum is 312 bits (the endings attribution hash plus its
+placement ordinal), correcting the initial 256-bit sketch. Numeric paths use 56
+bits and sort paths use 120; sequence references and parent-hint routes cap at 64
+levels. One unit may traverse these fixed paths and one admitted item, but cannot
+walk an arbitrary number of saved ranges, observations or pending index rows.
+
+## Validation — Linux x64
+
+Final code/tests: `263eaf149067ea549d14ce98d3365a6c7432ecce`, containing main
+`58d92a423dce`. The later validation commit changes this plan only.
+
+- Final pre-verify: all five checks pass; 402 unit files, 9,292 executed/passed,
+  zero failed, three existing opt-in live/interoperability skips.
+  Log: `/tmp/builder-2087/pre-verify-final.log`.
+- Final `npm run build` and `npm run check:docs` pass. Logs:
+  `/tmp/builder-2087/build-final.log`, `/tmp/builder-2087/docs-check.log`.
+- Guarded replay: `a real daemon lazily fills a served gap after more than 200
+  entries written while Electron is closed`: one executed/passed, zero failed/skipped,
+  `forbiddenLaunchAttempts: 0`, with original assertions/outgoing checks intact.
+  Log: `/tmp/builder-2087/replay.log`. This establishes captured-client behavior.
+- `packaged protected history commits and reopens with production encryption`:
+  one executed/passed, zero failed/skipped. Source `c6cb8844ca919fb4c000dbf79968218defa1c210`
+  has identical production files to the final code/test commit (verified by Git diff).
+  Electron 33.4.11, embedded Node 20.18.3, better-sqlite3 12.4.1,
+  production `gnome_libsecret`; packaged, ASAR and native-unpacked flags all true.
+  Exact retained 1,000-item reopen and all 801 recovered identities pass.
+  Raw runtime output: `/tmp/pyry-history-native-kj0hB7/runtime.stdout` and
+  `/tmp/pyry-history-native-kj0hB7/runtime.stderr`; test log:
+  `/tmp/builder-2087/native-final.log`. Stderr retains system-bus/GPU/colour
+  diagnostics alongside successful completion.
+
+The no-yield control failed because no timer ran before completion. Earlier local
+setup and fixture failures remain in `/tmp/builder-2087/storage-tests.log`,
+`/tmp/builder-2087/equivalence.log` and `/tmp/builder-2087/pre-verify.log`;
+the final passing runs above supersede them without changing historical outcomes.

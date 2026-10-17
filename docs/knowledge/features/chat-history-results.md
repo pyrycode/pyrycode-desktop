@@ -5,11 +5,15 @@ Result states, local failure presentation and preservation rules for
 
 ## Results and failure preservation
 
-Saved-thread reading shows “Loading saved messages…” while pending in either connection
-state. Nonempty restored content shows “Offline. Showing saved messages.” only while
-the selected host is unavailable; connected opening and reconnect show no offline
-notice. Both `missing` and a saved-empty partial thread page succeed and draw no notice at
-all — a loaded, empty local read reads as the ordinary state of a chat opened for
+Saved-thread reading shows “Loading saved messages…” in the
+[Top overlay’s connection/restoration pill](conversation-shell-chrome.md#connection-and-saved-history-announcement)
+while pending in either connection state, until the read settles. Restored content
+adds “Offline. Showing saved messages.” only when the selected host is offline and
+its host/conversation-qualified snapshot actually displays a row (`shown === true`).
+Hidden-only snapshots stay silent, as do daemon-update-required panes that draw no
+saved rows. Connected state clears connection/offline copy independently of loading.
+Both `missing` and a saved-empty partial thread page succeed and add no saved-message
+notice — a loaded, empty local read reads as the ordinary state of a chat opened for
 the first time on this machine, not a fault (\#1447). Errors, rejected
 IPC, invalid snapshots, unexpected result statuses and wrong host/conversation/kind
 results instead show “Could not read saved messages on this device.” A local read

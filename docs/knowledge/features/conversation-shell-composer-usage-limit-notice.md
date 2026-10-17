@@ -75,31 +75,30 @@ account's quota posture, a fact about the operator, and even a content-free coun
 crack in a property that has to be total.
 
 **`ComposerUsageLimitNotice` was retired by #1604** — no consumer once the reading moved out of the slot.
-Its replacement, **`TopOverlay({ reading, nowSeconds, dismissed, repair, onDismissUsage, onRepair })`**
-(`TopOverlay.tsx`), is the pure, exported view for the whole overlay, not the notice alone — it also draws
-the Re-pair pill; see [Actionable-error button](conversation-shell-composer-repair-button.md). It returns
-`null`, rendering no element, only when there is no usage pill to show (`reading` is `null`, or
-`isUsageReadingDismissed` says the operator already dismissed this exact triple) **and** `repair` is
-false — an empty overlay takes no space and leaves nothing in the tree. Otherwise it renders
-`<div className="conversation__top-overlay">` holding the usage pill first
-(`top-overlay-pill top-overlay-pill--default` or `--error`, chosen by an explicit two-way conditional over
-`notice.variant`, never a template) and the Re-pair pill second. Only the default pill carries the X
-button, `aria-label={USAGE_PILL_DISMISS_LABEL}` ("Dismiss usage notice"), wrapping an `aria-hidden` inline
-SVG glyph inked by `currentColor`. Props, not a store read — the `ComposerErrorChip`/`ConnectionBanner`
-discipline this view inherits, and here it remains the only way the matrix is assertable at all, since
-zustand v5's `useStore` reads `getInitialState()` under `renderToStaticMarkup`. No live region and no
-hidden prefix: both leads already say what they are in plain words, so the visible text is already the
-accessible name — #279's connection banner still owns the disconnect announcement.
+Its replacement, **`TopOverlay`** (`TopOverlay.tsx`), is the pure view for all overlay
+occupants: usage, permission resolution, session error, Markdown-open failure,
+connection/restoration feedback and recovery actions, in that order. It returns
+`null` only when none has anything to show. Usage is first, with
+`top-overlay-pill--default` or `--error` selected by an explicit conditional over
+`notice.variant`, never by a daemon-controlled class. Only default usage carries
+its X, named `USAGE_PILL_DISMISS_LABEL` (“Dismiss usage notice”), wrapping an
+`aria-hidden` SVG glyph inked by `currentColor`.
+
+Props keep this view directly testable. Zustand v5 static renders use
+`getInitialState()`, so merely setting current store state would not prove a
+populated branch. Usage has no live region or hidden prefix; the overlay's
+separate [connection/restoration pill](conversation-shell-chrome.md#connection-and-saved-history-announcement)
+owns that atomic polite announcement. The container itself is not a live region.
 
 **`TopOverlayControl`** (`ConversationScreen.tsx`) is the store-bound container, mounted as a sibling leaf
-of `Timeline` inside `.conversation__message-area` rather than anything read inside
+of `ThreadItemsTimeline` inside `.conversation__message-area` rather than anything read inside
 `ComposerErrorSlotControl`. It reads the active conversation, `selectUsageLimitFor` with
 `Math.floor(Date.now() / 1000)` (the stable `NO_USAGE_LIMIT_READING` selector covers no open conversation
 without a conditional hook call), the dismissal store's `dismissed`, and `shouldOfferRepair(status)` for
 `repair` — **with no connection gate on the reading itself**: an account's quota does not change when a
 socket drops, which is the whole point of the move — a warning that used to disappear behind #279's banner
 on disconnect now keeps showing. Its `onDismissUsage` writes straight to `usagePillDismissalStore`; its
-`onRepair` is #963's former `handleRepair`, moved verbatim — it still re-resolves the host from the stores
+`onRepair` re-resolves the host and rechecks the repair predicate from the stores
 at click time and still never calls `runUnpair` or clears a store. These reads add no timer.
 
 **`usagePillDismissalStore`** (`src/renderer/src/store/usagePillDismissalStore.ts`) holds one triple for
@@ -110,8 +109,8 @@ because [Paired shell](paired-shell.md) keys that screen by pane and unmounts it
 a `useState` there would forget the dismissal on every navigation between panes.
 
 **`ComposerErrorSlot` no longer takes a usage reading.** #1604 also moved Re-pair out of the slot (see
-[Actionable-error button](conversation-shell-composer-repair-button.md)), so the slot's own chain now opens
-on reconnect, then the connection-error chip; while connected it returns
+[Actionable-error button](conversation-shell-composer-repair-button.md)); #2076 moved Reconnect and
+retired the connection chip. While connected the slot returns
 `recovery ?? refusal ?? notice ?? history ?? mcpFailure ?? taskCount ?? null`, where `notice` now carries
 only the settings-rejection message and the stopping report. Usage no longer competes for this chain in
 either direction: it cannot be held back by a higher-priority slot occupant, and it no longer holds back

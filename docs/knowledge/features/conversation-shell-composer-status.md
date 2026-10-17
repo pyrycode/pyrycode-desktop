@@ -1,17 +1,17 @@
 # Conversation shell — composer status row and error slot
 
-The status row directly above the message box: its activity/thinking display, its error chip, that chip's fold into an actionable reconnect button, and the retry/compacting/stall statuses folded into its label. Split from [Composer](conversation-shell-composer.md) 2026-09-05, once this ticket's message-box growth would have pushed the combined document over the size cap. (Through #1604 the chip's fold also produced a Re-pair button here; Re-pair now shows in the conversation's Top overlay instead — see below.)
+The status row directly above the message box holds activity/thinking and a
+single connected-only report or recovery occupant. Connection explanations,
+Reconnect and Re-pair now live in the conversation's Top overlay; #2076 retired
+the connection chip and composer Reconnect.
 
-Part of [Composer](conversation-shell-composer.md); see that document for the message box and footer row, and [Conversation shell](conversation-shell.md) for the screen overall.
-
-This page holds the row's own geometry and the five small, connected-only occupants of its trailing
-slot's precedence chain. The largest occupants live on their own pages, linked from their stub
-headings below: [Composer status row](conversation-shell-composer-status-row.md) (#796),
-[Composer error chip](conversation-shell-composer-error-chip.md) (#797), and
-[Actionable-error button](conversation-shell-composer-repair-button.md) (#963, Reconnect only since #1604).
-[The usage-limit notice](conversation-shell-composer-usage-limit-notice.md) (#1321) and Re-pair, #963's
-other arm, both moved out of this slot into the conversation's Top overlay by #1604 — their pages describe
-where they live now, and neither is an occupant of the chain below any more.
+Part of [Composer](conversation-shell-composer.md); see
+[Conversation shell](conversation-shell.md) for the screen overall. Geometry lives
+in [Composer status row](conversation-shell-composer-status-row.md), historical
+chip references in [Composer error chip](conversation-shell-composer-error-chip.md),
+and current host recovery in [connection recovery actions](conversation-shell-composer-repair-button.md).
+The [usage-limit notice](conversation-shell-composer-usage-limit-notice.md) also
+shows independently in the Top overlay.
 
 ## Composer status row (#796)
 
@@ -73,17 +73,15 @@ hand-over acceptance remain #1662's scope; no live-Claude pass is claimed here.
 
 ## Composer error chip (#797)
 
-Split out to its own page: [Composer error chip](conversation-shell-composer-error-chip.md) — the row's
-`trailing` slot filled with a red pill reading `COMPOSER_ERROR_CHIP_COPY` in the `error` connection arm
-and no other, and why it never destructures `status.error`.
+[Composer error chip](conversation-shell-composer-error-chip.md) records the
+surface's retirement by #2076. There is no connection chip in this row.
 
 ## Actionable-error button, and the row that grows to fit it (#963; Re-pair moved out by #1604)
 
-Split out to its own page: [Actionable-error button, and the row that grows to fit it](conversation-shell-composer-repair-button.md) —
-`Connection error - Reconnect` for terminal failures except `unpair` and `not-paired`, the row's growth
-from 24 to 32px to fit it, and the retired `RepairPrompt`/`RepairControl`/`.composer__repair` block this
-retires. `Pairing error - Re-pair`, #963's other arm, moved to the conversation's Top overlay in #1604; on
-a pairing rejection this slot now falls through to the ordinary connection-error chip below instead.
+Both connection recovery actions now use the Top overlay. See
+[connection recovery actions](conversation-shell-composer-repair-button.md) for
+unchanged predicates, click-time host routing and mounted evidence. Connection
+changes no longer grow the row to accommodate Reconnect.
 
 ## Stopped-turn recovery
 
@@ -107,7 +105,7 @@ slash command**, as of [#1496](https://github.com/pyrycode/pyrycode-desktop/issu
 outside `sendText` entirely; see [New session control
 action](conversation-shell-actions-menu-and-reader-cutover.md#new-session-control-action-1218-folded-to-the-menus-only-reset-row-by-1496).
 
-Recovery has priority after reconnect and connection errors, before refusal recovery and
+Recovery has first priority in the connected-only slot, before refusal recovery and
 model-settings rejection; it is visible only while connected. (Through #1604, the usage-limit notice
 also sat in this chain, below Claude stopping reports; it now shows independently, in the Top overlay,
 and no longer competes with recovery in either direction.) The
@@ -157,13 +155,12 @@ fixed client copy in a `role="alert"` element. It is available both with the ord
 composer and while the [questionnaire's model footer](composer-model-menu.md#availability-during-question-batches)
 is visible; rejection leaves the question answerable and rolls back the optimistic label.
 
-The single-occupant priority is reconnect button → connection-error chip → stopped-turn
-recovery → refusal Switch back (with any rejection feedback) → model rejection → Claude
-stopping report → history failure → MCP server failure → task count. Recovery and notices
-require `connected`; disconnected and connecting states hide them without clearing held reports. The
-[usage-limit notice](conversation-shell-composer-usage-limit-notice.md) and Re-pair are no longer part of
-this chain (#1604): both show in the conversation's Top overlay whatever this chain holds, and the usage
-reading shows whatever the connection state too.
+The single-occupant priority is stopped-turn recovery → refusal Switch back
+(with any rejection feedback) → model rejection → Claude stopping report → history failure → MCP server failure → task count. Recovery and notices
+require `connected`; every non-connected state hides them without clearing held reports. The
+[usage-limit notice](conversation-shell-composer-usage-limit-notice.md), connection feedback, Reconnect
+and Re-pair are outside this chain: they use the Top overlay independently. Usage remains visible
+whatever the connection state.
 `.composer-status__error--settings` retains the error treatment but uses
 `flex: 0 1 auto`, `min-width: 0` and `white-space: normal` so the sentence can wrap at the
 800px minimum window width.
@@ -323,8 +320,8 @@ size, dropped-task counts and retained `selectLiveTaskCountFor` producer state c
 add tasks to this reading. Supplied inactive work remains accessible through the
 Background tasks menu even when the active count is zero.
 
-The connected-only status slot keeps task count last, behind reconnect/errors,
-recovery/refusal, model/stopping/history and MCP notices. An absent occupant must
+The connected-only status slot keeps task count last, behind recovery/refusal,
+model/stopping/history and MCP notices. Connection recovery lives in the Top overlay. An absent occupant must
 reach the precedence chain as actual null, not an element whose view later returns
 null. `ComposerTaskCount` itself returns null at `count <= 0`; otherwise it renders
 a real button with “1 task running” or “N tasks running”. The visible text supplies

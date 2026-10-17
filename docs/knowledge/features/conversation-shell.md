@@ -67,20 +67,22 @@ A **Top overlay of pills** landed in [#1604](https://github.com/pyrycode/pyrycod
 
 The [permission resolution notice](#permission-resolution-notices) follows usage,
 with client-owned copy and a dismiss X. A session-error notice follows resolution
-and precedes Re-pair, using the existing Error treatment with no dismiss control.
+and precedes Markdown-open and connection feedback, using the existing Error
+treatment with no dismiss control.
 `TopOverlayControl` selects only the open conversation's admitted `sessionError` from
 its authoritative live store. `TopOverlay` compares its code to client literals; daemon codes
 and message text never enter displayed text, attributes or classes.
 
 The [Markdown reader's failed-open notice](conversation-shell-markdown-reader.md#how-it-works)
-follows session errors and precedes Re-pair. It uses one existing Error pill with
+follows session errors and precedes connection/restoration feedback and recovery
+actions. It uses one existing Error pill with
 the fixed copy “Could not open the file.” and no dismiss control. Its `role="status"`
 provides a polite announcement; the overlay container itself is not a live region.
 It coexists with usage and Re-pair pills without a full-width band or moving the
 message list or composer. The reader owns its lifetime: the next open attempt or
 a conversation switch clears it, and returning to the chat does not restore it.
 
-Re-pair and pills with a dismiss X show an 8% On Surface hover layer over their
+Reconnect, Re-pair and pills with a dismiss X show an 8% On Surface hover layer over their
 existing fill, within 6px corners. Inert notices keep their resting paint; geometry
 and native keyboard outlines stay unchanged. See
 [Top overlay hover](conversation-shell-chrome.md#top-overlay-hover) for selectors
@@ -113,9 +115,24 @@ also use level 2 and retain precedence through later DOM placement. See
 [browser stacking proof](development-verification-layout-and-input.md#layout-and-input) for the
 regression's overlap, hit-testing and click requirements.
 
-A **third, prominent** read of the connection status landed in [#279](../codebase/279.md): a disconnected-only banner across the top of the thread, between the header row and the message list — distinct from both the composer's terse inline gate and the still-separate #149 two-dot indicator. See [Connection banner](conversation-shell-chrome.md#connection-banner-279) below.
+Connection and saved-history feedback now occupy the **Top overlay** as well
+([#2076](https://github.com/pyrycode/pyrycode-desktop/issues/2076)). A single
+non-dismissible Error pill owns the atomic polite connection/restoration
+announcement. It shows the open host's fixed connection explanation, adds saved
+copy only for visible host-qualified offline rows, and keeps loading feedback
+until its independent read settles. Empty and hidden-only snapshots do not justify
+“Showing saved messages”; `items.length` alone would make a false claim.
+Connected state clears connection/offline copy, including while loading continues.
+Reconnect and Re-pair are Error action pills; both re-resolve the current host and
+recheck their existing predicates at click time. The retired header bands and
+composer connection chip/button have no remaining mounts. Other composer
+occupants remain connected-only; send restrictions and automatic retries retain
+their policy. See [connection feedback](conversation-shell-chrome.md#connection-banner-279)
+and [recovery routing and counted Linux evidence](conversation-shell-composer-repair-button.md).
+The same absolute overlay preserves the Markdown failure pill, wraps at 800px,
+and leaves timeline/composer geometry and pointer-transparent gaps intact.
 
-A **pre-first-message workspace chip** landed in [#278](../codebase/278.md) and was **removed in [#1486](https://github.com/pyrycode/pyrycode-desktop/issues/1486)**: a Material 3 pill above the empty new-discussion thread showing the workspace `cwd` the discussion will run in, with a disabled "Change" placeholder reserved for the #157 Workspace Picker sheet, gone once the thread had its first message. By the time it was removed, the sidebar's workspace-start plus (#1178) and Add workspace (#1189) had made every chat start in a chosen directory, so the row only restated a choice already made; the empty thread's copy is now the first thing below the banner row. See [Workspace chip](conversation-shell-workspace-chip-and-picker.md#workspace-chip-278-deleted-by-1486) below.
+A **pre-first-message workspace chip** landed in [#278](../codebase/278.md) and was **removed in [#1486](https://github.com/pyrycode/pyrycode-desktop/issues/1486)**: a Material 3 pill above the empty new-discussion thread showing the workspace `cwd` the discussion will run in, with a disabled "Change" placeholder reserved for the #157 Workspace Picker sheet, gone once the thread had its first message. By the time it was removed, the sidebar's workspace-start plus (#1178) and Add workspace (#1189) had made every chat start in a chosen directory, so the row only restated a choice already made; the empty thread's copy remains in the message area beneath the overlay. See [Workspace chip](conversation-shell-workspace-chip-and-picker.md#workspace-chip-278-deleted-by-1486) below.
 
 The chip's "Change" placeholder was wired in [#383](../codebase/383.md): a bottom sheet (Figma node 20-2) listing the [recent-workspaces store](recent-workspaces-store.md) (#382), marking the row matching the active conversation's `cwd` with a "default" pill, and dispatching the existing [`changeWorkspace` command](conversation-workspace-change.md) (#379) on selection — the daemon's `conversation_updated` reply reflects the change into the conversation list for free, no optimistic update. Closes #157's split except for the "Other" section's create-folder dialog, deferred to #384 and landed by [#398](../codebase/398.md). #1486 deleted the chip that opened this sheet from the conversation screen; its pure view and `requestChangeWorkspace` survive as Settings' [Default workspace row](settings-screen-how-it-works.md#the-defaults-section-defaultworkspacerowtsx-404)'s own picker, while the #383 container, `CreateFolderDialog` and the conversation-scoped `onCreateFolder` wiring stay in the tree dormant, deliberately unswept: removing this entry point also removed the app's only way to make a directory on the host, and [#1499](https://github.com/pyrycode/pyrycode-desktop/issues/1499) owns that capability question. See [Workspace Picker sheet](conversation-shell-workspace-chip-and-picker.md#workspace-picker-sheet-383) below.
 
@@ -271,7 +288,7 @@ and protected-storage cleanup keep their independent host-qualified lifecycle an
 
 `TopOverlay.tsx` is the pure view; `TopOverlayControl` in `ConversationScreen.tsx` selects the open
 chat's resolution from the [modal store](modal-store-bridge.md#permission-resolution-feedback).
-The pill sits below usage and above session errors, Markdown failures and Re-pair, using the existing Default treatment and exact 8px X.
+The pill sits below usage and above session errors, Markdown failures, connection feedback and recovery actions, using the existing Default treatment and exact 8px X.
 Its only copies are “Resolved on another device” (`remote`) and “Request timed out” (`timeout`);
 the X is named “Dismiss permission resolution notice”. Outcome, raw source and daemon-authored text
 never enter this notice's DOM. An unknown/already-removed prompt, local answer/cancel or reconnect
@@ -383,7 +400,7 @@ supplied test inputs must still be reprojected.
 - Since [#179](../codebase/179.md), the timeline is the **only** thread surface — no split-brain, no empty second region. `MessageThread`/`selectMessages` are retained but unread residue.
 - A click or Enter submits through the host-qualified pending-send store, capturing authenticated device/message identity. Whitespace does nothing; identity or bridge failure preserves recoverable input. Accepted daemon items settle only the exact host/device/message pair. See [Composer send](composer-send.md).
 - **Dark scheme only**; the desktop sidebar stays fixed while the chat pane reflows down to the 800px minimum window width.
-- **Connection banner** ([#279](../codebase/279.md)) — reads the open conversation's own host through `useOpenConnectionStatus` and renders while it is not connected. Pairing rejection selects the fixed recovery notice; other non-connected states use `CONNECTION_BANNER_COPY`, never `ConnectionError.message`. See [per-host decisions](session-store.md#one-slot-per-server-since-1133). Through [#968](../codebase/968.md) it coexisted with the composer's own terse caption (#31), both visible while disconnected by design; #968 dropped that caption, and the banner is now the only announcement of a non-connected state outside the `error` arm's status-row occupant (#797/#963).
+- **Connection feedback** — reads the open host through `useOpenConnectionStatus` and uses `connectionNotice` for fixed generic, pairing-expired or daemon-update copy. One Top overlay pill combines the connection explanation, visible offline saved-row notice and independent loading feedback. Connected state clears connection/offline copy; read settlement clears loading. See [announcement ownership](conversation-shell-chrome.md#connection-and-saved-history-announcement).
 - Renderer unit tests use `renderToStaticMarkup`: store-bound containers read Zustand's initial server snapshot, and effects, geometry and clicks do not run. Fake-transport Electron coverage establishes interaction; see [test boundaries](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves).
 - **Session-boundary delimiter** ([#286](../codebase/286.md), redrawn [#690](https://github.com/pyrycode/pyrycode-desktop/issues/690)) — appears only when a `sessionBoundary` item exists; an empty thread and a thread with no boundary render exactly as before. Its `clear`/`idle_evict` copy is no longer provisional as of #690 — `Session reset` / `Session reset after idle` are the shipped labels, not a placeholder awaiting a Figma variant.
 - **Queued rows** — supplied shown queued user items keep dimmed bubbles and valid attachments. Usable raw handles and a connected owning host gate Cancel/Send now; Send now also requires `mid_turn_input`. Drop hides only after the supplied revision, with no optimistic removal. See [queue authority](#what-it-does).

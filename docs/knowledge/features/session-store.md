@@ -43,7 +43,7 @@ The first two message actions mirror the two wire envelope types 1:1, so #3's tr
 `ConnectionError` (`{ code, message, retryable }`) is a renderer-owned shape for
 connection failures. Main classifies wire errors and transport failures into
 client-owned codes and copy; raw daemon error text is not copied across IPC.
-The connection banner selects fixed copy from the code, never `error.message`.
+The Top overlay’s connection explanation selects fixed copy from the code, never `error.message`.
 
 ### The reducer
 
@@ -184,7 +184,7 @@ Narrow-slice selection means a status change does not re-render the thread and a
 - [Daemon-event bridge (renderer)](daemon-event-bridge.md) — the #19 seam that translates `DaemonEvent`s and dispatches them into this store; its `originOf` (#1133) is the only place the per-server `serverId` on a status action is derived, from #1068's stamp
 - [Live window](live-window.md#one-slot-per-server-since-1121) — #1121, the main-side precedent for the same `Map<StatusOrigin, …>` shape, applied to the reopened-window status cache
 - [Relay-link store](relay-link-store.md#one-slot-per-server-since-1134) — #1134, the third application of this shape: the relay leg the same host row reads next to this one, keyed by its own `RelayLinkOrigin` rather than an import of `StatusOrigin`
-- [Conversation shell](conversation-shell.md) — its composer, connection banner and repair slot read the open host's connection status
+- [Conversation shell](conversation-shell.md) — its composer and Top overlay connection/recovery pills read the open host's connection status
 - [Composer send](composer-send.md) — dispatches the `messageSent` optimistic-echo action into this store ([#66](../codebase/66.md))
 - [Unpair channel](unpair-channel.md) — the main-side bridge whose `ok` result triggers the pairing-ended clear ([#173](../codebase/173.md)); `runUnpair` itself no longer dispatches `reset` directly as of [#531](../codebase/531.md)
 - [Paired shell](paired-shell.md) — `clearPairingScopedState` ([#531](../codebase/531.md)), the shared helper `reset` is dispatched through; unpair alone since [#1141](https://github.com/pyrycode/pyrycode-desktop/issues/1141) — pairing another server adds a server rather than ending one, and stopped clearing anything

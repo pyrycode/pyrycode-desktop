@@ -50,6 +50,7 @@ function failure(error: unknown, fallback: 'unreadable' | 'write-failed' | 'remo
 /** One main-process instance owns retained import and scoped cleanup for the app lifetime. */
 export function createChatHistoryStore(deps: {
   secureStore: SecureStore; log: DiagnosticLog; encryption: SecretEncryption; database: ReturnType<typeof createHistoryDatabase>
+  onMutationTurn?: (units: number) => Promise<void>
 }) {
   const { secureStore, log, encryption, database } = deps
   const threads = createIndexedThreadHistory(deps)
@@ -131,10 +132,16 @@ export function createChatHistoryStore(deps: {
     const { operation, serverId } = request
     let reading = true
     try {
+      if (request.operation === 'mutateThread') {
+        reading = false
+        const result = requireSuccess(await threads.executeMutation(request, deps.onMutationTurn))
+        await retireSource()
+        return result
+      }
       const result = database.transaction((db): ChatHistoryResult => {
         if (operation === 'openThreadPage' || operation === 'newestThreadPage' || operation === 'beforeThreadPage')
           return requireSuccess(threads.executeSync(request))
-        if (operation === 'readThread' || operation === 'replaceThread' || operation === 'mutateThread') {
+        if (operation === 'readThread' || operation === 'replaceThread') {
           const result = threads.executeSync(request)
           if (result.status === 'page') throw INVALID_CHAT_HISTORY
           requireSuccess(result)

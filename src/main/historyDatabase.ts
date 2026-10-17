@@ -89,6 +89,24 @@ export function createHistoryDatabase({ userDataPath }: { userDataPath: string }
         return run(db)
       })()
     },
+    /** The application queue owns this connection until completion, including every yield. */
+    async transactionSteps(run: (db: Database.Database) => Generator<void>,
+      onTurn: (units: number) => Promise<void> = () => new Promise(resolve => setImmediate(resolve))): Promise<void> {
+      const db = open()
+      if (db.inTransaction) throw new Error('history transaction already active')
+      db.exec('BEGIN IMMEDIATE')
+      try {
+        const steps = run(db)
+        let units = 0
+        while (!steps.next().done) {
+          if (++units === 16) { await onTurn(units); units = 0 }
+        }
+        db.exec('COMMIT')
+      } catch (error) {
+        if (db.inTransaction) db.exec('ROLLBACK')
+        throw error
+      }
+    },
     close(): void { connection?.close(); connection = undefined }
   }
 }

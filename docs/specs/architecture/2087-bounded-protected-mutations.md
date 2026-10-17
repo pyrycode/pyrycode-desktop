@@ -106,3 +106,24 @@ None. One transaction held across turns is required to preserve existing atomici
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-17
+
+## Revisions
+
+2026-10-17: Preparation also includes replacing an old epoch/reset owner. A direct
+scope DELETE would hide a history-sized foreign-key cascade in the setup unit.
+The iterator therefore deletes each old protected record, payload and auth row as
+one counted unit before deleting the empty scope. Header authentication, remaining
+setup and final header writing are each one unit; range setup and final range insertion are separate units.
+BEGIN/COMMIT/ROLLBACK remain indivisible native transaction operations.
+
+The implemented transition regressions are `bounds %s work and admits a timer after
+progress before completion` (items, removals, progress, ranges and reset),
+`production scheduling lets a real timer run after item writes and before
+acknowledgement`, `rolls back bounded %s failure without retry and retains explicit
+replay through a fresh owner` (turn, index and header), `serializes $action after
+interruption=$interrupted across hosts before close`, and `bounded and separately
+saved application preserve exact items, order and progress after replay and reopen`.
+Independent SQL write/selected-record and metadata-fold counters accompany the
+driver's 16-unit turn count. The long-running protected counter fixture uses a
+30-second test timeout; responsiveness is asserted through work counts and actual
+callbacks, not an elapsed-time threshold.

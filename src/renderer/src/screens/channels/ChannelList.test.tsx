@@ -120,6 +120,7 @@ const render = (
       serverIds={serverIds}
       statuses={statuses}
       openConversationId={openConversationId}
+      openServerId={openConversationId === null ? null : DEFAULT_SERVER}
       onOpen={noop}
       onOpenSettings={noop}
       onOpenArchive={noop}

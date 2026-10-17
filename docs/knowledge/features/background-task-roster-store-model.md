@@ -123,7 +123,7 @@ Since [#1117](daemon-connection-routing.md) the app holds one live connection pe
 edge was originally a nullary whole-map clear, which
 [#1139](https://github.com/pyrycode/pyrycode-desktop/issues/1139) scoped to the reconnecting server's own
 conversations (sourced from the [server-keyed conversation
-list](conversation-list-store.md#one-slot-per-server-since-1086)), the same fix
+list](conversation-list-store-per-server-keying.md#one-slot-per-server-since-1086)), the same fix
 [#1138](https://github.com/pyrycode/pyrycode-desktop/issues/1138) shipped for [`queueStore`](queue-store.md)
 one week earlier. Scoping the edge retired the self-heal that had kept this store out of
 [`clearPairingScopedState`](paired-shell.md#related): a new pairing's first `connected` resolves an empty

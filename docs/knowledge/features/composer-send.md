@@ -22,6 +22,13 @@ Enter and Actions-menu sends:
   returns false so the container retains its draft. An already accepted daemon item
   remains authoritative.
 
+Connection explanations and Reconnect/Re-pair live in the conversation's
+[Top overlay](conversation-shell-chrome.md#connection-banner-279), with
+[unchanged recovery predicates and click-time host checks](conversation-shell-composer-repair-button.md).
+The composer status row has no connection chip or Reconnect button; its remaining
+occupants keep their connected-only priority. Send gating and automatic retries
+retain their existing policy.
+
 The local row represents submission, not confirmed delivery. Accepted daemon items
 render through [the supplied thread view](conversation-shell.md#what-it-does).
 

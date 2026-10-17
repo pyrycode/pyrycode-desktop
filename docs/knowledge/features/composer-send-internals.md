@@ -195,9 +195,12 @@ export function composerAvailability(status: ConnectionStatus): ComposerAvailabi
 | `disconnected` | `false` |
 | `error` | `false` |
 
-Through [#968](../codebase/968.md), `ComposerAvailability` also carried `hint: string | null` — a short "why unavailable" caption (`Connecting…` / `Not connected` / `Connection error`), rendered directly above the message box as `<p className="composer__hint" role="status">`. #968 retired the caption and the field: the connection state is said by [the banner](conversation-shell-chrome.md#connection-banner-279) (#279) in every non-connected arm and by [the status row's chip or button](conversation-shell-composer-error-chip.md#composer-error-chip-797) (#797/#963) in the `error` arm, so the caption was a third read in `error` and a second read in `connecting`/`disconnected` — the banner is what survives in every arm. `ComposerAvailability` stays a one-field record rather than collapsing to a bare boolean: the call site already destructures from it, and the ruling was "drop the caption," not "redesign the gate." The function now reads `status.type` and nothing else, so there is no string on this path to leak — the docblock paragraph that used to reserve `ConnectionError.message` for the banner's exclusive use went with the field it was reserving.
-
-Both facts (`canSend` and, before #968, `hint`) derive from the single `selectStatus` read, so there is one source of truth. A `default: assertNever(status)` arm makes a new `ConnectionStatus` arm a compile error — unchanged by #968.
+`ComposerAvailability` remains a one-field `{ canSend }` record. The caption and
+`hint` field retired in #968; #2076 moved their surviving connection explanation
+into the [Top overlay](conversation-shell-chrome.md#connection-banner-279).
+The send gate reads only `status.type`; the host-qualified `useOpenConnectionStatus`
+read supplies both it and the overlay. Its exhaustive `assertNever` switch makes a
+new connection arm a compile error. A connection change does not change thread data.
 
 In the container, `Composer` combines connection availability with the
 [new-chat model-recall hold](remembered-model.md#eligibility-and-settlement). It selects
@@ -210,7 +213,7 @@ the settings command returns; unrelated chats remain available.
 ### 5. Re-pair gate — `shouldOfferRepair` ([#167](../codebase/167.md))
 
 `shouldOfferRepair` and `shouldOfferReconnect` are pure, disjoint decisions over
-`ConnectionStatus`, used by the [composer's actionable-error slot](conversation-shell-composer-repair-button.md).
+`ConnectionStatus`, used by the [Top overlay’s recovery actions](conversation-shell-composer-repair-button.md).
 Since [#1510](https://github.com/pyrycode/pyrycode-desktop/issues/1510), terminal failure alone
 cannot offer re-pairing:
 
@@ -233,42 +236,34 @@ including 4421 or 4401, establishes only a connection failure and offers Reconne
 Transport, handshake and unknown terminal error codes therefore take the reconnect arm.
 `unpair` is excluded to avoid the failed-removal self-loop; `not-paired` has no saved
 host to dial. Both predicates reject retryable errors and every non-error status;
-remaining errors retain the chip. Unit tables assert both decisions together so an
-accidental overlap cannot pass as two independently plausible gates.
+every non-connected state retains the explanatory overlay pill. Unit tables assert
+both decisions together so an accidental overlap cannot pass as two independently plausible gates.
 
 These recovery gates do not enable sending. `composerAvailability` (§4) still:
 
 - **Guards `handleSubmit`** with `if (!canSend) return` at the top — the authoritative gate, blocking the **Enter** path (`handleKeyDown → handleSubmit`) as well as the button. `submitMessage` is never reached while not connected, so no `sendCommand` and no optimistic `dispatch` fire; the input is **not** cleared.
 - **Natively disables** the send `<button>` with `disabled={!canSend}` (a disabled button fires no `onClick` — the visible affordance, platform-blocked in addition to the handler guard).
 
-The `<textarea>` stays **enabled** while not connected — the user may draft while `connecting`; only the send control is gated. Selecting `status` re-renders `Composer` when it changes, so the re-enable is reactive; the thread (which selects only `selectMessages`) doesn't re-render on status change.
+The `<textarea>` stays **enabled** while not connected — the user may draft while `connecting`; only the send control is gated. Selecting the open host’s `status` makes the control re-enable reactively; it does not reconstruct thread rows.
 
-Through [#968](../codebase/968.md), a third bullet rendered the hint above the input/button row as `<p className="composer__hint" role="status">` — a polite live region so a screen reader announced the status change without stealing focus. That element and its rule (`conversation.css`'s `.composer__hint`) are retired; the announcement isn't lost, since [the connection banner](conversation-shell-chrome.md#connection-banner-279) (#279) is the polite live region for the same transition in every non-connected arm and was already written to avoid double-announcing with the caption. Deleting the caption *is* the 8px between the status row and the message box: `.composer`'s `padding-top` (`--space-2`) was always the caption's own inset, `ComposerStatusArea` renders unconditionally as `.composer`'s sibling, and `.composer__row` is now `.composer`'s first child — so that gap is identical in all four connection states with no new CSS rule.
+The old `.composer__hint` live region and CSS remain retired. The overlay now owns
+one atomic polite connection/restoration region; recovery buttons add no second
+announcement. `.composer` retains its existing 8px top inset independently of
+connection state.
 
 ### 6. Connection banner gate — `shouldShowBanner` / `CONNECTION_BANNER_COPY` ([#279](../codebase/279.md))
 
-A third pure predicate beside `composerAvailability`/`shouldOfferRepair`, over the same
-`ConnectionStatus` — whether the conversation screen should render the prominent, disconnected-only
-banner across the top of the thread (see
-[Conversation shell → Connection banner](conversation-shell-chrome.md#connection-banner-279)).
+The names remain after #2076 retired the banner view. `shouldShowBanner(status)`
+returns `status.type !== 'connected'`; `connectionNotice(status)` uses it to return
+`null` when connected and fixed client-owned copy otherwise. Pairing rejection
+selects the pairing-expired explanation; daemon `update-required` selects
+`DAEMON_UPDATE_REQUIRED_COPY`; all other non-connected states use
+`CONNECTION_BANNER_COPY`. Error messages never supply visible or accessible text.
+See [the exact copy and saved/loading rules](conversation-shell-chrome.md#connection-banner-279).
 
-```ts
-export function shouldShowBanner(status: ConnectionStatus): boolean {
-  return status.type !== 'connected'
-}
-```
-
-Unlike `composerAvailability`, this is not an exhaustive per-arm switch: every non-connected arm
-(`disconnected`/`connecting`/`error`) maps to the identical behavior (show the banner), so `!==
-'connected'` is the honest shape — and its fail-mode is correct, since a hypothetical future 5th
-`ConnectionStatus` arm defaults to *showing* the not-connected banner rather than silently hiding it.
-
-`CONNECTION_BANNER_COPY` ships alongside it — a single client-owned string constant. Through [#968](../codebase/968.md)
-it was lexically distinct from all three `composerAvailability` hints; those retired with the caption, and
-it is now argued distinct from the status row's chip and button strings instead (`COMPOSER_ERROR_CHIP_COPY`
-§8, `COMPOSER_REPAIR_BUTTON_COPY` and `COMPOSER_RECONNECT_BUTTON_COPY` §9), so the banner and the row directly above the message box never read
-as the same string stacked twice. One constant, not a per-arm map: every non-connected arm is a state
-where pyry is unreachable, so one sentence covers all three honestly.
+Unlike the exhaustive send gate, the notice predicate deliberately defaults any
+future non-connected arm to showing an explanation. It does not change sending,
+retry policy or pairing storage.
 
 ### 7. Keystroke-intent gates — `shouldSubmitOnKeyDown` ([#512](../codebase/512.md)) and `shouldInterruptOnKeyDown` ([#1072](https://github.com/pyrycode/pyrycode-desktop/issues/1072))
 
@@ -309,36 +304,15 @@ A second binding lives outside this module, on `ComposerSendButton`'s running va
 
 ### 8. Error chip copy — `composerSend.ts` (#797)
 
-The chip's visible copy and hidden prefix share this module with the connection banner
-(§6) and both recovery buttons (§9). These are plain constants, not predicates — no
-`shouldShowErrorChip` was added beside them. The gate is already the discriminant of the one arm the [composer status row's error chip](conversation-shell-composer-error-chip.md#composer-error-chip-797)
-belongs to (`status.type === 'error'`), so a named predicate would only restate that in an export and a
-test matrix.
-
-```ts
-export const COMPOSER_ERROR_CHIP_COPY = 'Host connection down!'
-export const COMPOSER_ERROR_CHIP_PREFIX_COPY = 'Error: '
-```
-
-Both carry `CONNECTION_BANNER_COPY`'s three-part contract: a client-owned constant, lexically distinct
-from the banner copy (`COMPOSER_ERROR_CHIP_COPY` leads with "Host", sharing no leading word with `Cannot
-reach pyrybox…`; its distinctness from the button that replaces it in the same slot is argued in §9's own
-docblock), and zero daemon-supplied substring — structural here, not conventional, since the chip view
-narrows on `status.type` and never destructures `status.error`. Apostrophe-free like every string in this
-module (`renderToStaticMarkup` escapes `'` → `&#x27;`, so a `toContain` only matches verbatim without one).
-
-`COMPOSER_ERROR_CHIP_PREFIX_COPY`'s **trailing space is load-bearing** — it is the separator between the
-hidden prefix and the visible copy when a screen reader concatenates them into `Error: Host connection
-down!`; an editor's trim would silently degrade the announcement. `composerSend.test.ts` pins it.
-
-These two live here, beside `CONNECTION_BANNER_COPY`, rather than as module-level constants in
-`ConversationScreen.tsx` (where `THINKING_COPY`/`STALL_COPY`/`EMPTY_THREAD_COPY` live): every string that
-speaks about `ConnectionStatus` lives in this one module, which is what makes the lexical-distinctness
-comparison reviewable in one place.
+\#2076 removed `ComposerErrorChip`, `COMPOSER_ERROR_CHIP_COPY` and
+`COMPOSER_ERROR_CHIP_PREFIX_COPY`. Connection feedback now uses the single overlay
+announcement described in §6. The remaining `.composer-status__error` styling
+still serves other reports and per-message delivery feedback; its presence does
+not imply a connection chip.
 
 ### 9. Actionable-error button copy — `COMPOSER_REPAIR_BUTTON_COPY` ([#963](https://github.com/pyrycode/pyrycode-desktop/issues/963))
 
-The two client-owned labels live beside the connection banner and error-chip copy in
+The two client-owned labels live beside the connection explanation copy in
 `composerSend.ts`. The corresponding predicate in §5 selects exactly one:
 
 ```ts
@@ -348,13 +322,13 @@ export const COMPOSER_RECONNECT_BUTTON_COPY = 'Connection error - Reconnect'
 
 Both follow “Type of error - Action” with an ASCII hyphen-minus separator. Their
 visible text is their accessible name: no `aria-label`, hidden `Error: ` prefix or
-additional live region. The connection banner already announces loss of connectivity.
-Both render with `button-small button-small--error` in the same trailing slot.
+additional live region. The connection/restoration pill announces loss of connectivity.
+Both actions render with `top-overlay-pill top-overlay-pill--error` in the Top overlay.
 
 Error fields select the branch but never supply markup, attributes or accessible copy.
 Static-render tests use sentinel messages on both buttons and a sentinel code on
 Reconnect; repair must retain the real `pairing-rejected` code to exercise its branch.
-See [the actionable-error slot](conversation-shell-composer-repair-button.md) for
+See [the recovery actions](conversation-shell-composer-repair-button.md) for
 host resolution, recovery ownership and interaction coverage.
 
 ### 10. Attachments named on the outbound frame — `takeAttachments` ([#1039](https://github.com/pyrycode/pyrycode-desktop/issues/1039), reworked by [#1055](https://github.com/pyrycode/pyrycode-desktop/issues/1055))

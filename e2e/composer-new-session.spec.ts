@@ -204,13 +204,13 @@ test('reset phases reach the composer and session_transition clears the label wi
   await expect(statusLabel).toHaveCount(0)
 })
 
-test('reset labels keep one-line geometry beside the trailing error chip at minimum width', async ({
+test('reset labels keep one-line geometry while connection pills float at minimum width', async ({
   launchPairedApp
 }, testInfo) => {
   const { page, app, daemon } = await launchPairedApp()
   const row = page.locator('.composer-status')
   const label = row.locator('.composer-status__label')
-  const chip = row.locator('.composer-status__error')
+  const connectionPill = page.locator('.conversation__top-overlay [role="status"]')
   const composer = page.locator('.composer__row')
   const states: Array<{ phase: ResettingPayload['phase']; handoff: ResettingPayload['handoff']; copy: string }> = [
     { phase: 'restarting', handoff: 'written', copy: 'Resetting: restarting claude… handoff note written' },
@@ -226,7 +226,8 @@ test('reset labels keep one-line geometry beside the trailing error chip at mini
   }, { channel: DAEMON_EVENT_CHANNEL, type })
   for (const trailing of [false, true]) {
     if (trailing) await connection('failed')
-    await expect(chip).toHaveCount(trailing ? 1 : 0)
+    await expect(connectionPill).toHaveCount(trailing ? 1 : 0)
+    await expect(row.locator('.composer-status__error')).toHaveCount(0)
     for (const width of [800, 1280]) {
       await app.evaluate(({ BrowserWindow }, width) => {
         BrowserWindow.getAllWindows()[0].setSize(width, 600)
@@ -262,7 +263,7 @@ test('reset labels keep one-line geometry beside the trailing error chip at mini
         expect(bounds.height).toBe(bounds.lineHeight)
         expect(bounds.contained).toBe(true)
         expect(bounds.singleTextNode).toBe(true)
-        if (width === 800 && trailing) expect(bounds.truncated).toBe(true)
+        // Connection feedback no longer consumes label width; containment and one-line height still hold.
         await page.screenshot({
           path: testInfo.outputPath(`reset-${width}-${trailing ? 'error' : 'empty'}-${handoff}.png`),
           animations: 'disabled'

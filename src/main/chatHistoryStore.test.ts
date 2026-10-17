@@ -170,6 +170,33 @@ describe('protected chat history storage', () => {
     expect(await h.fresh().execute(read)).toMatchObject(action === 'host' || action === 'conversation' ? { status: 'missing' } : { status: 'stored', snapshot: { thread: { items: [] } } })
     expect(await h.fresh().execute({ ...read, serverId: 'b' })).toMatchObject({ status: 'stored', snapshot: { thread: { items: [], epoch: 'e' } } })
   })
+  it.each(['conversation', 'host'])('confirmed %s removal fences stale handler admission after bounded progress', async action => {
+    const h = await setup(), paired = new Set(['a', 'b'])
+    let entered = () => {}, release = () => {}, turns = 0
+    const started = new Promise<void>(resolve => { entered = resolve })
+    const held = new Promise<void>(resolve => { release = resolve })
+    const store = createChatHistoryStore({ ...h, onMutationTurn: async () => {
+      if (++turns === 4) { entered(); await held }
+    } })
+    const handler = createChatHistoryHandler({ store, log: h.log, pairedServers: {
+      loadById: async server => paired.has(server) ? { server, relay: '', token: '', server_static_pubkey: '' } : null
+    } })
+    await handler(null, mutation()); await handler(null, mutation({}, 'b'))
+    const saving = handler(null, mutation({ items: Array.from({ length: 40 }, (_, id) => ({ id, rev: 1, kind: 'future' })) }))
+    await started
+    const removing = action === 'host' ? handler.clearServer('a', async server => {
+      paired.delete(server); return { matched: true, remaining: 1 }
+    }) : handler(null, { operation: 'removeConversation', serverId: 'a', conversationId: 'chat' })
+    const stale = handler(null, mutation({ items: [{ id: 99, rev: 1, kind: 'future' }] }))
+    release()
+    expect(await saving).toEqual({ status: 'ok' }); await removing
+    paired.add('a')
+    expect(await stale).toEqual({ status: 'error', code: 'unknown-host' })
+    const read = { operation: 'readThread', serverId: 'a', conversationId: 'chat' }
+    expect(await h.fresh().execute(read)).toEqual({ status: 'missing' })
+    expect(await h.fresh().execute({ ...read, serverId: 'b' })).toMatchObject({ status: 'stored', snapshot: { thread: { items: [] } } })
+  })
+
   it('explicit removal follows held writes, removes omitted threads and cannot be undone by queued old saves', async () => {
     const h = await setup()
     const paired = new Set(['a', 'b'])

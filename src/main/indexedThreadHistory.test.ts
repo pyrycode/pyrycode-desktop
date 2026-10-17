@@ -237,7 +237,7 @@ function owned(s: { serverId: string; conversationId: string; thread: ThreadSnap
 
 it('bounded and separately saved application preserve exact items, order and progress after replay and reopen', async () => {
   const bounded = setup(), separate = setup(), seed = snapshot(40)
-  seed.thread.items[1] = { ...seed.thread.items[1], kind: 'assistant_message', text: 'prefix' }
+  seed.thread.items[1] = { ...seed.thread.items[1], kind: 'assistant_message', content: { text: 'prefix' } }
   for (const h of [bounded, separate]) {
     expect(await h.store.execute(put(seed))).toEqual({ status: 'ok' })
     expect(await h.store.execute(owned(seed))).toEqual({ status: 'ok' })
@@ -246,7 +246,7 @@ it('bounded and separately saved application preserve exact items, order and pro
   void ignoredItems; void ignoredRanges; void ignoredArrival
   const unfinished = { ...old, version: 400, uncommittedVersion: 400 }
   const completed = { ...old, version: 400, checkpoint: 400, uncommittedVersion: 0, repair: null }
-  const items = [{ ...seed.thread.items[1], text: 'prefix extended' },
+  const items = [{ ...seed.thread.items[1], content: { text: 'prefix extended' } },
     { ...seed.thread.items[2], rev: 500, order: 10000, text: 'revision' },
     { id: 100, rev: 1, kind: 'future', order: 2 }]
   const observations = [{ metadata: unfinished }, { metadata: completed, completion: { fromVersion: 100, version: 400 },

@@ -126,4 +126,6 @@ saved application preserve exact items, order and progress after replay and reop
 Independent SQL write/selected-record and metadata-fold counters accompany the
 driver's 16-unit turn count. The long-running protected counter fixture uses a
 30-second test timeout; responsiveness is asserted through work counts and actual
-callbacks, not an elapsed-time threshold.
+callbacks, not an elapsed-time threshold. `confirmed %s removal fences stale handler
+admission after bounded progress` also checks host/conversation generations through
+the existing saved-host handler, including credential cleanup and equal IDs on two hosts.

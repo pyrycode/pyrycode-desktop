@@ -168,19 +168,21 @@ it('cold opening payload work stays bounded as unrelated older, hidden and range
     const conversionMs = performance.now() - converting
     h.database.close(); const fresh = h.fresh()
     let structural = 0, records = 0, payloads = 0
+    // Each prepared statement is private to this call. Count real reads directly
+    // without retaining a Vitest mock and its call history for every statement.
     fresh.database.transaction(db => {
       const prepare = db.prepare.bind(db)
       vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
         const statement = prepare(sql)
         if (sql.startsWith('SELECT')) for (const method of ['all', 'get'] as const) {
           const read = statement[method].bind(statement)
-          vi.spyOn(statement, method).mockImplementation((...args) => {
+          Object.defineProperty(statement, method, { value: (...args: unknown[]) => {
             const result = read(...args), count = Array.isArray(result) ? result.length : Number(result !== undefined)
             if (sql.includes('thread_auth')) structural += count
             else if (sql.includes('thread_records')) records += count
             else if (sql.includes('thread_payloads')) payloads += count
             return result
-          })
+          } })
         }
         return statement
       })
@@ -283,11 +285,11 @@ it('successive owned additions keep ordering paths and record work bounded witho
       const statement = prepare(sql)
       if (sql.startsWith('SELECT')) {
         const get = statement.get.bind(statement), all = statement.all.bind(statement)
-        vi.spyOn(statement, 'get').mockImplementation((...args) => { const r = get(...args); reads += r ? 1 : 0; return r })
-        vi.spyOn(statement, 'all').mockImplementation((...args) => { const r = all(...args); reads += r.length; return r })
+        statement.get = (...args) => { const r = get(...args); reads += r ? 1 : 0; return r }
+        statement.all = (...args) => { const r = all(...args); reads += r.length; return r }
       } else {
         const run = statement.run.bind(statement)
-        vi.spyOn(statement, 'run').mockImplementation((...args) => { writes++; return run(...args) })
+        statement.run = (...args) => { writes++; return run(...args) }
       }
       return statement
     })
@@ -531,7 +533,7 @@ it('coalesces shared protected paths into one write per path in an owned batch',
       const statement = prepare(sql)
       if (sql.startsWith('INSERT OR REPLACE INTO thread_auth')) {
         const run = statement.run.bind(statement)
-        vi.spyOn(statement, 'run').mockImplementation((...args) => { writes++; return run(...args) })
+        statement.run = (...args) => { writes++; return run(...args) }
       }
       return statement
     })
@@ -555,11 +557,11 @@ it('ordinary owned validation, serialization and protected record work stay boun
         const statement = prepare(sql)
         if (sql.startsWith('SELECT')) {
           const all = statement.all.bind(statement), get = statement.get.bind(statement)
-          vi.spyOn(statement, 'all').mockImplementation((...args) => { const result = all(...args); rows += result.length; return result })
-          vi.spyOn(statement, 'get').mockImplementation((...args) => { const result = get(...args); rows += result ? 1 : 0; return result })
+          statement.all = (...args) => { const result = all(...args); rows += result.length; return result }
+          statement.get = (...args) => { const result = get(...args); rows += result ? 1 : 0; return result }
         } else {
           const run = statement.run.bind(statement)
-          vi.spyOn(statement, 'run').mockImplementation((...args) => { writes++; return run(...args) })
+          statement.run = (...args) => { writes++; return run(...args) }
         }
         return statement
       })
@@ -843,8 +845,8 @@ it('selected reads/JSON decodes/decrypts stay bounded when unrelated history gro
         const statement = prepare(sql)
         if (sql.startsWith('SELECT')) {
           const all = statement.all.bind(statement), get = statement.get.bind(statement)
-          vi.spyOn(statement, 'all').mockImplementation((...args) => { const result = all(...args); rows += result.length; return result })
-          vi.spyOn(statement, 'get').mockImplementation((...args) => { const result = get(...args); rows += result ? 1 : 0; return result })
+          statement.all = (...args) => { const result = all(...args); rows += result.length; return result }
+          statement.get = (...args) => { const result = get(...args); rows += result ? 1 : 0; return result }
         }
         return statement
       })

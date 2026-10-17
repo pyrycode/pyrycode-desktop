@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto'
 import Database from 'better-sqlite3'
 import { createHistoryDatabase } from './historyDatabase'
 import { createIndexedThreadHistory } from './indexedThreadHistory'
-import { parseChatHistorySnapshot, type ThreadSnapshot } from '../shared/chatHistory'
+import { parseChatHistorySnapshot, parseChatHistoryRequest, type ThreadSnapshot } from '../shared/chatHistory'
 import type { SecretEncryption } from './secureStore'
 
 const roots: string[] = [], owners: ReturnType<typeof createHistoryDatabase>[] = []
@@ -234,6 +234,45 @@ function owned(s: { serverId: string; conversationId: string; thread: ThreadSnap
   void ignoredItems; void ignoredRanges; void ignoredArrival
   return ask('mutateThread', { change: { metadata, acceptEpoch: true, items: [], removeIds: [], ranges: [], ...extra } }, s.serverId, s.conversationId)
 }
+
+it('bounded and separately saved application preserve exact items, order and progress after replay and reopen', async () => {
+  const bounded = setup(), separate = setup(), seed = snapshot(40)
+  seed.thread.items[1] = { ...seed.thread.items[1], kind: 'assistant_message', content: { text: 'prefix' } }
+  for (const h of [bounded, separate]) {
+    expect(await h.store.execute(put(seed))).toEqual({ status: 'ok' })
+    expect(await h.store.execute(owned(seed))).toEqual({ status: 'ok' })
+  }
+  const { items: ignoredItems, ranges: ignoredRanges, arrivalOrder: ignoredArrival, ...old } = seed.thread
+  void ignoredItems; void ignoredRanges; void ignoredArrival
+  const unfinished = { ...old, version: 400, uncommittedVersion: 400 }
+  const completed = { ...old, version: 400, checkpoint: 400, uncommittedVersion: 0, repair: null }
+  const items = [{ ...seed.thread.items[1], content: { text: 'prefix extended' } },
+    { ...seed.thread.items[2], rev: 500, order: 10000, text: 'revision' },
+    { id: 100, rev: 1, kind: 'future', order: 2 }]
+  const observations = [{ metadata: unfinished }, { metadata: completed, completion: { fromVersion: 100, version: 400 },
+    availability: { start: 0, available: false } }, { metadata: { ...completed, version: 450, uncommittedVersion: 450 } }]
+  const request = parseChatHistoryRequest(owned(seed, { items, removeIds: [3, 7], ranges: [{ start: 3, end: 900 }],
+    priorProgress: observations, metadata: { ...completed, version: 450, checkpoint: 450, uncommittedVersion: 450 } }))
+  if (request.operation !== 'mutateThread') throw Error('expected mutation')
+  expect(await bounded.store.executeMutation(request)).toEqual({ status: 'ok' })
+  expect(await separate.store.execute(owned(seed, { items, removeIds: [3, 7], ranges: [{ start: 3, end: 900 }], metadata: old }))).toEqual({ status: 'ok' })
+  for (const progress of [...observations, request.change]) {
+    expect(await separate.store.execute(owned(seed, { ...progress, items: [], ranges: [], removeIds: [], priorProgress: [] }))).toEqual({ status: 'ok' })
+  }
+  const read = ask('readThread'), expected = await separate.store.execute(read)
+  if (expected.status !== 'stored' || expected.snapshot.kind !== 'daemon-items') throw Error('expected saved thread')
+  expect(expected.snapshot.thread.items).toEqual(expect.arrayContaining(items))
+  expect(expected.snapshot.thread.items.some(item => item.id === 3 || item.id === 7)).toBe(false)
+  expect(expected.snapshot.thread.arrivalOrder).toEqual([...seed.thread.arrivalOrder.filter(id => id !== 3 && id !== 7), 100])
+  expect(expected.snapshot.thread.ranges).toEqual([{ start: 0, end: 950 }])
+  expect(await bounded.store.execute(read)).toEqual(expected)
+  expect(await bounded.store.executeMutation(request)).toEqual({ status: 'ok' })
+  bounded.database.close()
+  expect(await bounded.fresh().store.execute(read)).toEqual(expected)
+  const p = await page(bounded.fresh().store)
+  expect(p.metadata).toMatchObject({ checkpoint: 400, version: 450, uncommittedVersion: 450, olderAvailable: false })
+  expect(p.availabilityStart).toBe(0)
+})
 
 it('successive owned additions keep ordering paths and record work bounded without rewriting placements', async () => {
   const h = setup(), s = snapshot(0)

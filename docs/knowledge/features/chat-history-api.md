@@ -209,6 +209,45 @@ proportional to received observations, not saved history. Protection stays in ma
 the renderer receives no SQL, filesystem, keys or ciphertext. Bounded reads return
 only validated projections and opaque local continuations.
 
+An ordinary `mutateThread` save executes through a resumable generator rather than
+one synchronous pass, so the main process can still service native callbacks while
+a large save is in flight. The work unit is one admitted item or removal, one
+preparation entry (an old owner's row during an epoch/reset replacement — deleted
+one at a time so the foreign-key cascade on the emptied scope cannot hide a
+backlog), one range-traversal candidate or range start, one progress observation,
+or one authenticated index row flush. `historyDatabase.ts`'s `transactionSteps`
+drains the generator and awaits a turn callback every 16 units — `setImmediate` by
+default, a real macrotask, so timers and native events run between batches.
+`createChatHistoryStore`'s optional `onMutationTurn` hook overrides that callback;
+only deterministic tests pass one, production code takes the default. Range
+traversal stays lazy (`windowSteps`, one leaf at a time) and index flushing stays
+incremental, so one incoming range merging many saved ranges, or a large pending
+backlog, cannot shift the cost into another synchronous phase instead of shrinking it.
+
+One `BEGIN IMMEDIATE` transaction stays open for the whole mutation across every
+yield: `COMMIT` runs only once the generator completes, and any thrown error —
+including one raised while suspended on a yield — rolls the transaction back, so
+no partial save becomes durable and a fresh-owner reopen after interruption cannot
+observe a completed partial checkpoint. Pending schema migrations still commit in
+their own synchronous transaction immediately before the bounded one opens, never
+across a yield. The application store's queue holds the connection for the
+mutation's entire promise, so no other admitted read, write, reset, removal or
+close touches storage during a yield; `close()` seals admission and waits for the
+queue before closing the native connection. There is no internal retry: a failed
+mutation returns through the existing error result, and explicit resubmission,
+including replaying a lost acknowledgement, is idempotent against the saved state.
+
+A migration failure, or an open failure other than `unsupported-version`, on a
+mutation now surfaces as `write-failed` rather than the `unreadable` the old fully
+synchronous path returned; both are existing static codes the renderer only logs,
+so this changes diagnostics rather than renderer-visible behavior.
+
+Import, retained-format conversion (the one-time upgrade from positional to
+sequence-indexed storage) and full-snapshot replacement (`replaceThread`) stay
+fully synchronous. They are outside this bounded-execution claim and keep their
+existing contracts; a dependent change owns writer backlog repair and the related
+native heartbeat behavior.
+
 ### Bounded authoritative opening and pages
 
 The fixed shared/preload/main `chatHistory` bridge admits authoritative page

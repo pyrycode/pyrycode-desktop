@@ -71,6 +71,37 @@ describe('production thread composition', () => {
     expect(r.live('one', 'empty').getState().binding).toBeNull()
     r.dispose()
   })
+  it('removal of a host with several live rows terminates and cannot be recreated by delayed readers', () => {
+    const { runtime: r } = fixture()
+    for (const host of ['one', 'two']) r.event(connected(host, true))
+    r.summary('two', { id: 'alpha', current_session_id: 'B' })
+    const rows = [['one', 'alpha'], ['one', 'gamma'], ['two', 'alpha']] as const
+    const before = rows.map(([host, chat]) => r.live(host, chat))
+    // Like the badge recount: every listed row is read on each runtime state change, departed ones included.
+    let reads = 0
+    const off = r.state.subscribe(() => {
+      if (++reads > 100) throw new Error('re-entrant removal')
+      for (const [host, chat] of rows) r.live(host, chat)
+    })
+    beginChatHistoryRemoval('one')(false)
+    expect(rows.map(([host, chat]) => r.live(host, chat))).toEqual(before)
+    beginChatHistoryRemoval('one')(true)
+    expect(reads).toBeLessThan(100)
+    const inert = r.live('one', 'alpha')
+    expect(inert).not.toBe(before[0])
+    expect(r.live('one', 'gamma')).toBe(inert)
+    inert.getState().dispatch({ type: 'summary', serverId: 'one', summary: { id: 'alpha', current_session_id: 'late' } })
+    expect(inert.getState().binding).toBeNull()
+    expect(r.live('two', 'alpha')).toBe(before[2])
+    expect(before[2].getState().binding?.sessionId).toBe('B')
+    r.event({ type: 'disconnected', serverId: 'one' })
+    expect(r.live('one', 'alpha')).toBe(inert)
+    r.event(connected('one', true))
+    const relinked = r.live('one', 'alpha')
+    expect(relinked).not.toBe(inert)
+    expect(r.live('one', 'alpha')).toBe(relinked)
+    off(); r.dispose()
+  })
   it('authoritative metadata has one selected-host projection rather than parallel legacy writers', () => {
     const { runtime: r } = fixture()
     for (const host of ['one', 'two']) {

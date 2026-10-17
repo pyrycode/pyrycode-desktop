@@ -112,3 +112,12 @@ Linux x86_64, implementation `6908679f`, main `58d92a423dce`, 2026-10-17. Final 
 - Preserved failed geometry/restart-assumption reports and the main-only #2089 baseline reports under `/tmp/builder-2084/`. Process inspection after those runs confirmed all ticket-owned Electron/test workers exited.
 
 macOS is outside this Linux ticket's verification scope. No current daemon/provider live acceptance is claimed or required by this ticket.
+
+### Rework validation — 2026-10-17
+
+Linux x86_64, fix `968d761f`, main `58d92a423dce` (final merge already up to date). The new static assertions first failed because both hosts were selected: 4 failed, 6 passed; after the fix, both focused suites passed all 94 tests.
+
+- Pre-verify passed all five checks: 403 files, 9,306 tests passed, 3 existing skips. Build and docs guard passed. Logs: `/tmp/builder-2084/rework-pre-verify.log`, `rework-build.log`, `rework-docs.log`.
+- `e2e/sidebar-pinned.spec.ts`: 1 executed/passed, 1 existing #2089 skip, 0 failures/flaky results. Host switches Beta → Alpha → Beta each select exactly the clicked row; the correlated rename retains that selection. Fresh JSON: `/tmp/builder-2084/rework-pinned-report.json`; artifacts: `/tmp/builder-2084/rework-pinned-results/`.
+- Guarded archive-order replay: 1 executed/passed, 0 failed/skipped, zero forbidden launches; original assertions and strict outgoing matching unchanged. Log: `/tmp/builder-2084/rework-replay.log`; results: `/tmp/builder-2084/rework-replay-results/`. Capture provenance remains the daemon revision recorded above; no fresh provider acceptance is claimed.
+- Compared Figma with `/tmp/builder-2084/rework-selected-1280.png` and `rework-selected-800.png`: only Beta has the selected fill while Alpha shares its conversation ID. No unresolved selection-layout deviation.

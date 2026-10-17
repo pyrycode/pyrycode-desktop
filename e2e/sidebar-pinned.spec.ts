@@ -58,13 +58,20 @@ test('pins refresh per host, preserve attribution and folds, and survive an offl
   expect(geometry).toEqual({ inset: 0, pitch: 28, height: 24 })
   await expect(page.locator('.channel-list__host-content .channel-list__row-open')).toHaveCount(0)
   // Both hosts report the same conversation ID; their rows remain independently interactive.
-  await buttons.first().click()
-  await expect(buttons.first()).toHaveAttribute('aria-current', 'true')
+  for (const label of ['Beta · Server', 'Alpha · Pyry', 'Beta · Server']) {
+    await pinned.getByRole('button', { name: label, exact: true }).click()
+    await expect(page.locator('.channel-list__row-open[aria-current="true"]')).toHaveText([label])
+  }
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await page.screenshot({ path: '/tmp/builder-2084/rework-selected-1280.png', animations: 'disabled' })
+  await page.setViewportSize({ width: 800, height: 800 })
+  await page.screenshot({ path: '/tmp/builder-2084/rework-selected-800.png', animations: 'disabled' })
   await pinned.locator('.channel-list__row').first().getByRole('button', { name: 'Edit channel', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Edit channel', exact: true })
   await dialog.getByRole('textbox', { name: 'Channel name:', exact: true }).fill('Beta renamed')
   await dialog.getByRole('button', { name: 'OK', exact: true }).click()
   await expect(buttons).toHaveText(['Beta renamed · Server', 'Alpha · Pyry'])
+  await expect(page.locator('.channel-list__row-open[aria-current="true"]')).toHaveText(['Beta renamed · Server'])
   expect(b.renames).toEqual([{ conversation_id: SEEDED_ROW.id, name: 'Beta renamed' }])
   expect(a.renames).toEqual([])
 

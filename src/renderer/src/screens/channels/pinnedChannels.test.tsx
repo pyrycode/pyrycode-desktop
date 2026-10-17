@@ -45,7 +45,7 @@ const noop = () => {}
 function markup(conversations: readonly ConversationSummary[], extra: Partial<ComponentProps<typeof ChannelListView>> = {}) {
   return renderToStaticMarkup(<ChannelListView conversations={conversations} serverIds={['a', 'b']}
     statuses={new Map<string, ConnectionStatus>([['a', { type: 'connected', ack: {} } as ConnectionStatus], ['b', { type: 'connecting' }]])}
-    hostLabels={new Map([['a', '<Host>']])} openConversationId="same"
+    hostLabels={new Map([['a', '<Host>']])} openConversationId="same" openServerId="a"
     onOpen={noop} onOpenSettings={noop} onOpenArchive={noop} onPairNewHost={noop}
     onCreateChat={noop} onCreateChannel={noop} onEditWorkspace={noop} onEditHost={noop}
     onAddWorkspace={noop} onSaveAsChannel={noop} onRename={noop} onEditChannel={noop} {...extra} />)
@@ -60,9 +60,21 @@ describe('pinned row markup', () => {
     expect(html).toContain(' · Server')
     expect(html.match(/class="channel-list__row"/g)).toHaveLength(2)
     expect(html.match(/class="channel-list__rename"/g)).toHaveLength(1)
-    expect(html.match(/aria-current="true"/g)).toHaveLength(2)
+    expect(html.match(/aria-current="true"/g)).toHaveLength(1)
     expect(html).toContain('channel-list__pinned-rule')
     expect(html).not.toContain('data-host-down="true"')
+  })
+  it.each(['a', 'b'])('selects only host %s when pinned conversation IDs match', openServerId => {
+    const html = markup([{ ...row('same'), name: 'Alpha' }, { ...row('same', '', 'b'), name: 'Beta' }], { openServerId })
+    const selected = [...html.matchAll(/<button\b[^>]*aria-current="true"[^>]*>([\s\S]*?)<\/button>/g)]
+    expect(selected).toHaveLength(1)
+    expect(selected[0][1]).toContain(openServerId === 'a' ? 'Alpha' : 'Beta')
+    expect(selected[0][1]).toContain(openServerId === 'a' ? ' · &lt;Host&gt;' : ' · Server')
+  })
+  it('does not select a pinned row without a matching active host and conversation', () => {
+    const rows = [row('same'), row('same', '', 'b')]
+    expect(markup(rows, { openServerId: null })).not.toContain('aria-current="true"')
+    expect(markup(rows, { openConversationId: 'other' })).not.toContain('aria-current="true"')
   })
   it.each(['disconnected', 'error'] as const)('marks only pinned rows down for %s', type => {
     const html = markup([row('pin'), row('normal', null)], { statuses: new Map([['a',

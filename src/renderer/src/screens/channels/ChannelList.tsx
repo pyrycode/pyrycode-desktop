@@ -201,6 +201,9 @@ export function ChannelList({
   // per-row read would re-render two rows. Accepted — a switch already rebuilds the chat pane, and this
   // is the prop path #1097 freed by deleting `now`.
   const openConversationId = useActiveConversationStore((s) => s.activeConversation?.id ?? null)
+  const openServerId = useActiveConversationStore(({ activeConversation }) =>
+    activeConversation && 'serverId' in activeConversation && typeof activeConversation.serverId === 'string'
+      ? activeConversation.serverId : null)
   // #1070 — WHICH machines the sidebar draws a subtree for, read HERE rather than inside the host row.
   // This is `openConversationId`'s ruling above, applied to a second piece of store state and for the
   // same reason: zustand v5 serves `getInitialState()` under `renderToStaticMarkup`, so a component
@@ -369,6 +372,7 @@ export function ChannelList({
         onOpenApp={(serverId, appId) => { void window.pyry.hostedPane({ type: 'select', serverId, appId }) }}
         onRefreshApps={serverId => { void window.pyry.refreshHostedApps(serverId) }}
         openConversationId={openConversationId}
+        openServerId={openServerId}
         onOpen={onOpen}
         onOpenSettings={onOpenSettings}
         onOpenArchive={onOpenArchive}
@@ -737,6 +741,7 @@ export function ChannelListView({
   statuses,
   serverIds,
   openConversationId,
+  openServerId,
   onOpen,
   onOpenSettings,
   onOpenArchive,
@@ -776,6 +781,7 @@ export function ChannelListView({
   // caller silently render an unmarked sidebar. The unit tier's own helper defaults it to `null`, which
   // is exactly what the store hydrates to under `renderToStaticMarkup`.
   openConversationId: string | null
+  openServerId: string | null
   onOpen: (row: ConversationSummary) => void
   onOpenSettings: () => void
   onOpenArchive: () => void
@@ -856,6 +862,7 @@ export function ChannelListView({
           statuses,
           serverIds,
           openConversationId,
+          openServerId,
           onOpen,
           onCreateChat,
           onCreateChannel,
@@ -2148,6 +2155,7 @@ function renderBody(
   statuses: SessionState['statuses'],
   serverIds: readonly string[],
   openConversationId: string | null,
+  openServerId: string | null,
   onOpen: (row: ConversationSummary) => void,
   onCreateChat: (cwd: string, serverId: string | undefined) => void,
   onCreateChannel: (cwd: string, serverId: string | undefined) => void,
@@ -2205,7 +2213,7 @@ function renderBody(
             return <Row key={JSON.stringify([serverId, row.id])} row={row}
               pinnedHost={hostLabels?.get(serverId) ?? hostRowLabel({ status: 'not-stored' })}
               hostDown={status === 'disconnected' || status === 'error'}
-              isOpen={(!pane || pane.type === 'closed') && row.id === openConversationId}
+              isOpen={(!pane || pane.type === 'closed') && serverId === openServerId && row.id === openConversationId}
               onOpen={() => onOpen(row)}
               pen={status === 'connected' ? { ...CHANNELS_ROW_PEN, onEdit: () => onEditChannel(row) } : undefined} />
           })}

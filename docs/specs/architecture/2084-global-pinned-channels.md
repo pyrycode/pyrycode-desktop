@@ -90,6 +90,16 @@ Visual comparison found that existing host-tree row margins also affected the ne
 
 The optional post-relaunch unpair check exposed an existing hang, confirmed on unchanged main `58d92a423dce` without pin fields or pinned markup (1 executed, 1 failed; the simpler two-row baseline passed). Filed #2089 in Backlog with priority:low. Preserve its reproduction as `blocked on #2089 — unpair an unreachable saved host after relaunch`, skipped independently of the active pin-display/restart scenario. The bug requires runtime/unpair investigation outside this ticket; no such production repair is included.
 
+2026-10-17 (verifier finding 1): Pinned selection incorrectly compared conversation IDs alone, marking both shared-ID host rows current. `ChannelList` will read the active conversation's stamped host through a narrow selector and pass required `openServerId: string | null` through `ChannelListView` to `renderBody`. A pinned row is current only when both identities match and the hosted app pane is closed. No new store, async work, decoding or mutation path is introduced. Static regressions select each host independently and cover missing/mismatching active identity; the mounted scenario opens Beta, Alpha, then Beta again and requires exactly one current row with the clicked host suffix. Three view consumers need updating; no in-flight branches overlap these edits. The rework adds fewer than 100 lines, no exports or state-machine branches, and remains within the ticket's size limits.
+
+## Documentation handoff
+
+Pending for the documentation stage, as requested by the verifier:
+
+- `docs/knowledge/features/channel-list.md` — What it does: global Pinned eligibility, suffix/fallbacks, removal from host Channels, precise timestamp/identity ordering, invalid timestamps last, host-aware selection and offline appearance; pin controls remain #2085.
+- `docs/knowledge/features/conversation-list-store.md` — document additive live/cache `pinned_at` decoding, legacy omission and authoritative per-host refresh/persistence after `conversation_updated`.
+- `docs/knowledge/features/channel-list.md` — retain the offline-unpair limitation tracked by #2089 and distinguish fake/replay coverage from current provider acceptance.
+
 ## Validation evidence
 
 Linux x86_64, implementation `6908679f`, main `58d92a423dce`, 2026-10-17. Final main merge was already up to date.

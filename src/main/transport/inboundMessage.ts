@@ -2672,6 +2672,7 @@ function parseConversationSummary(payload: unknown): ConversationSummary {
   const last_message_ts = requireString(payload, 'last_message_ts')
   const last_used_at = requireString(payload, 'last_used_at')
   const archived_at = payload.archived_at === undefined ? null : requireStringOrNull(payload, 'archived_at')
+  const pinned_at = payload.pinned_at === undefined ? null : requireStringOrNull(payload, 'pinned_at')
   const workspace_label = requireStringOrNull(payload, 'workspace_label')
   const is_muted = payload.is_muted === undefined ? false : requireBoolean(payload, 'is_muted')
   return {
@@ -2684,6 +2685,7 @@ function parseConversationSummary(payload: unknown): ConversationSummary {
     last_message_ts,
     last_used_at,
     archived_at,
+    pinned_at,
     workspace_label,
     ...optionalAgent(payload),
     ...optionalReadId(payload, 'read_up_to'),

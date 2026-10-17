@@ -74,10 +74,10 @@ describe('chat history records and requests', () => {
 })
 
 
-describe('saved list archive timestamp', () => {
+describe.each(['archived_at', 'pinned_at'])('saved list %s timestamp', (field) => {
   const list = (rows: unknown[]) => ({ version: 1, kind: 'list', serverId: 'host', conversations: rows })
   it.each(['2026-09-30T12:00:00Z', 'invalid-time', '', null])('preserves %s through JSON restoration', (archived_at) => {
-    const saved = list([{ ...summary, archived_at }])
+    const saved = list([{ ...summary, [field]: archived_at }])
     expect(parseChatHistorySnapshot(JSON.parse(JSON.stringify(saved)))).toEqual(saved)
   })
   it('restores a pre-field saved snapshot without inventing an archive time', () => {
@@ -85,7 +85,12 @@ describe('saved list archive timestamp', () => {
     expect(parseChatHistorySnapshot(JSON.parse(JSON.stringify(saved)))).toEqual(saved)
   })
   it.each([false, true, 1, {}, []])('rejects wrong-type saved stamps: %s', (archived_at) => {
-    expect(() => parseChatHistorySnapshot(list([{ ...summary, archived_at }]))).toThrow()
+    expect(() => parseChatHistorySnapshot(list([{ ...summary, [field]: archived_at }]))).toThrow()
+  })
+  it('never echoes invalid input', () => {
+    expect(() => parseChatHistorySnapshot(list([{ ...summary, [field]: { private: 'PRIVATE_SENTINEL' } }]))).toThrow()
+    try { parseChatHistorySnapshot(list([{ ...summary, [field]: { private: 'PRIVATE_SENTINEL' } }])) }
+    catch (error) { expect(String(error)).not.toContain('PRIVATE_SENTINEL') }
   })
 })
 

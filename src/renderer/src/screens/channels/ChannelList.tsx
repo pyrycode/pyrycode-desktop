@@ -100,6 +100,7 @@ import { ConversationStatusDot } from './ConversationStatusDot'
 import {
   titleFor,
   partitionActive,
+  partitionSidebar,
   groupByWorkspace,
   groupByServer,
   UNKNOWN_WORKSPACE_KEY
@@ -229,6 +230,9 @@ export function ChannelList({
     return () => { active = false; off.forEach(stop => stop()) }
   }, [servers, appsStore])
   const statuses = useSessionStore((state) => state.statuses)
+  const heldHostLabels = useHostLabelStore(state => state.byServer)
+  const hostLabels = new Map(servers.map(server => [server.serverId,
+    hostRowLabel(selectHostLabelFor(server.serverId)({ byServer: heldHostLabels }))]))
   const connected = (serverId: string | null | undefined): boolean =>
     typeof serverId === 'string' && statuses.get(serverId)?.type === 'connected'
   // Transient, per-interaction dialog state — component-local useState, not the store (the lowest scope
@@ -359,6 +363,7 @@ export function ChannelList({
         conversations={conversations}
         statuses={statuses}
         serverIds={servers.map((server) => server.serverId)}
+        hostLabels={hostLabels}
         apps={apps}
         pane={pane}
         onOpenApp={(serverId, appId) => { void window.pyry.hostedPane({ type: 'select', serverId, appId }) }}
@@ -722,6 +727,7 @@ export function ChannelList({
  * host row to draw, and that row is where #1185/#1189 put the plus that starts a chat in a new workspace.
  */
 export function ChannelListView({
+  hostLabels,
   apps,
   pane,
   onOpenApp,
@@ -745,6 +751,7 @@ export function ChannelListView({
   onRename,
   onEditChannel
 }: {
+  hostLabels?: ReadonlyMap<string, string>
   apps?: ReadonlyMap<string, HostedAppsDisplayState>
   pane?: HostedPaneState
   onOpenApp?: (serverId: string, appId: string) => void
@@ -859,7 +866,7 @@ export function ChannelListView({
           onSaveAsChannel,
           onRename,
           onEditChannel,
-          apps, pane, onOpenApp, onRefreshApps
+          apps, pane, onOpenApp, onRefreshApps, hostLabels
         )}
       </div>
       {appUpdate}
@@ -2154,9 +2161,10 @@ function renderBody(
   apps?: ReadonlyMap<string, HostedAppsDisplayState>,
   pane?: HostedPaneState,
   onOpenApp?: (serverId: string, appId: string) => void,
-  onRefreshApps?: (serverId: string) => void
+  onRefreshApps?: (serverId: string) => void,
+  hostLabels?: ReadonlyMap<string, string>
 ): JSX.Element | null {
-  const { channels, discussions } = partitionActive(conversations ?? [])
+  const { pinned, channels, discussions } = partitionSidebar(conversations ?? [], serverIds)
   if (serverIds.length === 0 && channels.length === 0 && discussions.length === 0) return null
   const hostedChannels = groupByServer(serverIds, channels)
   const hostedChats = groupByServer(serverIds, discussions)
@@ -2188,6 +2196,22 @@ function renderBody(
   )
   return (
     <>
+      {pinned.length > 0 && (
+        <div className="channel-list__pinned">
+          <div className="channel-list__pinned-heading">Pinned</div>
+          {pinned.map(row => {
+            const serverId = row.serverId ?? ''
+            const status = statuses.get(serverId)?.type
+            return <Row key={JSON.stringify([serverId, row.id])} row={row}
+              pinnedHost={hostLabels?.get(serverId) ?? hostRowLabel({ status: 'not-stored' })}
+              hostDown={status === 'disconnected' || status === 'error'}
+              isOpen={(!pane || pane.type === 'closed') && row.id === openConversationId}
+              onOpen={() => onOpen(row)}
+              pen={status === 'connected' ? { ...CHANNELS_ROW_PEN, onEdit: () => onEditChannel(row) } : undefined} />
+          })}
+          <div className="channel-list__pinned-rule" />
+        </div>
+      )}
       {hostedChannels.servers.map((host) => {
         const connected = statuses.get(host.serverId)?.type === 'connected'
         return (
@@ -2310,7 +2334,9 @@ function Row({
   isOpen,
   onOpen,
   onSaveAsChannel,
-  pen
+  pen,
+  pinnedHost,
+  hostDown
 }: {
   row: ConversationSummary
   isOpen: boolean
@@ -2319,9 +2345,12 @@ function Row({
   // #1441 — the bare `onRename` became a `RowPenControl`: BOTH trees draw a pen now, and they differ in
   // the word and in the class tokens, so the handler alone no longer says which pen this is.
   pen?: RowPenControl
+  pinnedHost?: string
+  hostDown?: boolean
 }): JSX.Element {
   return (
-    <div className="channel-list__row">
+    <div className="channel-list__row" data-pinned={pinnedHost !== undefined ? 'true' : undefined}
+      data-host-down={hostDown ? 'true' : undefined}>
       {/* #801 — the status dot, LEADING the row and a SIBLING of the open button, not a child of it. The
           dot ships a named `role="img"` for all three statuses, so nesting it would fold "Idle" — and,
           as the daemon works, "Assistant working" — into the button's accessible name, mutating what
@@ -2341,7 +2370,8 @@ function Row({
         aria-current={isOpen ? 'true' : undefined}
         onClick={onOpen}
       >
-        <span className="channel-list__title">{titleFor(row.name)}</span>
+        <span className="channel-list__title">{titleFor(row.name)}{pinnedHost !== undefined &&
+          <span className="channel-list__pinned-host">{' · '}{pinnedHost}</span>}</span>
       </button>
       {onSaveAsChannel && (
         // Icon-only button — `aria-label` supplies the accessible name (the .channel-list__save pattern),

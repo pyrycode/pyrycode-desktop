@@ -197,6 +197,7 @@ export function parseChatHistorySnapshot(value: unknown): ChatHistorySnapshot {
         ...(c.read_up_to === undefined ? {} : { read_up_to: readId(c.read_up_to) }),
         ...(c.latest_entry_id === undefined ? {} : { latest_entry_id: readId(c.latest_entry_id) }),
         ...(c.archived_at === undefined ? {} : { archived_at: nullable(c.archived_at, string) }),
+        ...(c.pinned_at === undefined ? {} : { pinned_at: nullable(c.pinned_at, string) }),
         // An untagged row restores with no key at all, as before #1649.
         ...(c.agent === undefined ? {} : { agent: agentFromWire(string(c.agent)) })
       }

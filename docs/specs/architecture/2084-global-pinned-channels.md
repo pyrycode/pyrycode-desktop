@@ -79,3 +79,13 @@ None. Keep timestamp parsing local to sidebar to avoid changing Archive's fallba
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-17
+
+## Revisions
+
+2026-10-17: Partition and static markup cases share `pinnedChannels.test.tsx` (the transition table's `.test.ts` shorthand refers to that suite). Existing daemon-connection decoder assertions also need the newly normalized null pin field. The mounted test holds disconnected/connecting appearances through the existing typed lifecycle IPC; authoritative pin changes, terminal failure, saved-profile restart and subsequent unpair remain driven through the existing application/fake transport paths. No production contract changed.
+
+The first mounted run reached the saved-profile visibility assertions, then exposed an incorrect test assumption: an unreachable host can remain connecting during supervisor retries instead of reporting a terminal error within five seconds. The restart assertion proves persisted visibility with no row reinjection; disconnected/connecting appearance and actual transport-driven terminal error are independently asserted before quitting. No production change was needed.
+
+Visual comparison found that existing host-tree row margins also affected the new global group: a 12px indent and 32px pitch instead of the design's flush edge and 28px pitch. A measured mounted regression reproduced both values before the fix. Scope a margin reset to pinned rows, leaving host-tree geometry unchanged.
+
+The optional post-relaunch unpair check exposed an existing hang, confirmed on unchanged main `58d92a423dce` without pin fields or pinned markup (1 executed, 1 failed; the simpler two-row baseline passed). Filed #2089 in Backlog with priority:low. Preserve its reproduction as `blocked on #2089 — unpair an unreachable saved host after relaunch`, skipped independently of the active pin-display/restart scenario. The bug requires runtime/unpair investigation outside this ticket; no such production repair is included.

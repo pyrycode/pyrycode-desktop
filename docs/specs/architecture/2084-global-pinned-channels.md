@@ -89,3 +89,16 @@ The first mounted run reached the saved-profile visibility assertions, then expo
 Visual comparison found that existing host-tree row margins also affected the new global group: a 12px indent and 32px pitch instead of the design's flush edge and 28px pitch. A measured mounted regression reproduced both values before the fix. Scope a margin reset to pinned rows, leaving host-tree geometry unchanged.
 
 The optional post-relaunch unpair check exposed an existing hang, confirmed on unchanged main `58d92a423dce` without pin fields or pinned markup (1 executed, 1 failed; the simpler two-row baseline passed). Filed #2089 in Backlog with priority:low. Preserve its reproduction as `blocked on #2089 — unpair an unreachable saved host after relaunch`, skipped independently of the active pin-display/restart scenario. The bug requires runtime/unpair investigation outside this ticket; no such production repair is included.
+
+## Validation evidence
+
+Linux x86_64, implementation `6908679f`, main `58d92a423dce`, 2026-10-17. Final main merge was already up to date.
+
+- Final pre-verify: all five checks passed; 403 unit files passed, 9,303 tests passed, 3 existing skips. `/tmp/builder-2084/pre-verify-release.log`.
+- Build and docs guard passed after the final main merge, with build repeated after pre-verify: `/tmp/builder-2084/build-verified.log`, `/tmp/builder-2084/docs-release.log`.
+- `e2e/sidebar-pinned.spec.ts`: 1 executed/passed, 1 separately skipped #2089 reproduction. The active scenario covers external and correlated refreshes, shared-ID host interaction, folds, measured geometry, connecting/disconnected/error styling, successful saved-list observation and actual offline profile relaunch. `/tmp/builder-2084/pinned-pass.log`, `/tmp/builder-2084/pinned-pass/`.
+- Final guarded replay selected `real daemon shows the second archived channel first, against last-used ascending order`: 1 executed/passed, zero forbidden launches; original assertions and strict outgoing matching unchanged. `/tmp/builder-2084/replay-release.log`, `/tmp/builder-2084/replay-release-results/`. Capture daemon revision `58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`; this is offline replay, not fresh provider acceptance.
+- Compared integrated 1280×800 and 800×800 captures with the Figma screenshot: `/tmp/builder-2084/pinned-1280.png`, `/tmp/builder-2084/pinned-800.png`. Global rows align with the heading, measure 24px high on a 28px pitch, and preserve the intended separator and down colors. No unresolved pin-layout deviation.
+- Preserved failed geometry/restart-assumption reports and the main-only #2089 baseline reports under `/tmp/builder-2084/`. Process inspection after those runs confirmed all ticket-owned Electron/test workers exited.
+
+macOS is outside this Linux ticket's verification scope. No current daemon/provider live acceptance is claimed or required by this ticket.

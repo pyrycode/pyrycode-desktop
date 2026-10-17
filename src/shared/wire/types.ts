@@ -3315,6 +3315,8 @@ export interface ConversationSummary {
   last_used_at: string
   /** Archive instant from daemon PR #2700; optional for legacy snapshots and fixtures. */
   archived_at?: string | null
+  /** Host-stored pin instant; absent on legacy saved summaries. */
+  pinned_at?: string | null
   workspace_label: string | null
 }
 

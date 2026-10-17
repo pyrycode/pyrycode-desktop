@@ -29,6 +29,10 @@ belong only in [Archive](archive-screen.md), which retains daemon list order. A 
 server stamp remains visible in a fallback without host actions; it is never assigned to another
 host. Two paired daemon workspaces on one machine remain two hosts.
 
+A single **Pinned** section, when non-empty, precedes every host, outside any host's folds — see [the
+global Pinned section](#the-global-pinned-section) below. Eligible rows leave their host's Channels
+list; they are never also drawn there.
+
 The host and all three sections begin expanded and fold independently, including on an empty host.
 Folding preserves the current conversation or app selection and composer draft. Host rows show no
 connection dots or dot wrapper in any state; Edit host reveals on hover or keyboard focus. A failed host keeps a
@@ -317,6 +321,73 @@ host would claim an identity the client cannot establish. The helper uses a `Map
 plain-object `__proto__` behavior for string ids. Server ids are React reconciliation keys and
 comparison operands, never rendered as labels or attributes.
 
+### The global Pinned section (`channelListViewModel.ts` / `ChannelList.tsx`, added by [#2084](https://github.com/pyrycode/pyrycode-desktop/issues/2084))
+
+Pins are host-local and nullable (`ConversationSummary.pinned_at?: string | null`, [Core
+\#3538](https://github.com/pyrycode/pyrycode/issues/3538)) — the daemon decides what's pinned, this
+screen only displays it; see [Conversation list store § Received pin
+state](conversation-list-store.md#received-pin-state-since-2084) for the decode. `partitionSidebar(rows,
+serverIds)` wraps `partitionActive`: it starts from the active Channels partition, keeps only rows
+stamped with a **saved** host id (`serverIds`, the same join `groupByServer` uses — an unattributed or
+unpaired-host stamp is never eligible) and a non-null `pinned_at`, and removes exactly those rows from
+the Channels copy it returns. Chats, Apps, and both unattributed fallbacks are untouched. `renderBody`
+draws the resulting `pinned` list in a `.channel-list__pinned` block before the host loop, and omits
+both the block and its separator when `pinned` is empty — the section's only entry/exit condition.
+
+Ordering parses each row's `pinned_at` once (not once per comparator call) with a local
+`PIN_RFC3339`/`pinInstant` pair that mirrors [Archive's `archiveInstant`/`isArchiveInstant`
+convention](archive-screen.md) rather than importing it, to keep this screen's fallback semantics from
+drifting if Archive's ever changes: real calendar/leap-year validity, RFC3339 offset or `Z`, and
+arbitrary sub-millisecond precision compared by parsed milliseconds first, then the fractional digits
+past the third with trailing zeros trimmed (so `.0001` and `.00010000...1` compare correctly without
+float rounding). A row with a syntactically invalid or impossible-date stamp sorts after every row
+with a valid one. Ties — both invalid, or two valid instants equal to that precision — break on
+`serverId` then `id`, ascending UTF-16 code-unit order, the same tie-break family `channelListViewModel`
+uses elsewhere. Two hosts reporting the same conversation ID both keep their own pinned row — the
+partition and the sort key on server id first, never collapsing by conversation id alone. The input
+array and its rows are not mutated.
+
+Each pinned row reuses the ordinary `Row` component with two additional optional props: `pinnedHost`
+(a display label, never `undefined` for a pinned row, so its presence is `Row`'s own "am I a pinned
+row" signal) and `hostDown`. The title's `· host name` suffix renders as a second escaped `<span
+className="channel-list__pinned-host">` child of the existing title span — never a separate attribute,
+URL or lookup key — using the same `hostRowLabel`/`selectHostLabelFor` fallback (`'Server'`) the host
+row itself falls back to, read by the container from `useHostLabelStore` and passed down as a
+`serverId → label` map so the pure view never touches the label store directly. The pen is the existing
+`CHANNELS_ROW_PEN` (**Edit channel**, gated on that row's own host being `connected` — never on the
+open chat), and the row's React key is `JSON.stringify([serverId, id])`, the two-part key `groupByServer`
+anticipates for exactly this duplicate-ID case.
+
+**Selection is both-identities, not conversation-id-alone — [verifier finding
+1](../../specs/architecture/2084-global-pinned-channels.md#revisions) on the first pass.** A pinned
+row reads `isOpen` from `serverId === openServerId && row.id === openConversationId` (and no hosted
+pane open); `openServerId` is a narrow read of the active conversation's own stamped host
+(`useActiveConversationStore`), not a derived guess. Comparing only `row.id` would mark both of two
+hosts' rows current whenever they share a conversation ID, which the duplicate-ID case above
+guarantees can happen. Opening a pinned row calls the same `onOpen` every other row uses; host
+attribution and the Edit channel dialog's target follow the clicked row, not the open chat.
+
+**Offline appearance is scoped to pinned rows only, by a data attribute, not a shared class.**
+`Row` sets `data-pinned` and `data-host-down` on its wrapper; `channels.css` scopes
+`.channel-list__row[data-host-down='true']` to error-colored title/suffix/status-dot text and 0.6
+row opacity, `connecting` draws the normal appearance, and a 1px inverse-primary
+`.channel-list__pinned-rule` follows the group. This status comes from the same `SessionState.statuses`
+map every other row reads — a pinned row for a saved-but-unreachable host keeps rendering from the
+persisted list (see [chat history](chat-history.md)) through a profile relaunch, independent of
+whether that host's connection has resolved yet.
+
+[`pinnedChannels.test.tsx`](../../../src/renderer/src/screens/channels/pinnedChannels.test.tsx) is the
+static suite: `partitionSidebar` ordering (fractional precision, invalid-after-valid, UTF-16 ties,
+eligibility, frozen input) and markup (heading placement, escaped suffix and fallbacks, exactly one
+pinned-vs-host-tree selection, connecting-vs-down-vs-error coloring, empty-section omission).
+[`e2e/sidebar-pinned.spec.ts`](../../../e2e/sidebar-pinned.spec.ts) is the one mounted scenario: external
+and correlated `conversation_updated` pushes that add/remove/reorder only the emitting host's pins,
+host-attributed rename and selection across a shared conversation ID, measured geometry against Figma,
+computed disconnected/error styling, and an actual profile relaunch that observes a successful saved
+list before quitting rather than re-seeding one. Local pin/unpin controls are a separate ticket
+(#2085); this screen only ever displays a pin the host already reports, including one changed from
+another device.
+
 ### Workspace data
 
 The [workspace data and sidebar grouping](channel-list-workspace-grouping.md) page distinguishes
@@ -479,13 +550,29 @@ cannot establish hover paint or layout stability. See the
   hosts remain foldable but cannot create. Authentication checks need connected-only controls or
   composer readiness plus authentication/receipt barriers; see
   [host connection verification](channel-list-host-row.md#connection-presentation-and-verification).
+- **Unpairing an unreachable saved host after a profile relaunch can hang — tracked by
+  [#2089](https://github.com/pyrycode/pyrycode-desktop/issues/2089), reproduced on unchanged main
+  without any pin field or pinned markup involved.** The global Pinned section's own restart,
+  offline-appearance and authoritative-replace behavior are unaffected and independently verified;
+  only the follow-on unpair action on such a host is the open gap. Do not read #2084's e2e coverage as
+  closing it — that scenario is skipped pending #2089, independently of the active pin-display
+  assertions in the same spec.
+- **Mounted and recorded-replay coverage of the Pinned section (`e2e/sidebar-pinned.spec.ts`, the
+  shared-replay client scenarios) is fake-transport and captured-daemon evidence, not current
+  provider/daemon live acceptance.** It proves the client's own decode, partition, render and
+  persistence behavior against a scripted peer; it does not establish that a present-day `pyry`
+  daemon or provider sends `pinned_at` in the shape this screen expects.
 
 ## Related
 
 - [Paired shell](paired-shell.md) / [#140](../codebase/140.md) — the `list ⇄ thread` router this screen
   fills the `list` arm of; since [#670](../codebase/670.md) also the two-pane shell's sidebar.
 - [Conversation list store](conversation-list-store.md) / [#208](../codebase/208.md) — the store slice
-  this screen reads verbatim (snake_case `ConversationSummary` rows, `null` vs `[]` contract).
+  this screen reads verbatim (snake_case `ConversationSummary` rows, `null` vs `[]` contract), including
+  [the received `pinned_at` field](conversation-list-store.md#received-pin-state-since-2084) this
+  screen's global Pinned section reads (#2084).
+- [Global Pinned section architecture](../../specs/architecture/2084-global-pinned-channels.md) —
+  design, security review and the verifier-found host-vs-conversation-id selection fix (#2084).
 - [Conversation list fetch](conversation-list-fetch.md) / [#139](../codebase/139.md) — the transport
   decode; documents the no-message-text wire gap this screen's row shape is scoped by.
 - [Conversation shell](conversation-shell.md) — the thread view every row opens into via `onOpen`.

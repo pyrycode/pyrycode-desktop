@@ -1033,6 +1033,7 @@ const CONV_NAMED = {
   is_archived: false,
   is_muted: false,
   archived_at: null,
+  pinned_at: null,
   cwd: '/home/user/project',
   last_message_ts: '2026-07-08T00:00:00Z',
   last_used_at: '2026-07-09T00:00:00Z',
@@ -1047,6 +1048,7 @@ const CONV_UNNAMED = {
   is_archived: true,
   is_muted: true,
   archived_at: null,
+  pinned_at: null,
   cwd: '/tmp/scratch',
   last_message_ts: '2026-07-07T00:00:00Z',
   last_used_at: '2026-07-07T12:00:00Z',
@@ -11244,14 +11246,19 @@ describe('admitted envelope observation', () => {
 })
 
 
-describe('conversation list archive timestamp', () => {
+describe.each(['archived_at', 'pinned_at'] as const)('conversation list %s timestamp', (field) => {
+  it('never echoes invalid input', () => {
+    const decode = () => parseInboundMessage(encodeConversations({ conversations: [{ ...CONV_NAMED, [field]: { private: 'PRIVATE_SENTINEL' } }] }))
+    expect(decode).toThrow(WireDecodeError)
+    try { decode() } catch (error) { expect(String(error)).not.toContain('PRIVATE_SENTINEL') }
+  })
   it.each(['2026-09-30T12:00:00Z', 'invalid-time', '', null, undefined])('preserves or normalizes %s', (archived_at) => {
-    const result = parseInboundMessage(encodeConversations({ conversations: [{ ...CONV_NAMED, archived_at }] }))
+    const result = parseInboundMessage(encodeConversations({ conversations: [{ ...CONV_NAMED, [field]: archived_at }] }))
     expect(result?.kind).toBe('conversations')
-    if (result?.kind === 'conversations') expect(result.conversations[0].archived_at).toBe(archived_at ?? null)
+    if (result?.kind === 'conversations') expect(result.conversations[0][field]).toBe(archived_at ?? null)
   })
   it.each([false, true, 1, {}, []])('rejects wrong-type archive stamps for the whole list: %s', (archived_at) => {
-    expect(() => parseInboundMessage(encodeConversations({ conversations: [CONV_UNNAMED, { ...CONV_NAMED, archived_at }] }))).toThrow(WireDecodeError)
+    expect(() => parseInboundMessage(encodeConversations({ conversations: [CONV_UNNAMED, { ...CONV_NAMED, [field]: archived_at }] }))).toThrow(WireDecodeError)
   })
 })
 

@@ -71,6 +71,10 @@ No new failure modes. A failed unpair still settles `removed === false`. `remove
 
 - Whether any other `runtime.state` subscriber on the unpair path loops after the fix. Settle this by running the Playwright spec with the fix.
 
+## Revisions
+
+- 2026-10-17: The open question is resolved with no design change. With the fix, the Playwright spec passes (1 executed, 1 passed, normal teardown), so no other `runtime.state` subscriber loops on the unpair path. One implementation detail: the inert store is created lazily, on the first departed read, and is still once per runtime. Creating it while `createThreadRuntime` was being constructed failed because the module-level `threadRuntime` singleton is evaluated during a circular import (`modalBridge` → `threadRuntime`), before `createThreadLiveState` is defined.
+
 ## Security review
 
 **Verdict:** PASS

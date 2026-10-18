@@ -23,3 +23,29 @@ Change the shared markdown column gap from `--space-2` (8 px) to `--space-4` (16
 - Watch focused spacing checks fail at the old 8 px gap before changing CSS.
 - Run focused conversation, markdown, streaming and reader renderer tests, pre-verify and build after the final main merge; run only affected spacing/reader e2e scenarios on Linux.
 - Capture streaming/settled messages and the reader at 1280×800 and 800×800, then compare with Figma. Screenshots stay under `/tmp/builder-2097/`.
+
+## Revisions
+
+2026-10-18 — Verifier finding 1: the complete application gate and its branch retry lost
+the Electron inspection context while reading `savedReads` and installing its diagnostic
+listener. Both launch-fate records show the resumed app alive with clean teardown.
+This is the documented inspection-acknowledgement failure, not evidence of a markdown
+layout failure; its upstream Electron trigger remains unknown.
+
+Extract the saved-traversal counter setup into `installSavedTraversalReads` in
+`e2e/fixtures/savedTraversalReads.ts`. Publish a listener-identity marker and preserve
+the counter on repeated/late setup. Confirm actual registration with read-only inspection
+before opening the conversation. Permit at most two guarded installations, each followed
+by three inspection attempts; only transient acknowledgement loss plus confirmed absence
+permits another installation. Unavailable inspection and unrelated errors fail setup.
+Use `readMainProcess` in five-second polls for both traversal counters. Keep the release
+action single-shot and retain every existing history, scroll, anchor and request assertion.
+Attach counted setup evidence to each traversal case.
+
+Controlled tests execute the serialized callbacks with an IPC fake: loss before/after
+effect, lost/exhausted confirmation, late setup, missing/changed listeners and fatal errors.
+Run the complete thread-activation spec and focused spacing/reader scenarios on Linux;
+the dispatcher must obtain a complete accepted application gate before approval.
+The repair adds no product behavior, state, exported types or production files. Combined
+written work remains below 400 lines, with two acceptance behaviors and no consumer cascade.
+The overlap with #2079 changes a different test's subscription; no dependency is needed.

@@ -41,7 +41,10 @@ export function createThreadBodies(deps: {
     for (const e of entries.values()) {
       if (bytes <= limits.bytes) break
       if (!e.bytes || e.requestId || e.queued) continue
-      bytes -= e.bytes; e.bytes = 0; e.connection = undefined; e.state = missing('evicted'); notify(e)
+      bytes -= e.bytes; e.bytes = 0; e.connection = undefined
+      // Content is disposable; failed admission still requires an explicit retry.
+      e.state = e.state.type === 'failed' ? { type: 'failed', reason: e.state.reason, stale: true } : missing('evicted')
+      notify(e)
     }
   }
   function pump(): void {
@@ -117,7 +120,7 @@ export function createThreadBodies(deps: {
       if (e && e.generation !== scope?.generation) { retire(request.serverId, request.conversationId, true); e = undefined }
       if (!e) {
         if (entries.size >= limits.entries) {
-          const victim = [...entries].find(([, value]) => !value.leases.size && !value.requestId && !value.queued)
+          const victim = [...entries].find(([, value]) => value.state.type !== 'failed' && !value.leases.size && !value.requestId && !value.queued)
           if (!victim) {
             deps.log({ event: 'thread-body', code: 'limit' })
             return { getState: () => missing('limit'), release() {}, retry() {} }

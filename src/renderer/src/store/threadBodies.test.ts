@@ -119,6 +119,71 @@ it('times out once, never retries automatically, and an explicit retry gets a fr
   h.settle(1); expect(lease.getState().type).toBe('ready')
   h.cache.dispose(); expect(vi.getTimerCount()).toBe(0)
 })
+it('byte eviction preserves failed revalidation until explicit retry', () => {
+  const content = { output: 'é' }, bytes = new TextEncoder().encode(JSON.stringify(content)).length
+  const h = fixture({ active: 4, queued: 28, entries: 64, bytes, leases: 128 })
+  const first = h.cache.demand(request)
+  h.settle(0, content); first.release()
+  h.cache.event({ type: 'disconnected', serverId: 'a' }); h.cache.event(connected())
+  const revalidation = h.cache.demand(request), failed = h.reads()[1]
+  h.cache.event({ type: 'threadQueryFailed', serverId: 'a', conversationId: 'c', requestId: failed.requestId,
+    inReplyTo: 1, reason: 'daemon-error' })
+  expect(revalidation.getState()).toMatchObject({ type: 'failed', content })
+  h.cache.demand({ ...request, itemId: 2 }); h.settle(2, content)
+  expect(revalidation.getState()).toEqual({ type: 'failed', reason: 'daemon-error', stale: true })
+  const reopened = h.cache.demand(request)
+  expect(h.reads()).toHaveLength(3)
+  reopened.retry(); expect(h.reads()).toHaveLength(4)
+  expect(h.reads()[3].requestId).not.toBe(failed.requestId)
+  h.settle(1); expect(reopened.getState().type).toBe('loading')
+  h.settle(3, content); expect(reopened.getState()).toEqual({ type: 'ready', content, stale: false })
+  h.cache.dispose()
+})
+it('record eviction preserves failed admission until explicit retry', () => {
+  const h = fixture({ active: 4, queued: 28, entries: 2, bytes: 1024, leases: 128 })
+  const first = h.cache.demand(request), failed = h.reads()[0]
+  h.cache.event({ type: 'threadQueryFailed', serverId: 'a', conversationId: 'c', requestId: failed.requestId,
+    inReplyTo: 1, reason: 'daemon-error' })
+  first.release()
+  const other = h.cache.demand({ ...request, itemId: 2 }); h.settle(1); other.release()
+  const pressure = h.cache.demand({ ...request, itemId: 3 })
+  expect(pressure.getState().type).toBe('loading')
+  const reopened = h.cache.demand(request)
+  expect(reopened.getState()).toMatchObject({ type: 'failed', reason: 'daemon-error' })
+  expect(h.reads()).toHaveLength(3)
+  reopened.retry(); expect(h.reads()).toHaveLength(4)
+  expect(h.reads()[3].requestId).not.toBe(failed.requestId)
+  h.settle(0); expect(reopened.getState().type).toBe('loading')
+  h.settle(3); expect(reopened.getState().type).toBe('ready')
+  h.cache.dispose()
+})
+it.each(['clear', 'generation'])('saturated failed admission stays bounded and clears only with its lifecycle scope: %s', mode => {
+  vi.useFakeTimers()
+  const h = fixture()
+  for (let itemId = 1; itemId <= 64; itemId++) {
+    const lease = h.cache.demand({ ...request, itemId }), c = h.reads()[itemId - 1]
+    h.cache.event({ type: 'threadQueryFailed', serverId: 'a', conversationId: 'c', requestId: c.requestId,
+      inReplyTo: 1, reason: 'daemon-error' })
+    lease.release()
+  }
+  h.cache.retire('a', 'c')
+  h.cache.event({ type: 'disconnected', serverId: 'a' }); h.cache.event(connected())
+  for (let itemId = 65; itemId <= 128; itemId++) {
+    expect(h.cache.demand({ ...request, itemId }).getState()).toMatchObject({ type: 'missing', reason: 'limit' })
+  }
+  for (let itemId = 1; itemId <= 64; itemId++) {
+    const lease = h.cache.demand({ ...request, itemId })
+    expect(lease.getState()).toEqual({ type: 'failed', reason: 'daemon-error', stale: true }); lease.release()
+  }
+  expect(h.reads()).toHaveLength(64); expect(vi.getTimerCount()).toBe(0)
+  if (mode === 'clear') h.cache.retire('a', 'c', true)
+  else h.replace()
+  const next = h.cache.demand(request)
+  expect(h.reads()).toHaveLength(65)
+  h.settle(0); expect(next.getState().type).toBe('loading')
+  h.settle(64); expect(next.getState().type).toBe('ready')
+  h.cache.dispose(); expect(vi.getTimerCount()).toBe(0)
+})
 it('equal host/conversation/epoch strings cannot revive retired ownership or generation', () => {
   const h = fixture(), old = h.cache.demand(request), listener = vi.fn()
   h.replace()

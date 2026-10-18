@@ -61,13 +61,13 @@ const bodyRequest = { serverId: 'a', conversationId: 'c', epoch: 'e', itemId: 1,
 const bodyQuery = { type: 'thread_read_tool_body' as const, payload: { conversation_id: 'c', epoch: 'e', item_id: 1, expected_rev: 8 } }
 const bodyData = { conversation_id: 'c', epoch: 'e', version: 8, item_id: 1, rev: 8, kind: 'tool_call', content: { input: '', output: '' }, final: false }
 const bodyDone = { conversation_id: 'c', epoch: 'e', version: 8, item_id: 1, rev: 8, kind: 'tool_call', final: true }
-function bodyParts(id: number, payload: unknown = bodyData) {
+function bodyParts(id: number, payload: unknown = bodyData, itemId = 1) {
   const json = JSON.stringify(payload), update_id = createHash('sha256').update('thread_tool_body').update('\0').update(json).digest('hex')
   let offset = 0
   return Array.from({ length: Math.ceil(json.length / 20000) }, (_, index) => {
     const data = json.slice(index * 20000, (index + 1) * 20000), start = offset
     offset += Buffer.byteLength(data)
-    return frame('thread_tool_body', { conversation_id: 'c', epoch: 'e', version: 8, item_id: 1, rev: 8, data,
+    return frame('thread_tool_body', { conversation_id: 'c', epoch: 'e', version: 8, item_id: itemId, rev: 8, data,
       continuation: { update_id, index, offset: start, total_bytes: Buffer.byteLength(json), final: offset === Buffer.byteLength(json) } }, id)
   })
 }
@@ -214,6 +214,78 @@ it('two hosts with colliding identities keep frame results isolated through the 
   const again = a.r.bodies.demand(bodyRequest)
   expect(again.getState()).toMatchObject({ type: 'ready', content: bodyData.content })
   expect(a.reads()).toHaveLength(1); a.close(); b.connection.stop()
+})
+it('byte eviction through frames and preload retains failed admission until retry', async () => {
+  const h = await bodyRuntime(), content = { output: 'x'.repeat(6 * 1024 * 1024) }
+  const complete = (id: number, itemId: number) => {
+    bodyParts(id, { ...bodyData, item_id: itemId, content }, itemId).forEach(h.emit)
+    h.emit(frame('thread_tool_body', { ...bodyDone, item_id: itemId }, id))
+  }
+  const first = h.r.bodies.demand(bodyRequest), original = h.reads()[0].id
+  complete(original, 1); expect(first.getState().type).toBe('ready'); first.release()
+  h.configs[0].onEvent({ type: 'relay-link-down', code: 1006 })
+  h.configs[0].onEvent({ type: 'handshake-complete', helloAck: h.ack })
+  const validation = h.r.bodies.demand(bodyRequest), failed = h.reads()[1].id
+  h.emit(frame('error', { code: 'thread.query_failed', message: 'private', retryable: true }, failed))
+  expect(validation.getState()).toMatchObject({ type: 'failed', content })
+  for (const itemId of [2, 3]) {
+    const other = h.r.bodies.demand({ ...bodyRequest, itemId })
+    complete(h.reads().at(-1)!.id, itemId); expect(other.getState().type).toBe('ready'); other.release()
+  }
+  expect(validation.getState()).toEqual({ type: 'failed', reason: 'daemon-error', stale: true })
+  const reopened = h.r.bodies.demand(bodyRequest)
+  expect(h.reads()).toHaveLength(4)
+  reopened.retry(); expect(h.reads()).toHaveLength(5)
+  const fresh = h.reads()[4].id
+  expect(fresh).not.toBe(failed)
+  bodyParts(failed).forEach(h.emit)
+  h.emit(frame('thread_tool_body', bodyDone, original))
+  h.emit(frame('error', { code: 'thread.query_failed', message: 'late', retryable: true }, failed))
+  expect(reopened.getState().type).toBe('loading')
+  h.emit(frame('thread_tool_body', bodyData, fresh)); h.emit(frame('thread_tool_body', bodyDone, fresh))
+  expect(reopened.getState()).toEqual({ type: 'ready', content: bodyData.content, stale: false }); h.close()
+})
+it('record pressure through frames and preload cannot retry a released failure', async () => {
+  const h = await bodyRuntime(), first = h.r.bodies.demand(bodyRequest), failed = h.reads()[0].id
+  h.emit(frame('error', { code: 'thread.query_failed', message: 'private', retryable: true }, failed))
+  first.release()
+  for (let itemId = 2; itemId <= 65; itemId++) {
+    const other = h.r.bodies.demand({ ...bodyRequest, itemId }), id = h.reads().at(-1)!.id
+    h.emit(frame('thread_tool_body', { ...bodyData, item_id: itemId }, id))
+    h.emit(frame('thread_tool_body', { ...bodyDone, item_id: itemId }, id))
+    expect(other.getState().type).toBe('ready'); other.release()
+  }
+  const reopened = h.r.bodies.demand(bodyRequest)
+  expect(reopened.getState()).toEqual({ type: 'failed', reason: 'daemon-error', stale: true })
+  expect(h.reads()).toHaveLength(65)
+  reopened.retry(); expect(h.reads()).toHaveLength(66)
+  const fresh = h.reads()[65].id
+  expect(fresh).not.toBe(failed)
+  h.emit(frame('thread_tool_body', bodyData, failed)); h.emit(frame('thread_tool_body', bodyDone, failed))
+  expect(reopened.getState().type).toBe('loading')
+  h.emit(frame('thread_tool_body', bodyData, fresh)); h.emit(frame('thread_tool_body', bodyDone, fresh))
+  expect(reopened.getState()).toMatchObject({ type: 'ready', stale: false }); h.close()
+})
+it.each(['reset', 'epoch', 'delete', 'unpair'])('failed admission clears on runtime lifecycle %s even when identifiers are reused', async mode => {
+  const h = await bodyRuntime(), old = h.r.bodies.demand(bodyRequest), failed = h.reads()[0].id
+  h.emit(frame('error', { code: 'thread.query_failed', message: 'private', retryable: true }, failed))
+  expect(old.getState().type).toBe('failed')
+  if (mode === 'reset') h.r.items.getState().acceptEpoch('a', 'c', 'e', true)
+  if (mode === 'epoch') {
+    h.r.items.getState().acceptEpoch('a', 'c', 'replacement')
+    h.r.items.getState().acceptEpoch('a', 'c', 'e')
+  }
+  if (mode === 'delete') h.r.event({ type: 'conversationDeleted', serverId: 'a', id: 'c' })
+  if (mode === 'unpair') beginChatHistoryRemoval('a')(true)
+  await h.r.open('a', 'c').done
+  h.r.items.getState().acceptEpoch('a', 'c', 'e')
+  const next = h.r.bodies.demand(bodyRequest)
+  expect(h.reads()).toHaveLength(2)
+  const fresh = h.reads()[1].id
+  h.emit(frame('thread_tool_body', bodyData, failed)); h.emit(frame('thread_tool_body', bodyDone, failed))
+  expect(old.getState().type).toBe('missing'); expect(next.getState().type).toBe('loading')
+  h.emit(frame('thread_tool_body', bodyData, fresh)); h.emit(frame('thread_tool_body', bodyDone, fresh))
+  expect(next.getState()).toMatchObject({ type: 'ready', stale: false }); h.close()
 })
 it.each([['thread'], ['thread', 'thread_expansion'], ['thread', 'interactive']].map(capabilities => ({ capabilities })))('current handshake prerequisites $capabilities independently gate main and runtime', async ({ capabilities }) => {
   const h = await bodyRuntime()

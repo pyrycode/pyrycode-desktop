@@ -2,7 +2,8 @@
 
 Split out of [Daemon connection correlation](daemon-connection-correlation.md) for size. Diagnostic
 logging, then the request-response correlation stores for conversation creation, agent switching,
-attachment upload and retrieval, run-configuration reads, and the retired history boundary.
+attachment upload and retrieval, run-configuration reads, bounded thread bodies,
+and the retired history boundary.
 
 # Diagnostic logging ([#128](../codebase/128.md))
 
@@ -264,6 +265,56 @@ would misattribute the same way it would for `pendingSettings`.
 `runConfigReceived.sessionId` to index session → server; an uncorrelatable reply now teaches it nothing
 either, which is accepted as correct rather than a regression — a session id this client cannot tie to
 a request it sent is exactly the input that index must not accept.
+
+# Bounded thread body reads
+
+`loadDialConfig` advertises `thread_expansion` alongside `interactive` and `thread`.
+Both main and the [runtime body owner](thread-runtime.md#on-demand-bodies) require
+all three in the current accepted handshake, with `ack.server_id` matching the
+owning host. Another host's acceptance or a previous connection's capabilities
+cannot authorize a body read. Complete conversation queries retain their existing
+`thread` route when expansion is unsupported.
+
+`queryThread` carries an explicit `serverId` and opaque `requestId` through the
+validated preload/command bridge to `dispatchThreadQuery` and the named connection.
+For `thread_read_tool_body`, `isRendererCommand` requires nonempty host, request,
+conversation and epoch strings of at most 1024 characters, positive safe-integer
+`item_id` and `expected_rev`, and exactly those four query payload fields. Main
+rechecks admission for direct callers and reconstructs the outbound payload by
+name. Unavailable/unsupported connections and send failures settle through static,
+host-stamped `threadQueryFailed` classifications; peer error text is never forwarded.
+
+The receiver correlates `thread_tool_body` by the sent envelope's `in_reply_to`.
+Success requires exactly one object-valued `content` payload with `final: false`,
+then a separate `final: true` marker without a `content` property. The data must
+match the requested conversation, epoch, item and revision. The marker must match
+the data's captured epoch/version, item/revision, `tool_call` or `agent` kind and
+envelope session/conversation metadata; a supplied envelope conversation must
+also agree with the payload. The runtime independently checks its requested kind.
+Unknown object fields remain inert JSON. Successful empty input/output is content;
+an absent object or a marker arriving without data is a failure. Malformed,
+mismatched and refused replies use content-free failure handling.
+
+Body fragments omit `base_rev`, `content`, `kind` and logical `final`. Their
+SHA-256 digest is over `thread_tool_body`, a NUL byte and the reconstructed JSON
+bytes. Contiguous indices/byte offsets, stable metadata, final length, digest,
+UTF-8 and reconstructed identity are checked before delivery. A fragment's
+`continuation.final` completes assembly only: it cannot replace the separate
+success marker. Fragment assembly retains the existing 8 MiB logical limit,
+16 MiB aggregate buffer, eight pending assemblies and 30-second expiry. Each
+connection admits at most 32 registered body reads with a 30-second deadline
+covering the entire read, including a missing-marker wait.
+
+`cancelThreadQuery` validates the explicit host and nonempty request ID through
+the same bridge. It removes local correlation ownership, clears its deadline and
+releases all partial assemblies for that request, settling it as `interrupted`.
+It sends no daemon cancellation message. Connection retirement resets the
+receiver's pending work and assembly timers; unknown or retired correlations are
+dropped. The optional connection cancellation method preserves scalar test
+doubles. Body replies travel as typed, host-stamped events and never enter
+canonical batch application, coverage or read-receipt publication. See the
+[body plan](../../specs/architecture/2101-tool-body-demand.md) and
+[counted validation](thread-runtime.md#on-demand-body-validation).
 
 # Retired conversation-history correlation
 

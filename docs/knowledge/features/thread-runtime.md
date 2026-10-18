@@ -9,8 +9,8 @@ provide the rows, composer, menus, prompts, task drawer and scrolling.
 
 ## Accepted capability and host routing
 
-The client hello requests `interactive` and `thread`. Main checks each host's
-accepted handshake independently. A handshake without `thread` produces
+The client hello requests `interactive`, `thread` and `thread_expansion`. Main
+checks each host's accepted handshake independently. A handshake without `thread` produces
 `update-required` with a daemon cause and no `connected` event. The existing failed
 host treatment names the daemon and offers no app download link. That host draws
 no conversation rows and sends no content or recovery requests.
@@ -26,6 +26,8 @@ fallback when authoritative inputs are absent.
 Conversation commands capture the selected or retained host. Main resolves that
 explicit host through the paired registry. A last claimant of an equal conversation
 ID cannot redirect the request. Device identity is a separate authenticated fact.
+On-demand bodies additionally require the current owning handshake to accept all
+three capabilities; unsupported expansion leaves complete reading available.
 
 ## Restore, recovery and cleanup
 
@@ -123,6 +125,81 @@ offline thread still follows intrinsic row growth. Accepted saved demand preserv
 the existing visible-row anchor and offset. See
 [scroll demand](conversation-shell-scroll-pin.md#user-demand-and-prepend-position) and
 [counted recovery proof](chat-history-testing-restoration.md#counted-saved-traversal-recovery-validation).
+
+## On-demand bodies
+
+`createThreadRuntime().bodies.demand(request, listener?)` returns a lease with
+`getState()`, `release()` and `retry()`. The request names `serverId`,
+`conversationId`, `epoch`, `itemId`, `revision` and `kind` (`tool_call` or `agent`).
+Admission requires the selected conversation's current epoch and valid positive
+safe-integer item/revision coordinates. Main and runtime independently gate reads
+on the owning host's current accepted `interactive`, `thread`, `thread_expansion`
+handshake. The [main correlation contract](daemon-connection-correlation-requests.md#bounded-thread-body-reads)
+owns peer validation and local receive cleanup.
+
+Equal host/conversation/epoch/item/revision/kind demands share one queued or active
+read. Each lease owns one consumer and optional synchronous listener; releasing
+one leaves others active, while the last release cancels queued work locally and
+active work through the validated cancellation bridge. Each attempt captures a
+fresh UUID request ID and the current connection token, alongside selection and
+item-store generation ownership.
+Reused conversation, epoch or external owner strings cannot admit old data,
+fragments, markers or failures into a replacement attempt.
+
+State is `missing` with a reason (including offline, evicted or limit), `loading`,
+`failed` with a static reason, or `ready` with object content and a `stale` flag.
+Loading/failed states may retain stale completed content. Data is staged until the
+separate matching success marker arrives; fragment completion alone leaves the
+lease loading. Empty input/output can succeed, while absent/unavailable content
+cannot become an empty success. Unknown content stays inert JSON. Failure requires
+an active lease's explicit `retry()`; another demand, navigation or reconnect
+does not retry a retained failure automatically.
+
+The session cache has finite limits:
+
+| Resource | Limit |
+| --- | ---: |
+| Active reads | 4 |
+| Queued reads | 28 (32 outstanding total) |
+| Entry records | 64 |
+| Retained body content, measured as UTF-8 JSON | 16 MiB |
+| Demand leases, including listener subscriptions | 128 |
+| Active-read deadline | 30 seconds |
+
+Demand touches the entry's LRU position. Byte pressure discards retained content
+and reports truthful `missing/evicted` state for successful entries, including to
+their listeners. Failed content can also be discarded, but its record, reason and
+explicit-retry requirement survive: content eviction must never turn failure into
+an automatically fetchable miss. Record admission evicts only an unleased,
+nonfailed entry without active/queued work. Failed records remain bounded at the
+same 64-entry cap; if no eligible victim exists, a new identity is rejected with
+`missing/limit`. A separate failure ledger is unnecessary. Scope clearing removes
+these records; successful explicit retry replaces their failure state.
+
+Reopening unchanged retained success in the same connection reuses the cache.
+Navigation retires leases and unfinished work but may retain completed content.
+Disconnect also withdraws capability and leaves retained content stale and
+readable offline. Offline missing demand sends nothing. A new connection fetches
+nothing on its own: an explicit demand starts a revision-checked read, retaining
+stale content until the new data and marker succeed. Cancelling that validation
+cannot make the retained content fresh. Failed revalidation preserves the retry
+requirement even under byte or record pressure.
+
+Retirement first snapshots affected entries, disables **all** their leases and
+detaches listeners, then cancels work and settles or deletes entries before
+notifying the saved listeners with `missing/retired`. `demand`, `retry`, `start`
+and `pump` cannot dispatch replacement work during retirement. Revoking just the
+notified lease would let its callback retry through a second lease on the same or
+another departing entry. Reset/store-generation replacement, epoch replacement,
+conversation deletion and successful unpair clear the corresponding entries;
+disposal clears all entries, timers and subscriptions. Navigation/disconnect
+retain failure admission until explicit retry or lifecycle clearing.
+
+Bodies remain session memory only. Normal opening and presentation continue to
+use complete views, including the existing readable saved-complete route. Body
+results write no canonical item, coverage, completion certificate or read receipt.
+This operation adds no detail persistence, full-history read route, row-control
+wiring, child enumeration or compact selection.
 
 ## Navigation boundaries
 
@@ -229,6 +306,52 @@ branch. The publisher requires the authoritative epoch and shown watermark;
 cleanup, acknowledgement and reconnect retry retain their existing ownership fences.
 
 ## Validation boundaries
+
+### On-demand body validation
+
+The accepted verifier stage `fd6b8506` for [#2101 / PR #2108](https://github.com/pyrycode/pyrycode-desktop/pull/2108)
+records Linux evidence on 2026-10-18 at
+`1ce9eaf139a5607ef1bfadb54487cd40e867ce9b`: **9,511 unit tests executed,
+9,511 passed, 0 failed, 3 skipped**. All **48 frame/preload/runtime cases** in
+`e2e/threadBodies.test.ts` and **18 cache cases** in `threadBodies.test.ts` were
+present and passed. The three skipped unit cases require credentialed relay/Noise
+execution; suite and unhandled-error audits were empty.
+
+That counted run includes `runtime body tool_call traverses frames and preload,
+completes only at marker and reopens from cache`, `navigation back to the same
+strings creates new demand ownership and never adopts a late old failure`,
+`two hosts with colliding identities keep frame results isolated through the real
+bridge and runtime` and `reconnect leaves retained bodies stale until explicit
+fresh demand, and offline missing sends nothing`. It also includes the passing
+`byte eviction preserves failed revalidation until explicit retry`, `record
+eviction preserves failed admission until explicit retry`, saturation/scope-clear
+cases, all-lease retirement callbacks and the production regression `navigation
+cannot restart failed body work through a second existing lease in a retirement
+callback`. The [plan's regression inventory](../../specs/architecture/2101-tool-body-demand.md#revisions)
+maps the remaining parameterized lifecycle and boundary proofs. Synthetic frames
+exercise `createDaemonConnection`, command/event validation, preload and runtime;
+the Electron bridge is mocked in Vitest and establishes client contract handling.
+
+The configured Linux application gate executed **499 tests: 499 passed, 0 failed,
+5 skipped**, with no flaky results or report errors. All **29 captured scenarios**
+were present and passed, with zero remaining requests. Skips were three macOS-only
+cases, the existing system-prompt-reset fixme and unreachable-host unpair coverage
+awaiting #2089. The captured thread scenario, `daemon-built thread streams, places
+an agent, reconnects, resets and reopens saved items`, matched 45 requests and
+emitted 378 frames. Its source capture is historical:
+`2026-10-16T12:29:37.005Z`, Desktop `00ec821f9380b00cf2dfc0dd4817ee15584106a5`,
+daemon `58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`.
+
+Builder evidence independently records **2,396 affected tests executed/passed,
+0 failed, 0 skipped**, plus the focused guarded thread replay **1 executed/passed,
+0 failed, 0 skipped**. Accepted verifier pre-verify passed three checks and
+deliberately skipped two with `--no-suite`; install, docs guard, build/typecheck
+and Electron native preparation passed. These are recorded runs, not
+documentation-stage reruns. Captured replay and synthetic handling supply no new
+fresh-provider, physical-effect or encryption proof; none was required by this
+client-contract operation. macOS is outside this Linux ticket's verification scope.
+
+### Production activation validation
 
 The final Mac fake-daemon suite on 2026-10-15 executed and passed 434 cases,
 with zero failures, retries or flaky cases and 20 skips. Source was

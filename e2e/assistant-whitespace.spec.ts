@@ -1086,40 +1086,40 @@ test('streaming markdown blocks keep heading spacing through settlement', async 
   }
 })
 
-test('H1–H6 spacing preserves adjacent, nested and outside edges while replies grow', async ({ launchPairedApp }) => {
-  const levels = [1, 2, 3, 4, 5, 6]
-  const nested = levels.flatMap(level => ['Before nested heading.', '', `${'#'.repeat(level)} Nested ${level}`, '', 'After nested heading.', ''])
-  const source = [
-    '# First heading', 'Before heading.',
-    ...levels.flatMap(level => [`${'#'.repeat(level)} Level ${level}`, 'After heading.']),
-    '## Adjacent one', '### Adjacent two',
-    nested.map(line => `> ${line}`).join('\n'),
-    ['- Before list heading.', ...nested.slice(1).map(line => `  ${line}`)].join('\n'),
-    '###### Last heading'
-  ].join('\n\n')
-  const { page, app, daemon } = await launchPairedApp({})
-  for (const [index, text] of [source, ...levels.map(level => `${'#'.repeat(level)} Heading only`)].entries()) {
-    const turn = index + 41
-    daemon.pushFrame(assistantDeltaFrame(turn, text))
-    const bubble = page.locator('[data-thread-role="assistant"]').last()
-    const markdown = bubble.locator('.bubble__markdown')
-    await expect(bubble.locator('.bubble__cursor')).toBeVisible()
-    await expect(markdown.locator(':scope > *')).toHaveCount(index === 0 ? 19 : 1)
-    for (const phase of ['streaming', 'appended', 'settled']) {
-      if (phase === 'appended') {
-        daemon.pushFrame(encodeEnvelope({ id: 1, type: 'assistant_delta', ts: FIXED_TS, payload: {
-          conversation_id: SEEDED_ROW.id, turn_id: `turn-${turn}`, seq: 1, text: '\n\nAppended paragraph.'
-        } satisfies AssistantDeltaPayload }))
-        await expect(markdown.locator(':scope > :last-child')).toHaveText('Appended paragraph.')
-      }
-      if (phase === 'settled') {
-        daemon.pushFrame(turnEndFrame(turn))
-        await expect(bubble.locator('.bubble__cursor')).toHaveCount(0)
-      } else {
-        await expect(bubble.locator('.bubble__cursor')).toBeVisible()
-      }
-      for (const width of [1280, 800]) {
-        await app.evaluate(({ BrowserWindow }, value) => BrowserWindow.getAllWindows()[0].setSize(value, 800), width)
+for (const width of [1280, 800]) {
+  test(`H1–H6 spacing preserves adjacent, nested and outside edges while replies grow at ${width}`, async ({ launchPairedApp }) => {
+    const levels = [1, 2, 3, 4, 5, 6]
+    const nested = levels.flatMap(level => ['Before nested heading.', '', `${'#'.repeat(level)} Nested ${level}`, '', 'After nested heading.', ''])
+    const source = [
+      '# First heading', 'Before heading.',
+      ...levels.flatMap(level => [`${'#'.repeat(level)} Level ${level}`, 'After heading.']),
+      '## Adjacent one', '### Adjacent two',
+      nested.map(line => `> ${line}`).join('\n'),
+      ['- Before list heading.', ...nested.slice(1).map(line => `  ${line}`)].join('\n'),
+      '###### Last heading'
+    ].join('\n\n')
+    const { page, app, daemon } = await launchPairedApp({})
+    await app.evaluate(({ BrowserWindow }, value) => BrowserWindow.getAllWindows()[0].setSize(value, 800), width)
+    for (const [index, text] of [source, ...levels.map(level => `${'#'.repeat(level)} Heading only`)].entries()) {
+      const turn = index + 41
+      daemon.pushFrame(assistantDeltaFrame(turn, text))
+      const bubble = page.locator('[data-thread-role="assistant"]').last()
+      const markdown = bubble.locator('.bubble__markdown')
+      await expect(bubble.locator('.bubble__cursor')).toBeVisible()
+      await expect(markdown.locator(':scope > *')).toHaveCount(index === 0 ? 19 : 1)
+      for (const phase of ['streaming', 'appended', 'settled']) {
+        if (phase === 'appended') {
+          daemon.pushFrame(encodeEnvelope({ id: 1, type: 'assistant_delta', ts: FIXED_TS, payload: {
+            conversation_id: SEEDED_ROW.id, turn_id: `turn-${turn}`, seq: 1, text: '\n\nAppended paragraph.'
+          } satisfies AssistantDeltaPayload }))
+          await expect(markdown.locator(':scope > :last-child')).toHaveText('Appended paragraph.')
+        }
+        if (phase === 'settled') {
+          daemon.pushFrame(turnEndFrame(turn))
+          await expect(bubble.locator('.bubble__cursor')).toHaveCount(0)
+        } else {
+          await expect(bubble.locator('.bubble__cursor')).toBeVisible()
+        }
         const metrics = await markdown.evaluate(el => {
           const children = Array.from(el.children)
           const rects = children.map(child => child.getBoundingClientRect())
@@ -1148,8 +1148,8 @@ test('H1–H6 spacing preserves adjacent, nested and outside edges while replies
         for (const gaps of metrics.nested) for (const gap of gaps) expect(gap).toBeCloseTo(8, 1)
       }
     }
-  }
-})
+  })
+}
 
 test('a markdown heading is typed from one step of the scale, not by the browser', async ({
   launchPairedApp

@@ -27,3 +27,7 @@ Keep the 16 px flex gap and zero direct-child margins. At a non-heading → H1�
 - Add a measured fake-transport case beside the whitespace cases: all six levels between non-heading blocks, adjacent headings, first/last and heading-only edges, nested list/quote headings; check active streaming, appended content and settlement at 1280×800 and 800×800 windows.
 - Observe the new measured test fail against the old CSS before implementation. Build before Electron checks; run the affected whitespace and reader-menu scenarios plus existing AssistantMarkdown/StreamingAssistantMarkdown renderer checks through pre-verify after the final merge of main.
 - Capture synthetic streaming/settled replies to `/tmp/builder-2107/`, inspect against Figma, and report paths and viewport sizes in the PR. Linux only; no provider/live behavior changes.
+
+## Revisions
+
+2026-10-18: The combined browser run passed 17 cases but the new case lost its Electron main evaluation context during one of 42 window resize calls (`/tmp/builder-2107/final/`). Parameterize the new regression by viewport and resize once per launch, retaining every level, nested case and streaming/append/settlement assertion at both widths. Production design is unchanged.

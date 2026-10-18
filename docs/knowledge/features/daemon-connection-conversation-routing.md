@@ -108,6 +108,18 @@ evidence can restore a claim, and surviving ambiguity still refuses host-bound r
 units cover the ordinary-call-before-read interleaving as well as direct surviving-host routing.
 See [read publication](conversation-last-read-store.md#how-it-works).
 
+## Host-bound pin routing
+
+`setConversationPinned` requires the row's observed `serverId` and calls
+`resolve(conversation_id, serverId)`. Like host-bound reads, it requires exactly one current
+list claimant whose registry connection still exists, matching the observed host. Unknown
+ownership, a mismatch or multiple current claims sends no write. The ordinary last-written
+index owner and the renderer's explicit host cannot bypass that check; there is no fallback
+to the active, first or sole connection. Connection existence is not authentication:
+[the selected connection](daemon-connection-methods.md#channel-pin-writes) independently requires
+a live authenticated driver before sending. Only that connection receives the payload, and
+host attribution remains outside its two-field wire body.
+
 ## The registry's per-server accessor
 
 `connectionFor(serverId): ActiveConnection | null` is `connectionRegistry.ts`'s new member, found with a

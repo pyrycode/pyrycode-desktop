@@ -35,6 +35,7 @@ export interface DaemonConnection {
   queryThread(query: ThreadQuery, requestId: string): void  // host-addressed catch-up/page; register envelope correlation before authenticated send
   requestSystemPrompt(conversationId: string): void  // #1230: encrypt a request_system_prompt onto the live session, asking what system prompt a conversation holds and whether the running session was started with a different one; the id is REQUIRED, requestModelList's rule; answered by ONE system_prompt → systemPromptReceived, correlated by envelope id since the reply names no conversation, and by NOTHING ELSE — this verb has no error frame at all, so nothing retries and an unroutable id must be refused before the send
   newSession(conversationId: string): void  // #1217: encrypt a new_session onto the live session — KILLS claude and spawns a fresh one under a new session id; the id is REQUIRED (unlike the wire type, which mirrors the daemon's optional field); fire-and-forget, NO reply of any kind
+  setConversationPinned(payload: SetConversationPinnedPayload): void  // one authenticated write; placement follows authoritative update/re-list
   switchAgent(payload: SwitchAgentPayload): void  // authenticated owner only; one switch_agent, no retries
   createConversation(payload: CreateConversationPayload): void  // #241: encrypt a create_conversation onto the live session, fresh-literal net
   setSessionSettings(payload: SetSessionSettingsPayload, changeId: string): void  // #263: encrypt a set_session_settings onto the live session, omitempty presence contract owned by the builder; #261 added changeId + pending-map correlation
@@ -401,6 +402,34 @@ not tell from a true one. `connectionRegistry.ts`'s `viewOf` gained one delegate
 tsc-only break shape as #1165's/#1217's/#1222's additions. Ships with no renderer sender and no render
 consumer — #1231 fires the ask and stores the reply, #1078 renders it; all four exhaustive bridges take
 a dormant no-op arm. See [System prompt send](system-prompt-send.md) for the full contract.
+
+## Channel pin writes
+
+`setConversationPinned(payload)` sends one `set_conversation_pinned` envelope using
+`buildSetConversationPinned({ id: nextEnvelopeId++, ts: now(), payload })`. Main rebuilds exactly
+`{ conversation_id, pinned }`, including a present `false` for unpin; renderer host attribution
+never reaches the [wire payload](wire-codec.md#channel-pin-protocol).
+
+The renderer sends `{ type: 'setConversationPinned', serverId, payload }` through the existing
+preload command bridge. `isRendererCommand` requires a nonempty string `serverId` of at most 1024
+characters and a non-array payload with exactly two own keys, `conversation_id` and `pinned`.
+The ID must be a nonempty string; `pinned` must be strictly `true` or `false`. Missing/null values,
+coercible strings/numbers, inherited-only fields and additional own fields (including symbols)
+are rejected at admission. The connection's fresh literal also strips fields from internal callers.
+
+Main dispatch uses `router.resolve(conversation_id, serverId)?.connection.setConversationPinned(payload)`.
+[Observed-host routing](daemon-connection-conversation-routing.md#host-bound-pin-routing) requires
+a unique current owning claim matching the observation; a renderer hint cannot select a connection
+directly. Registry `viewOf` delegates the method to that selected connection.
+
+A null driver or unauthenticated connection refuses, including before handshake, after link loss
+and after stop. Encode/send exceptions are caught. Diagnostics contain only fixed
+`conversation-pin-refused` / `not-connected`, `conversation-pin-sent`, or
+`conversation-pin-failed` / `local-send` classifications, without IDs, payloads or exception text.
+There is no correlation map, pin result event, retry, pending UI or capability flag. Existing
+`conversationUpdated` handling refreshes the emitting host's list for both correlated and unsolicited
+updates. Only that authoritative list changes sidebar placement; errors and local failures emit no
+synthetic list mutation. See [sidebar actions and counted evidence](channel-list.md#pin-and-unpin-actions).
 
 ## Modal answers and cancellation
 

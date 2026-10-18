@@ -45,7 +45,7 @@ export function createThreadBodies(deps: {
     }
   }
   function pump(): void {
-    if (disposed) return
+    if (disposed || retiring > 0) return
     for (const e of entries.values()) {
       if (!e.queued) continue
       if ([...entries.values()].filter(x => x.requestId).length >= limits.active) break
@@ -61,6 +61,7 @@ export function createThreadBodies(deps: {
     }
   }
   function start(e: Entry): void {
+    if (disposed || retiring > 0 || !e.leases.size) return
     const c = connections.get(e.request.serverId), content = retained(e)
     if (!c) { e.state = content ? { type: 'ready', content, stale: true } : missing('offline'); return }
     if (!c.supported) {
@@ -75,20 +76,27 @@ export function createThreadBodies(deps: {
   function retire(host?: string, chat?: string, clear = false): void {
     retiring++
     try {
-      for (const [id, e] of entries) {
-        if (host !== undefined && e.request.serverId !== host || chat !== undefined && e.request.conversationId !== chat) continue
+      const affected = [...entries].filter(([, e]) => (host === undefined || e.request.serverId === host) &&
+        (chat === undefined || e.request.conversationId === chat))
+      const listeners: Array<(state: ThreadBodyState) => void> = []
+      // Revoke every affected lease before cancellation or notifications can call back into this writer.
+      for (const [, e] of affected) {
+        for (const lease of e.leases) {
+          lease.active = false; leaseCount--
+          if (lease.listener) listeners.push(lease.listener)
+          lease.listener = undefined
+        }
+        e.leases.clear()
+      }
+      for (const [id, e] of affected) {
         const content = retained(e)
         cancel(e)
         if (clear) e.state = missing('retired')
         else if (e.state.type !== 'failed') e.state = content ? { type: 'ready', content,
           stale: e.state.stale || e.connection !== connections.get(e.request.serverId)?.token } : missing('retired')
-        for (const lease of e.leases) {
-          lease.active = false; leaseCount--
-          const listener = lease.listener; lease.listener = undefined; listener?.(missing('retired'))
-        }
-        e.leases.clear()
         if (clear) entries.delete(id)
       }
+      for (const listener of listeners) listener(missing('retired'))
     } finally { retiring-- }
     pump()
   }
@@ -138,7 +146,7 @@ export function createThreadBodies(deps: {
             pump()
           }
         },
-        retry() { if (lease.active && entry.state.type === 'failed') { start(entry); notify(entry) } }
+        retry() { if (!disposed && retiring === 0 && lease.active && entry.state.type === 'failed') { start(entry); notify(entry) } }
       }
     },
     retire,

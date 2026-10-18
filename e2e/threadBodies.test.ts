@@ -175,6 +175,29 @@ it('navigation back to the same strings creates new demand ownership and never a
   h.emit(frame('thread_tool_body', bodyData, fresh)); h.emit(frame('thread_tool_body', bodyDone, fresh))
   expect(next.getState()).toMatchObject({ type: 'ready', stale: false }); h.close()
 })
+it('navigation cannot restart failed body work through a second existing lease in a retirement callback', async () => {
+  const h = await bodyRuntime()
+  const first = h.r.bodies.demand(bodyRequest, state => {
+    if (state.type === 'missing') second.retry()
+  })
+  const second = h.r.bodies.demand(bodyRequest), id = h.reads()[0].id
+  h.emit(frame('error', { code: 'thread.query_failed', message: 'peer content', retryable: true }, id))
+  expect(second.getState().type).toBe('failed')
+  await h.r.open('a', 'other').done
+  expect(h.reads()).toHaveLength(1)
+  expect(first.getState().type).toBe('missing'); expect(second.getState().type).toBe('missing')
+  await h.r.open('a', 'c').done
+  const reopened = h.r.bodies.demand(bodyRequest)
+  bodyParts(id).forEach(h.emit)
+  h.emit(frame('thread_tool_body', bodyData, id)); h.emit(frame('thread_tool_body', bodyDone, id))
+  expect(reopened.getState()).toMatchObject({ type: 'failed', reason: 'daemon-error' })
+  expect(h.reads()).toHaveLength(1)
+  reopened.retry()
+  const fresh = h.reads()[1].id
+  expect(fresh).not.toBe(id)
+  h.emit(frame('thread_tool_body', bodyData, fresh)); h.emit(frame('thread_tool_body', bodyDone, fresh))
+  expect(reopened.getState()).toMatchObject({ type: 'ready', stale: false }); h.close()
+})
 it('two hosts with colliding identities keep frame results isolated through the real bridge and runtime', async () => {
   const a = await bodyRuntime(), b = await connected('b', true)
   routePreloadQueries(host => host === 'a' ? a.connection : host === 'b' ? b.connection : null)

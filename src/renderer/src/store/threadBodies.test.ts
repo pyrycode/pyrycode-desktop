@@ -42,6 +42,30 @@ it('retirement notifications cannot reenter demand and revive a leaving scope', 
   expect(states).toEqual(['failed']); expect(h.reads()).toHaveLength(1)
   h.cache.dispose()
 })
+it.each([1, 2])('retirement disables every existing lease before callbacks retry item %s', itemId => {
+  vi.useFakeTimers()
+  const h = fixture(), observed: string[] = []
+  const first = h.cache.demand(request, state => {
+    if (state.type !== 'missing') return
+    observed.push(second.getState().type)
+    second.retry()
+  })
+  const second = h.cache.demand({ ...request, itemId })
+  for (const c of h.reads()) h.cache.event({ type: 'threadQueryFailed', serverId: 'a', conversationId: 'c',
+    requestId: c.requestId, inReplyTo: 1, reason: 'daemon-error' })
+  const reads = h.reads().length
+  h.cache.retire('a', 'c')
+  expect(observed).toEqual(['missing'])
+  expect(h.reads()).toHaveLength(reads)
+  expect(first.getState().type).toBe('missing')
+  const reopened = h.cache.demand({ ...request, itemId })
+  for (let i = 0; i < reads; i++) h.settle(i)
+  expect(reopened.getState()).toMatchObject({ type: 'failed', reason: 'daemon-error' })
+  expect(vi.getTimerCount()).toBe(0)
+  reopened.retry(); expect(h.reads()).toHaveLength(reads + 1)
+  h.settle(reads); expect(reopened.getState().type).toBe('ready')
+  h.cache.dispose(); expect(vi.getTimerCount()).toBe(0)
+})
 it('admits exactly four active plus 28 queued demands, and releases only the last consumer', () => {
   const h = fixture(), leases = Array.from({ length: 32 }, (_, i) => h.cache.demand({ ...request, itemId: i + 1 }))
   expect(h.reads()).toHaveLength(4)

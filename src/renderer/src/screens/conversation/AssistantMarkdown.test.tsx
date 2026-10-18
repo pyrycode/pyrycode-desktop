@@ -32,6 +32,83 @@ const count = (markup: string, pattern: RegExp): number => [...markup.matchAll(p
 
 describe.each([
   ['default', {}],
+  ['navigation enabled', { onOpenMarkdownPath: () => {}, onOpenHostedApp: () => {} }]
+] as const)('bare Obsidian prose links with %s', (_name, navigation) => {
+  const renderProse = (text: string): string =>
+    renderToStaticMarkup(<AssistantMarkdown text={text} {...navigation} />)
+  const url = 'obsidian://open?vault=Second%20Brain&file=Plan'
+  const escaped = 'obsidian://open?vault=Second%20Brain&amp;file=Plan'
+  const anchor = `<a href="${escaped}" target="_blank" rel="noreferrer">${escaped}</a>`
+
+  it('links two URLs and emphasis while preserving surrounding prose', () => {
+    expect(renderProse(`Before ${url} and *${url}* after.`)).toBe(
+      `<p>Before ${anchor} and <em>${anchor}</em> after.</p>`
+    )
+  })
+
+  it.each(['.', ',', ';', ':', '!', '?', ')', ')).', '?!:;,.)'])
+  ('leaves trailing sentence punctuation outside: %s', suffix => {
+    expect(renderProse(`See ${url}${suffix}`)).toBe(`<p>See ${anchor}${suffix}</p>`)
+  })
+
+  it.each([
+    [' ', ' '], ['\t', '\t'], ['\n', '\n'], ['<', '&lt;'], ['>', '&gt;'],
+    ['`', '`'], ['"', '&quot;'], ['[', '['], [']', ']']
+  ])('stops at delimiter %j', (delimiter, output) => {
+    expect(renderProse(`See ${url}${delimiter}tail`)).toBe(`<p>See ${anchor}${output}tail</p>`)
+  })
+
+  it.each([
+    ['obsidian://open?file=Plan%20(draft)', 'obsidian://open?file=Plan%20(draft)'],
+    ["obsidian://open?file=Plan's!draft*copy", 'obsidian://open?file=Plan&#x27;s!draft*copy'],
+    ['OBSIDIAN://open?file=日本', 'OBSIDIAN://open?file=日本'],
+    ['obsidian://open?file=A%20((draft))', 'obsidian://open?file=A%20((draft))']
+  ])('preserves admitted note characters verbatim: %s', (candidate, output) => {
+    expect(renderProse(`(${candidate}).`)).toBe(
+      `<p>(<a href="${output}" target="_blank" rel="noreferrer">${output}</a>).</p>`
+    )
+  })
+
+  it.each([
+    'obsidian://new?file=Plan', 'obsidian://search?query=Plan',
+    'obsidian://open?file=Plan&append=text', 'obsidian://open?file=x.hta',
+    'wordobsidian://open?file=Plan', 'https://x/obsidian://open?file=Plan',
+    ':obsidian://open?file=Plan', '_obsidian://open?file=Plan',
+    'obsidian://open?file=Plan&append=obsidian://open?file=Other',
+    'obsidian://open?file=Plan%26append=bad', 'obsidian://open?file=Plan#append=bad',
+    'obsidian://opening?file=Plan', 'obsidian://open?file=%zz',
+    'https://example.com', 'http://example.com', 'www.example.com', 'user@example.com'
+  ])('keeps rejected candidates as complete text: %s', candidate => {
+    expect(renderProse(`See ${candidate} now.`)).toBe(
+      `<p>See ${candidate.replace(/&/g, '&amp;')} now.</p>`
+    )
+  })
+
+  it.each(['inline', 'reference', 'collapsed', 'shortcut'])
+  ('excludes entire existing %s link subtrees including emphasis', style => {
+    for (const emphasis of [false, true]) {
+      const label = emphasis ? `*${url}*` : url
+      const output = emphasis ? `<em>${escaped}</em>` : escaped
+      for (const outer of ['https://outer.example', 'javascript:alert(1)']) {
+        const source = style === 'inline' ? `[${label}](${outer})`
+          : style === 'reference' ? `[${label}][ref]\n\n[ref]: ${outer}`
+            : `[${label}]${style === 'collapsed' ? '[]' : ''}\n\n[${label}]: ${outer}`
+        expect(renderProse(source)).toBe(outer.startsWith('https:')
+          ? `<p><a href="${outer}" target="_blank" rel="noreferrer">${output}</a></p>`
+          : `<p>${output}</p>`)
+      }
+    }
+  })
+
+  it.each(['```\n', '```txt\n', '    '])('leaves code blocks unchanged: %j', prefix => {
+    const markup = renderProse(prefix + url + (prefix.startsWith('```') ? '\n```' : ''))
+    expect(markup).toContain(`${escaped}\n</code></pre>`)
+    expect(markup).not.toMatch(/<a\b|href=/)
+  })
+})
+
+describe.each([
+  ['default', {}],
   ['workspace navigation', { onOpenMarkdownPath: () => {} }],
   ['workspace and hosted navigation', { onOpenMarkdownPath: () => {}, onOpenHostedApp: () => {} }]
 ] as const)('whole inline-code URL links with %s', (_name, navigation) => {

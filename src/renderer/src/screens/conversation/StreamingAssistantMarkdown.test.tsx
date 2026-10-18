@@ -62,6 +62,23 @@ describe('parser-verified streaming partitions', () => {
 })
 
 describe('pending presentation', () => {
+  it('keeps bare Obsidian links inert in a synthetic pending table', () => {
+    const url = 'obsidian://open?vault=v&file=Plan'
+    const escaped = 'obsidian://open?vault=v&amp;file=Plan'
+    const source = `| Note | ${url} |`
+    for (const navigation of [{}, { onOpenMarkdownPath: () => {}, onOpenHostedApp: () => {} }]) {
+      const pending = pendingMarkdown(source)
+      const markup = renderToStaticMarkup(
+        <AssistantMarkdown text={pending.text} allowElement={pending.allowElement} {...navigation} />
+      )
+      expect(markup).toContain(escaped)
+      expect(markup).not.toMatch(/<a\b|href=/)
+      const settled = renderToStaticMarkup(<AssistantMarkdown text={source + '\n| --- | --- |'} {...navigation} />)
+      expect(settled).toContain('<table>')
+      expect(settled).toContain(`<a href="${escaped}" target="_blank" rel="noreferrer">${escaped}</a>`)
+    }
+  })
+
   it.each(['https://example.com', 'obsidian://open?vault=v&file=Plan'])
   ('keeps synthetic URL code unlinked until original completed source settles: %s', url => {
     for (const navigation of [{}, { onOpenMarkdownPath: () => {}, onOpenHostedApp: () => {} }]) {

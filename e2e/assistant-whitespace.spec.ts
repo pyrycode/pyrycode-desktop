@@ -1111,7 +1111,7 @@ test('a markdown heading is typed from one step of the scale, not by the browser
   expect(heading.computed).toEqual(heading.token)
 })
 
-test('consecutive blocks one level inside a list item or a blockquote sit that same token apart', async ({
+test('consecutive blocks one level inside a list item or a blockquote keep their 8 px rhythm', async ({
   launchPairedApp
 }) => {
   const { page } = await launchPairedApp({ buildReplyFrames })

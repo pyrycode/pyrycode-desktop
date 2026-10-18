@@ -64,6 +64,10 @@ One fake-transport Electron spec drives both hosts, real preload/IPC/registry/en
 
 None. Cleaner-shape check: retain the existing authoritative partition/list refresh rather than introduce pin state or copy mute's result-event machinery.
 
+## Revisions
+
+2026-10-18: Final geometry review found the existing chevron/pen slot convention overlaps hit areas by 8px. Pin and pen instead have adjacent 28px hit areas; right-align the pin glyph without padding to preserve the Figma 20px glyph pitch, center its hover paint on that glyph, and reserve 56px for both buttons. The focused Electron geometry assertion failed on the overlap before this correction.
+
 ## Security review
 
 **Verdict:** PASS

@@ -77,6 +77,7 @@ test('sidebar pin actions route uniquely and wait for owning-host confirmation',
     expect(boxes.glyph.width).toBe(12); expect(boxes.glyph.height).toBe(12)
     expect(boxes.title.right).toBeLessThanOrEqual(boxes.pin.left)
     expect(boxes.pin.x).toBeLessThan(boxes.pen.x)
+    expect(boxes.pin.right).toBeLessThanOrEqual(boxes.pen.left)
     await page.screenshot({ path: `/tmp/builder-2085/controls-${size.width}.png`, animations: 'disabled' })
   }
   await zulu.hover()

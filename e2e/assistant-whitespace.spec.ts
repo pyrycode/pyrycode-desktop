@@ -251,7 +251,7 @@ const PROMPT_TEXT = 'answer me in several shapes'
 // --- Spec-local frame builders (the seedConversationsFrame idiom): each seals one envelope through the
 // production codec, deterministic id/ts. ---
 
-const assistantDeltaFrame = (turn: number, text: string): Uint8Array =>
+const assistantDeltaFrame = (turn: number, text: string, seq = 0): Uint8Array =>
   encodeEnvelope({
     id: REPLY_ENVELOPE_ID,
     type: 'assistant_delta',
@@ -259,7 +259,7 @@ const assistantDeltaFrame = (turn: number, text: string): Uint8Array =>
     payload: {
       conversation_id: SEEDED_ROW.id,
       turn_id: `turn-${turn}`,
-      seq: 0,
+      seq,
       text
     } satisfies AssistantDeltaPayload
   })
@@ -397,31 +397,36 @@ interface TypeQuartet {
 interface HeadingTypeMetrics {
   computed: TypeQuartet
   token: TypeQuartet
+  fontFamily: string
+  sansToken: string
+  color: string
+  colorToken: string
 }
 
-/**
- * A heading's live type quartet inside a settled bubble's container, beside the four --text-title-large-*
- * tokens read off that same element. Both halves come from one evaluate so the comparison is against the
- * scale rather than against `22px` written down — the token idiom of readRhythmMetrics above, and what
- * keeps this spec free of type literals too.
- *
- * The fixture's heading is the RHYTHM block's `<h2>`. One level of six is enough: it proves the class of
- * failure that matters (a heading typed by the UA stylesheet rather than by the theme), and the reply
- * stream is indexed positionally, so adding a turn to reach another level would shift every index above.
- */
-const readHeadingTypeMetrics = (page: Page, index: number): Promise<HeadingTypeMetrics> =>
+/** Read computed typography beside the designated token family from the same live heading. */
+const readHeadingTypeMetrics = (
+  page: Page, index: number, selector: string, tokenFamily: string
+): Promise<HeadingTypeMetrics> =>
   assistantBubble(page, index)
-    .locator('.bubble__markdown h2')
-    .evaluate((el) => {
+    .locator(`.bubble__markdown ${selector}`)
+    .evaluate((el, family) => {
       const style = getComputedStyle(el)
-      // Blink serialises a computed letter-spacing of zero as the `normal` keyword, and title-large's
-      // tracking token is `0px` — one computed value spelled two ways. Both sides pass through this, so
-      // the comparison is over values and not over spellings.
+      // Blink serialises zero tracking as `normal` rather than `0px`.
       const tracking = (value: string): string => {
         const trimmed = value.trim()
         return trimmed === 'normal' ? '0px' : trimmed
       }
+      const font = (value: string): string => value.trim().replace(/["']/g, '')
+      const probe = document.createElement('span')
+      probe.style.color = 'var(--color-on-secondary-container)'
+      el.append(probe)
+      const colorToken = getComputedStyle(probe).color
+      probe.remove()
       return {
+        fontFamily: font(style.fontFamily),
+        sansToken: font(style.getPropertyValue('--font-sans')),
+        color: style.color,
+        colorToken,
         computed: {
           fontSize: style.fontSize,
           lineHeight: style.lineHeight,
@@ -429,13 +434,13 @@ const readHeadingTypeMetrics = (page: Page, index: number): Promise<HeadingTypeM
           fontWeight: style.fontWeight
         },
         token: {
-          fontSize: style.getPropertyValue('--text-title-large-size').trim(),
-          lineHeight: style.getPropertyValue('--text-title-large-line').trim(),
-          letterSpacing: tracking(style.getPropertyValue('--text-title-large-tracking')),
-          fontWeight: style.getPropertyValue('--text-title-large-weight').trim()
+          fontSize: style.getPropertyValue(`${family}-size`).trim(),
+          lineHeight: style.getPropertyValue(`${family}-line`).trim(),
+          letterSpacing: tracking(style.getPropertyValue(`${family}-tracking`)),
+          fontWeight: style.getPropertyValue(`${family}-weight`).trim()
         }
       }
-    })
+    }, tokenFamily)
 
 interface NestedRhythmMetrics {
   spaceTokenPx: number
@@ -556,7 +561,7 @@ interface InlineCodeMetrics {
   radiusToken: string
   spaceToken: string
   bodyMediumSizeToken: string
-  titleLargeSizeToken: string
+  markdownH2SizeToken: string
   codeBlockBackgroundColor: string
   bubbleWordBreak: string
   bubbleOverflowWrap: string
@@ -596,7 +601,7 @@ const readInlineCodeMetrics = (page: Page, index: number): Promise<InlineCodeMet
         radiusToken: style.getPropertyValue('--radius-xs').trim(),
         spaceToken: style.getPropertyValue('--space-1').trim(),
         bodyMediumSizeToken: style.getPropertyValue('--text-body-medium-size').trim(),
-        titleLargeSizeToken: style.getPropertyValue('--text-title-large-size').trim(),
+        markdownH2SizeToken: style.getPropertyValue('--text-markdown-h2-size').trim(),
         codeBlockBackgroundColor: getComputedStyle(codeBlock).backgroundColor,
         bubbleWordBreak: bubbleStyle.wordBreak,
         bubbleOverflowWrap: bubbleStyle.overflowWrap,
@@ -1088,27 +1093,58 @@ test('streaming markdown blocks keep 16 px gaps through settlement', async ({ la
   }
 })
 
-test('a markdown heading is typed from one step of the scale, not by the browser', async ({
-  launchPairedApp
-}) => {
-  const { page } = await launchPairedApp({ buildReplyFrames })
-
-  await streamTheReplies(page)
-
-  const heading = await readHeadingTypeMetrics(page, RHYTHM)
-
-  // #628's AC1 and AC5 — the three things review can only confirm by eye. That a rule under the container
-  // REACHES a heading at all: without one this <h2> keeps the UA stylesheet's 1.5em/bold, which is neither
-  // the step's size nor any weight the scale carries (it holds 400 and 500 only). That its values come from
-  // the SCALE and not from literals: the expected side is the element's own custom properties, so a
-  // hand-written `22px` in the rule would still pass while a hand-written `21px` could not — which is why
-  // the no-literal claim rests on the diff at review and this test carries the rest. And that all four
-  // properties come from ONE step: a quartet mixed from two steps fails on whichever property was taken
-  // from elsewhere.
-  //
-  // Deliberately the whole quartet in one compare, so a failure names every property that drifted rather
-  // than stopping at the first.
-  expect(heading.computed).toEqual(heading.token)
+test('all six markdown heading levels share the scale while streaming and settled', async ({ launchPairedApp }) => {
+  const headings = [
+    ['h1', '--text-markdown-h1', '20px', '28px', '500', '0px'],
+    ['h2', '--text-markdown-h2', '18px', '26px', '500', '0px'],
+    ['h3', '--text-title-medium', '16px', '24px', '500', '0.15px'],
+    ...['h4', 'h5', 'h6'].map(tag => [tag, '--text-markdown-h4-h6', '14px', '20px', '700', '0.25px'])
+  ]
+  const source = [
+    ...headings.map(([tag], index) => `${'#'.repeat(index + 1)} Heading level ${tag.slice(1)}\n\nBody paragraph.`),
+    '> ## Quoted heading',
+    '- ###### List heading'
+  ].join('\n\n') + '\n\n'
+  const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: inbound => {
+    const envelope = decodeEnvelope(inbound)
+    if (envelope.type !== 'send_message') return [seedConversationsFrame()]
+    return (envelope.payload as SendMessagePayload).conversation_id === SEEDED_ROW.id
+      ? [assistantDeltaFrame(1, source)] : []
+  } })
+  await page.getByPlaceholder('Message…').fill(PROMPT_TEXT)
+  await page.getByRole('button', { name: 'Send' }).click()
+  const bubble = assistantBubble(page, 0)
+  await expect(bubble.locator('.bubble__cursor')).toBeVisible()
+  await expect(bubble.getByRole('heading')).toHaveCount(8)
+  for (const phase of ['streaming', 'appended', 'settled']) {
+    if (phase === 'appended') {
+      daemon.pushFrame(assistantDeltaFrame(1, 'More streamed text.', 1))
+      await expect(bubble.locator('.bubble__markdown > p').last()).toHaveText('More streamed text.')
+    } else if (phase === 'settled') {
+      daemon.pushFrame(turnEndFrame(1))
+      await expect(bubble.locator('.bubble__cursor')).toHaveCount(0)
+    }
+    for (const width of [1280, 800]) {
+      await app.evaluate(({ BrowserWindow }, value) => BrowserWindow.getAllWindows()[0].setSize(value, 900), width)
+      for (const [tag, family, fontSize, lineHeight, fontWeight, letterSpacing] of headings) {
+        const selectors = [`> ${tag}`]
+        if (tag === 'h2') selectors.push('blockquote h2')
+        if (tag === 'h6') selectors.push('li h6')
+        for (const selector of selectors) {
+          const heading = await readHeadingTypeMetrics(page, 0, selector, family)
+          expect(heading.computed, `${phase} ${selector} at ${width}`).toEqual({ fontSize, lineHeight, fontWeight, letterSpacing })
+          expect(heading.computed).toEqual(heading.token)
+          expect(heading.fontFamily).toBe(heading.sansToken)
+          expect(heading.fontFamily).toMatch(/^Roboto,/)
+          expect(heading.color).toBe(heading.colorToken)
+        }
+      }
+      if (phase !== 'appended') {
+        await page.locator('.conversation__thread').evaluate(el => { el.scrollTop = 0 })
+        await capturePairedApp(app, page, `/tmp/builder-2106/${phase}-${width}.png`)
+      }
+    }
+  }
 })
 
 test('consecutive blocks one level inside a list item or a blockquote keep their 8 px rhythm', async ({
@@ -1253,13 +1289,14 @@ test('inline code reads as code in every container, at whatever step that contai
 
   // ...and the size claim named against the SCALE in two different steps, so "takes its container's step"
   // cannot be satisfied by everything happening to sit at one size. The heading case is the discriminating
-  // one: 22px here and 14px in the prose, from the same rule.
+  // one: 18px here and 14px in the prose, from the same rule.
   const inProse = inline.entries.filter((entry) => entry.blockAncestorTag === 'p')
   expect(inProse.length).toBeGreaterThan(0)
   for (const entry of inProse) expect(entry.fontSize).toBe(inline.bodyMediumSizeToken)
   const inHeading = inline.entries.filter((entry) => entry.blockAncestorTag === 'h2')
   expect(inHeading.length).toBe(1)
-  expect(inHeading[0].fontSize).toBe(inline.titleLargeSizeToken)
+  expect(inHeading[0].fontSize).toBe(inline.markdownH2SizeToken)
+  expect(inHeading[0].fontSize).toBe('18px')
 
   // AC4's geometric half: the long unbroken span actually broke across lines (one client rect per line
   // fragment), and the thread still has no horizontal scrollbar. Both are needed — a span that refused to

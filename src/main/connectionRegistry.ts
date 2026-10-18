@@ -280,6 +280,7 @@ export function createConnectionRegistry(deps: ConnectionRegistryDeps): Connecti
     setSystemPrompt: (payload) => resolve().setSystemPrompt(payload),
     markConversationRead: payload => resolve().markConversationRead?.(payload),
     setConversationMuted: (payload, attemptId) => resolve().setConversationMuted(payload, attemptId),
+    setConversationPinned: payload => resolve().setConversationPinned(payload),
     setSessionSettings: (payload, changeId) => resolve().setSessionSettings(payload, changeId),
     answerModal: (payload) => resolve().answerModal(payload),
     cancelModal: (payload) => resolve().cancelModal(payload),

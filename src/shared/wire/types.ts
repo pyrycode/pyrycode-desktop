@@ -391,6 +391,7 @@ export type EnvelopeType =
   // `in_reply_to` and carrying the new `is_muted`, pushed uncorrelated to every other connection;
   // refused with a correlated non-retryable `error`.
   | 'set_conversation_muted'
+  | 'set_conversation_pinned'
   | 'create_workspace_folder'
   | 'workspace_folder_created'
   // The client's ASK that a workspace be renamed (#1289) — the outbound half of the contract whose
@@ -3569,6 +3570,12 @@ export interface SetSystemPromptPayload {
 export interface SetConversationMutedPayload {
   conversation_id: string
   muted: boolean
+}
+
+/** Core #3538: both fields are required, including a present false when unpinning. */
+export interface SetConversationPinnedPayload {
+  conversation_id: string
+  pinned: boolean
 }
 
 /**

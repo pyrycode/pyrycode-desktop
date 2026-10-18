@@ -31,7 +31,14 @@ const REPLY = `Read [the plan](${GOOD_PATH}) and [the other](${BROKEN_PATH}).`
 
 // The note changes on the host between opens; the reader must show the new text on the second open.
 let reads = 0
-const noteText = (): string => `# Plan version ${reads}\n\nTokens first, running time second.`
+const noteText = (): string => [
+  `# Plan version ${reads}`, 'Tokens first, running time second.',
+  '- Pin the dispatcher\n- Measure running time',
+  '| Stage | Status |\n| --- | --- |\n| Build | Ready |',
+  '> Keep the quote treatment.',
+  'See [the refiner](https://example.com/refiner).',
+  '```\npyry release --both\npyry status\n```'
+].join('\n\n')
 
 function readReply(requestId: number, ask: ReadWorkspaceFilePayload): Uint8Array[] {
   reads += 1
@@ -127,6 +134,58 @@ test('a markdown link in a reply opens the note in the reader, refetched on ever
   await expect(reader).toBeVisible({ timeout: TIMEOUT_MS })
   await expect(reader.locator('.markdown-reader__title')).toHaveText('Plan.md')
   await expect(reader.locator('h1')).toHaveText('Plan version 1', { timeout: TIMEOUT_MS })
+  // Browser-computed inheritance and actual block rectangles prove the reader's shared text family.
+  for (const width of [1280, 800]) {
+    await app.evaluate(({ BrowserWindow }, value) => BrowserWindow.getAllWindows()[0].setSize(value, 800), width)
+    await expect.poll(() => page.evaluate(() => innerWidth)).toBe(width)
+    const markdown = reader.locator('.bubble__markdown')
+    for (const selector of ['p', 'li', 'th', 'td', 'blockquote', 'a']) {
+      const elements = markdown.locator(selector)
+      expect(await elements.count()).toBeGreaterThan(0)
+      for (const element of await elements.all()) {
+        await expect(element).toHaveCSS('font-family', /Roboto/)
+        await expect(element).toHaveCSS('font-size', '14px')
+        await expect(element).toHaveCSS('line-height', '20px')
+        await expect(element).toHaveCSS('letter-spacing', '0.25px')
+      }
+    }
+    const colors = await reader.evaluate(element => {
+      const probe = document.createElement('span')
+      element.append(probe)
+      const resolve = (token: string): string => {
+        probe.style.color = `var(${token})`
+        return getComputedStyle(probe).color
+      }
+      const result = { body: resolve('--color-on-secondary-container'), primary: resolve('--color-primary'),
+        outline: resolve('--color-outline'), stroke: resolve('--color-primary-container') }
+      probe.remove()
+      return result
+    })
+    for (const selector of ['p', 'li', 'th', 'td']) {
+      for (const element of await markdown.locator(selector).all()) {
+        await expect(element).toHaveCSS('color', colors.body)
+      }
+    }
+    await expect(markdown.locator('a')).toHaveCSS('color', colors.primary)
+    await expect(markdown.locator('a')).toHaveCSS('text-decoration-line', 'underline')
+    await expect(markdown.locator('blockquote')).toHaveCSS('border-left-color', colors.outline)
+    await expect(markdown.locator('blockquote')).toHaveCSS('border-left-width', '4px')
+    const code = markdown.locator('.code-block__body')
+    await expect(code).toHaveCSS('font-family', /Roboto Mono/)
+    await expect(code).toHaveCSS('font-size', '12px')
+    await expect(code).toHaveCSS('line-height', '20px')
+    await expect(markdown.locator('.code-block')).toHaveCSS('border-top-color', colors.stroke)
+    await expect(markdown.locator('.code-block')).toHaveCSS('border-radius', '6px')
+    await expect(markdown.getByRole('button', { name: 'Copy code', exact: true })).toBeVisible()
+    await expect(markdown.locator('.code-block__copy-icon')).toBeVisible()
+    const gaps = await markdown.evaluate(element => {
+      const blocks = [...element.children].map(child => child.getBoundingClientRect())
+      return blocks.slice(2).map((block, index) => block.top - blocks[index + 1].bottom)
+    })
+    expect(gaps).toHaveLength(5)
+    for (const gap of gaps) expect(gap).toBeCloseTo(16, 1)
+    await capturePairedApp(app, page, `/tmp/builder-2099/reader-body-${width}.png`)
+  }
   // Hidden, NOT unmounted: the Composer's pending set and upload listener are mount-local.
   await expect(composer).toBeHidden()
   await expect(assistant).toBeHidden()

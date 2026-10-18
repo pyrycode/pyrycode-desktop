@@ -809,7 +809,7 @@ button.top-overlay-pill:hover,
   white-space: nowrap;
 }
 
-/* The streaming and settled markdown container (Figma 16:43): a flex column with an 8px gap between
+/* The streaming and settled markdown container (Figma 132:4443): a flex column with a 16px gap between
    blocks. The bubble's own fill, padding and radius are already .bubble + .bubble--daemon — #969
    redrew all three from the desktop `Message` (20/16 padding, 6px on all four corners, the
    --color-on-primary-fixed fill), and none of that reaches this container — and its items-start +
@@ -819,7 +819,7 @@ button.top-overlay-pill:hover,
    this element the blocks would be direct children of .bubble with nothing to hang the gap on.
 
    The gap alone is NOT enough. index.css resets only `body`, so every UA block margin is live and would
-   ADD to the gap — <p> neighbours would sit ~24px apart, not 8px. margin-block, never `margin`:
+   ADD to the gap instead of sitting 16px apart. margin-block, never `margin`:
    margin-inline is <blockquote>'s 40px indent and its only visual distinction until #624 lands. Direct
    children only — a <p> nested in a <blockquote> or a loose <li> keeps its UA margins, which is #624's to
    tune. flex `gap` applies strictly BETWEEN items, so "no extra space at the first and last block" falls
@@ -827,7 +827,7 @@ button.top-overlay-pill:hover,
 .bubble__markdown {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--space-4);
 }
 
 .bubble__markdown > * {
@@ -871,7 +871,7 @@ button.top-overlay-pill:hover,
    and lists, and this ticket adds and removes no margin anywhere.
 
    Four omissions, each load-bearing rather than forgotten. No margin: .bubble__markdown > * already zeroes
-   it for direct children (and e2e/assistant-whitespace.spec.ts measures the resulting 8px rhythm, so one
+   it for direct children (and e2e/assistant-whitespace.spec.ts measures the resulting 16px rhythm, so one
    added here would fail it). No color: headings inherit --color-on-surface from .bubble--daemon, and this
    introduces no new colour. No font-family: --font-sans inherits from .conversation and the UA heading
    rules set size, weight and margin only, the reasoning .code-block__header already records. No word-break:

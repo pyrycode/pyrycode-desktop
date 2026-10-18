@@ -319,6 +319,47 @@ assertions and positive receipt barriers remain intact. Controlled failures and 
 observed recovered acknowledgement establish the confirmation mechanism; the upstream
 Electron/Playwright trigger behind context destruction remains unknown.
 
+### Saved traversal diagnostics
+
+The four saved-traversal variants in `thread-activation.spec.ts` install both the
+held-read wrapper above and
+[`installSavedTraversalReads`](../../../e2e/fixtures/savedTraversalReads.ts) in
+`onLaunched`, before opening the conversation. A lost setup acknowledgement may
+follow successful registration: blindly adding another `pyry:diagnostic` listener
+would double-count restores or reset `savedReads`. The callback publishes its
+listener as `__savedTraversalReads`; repeated or late callbacks preserve that
+identity and counter. Read-only inspection confirms that exact listener occurs
+once among the actual diagnostic listeners.
+
+Setup permits at most two installation attempts, each followed by up to three
+inspection attempts. Only transient acknowledgement loss plus confirmed absence
+permits another installation. Exhausted/unavailable inspection, acknowledged
+absence, changed or missing registration and unrelated errors fail setup.
+Both `savedReads` and `heldThreadReads` use `readMainProcess` inside five-second
+polls. The release emission remains single-shot; all history, scrolling, anchor
+and request assertions remain intact. Each case attaches `saved-traversal-setup`
+with separate `held` and `saved` installation, inspection and context-loss counts.
+
+[`savedTraversalReads.test.ts`](../../../e2e/fixtures/savedTraversalReads.test.ts)
+executes the serialized callbacks against an IPC fake, covering loss before/after
+effect, lost/exhausted confirmation, late/repeated setup, absent/changed listeners
+and fatal errors. The [accepted Linux verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2105#issuecomment-6255574509)
+confirms all 12 cases passed, none skipped. The dispatcher gate report counts the
+unit run as 9346 executed/passed, 0 failed, 3 skipped.
+
+The complete application run recorded 499 executed, 498 passed, 1 failed and
+5 skipped. All 20 thread-activation cases, including “unchanged saved traversal
+scrolls independently while server reply is held” and all four saved-traversal
+variants, were present and passed without retries. Each variant's setup attachment
+records one installation, one inspection and zero context losses for each helper;
+launch-fate records show clean exits without teardown failures. The unrelated
+history-on-open failure remains recorded in #2112; a separate dispatcher rerun
+executed/passed 3 tests, 0 failed/skipped, including “opening asks once and only
+trusted upward input asks for subsequent pages”. The dispatcher accepted that
+rerun; it does not erase the original failure. These are retained Linux results,
+not fresh documentation runs; macOS is outside this ticket's verification scope.
+The upstream Electron/Playwright trigger remains unknown.
+
 ### Native window setup
 
 Native window setup has two independently observable fields. The single-consumer

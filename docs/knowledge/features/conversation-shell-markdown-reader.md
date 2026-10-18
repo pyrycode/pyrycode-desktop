@@ -85,7 +85,12 @@ One new file, `src/renderer/src/screens/conversation/MarkdownReader.tsx`.
   point that isn't gated on content having arrived (see § Note actions menu). The body renders
   `<AssistantMarkdown text={state.text} />` inside `.bubble__markdown` when loaded (reusing
   the reply's own markdown CSS — headings, code chrome, tables, task marks — rather than
-  restating it), and an empty `aria-busy="true"` box while loading. **No `onOpenMarkdownPath`
+  restating it), and an empty `aria-busy="true"` box while loading. Top-level blocks
+  share the reply's 16 px (`--space-4`) gap and zero direct-child block margins:
+  no extra space above the first or below the last block inside the Markdown
+  container. Reader body padding remains separate. Nested list/quote rhythm stays
+  8 px; the reply's metadata/attachment margins remain 12 px outside that container.
+  **No `onOpenMarkdownPath`
   is passed** — a link inside a note renders as plain text or a plain external link exactly
   as it would in a reply with the prop absent; following a link within a note is a later
   ticket, not a gap in this one.
@@ -184,6 +189,15 @@ row and reading the clipboard back are Playwright's job —
 `e2e/markdown-reader-menu.spec.ts`, beside `e2e/markdown-reader.spec.ts`. It reads the OS
 clipboard back through main the way `e2e/message-copy.spec.ts` already does, including
 `clipboard.readHTML()` for the HTML flavour.
+
+That menu scenario also measures the loaded note's 16 px heading-to-paragraph gap
+and flush container edges at 1280×800 and 800×800 window sizes. Escaped raw HTML
+becomes bare text and therefore anonymous flex items: `el.children` omits them,
+so adjacent element rectangles spanning those items do not measure one gap. Keep
+the hostile HTML fixture and its security assertions; a final normal paragraph
+makes the last element also the last flex item for the bottom-edge check. The
+heading and first paragraph give a genuinely adjacent element pair. See the
+[counted Linux layout evidence](assistant-markdown-renderer.md#verification).
 
 ## Open in another app (#1631)
 

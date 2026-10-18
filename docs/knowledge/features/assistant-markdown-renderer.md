@@ -43,7 +43,7 @@ presentation. The stable reader callback and
 allow unchanged settled replies to reuse their render on new deltas. Memoization
 changes no security rule below.
 
-Rendering parses `text` synchronously without store access or effect hooks. The module-private `CodeBlock` holds a local DOM ref for user-activated copying; `AssistantMarkdown` emits no wrapper element of its own (`react-markdown` v10 emits block elements directly; the container and its class are [#609](../codebase/609.md)'s `.bubble__markdown`, a flex column with `gap: var(--space-2)` for Figma `16:43`'s 8px block rhythm). Built on `react-markdown@10.1.0` with:
+Rendering parses `text` synchronously without store access or effect hooks. The module-private `CodeBlock` holds a local DOM ref for user-activated copying; `AssistantMarkdown` emits no wrapper element of its own (`react-markdown` v10 emits block elements directly; the container is `.bubble__markdown`, a flex column with `gap: var(--space-4)` for Figma `132:4443`'s 16 px top-level block rhythm). Built on `react-markdown@10.1.0` with:
 
 - **No `rehypePlugins`.** No HTML parser exists in the dependency graph at all — interpreting HTML would require adding `rehype-raw` to `package.json`, a visible, reviewable act, not a config flip.
 - **Three stable `remarkPlugins`: `[remarkGfmSubset, remarkHostedLinks, remarkCodeSpanLinks]`.**
@@ -106,10 +106,17 @@ onOpenMarkdownPath={onOpenMarkdownPath} onOpenHostedApp={onOpenHostedApp} />`
 while `inProgress` is true, and `<AssistantMarkdown text={item.text}
 onOpenMarkdownPath={onOpenMarkdownPath} onOpenHostedApp={onOpenHostedApp} />`
 on settlement. Both live inside `.bubble__markdown`, with direct block children,
-reset margins and the existing 8px flex gap. Neither carries `bubble--assistant-text`;
+reset margins and a 16 px (`--space-4`) flex gap. Neither carries `bubble--assistant-text`;
 markdown owns prose whitespace on both branches, and `.code-block__body` retains
 `pre-wrap` for code. The decorative cursor is a sibling after the markdown container,
 before `BubbleMeta`, and disappears on settlement. User messages do not use this renderer.
+
+The same gap reaches settled replies, streaming replies and the reader. Streaming
+fragments leave frozen and pending blocks as direct flex children. Flex gap adds
+space only between blocks; `.bubble__markdown > * { margin-block: 0 }` keeps the
+first and last blocks flush with the container. Nested list-item and blockquote
+rhythm stays 8 px (`--space-2`). Metadata and file/image attachments sit outside
+this container and retain their separate 12 px (`--space-3`) margins.
 
 `onOpenMarkdownPath` and `onOpenHostedApp` are optional, forwarded through
 `ConversationScreen` and both conversation timelines to `TimelineRow`. Both reply
@@ -294,6 +301,25 @@ scoped parser breakpoint to prove later inputs exclude frozen source. It also co
 definition invalidation, pending presentation and both raw-source settlement triggers.
 [`e2e/assistant-whitespace.spec.ts`](../../../e2e/assistant-whitespace.spec.ts) checks
 computed styles and geometry for markdown-owned whitespace and cursor placement.
+
+Block spacing requires measured rectangles as well as computed `row-gap`: UA block
+margins can add space while the declared gap still looks correct. The settled
+“consecutive markdown blocks sit one spacing token apart, flush at the bubble edges”
+case guards block count, every gap and both zero edges. “streaming markdown blocks
+keep 16 px gaps through settlement” measures seven blocks before and after settlement
+at 1280×800 and 800×800 window sizes. The nested list/quote case retains 8 px checks.
+The [reader menu scenario](conversation-shell-markdown-reader.md#note-actions-menu)
+measures its loaded note at both sizes, accounting for escaped-HTML text items.
+
+The [accepted Linux verifier verdict for #2097](https://github.com/pyrycode/pyrycode-desktop/pull/2105#issuecomment-6255574509)
+records 499 executed, 498 passed, 1 failed and 5 skipped in the complete application
+run. All 17 whitespace/reader cases above were present and passed without retries.
+The unrelated history-on-open failure remains failed, tracked in #2112; its separate
+dispatcher rerun executed/passed 3 tests, 0 failed/skipped, including the failed case.
+The prior visual review inspected streaming, settled and reader captures from
+`93669438` at 1280×773 and 800×773 content sizes against Figma; the repair changed
+no spacing CSS. These are retained results, not fresh documentation runs. No provider
+run is required; macOS is outside this Linux ticket's verification scope.
 
 Recorded evidence at `4d33723f` from the
 [passing verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1832#issuecomment-6028909574):

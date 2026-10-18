@@ -99,6 +99,38 @@ Rendering parses `text` synchronously without store access or effect hooks. The 
 
 Neither the `a` nor `img` override spreads `{...props}` — a spread would put `href`/`src` straight back (and, for `a`, `title` and anything else react-markdown supplies) while every visible-text test assertion kept passing, so the no-spread rule is enforced by construction (a code comment flags it), not by test coverage alone. `.bubble__markdown a { color: var(--color-primary); text-decoration: underline; }` in `conversation.css` ([#610](../codebase/610.md)) is the app's first anchor rule — the underline is load-bearing, not decorative: colour alone against the surrounding prose ink measures 1.31:1, well under WCAG G183's 3:1 floor for a colour-only link cue.
 
+## Heading typography
+
+`conversation.css` applies the Figma `892:13442` scale through descendant selectors
+`.bubble__markdown h1` through `h6`. The token families in `theme/tokens.css` each
+provide `-size`, `-line`, `-weight` and `-tracking` values:
+
+| Level | Token family | Size / line height | Weight | Tracking |
+| --- | --- | --- | --- | --- |
+| H1 | `--text-markdown-h1-*` | 20 / 28 px | 500 | 0 px |
+| H2 | `--text-markdown-h2-*` | 18 / 26 px | 500 | 0 px |
+| H3 | `--text-title-medium-*` | 16 / 24 px | 500 | 0.15 px |
+| H4–H6 | `--text-markdown-h4-h6-*` | 14 / 20 px | 700 | 0.25 px |
+
+All six levels explicitly use On Secondary Container
+(`--color-on-secondary-container`) and `--font-sans`, preserving the Roboto-first
+stack (`'Roboto', system-ui, -apple-system, sans-serif`). H3 reuses title-medium;
+the other families are Markdown-specific so general-purpose type tokens retain
+their existing values.
+
+The same rules reach settled replies, `StreamingAssistantMarkdown`, headings
+nested in quotes or list items, and `MarkdownReaderView` through its existing
+`.bubble__markdown` container. The reader needs no duplicate heading definition.
+Inline code keeps `--font-mono` and inherits its heading's size, including 18 px
+inside H2; changing heading type must not replace that monospace treatment.
+
+This scale preserves heading margins, block gaps and non-heading typography.
+[#2107](https://github.com/pyrycode/pyrycode-desktop/issues/2107) owns heading margins;
+[#2100](https://github.com/pyrycode/pyrycode-desktop/issues/2100) owns reader-specific
+verification and overrides. Font packaging is outside this change. See
+[computed typography verification](assistant-markdown-renderer-verification.md#heading-typography)
+for literal-value and token assertions across streaming and settlement.
+
 ## Configuration and usage
 
 `TimelineRow` uses `<StreamingAssistantMarkdown text={item.text}
@@ -281,71 +313,10 @@ the earlier memoization decline.
 
 ## Verification
 
-`hostedAppLink.test.ts` pins the exact raw grammar. `hostedAppLinks.test.tsx`
-covers opt-in and inert output, no render-time activation or identity attributes,
-normalization rejection, escaped titles/reference labels and meaningful/blank
-labels in settled and streaming renderers. Static markup cannot prove activation;
-see [the production link scenarios and counted evidence](development-verification.md#hosted-app-link-verification).
-
-`StreamingAssistantMarkdown.test.tsx` replays every original prefix of the named
-regression fixtures and deterministic seeded block-starter fuzz. It compares raw
-partition trees at absolute offsets and rendered markup with the full parse/render,
-ignoring only whitespace between blocks. Pending display has separate expected-output
-cases because it intentionally differs from raw-prefix rendering. Existing
-`AssistantMarkdown.test.tsx` security cases also cover callers without stabilization.
-
-Static markup and unchanged DOM identity cannot prove a skipped render.
-[`e2e/progressive-markdown.spec.ts`](../../../e2e/progressive-markdown.spec.ts) uses
-mounted V8 function counters for frozen-render skips and bounded probing, plus a
-scoped parser breakpoint to prove later inputs exclude frozen source. It also covers
-definition invalidation, pending presentation and both raw-source settlement triggers.
-[`e2e/assistant-whitespace.spec.ts`](../../../e2e/assistant-whitespace.spec.ts) checks
-computed styles and geometry for markdown-owned whitespace and cursor placement.
-
-Block spacing requires measured rectangles as well as computed `row-gap`: UA block
-margins can add space while the declared gap still looks correct. The settled
-“consecutive markdown blocks sit one spacing token apart, flush at the bubble edges”
-case guards block count, every gap and both zero edges. “streaming markdown blocks
-keep 16 px gaps through settlement” measures seven blocks before and after settlement
-at 1280×800 and 800×800 window sizes. The nested list/quote case retains 8 px checks.
-The [reader menu scenario](conversation-shell-markdown-reader.md#note-actions-menu)
-measures its loaded note at both sizes, accounting for escaped-HTML text items.
-
-The [accepted Linux verifier verdict for #2097](https://github.com/pyrycode/pyrycode-desktop/pull/2105#issuecomment-6255574509)
-records 499 executed, 498 passed, 1 failed and 5 skipped in the complete application
-run. All 17 whitespace/reader cases above were present and passed without retries.
-The unrelated history-on-open failure remains failed, tracked in #2112; its separate
-dispatcher rerun executed/passed 3 tests, 0 failed/skipped, including the failed case.
-The prior visual review inspected streaming, settled and reader captures from
-`93669438` at 1280×773 and 800×773 content sizes against Figma; the repair changed
-no spacing CSS. These are retained results, not fresh documentation runs. No provider
-run is required; macOS is outside this Linux ticket's verification scope.
-
-Recorded evidence at `4d33723f` from the
-[passing verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1832#issuecomment-6028909574):
-the configured fake-transport run executed 321 tests, all passed, with 0 failed and
-5 skipped. Both named progressive tests, “indented pending headers and heading closers
-preserve streaming presentation” and “progressive presentation, parser/render reuse
-and raw-source settlement”, were present and passed (2 executed, 0 failed/skipped).
-All 13 assistant-whitespace tests executed and passed (0 failed/skipped). No live
-Claude or real-daemon evidence is required for this renderer behavior.
-
-The settled-row regression also counts `AssistantMarkdown` separately from
-`TimelineRow`, `ToolRow`, `StreamingAssistantMarkdown` and `parseMarkdown`.
-Establish positive counts before measuring skips and observe each delta before
-delivering the next; batching can otherwise manufacture apparent reuse.
-`StreamingAssistantMarkdown` may execute again for its own partition-state update,
-so its positive counter must remain separate from the parent row count. See
-[row reuse verification](conversation-shell-timeline-render.md#row-reuse-verification)
-for the mounted regression and baseline/fixed evidence.
-
-At `c0268369`, the 2026-10-08
-[verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1889#issuecomment-6053401984)
-and dispatcher gate report record 358 fake-transport tests executed/passed, 0 failed
-and 4 skipped. Both “settled rows skip deltas and unrelated group toggles while the
-active reply renders” and “progressive presentation, parser/render reuse and
-raw-source settlement” were present and passed. This is counted mounted evidence
-for settled reuse alongside the existing progressive proof.
+See [Assistant Markdown verification](assistant-markdown-renderer-verification.md)
+for computed typography, spacing, progressive rendering and retained counted
+evidence. Static server renders establish markup; Electron checks establish
+computed styles and mounted behavior.
 
 ## Related
 
@@ -355,7 +326,7 @@ for settled reuse alongside the existing progressive proof.
 - [#623 codebase notes](../codebase/623.md) — the `pre` override, `fenceLanguage`, and the original mobile-mock `.code-block`/`.code-block__header`/`.code-block__body` CSS.
 - [#721](https://github.com/pyrycode/pyrycode-desktop/issues/721) — redrew that CSS to the desktop design (corner, border colour, gutters, header type, divider colour, body line height); no change to `AssistantMarkdown.tsx` or to `fenceLanguage`. Added the `--text-label-medium-*` quartet, `--text-label-medium-weight-emphasized`, and the bespoke `--text-code-body-line` to `theme/tokens.css`.
 - [#780](https://github.com/pyrycode/pyrycode-desktop/issues/780) — reused `.code-block`/`.code-block__body` headerless for a second call site (an expanded `Bash` tool row's command), which moved `white-space: pre-wrap` and `word-break: break-word` onto `.code-block__body` itself in place of `.bubble__markdown pre` (deleted) and `.bubble` inheritance — neither reached the new site. No change to `AssistantMarkdown.tsx`. See [Conversation shell § Shell command code block](conversation-shell-tool-row-code-block.md#shell-command-code-block-780).
-- [#628 codebase notes](../codebase/628.md) — the `h1`–`h6` type-scale CSS, and the type-role census that picked the four steps.
+- [#628 codebase notes](../codebase/628.md) — the original heading type-role census; the current [Markdown heading scale](#heading-typography) supersedes that mapping.
 - [#629 codebase notes](../codebase/629.md) — the `ul`/`ol` indent, the blockquote's indent-plus-bar, and the nested block-rhythm CSS; the marker-overhang arithmetic that bounds the list indent.
 - [#630 codebase notes](../codebase/630.md) — inline code's chip CSS and its ancestry-based exclusion from a fenced block's contents; closes the #624 split.
 - [#610 codebase notes](../codebase/610.md) — the `http:`/`https:` link allowlist, `allowedLinkHref`, and the app's first anchor CSS.

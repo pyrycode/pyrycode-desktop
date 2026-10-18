@@ -108,6 +108,25 @@ One new file, `src/renderer/src/screens/conversation/MarkdownReader.tsx`.
   sites share the string because the failure reads the same to the operator either way, not
   because they share a rendering path.
 
+## Body typography
+
+`.markdown-reader__body` supplies the same body-medium tokens as thread prose:
+Roboto 14/20 px, weight 400 and 0.25 px tracking, with On Secondary Container ink
+(`--color-on-secondary-container`). Paragraphs, list items and table cells inherit
+these values. Quotes and links inherit the same typography; quotes retain their
+4 px Outline bar, and external links retain Primary ink and an underline.
+
+Sharing `AssistantMarkdown` does not alone establish matching prose: the reader
+inherits from its own scroll body rather than a message bubble. Keep the body
+tokens aligned there instead of adding per-element reader overrides. Fenced code
+has explicit shared styling: Roboto Mono 12/20 px, a 1 px Primary Container stroke,
+6 px radius and Copy code icon. Ordinary blocks retain the shared 16 px gap,
+with the nested 8 px rhythm and flush Markdown edges described above. The fixed
+top bar and sole body scrollport follow the [pane layout](#pane-wiring).
+
+Heading scale and reader-specific heading verification belong to the
+[separate heading work](assistant-markdown-renderer.md#heading-typography).
+
 ## Note actions menu
 
 [#1630](https://github.com/pyrycode/pyrycode-desktop/issues/1630) added a three-dot button at
@@ -420,6 +439,35 @@ mount-local state itself.
 subtree, don't unmount it, unless every child's state is already lifted to a store. An early
 return is the natural first instinct and reads as correct in review until the specific
 mount-local state it drops is traced.
+
+## Body typography verification
+
+[`e2e/markdown-reader.spec.ts`](../../../e2e/markdown-reader.spec.ts)'s existing
+“a markdown link in a reply opens the note in the reader, refetched on every open,
+and back returns (#1627)” scenario measures paragraphs, list items, table headers
+and cells, quotes and external links at 1280 and 800 px window widths. It checks
+literal 14/20 px type and 0.25 px tracking as well as the Roboto family and token
+ink, preserving the quote bar, link underline, fenced code and visible copy icon.
+It measures all five adjacent ordinary-block gaps after the heading-to-paragraph
+pair; heading spacing is separately owned. Shared markup alone would miss a
+wrong inherited body size, and a declared flex gap alone would miss extra margins.
+
+The [accepted Linux verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2114#issuecomment-6256632906)
+at `28aa981b` confirms `MarkdownReader.test.tsx` present and passed: 29 executed,
+29 passed, 0 failed and 0 skipped. Both reader browser specs,
+`e2e/markdown-reader.spec.ts` and `e2e/markdown-reader-menu.spec.ts`, were present
+and passed: 4 executed, 4 passed, 0 failed and 0 skipped, including the named
+round-trip regression above. The complete application run executed 500 tests:
+500 passed, 0 failed and 5 skipped. These are retained results; static unit
+renders prove markup and reducer behavior, while the browser proves computed
+typography, geometry and interaction.
+
+The verifier compared loaded synthetic reader captures from the reviewed revision
+at 1280×773 and 800×773 content sizes against Figma `552:2851` and `134:4890`,
+confirming prose typography/ink, outlined code/copy treatment and 16 px ordinary
+gaps. Retained capture references are `/tmp/verifier-2114/` and
+`/tmp/builder-2099/reader-body-{1280,800}.png`. This body change requires no
+provider/live run; macOS is outside this Linux ticket's verification scope.
 
 ## Related
 

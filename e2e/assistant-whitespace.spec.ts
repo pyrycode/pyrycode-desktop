@@ -1,6 +1,7 @@
 import type { Page, Locator } from '@playwright/test'
 import { test, expect, seedConversationsFrame, SEEDED_ROW } from './fixtures/launchPairedApp'
 import { bubbleTextExactly } from './fixtures/bubbleText'
+import { capturePairedApp } from './fixtures/capturePairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type {
   AssistantDeltaPayload,
@@ -55,7 +56,7 @@ const FIXED_TS = '2026-07-07T12:00:00.000Z'
 // so each lands SETTLED in its own bubble; the sixth carries a delta only, so it is the in-progress tail.
 // Three of the settled texts are read as COMPARISONS AGAINST THE FIRST, which is what keeps this spec free
 // of magic numbers: no expected pixel height, no expected width, no font metric. The one number it does
-// name — the 8px block rhythm — is read from the --space-2 token at runtime rather than written down.
+// name — the 16px block rhythm — is read from the --space-4 token at runtime.
 const CONTROL_TEXT = 'Alpha Beta' // one markdown paragraph, one line — the baseline both comparisons use.
 const SPACE_RUN_LENGTH = 24
 // Differs from the control ONLY in collapsible whitespace, so under markdown's `normal` the two render
@@ -364,7 +365,7 @@ interface RhythmMetrics {
  * The container's declared gap AND the distances actually measured between its blocks. Both halves are
  * needed: `row-gap` alone reads correct even when live UA block margins add 14-16px on top of it, so a
  * row-gap-only test would pass with the margin reset missing entirely. The expected value is read from the
- * --space-2 custom property rather than written as 8, so no spacing literal enters this spec either.
+ * --space-4 custom property, with an explicit 16px design assertion in the test.
  *
  * `.bubble__markdown` declares no padding and no border, so its border box IS its content box and the
  * first/last offsets below are the flush-with-the-bubble check.
@@ -378,7 +379,7 @@ const readRhythmMetrics = (page: Page, index: number): Promise<RhythmMetrics> =>
       const blocks = Array.from(el.children).map((child) => child.getBoundingClientRect())
       return {
         rowGapPx: parseFloat(style.rowGap),
-        spaceTokenPx: parseFloat(style.getPropertyValue('--space-2')),
+        spaceTokenPx: parseFloat(style.getPropertyValue('--space-4')),
         blockGapsPx: blocks.slice(1).map((rect, i) => rect.top - blocks[i].bottom),
         firstOffsetPx: blocks[0].top - box.top,
         lastOffsetPx: box.bottom - blocks[blocks.length - 1].bottom,
@@ -401,7 +402,7 @@ interface HeadingTypeMetrics {
 /**
  * A heading's live type quartet inside a settled bubble's container, beside the four --text-title-large-*
  * tokens read off that same element. Both halves come from one evaluate so the comparison is against the
- * scale rather than against `22px` written down — the --space-2 idiom of readRhythmMetrics above, and what
+ * scale rather than against `22px` written down — the token idiom of readRhythmMetrics above, and what
  * keeps this spec free of type literals too.
  *
  * The fixture's heading is the RHYTHM block's `<h2>`. One level of six is enough: it proves the class of
@@ -1039,12 +1040,13 @@ test('consecutive markdown blocks sit one spacing token apart, flush at the bubb
   // The three blocks are three different element types (p / h2 / ul), so the measurements below fail
   // against a margin reset narrow enough to miss one of them.
   expect(rhythm.blockCount).toBe(RHYTHM_BLOCK_COUNT)
+  expect(rhythm.spaceTokenPx).toBe(16)
 
   // AC4 — the declared rhythm is the token, not a literal.
   expect(rhythm.rowGapPx).toBe(rhythm.spaceTokenPx)
 
   // ...and the MEASURED rhythm is that same value. This is the load-bearing half: live UA block margins
-  // would add ~14-16px on top of the gap while `row-gap` still read 8px.
+  // would add ~14-16px on top of the gap while `row-gap` still read 16px.
   for (const gap of rhythm.blockGapsPx) {
     expect(Math.abs(gap - rhythm.spaceTokenPx)).toBeLessThanOrEqual(SUBPIXEL_TOLERANCE_PX)
   }
@@ -1053,6 +1055,37 @@ test('consecutive markdown blocks sit one spacing token apart, flush at the bubb
   // `gap`, which applies strictly BETWEEN items, once the UA margins are gone.
   expect(Math.abs(rhythm.firstOffsetPx)).toBeLessThanOrEqual(SUBPIXEL_TOLERANCE_PX)
   expect(Math.abs(rhythm.lastOffsetPx)).toBeLessThanOrEqual(SUBPIXEL_TOLERANCE_PX)
+})
+
+test('streaming markdown blocks keep 16 px gaps through settlement', async ({ launchPairedApp }) => {
+  const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: inbound => {
+    const envelope = decodeEnvelope(inbound)
+    if (envelope.type !== 'send_message') return [seedConversationsFrame()]
+    return (envelope.payload as SendMessagePayload).conversation_id === SEEDED_ROW.id
+      ? [assistantDeltaFrame(1, RHYTHM_TEXT + '\n\n```ts\nconst value = 1\n```\n\nFinal paragraph.\n')]
+      : []
+  } })
+  await page.getByPlaceholder('Message…').fill(PROMPT_TEXT)
+  await page.getByRole('button', { name: 'Send' }).click()
+  const bubble = assistantBubble(page, 0)
+  await expect(bubble.locator('.bubble__cursor')).toBeVisible()
+  await expect(bubble.locator('.bubble__markdown > *')).toHaveCount(7)
+  for (const phase of ['streaming', 'settled']) {
+    if (phase === 'settled') {
+      daemon.pushFrame(turnEndFrame(1))
+      await expect(bubble.locator('.bubble__cursor')).toHaveCount(0)
+    }
+    for (const width of [1280, 800]) {
+      await app.evaluate(({ BrowserWindow }, value) => BrowserWindow.getAllWindows()[0].setSize(value, 800), width)
+      const rhythm = await readRhythmMetrics(page, 0)
+      expect(rhythm.blockCount).toBe(7)
+      expect(rhythm.rowGapPx).toBe(16)
+      for (const gap of rhythm.blockGapsPx) expect(gap).toBeCloseTo(16, 1)
+      expect(rhythm.firstOffsetPx).toBeCloseTo(0, 1)
+      expect(rhythm.lastOffsetPx).toBeCloseTo(0, 1)
+      await capturePairedApp(app, page, `/tmp/builder-2097/${phase}-${width}.png`)
+    }
+  }
 })
 
 test('a markdown heading is typed from one step of the scale, not by the browser', async ({

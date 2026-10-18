@@ -68,6 +68,8 @@ None. Cleaner-shape check: retain the existing authoritative partition/list refr
 
 2026-10-18: Final geometry review found the existing chevron/pen slot convention overlaps hit areas by 8px. Pin and pen instead have adjacent 28px hit areas; right-align the pin glyph without padding to preserve the Figma 20px glyph pitch, center its hover paint on that glyph, and reserve 56px for both buttons. The focused Electron geometry assertion failed on the overlap before this correction.
 
+2026-10-18 (verifier rework): Keep enabled-only pin hover outside the shared `:is(...)` list so its specificity cannot override the existing 22px edit and 24px create hover layers. Extend `sidebar-control-hover.spec.ts` to cover the pin's glyph-centered 20px layer and disabled hover. Update `sidebar-control-name-pill.spec.ts` to count both channel controls, scope each pill to its control and cover pin pointer/focus placement; both it and `sidebar-row-geometry.spec.ts` assert open → pin → edit keyboard order while retaining edit reveal/dialog and clipping checks. These repair the same row-control contract, add no independent behavior or lifecycle state, and keep total written work below 800 lines with unchanged exports, consumers and acceptance behaviors. No in-flight feature branch overlaps these repair files.
+
 ## Security review
 
 **Verdict:** PASS

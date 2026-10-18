@@ -1479,10 +1479,11 @@
   display: block;
 }
 
-/* The state layer follows the glyph, preserving the larger hit box and fixed name pill. */
+/* Keep the pin's enabled guard outside :is() so existing controls retain their size overrides. */
 :is(.channel-list__host-edit, .channel-list__workspace-edit, .channel-list__rename,
   .channel-list__chat-edit, .channel-list__host-add, .channel-list__workspace-create,
-  .channel-list__section-create, .channel-list__save, .channel-list__pin:enabled):hover::before {
+  .channel-list__section-create, .channel-list__save):hover::before,
+.channel-list__pin:enabled:hover::before {
   content: '';
   position: absolute;
   left: 50%;

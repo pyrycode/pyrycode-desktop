@@ -73,14 +73,15 @@ const PILL_HEIGHT_PX = 24
 const OFFSET_X_PX = 12
 const OFFSET_Y_PX = 24
 
-// The three control names, restated here as the literals the operator reads rather than imported from the
+// The control names, restated here as the literals the operator reads rather than imported from the
 // screen. A constant imported from the code under test would agree with itself if both moved together;
 // these are the words the criterion names.
 // #1476 moved the Channels pen's word from `Rename` to `Edit channel` — the change the split below was
 // made FOR, and the proof it was worth making: this line moved and the Chats line under it did not.
 const EDIT_CHANNEL_NAME = 'Edit channel'
+const PIN_CHANNEL_NAME = 'Pin channel'
 const SAVE_NAME = 'Save as channel'
-// #1441 — the Chats tree's pen. A THIRD constant and not a reuse of the one above, mirroring the two
+// #1441 — the Chats tree's pen. Its own constant rather than a reuse of the one above, mirroring the two
 // module-local constants the screen keeps: the Channels pen's word moves on its own, so a shared literal
 // here would redden this file for a change that does not touch the Chats tree at all.
 const EDIT_CHAT_NAME = 'Edit chat'
@@ -99,8 +100,9 @@ const PROMOTED_ROW_COUNT = 40
 
 // #1441 — the trailing controls one CHAT row carries: the Save-as-channel chevron and, since that ticket,
 // the Edit chat pen beside it. Each wears its own `.channel-list__control-name`, so this is what the tall
-// list's pill total counts on top of one-per-promoted-row.
+// list's pill total counts alongside the channel rows' pin and edit controls.
 const CHAT_ROW_CONTROLS = 2
+const CHANNEL_ROW_CONTROLS = 2
 
 // Keep the fixture's directory on every row; the sidebar no longer groups by that value.
 const WORKSPACE_CWD = SEEDED_ROW.cwd
@@ -230,10 +232,10 @@ test('a row control names itself in a pill that follows the pointer, clear of th
 
   const tree = page.locator('.channel-list__tree')
   const rows = page.locator('.channel-list__row')
-  // Scope to conversation rows so section-create and host controls cannot change the counts or which
-  // pill `first()` and `last()` select when their own name pills are shown.
+  // Scope to conversation rows so section-create and host controls cannot change the counts.
   const pills = page.locator('.channel-list__row .channel-list__control-name')
   const renames = page.locator('.channel-list__rename')
+  const pins = page.getByRole('button', { name: PIN_CHANNEL_NAME, exact: true })
   const save = page.locator('.channel-list__save')
   const chatEdit = page.locator('.channel-list__chat-edit')
   const sidebar = page.locator('.paired-shell__sidebar')
@@ -246,12 +248,11 @@ test('a row control names itself in a pill that follows the pointer, clear of th
 
   daemon.pushFrame(tallListFrame())
   const rowCount = PROMOTED_ROW_COUNT + 1
-  // #1441 — the list holds forty promoted rows carrying one control each and ONE chat row carrying two, so
-  // the per-row pill total parts company with the row count. One named constant rather than four edited
-  // literals, so the arithmetic is stated once and a future third control on either row edits one line.
-  const pillCount = PROMOTED_ROW_COUNT + CHAT_ROW_CONTROLS
+  // Each channel has pin and edit; the chat retains save and edit.
+  const pillCount = PROMOTED_ROW_COUNT * CHANNEL_ROW_CONTROLS + CHAT_ROW_CONTROLS
   await expect(rows).toHaveCount(rowCount, { timeout: TIMEOUT_MS })
   await expect(renames).toHaveCount(PROMOTED_ROW_COUNT)
+  await expect(pins).toHaveCount(PROMOTED_ROW_COUNT)
   await expect(save).toHaveCount(1)
   // The chat pen's own token, asserted here because every count below depends on it: `.channel-list__rename`
   // staying at forty against forty-one rows is the whole reason #1441 gave the Chats tree a second token,
@@ -275,7 +276,7 @@ test('a row control names itself in a pill that follows the pointer, clear of th
   // ---
   await scrollTreeTo(tree, 'top')
   const firstPoint = await parkOn(renames.first(), 'first row rename', 4, 4)
-  const firstPill = pills.first()
+  const firstPill = renames.first().locator('.channel-list__control-name')
   await expect(firstPill).toBeVisible({ timeout: TIMEOUT_MS })
   await expect(firstPill).toHaveText(EDIT_CHANNEL_NAME)
   expect((await displays(pills)).filter((display) => display !== 'none')).toEqual(['block'])
@@ -335,6 +336,19 @@ test('a row control names itself in a pill that follows the pointer, clear of th
   const firstBoxMoved = await boxOf(firstPill, 'first row pill')
   expectAtPointer(firstBoxMoved, firstMoved, 'first row pill, followed')
   expectClearOfControl(firstBoxMoved, firstControlBox, 'first row pill, followed')
+
+  const firstPin = pins.first()
+  const pinPill = firstPin.locator('.channel-list__control-name')
+  const pinPoint = await parkOn(firstPin, 'first row pin', 4, 4)
+  await expect(pinPill).toBeVisible({ timeout: TIMEOUT_MS })
+  await expect(pinPill).toHaveText(PIN_CHANNEL_NAME)
+  expect((await displays(pills)).filter(display => display !== 'none')).toEqual(['block'])
+  const pinBox = await boxOf(pinPill, 'first row pin pill')
+  expectAtPointer(pinBox, pinPoint, 'first row pin pill')
+  expectClearOfControl(pinBox, await boxOf(firstPin, 'first row pin'), 'first row pin pill')
+  expectInsideWindow(pinBox, viewport, 'first row pin pill')
+  const pinMoved = await parkOn(firstPin, 'first row pin', 12, 12)
+  expectAtPointer(await boxOf(pinPill, 'first row pin pill'), pinMoved, 'first row pin pill, followed')
 
   // --- AC3's other half, read WHILE that pill is up: the sidebar has not widened and the scroller has
   // gained no horizontal scroll. An out-of-flow box adds scrollable overflow only where it overflows right
@@ -483,7 +497,7 @@ test('a row control names itself in a pill that follows the pointer, clear of th
   const highRow = rows.nth(HIGH_ROW_INDEX)
   const highControl = highRow.locator('.channel-list__rename, .channel-list__save')
   const highPoint = await parkOn(highControl, 'high row control', 4, 4)
-  const highPill = highRow.locator('.channel-list__control-name')
+  const highPill = highControl.locator('.channel-list__control-name')
   await expect(highPill).toBeVisible({ timeout: TIMEOUT_MS })
   // Re-read AFTER the hover: this is what says the row is still where it was put, so the reads below are
   // still measuring the case it was set up for rather than one Playwright scrolled it into.
@@ -511,7 +525,20 @@ test('a row control names itself in a pill that follows the pointer, clear of th
   await scrollTreeTo(tree, 'top')
   await rows.first().locator('.channel-list__row-open').focus()
   await page.keyboard.press('Tab')
+  await expect(firstPin).toBeFocused()
+  await expect(pinPill).toBeVisible({ timeout: TIMEOUT_MS })
+  await expect(pinPill).toHaveText(PIN_CHANNEL_NAME)
+  await expect(firstPill).toBeHidden()
+  expect((await displays(pills)).filter(display => display !== 'none')).toEqual(['block'])
+  const focusedPin = await boxOf(firstPin, 'first row pin')
+  const focusedPinPill = await boxOf(pinPill, 'first row pin pill')
+  expectAtPointer(focusedPinPill,
+    { x: focusedPin.x + focusedPin.width, y: focusedPin.y + focusedPin.height }, 'first row pin pill, focused')
+  expectClearOfControl(focusedPinPill, focusedPin, 'first row pin pill, focused')
+  expectInsideWindow(focusedPinPill, viewport, 'first row pin pill, focused')
+  await page.keyboard.press('Tab')
   await expect(renames.first()).toBeFocused()
+  await expect(pinPill).toBeHidden()
   await expect(firstPill).toBeVisible({ timeout: TIMEOUT_MS })
   await expect(firstPill).toHaveText(EDIT_CHANNEL_NAME)
   expect((await displays(pills)).filter((display) => display !== 'none')).toEqual(['block'])

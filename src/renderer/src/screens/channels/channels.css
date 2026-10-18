@@ -1393,6 +1393,33 @@
   opacity: 0;
 }
 
+.channel-list__row:has(> .channel-list__pin) > .channel-list__row-open {
+  padding-right: calc(2 * var(--space-7));
+}
+
+/* Pin/unpin share the pen's hit area, one glyph slot to its left, and stay visible at rest. */
+.channel-list__pin {
+  position: absolute;
+  right: var(--space-7);
+  top: calc(50% - var(--space-3));
+  width: var(--space-7);
+  height: var(--space-6);
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-primary);
+  cursor: pointer;
+  opacity: 1;
+}
+.channel-list__pin:disabled { cursor: default; }
+.channel-list__pin > svg { display: block; }
+.channel-list__pin:enabled:hover .channel-list__control-name,
+.channel-list__pin:focus-visible .channel-list__control-name { display: block; }
+.channel-list__pin:focus-visible { outline: 1px solid var(--color-outline); }
+
 .channel-list__rename:focus-visible {
   outline: 1px solid var(--color-outline);
   opacity: 1;
@@ -1452,10 +1479,11 @@
   display: block;
 }
 
-/* The state layer follows the glyph, preserving the larger hit box and fixed name pill. */
+/* Keep the pin's enabled guard outside :is() so existing controls retain their size overrides. */
 :is(.channel-list__host-edit, .channel-list__workspace-edit, .channel-list__rename,
   .channel-list__chat-edit, .channel-list__host-add, .channel-list__workspace-create,
-  .channel-list__section-create, .channel-list__save):hover::before {
+  .channel-list__section-create, .channel-list__save):hover::before,
+.channel-list__pin:enabled:hover::before {
   content: '';
   position: absolute;
   left: 50%;
@@ -1481,8 +1509,13 @@
 
 :is(.channel-list__host-edit, .channel-list__workspace-edit, .channel-list__rename,
   .channel-list__chat-edit, .channel-list__host-add, .channel-list__workspace-create,
-  .channel-list__section-create, .channel-list__save) > svg {
+  .channel-list__section-create, .channel-list__save, .channel-list__pin) > svg {
   position: relative;
+}
+
+/* Adjacent hit areas retain the design's 20px glyph pitch: pin art sits at its box's right edge. */
+.channel-list__pin:enabled:hover::before {
+  left: calc(100% - var(--space-3) / 2);
 }
 
 /* #1172 — THE NAME PILL both trailing controls show on hover or keyboard focus (Figma Pill 347:6617).

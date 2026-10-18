@@ -6,6 +6,7 @@ import { encodeEnvelope } from '../src/main/transport/codec'
 const cases = [
   ['host-edit', 'host-edit'],
   ['section-create', 'section-create'],
+  ['pin', 'pin'],
   ['rename', 'rename'],
   ['chat-edit', 'chat-edit'],
   ['save', 'save'],
@@ -43,7 +44,7 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 800, height: 600 
       probe.remove()
       return result
     })
-    await mkdir('/tmp/builder-1865', { recursive: true })
+    await mkdir('/tmp/builder-2085', { recursive: true })
     for (const [source, target] of cases) {
       const original = page.locator(`.channel-list__${source}`).first()
       const originalClass = await original.getAttribute('class')
@@ -85,6 +86,13 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 800, height: 600 
       expect(layer.x).toBeCloseTo(before.glyph.x - 4, 1)
       expect(layer.y).toBeCloseTo(before.glyph.y - 4, 1)
       expect(await geometry(control)).toEqual(before)
+      if (target === 'pin') {
+        await control.evaluate(el => { (el as HTMLButtonElement).disabled = true })
+        await control.hover()
+        expect(await control.evaluate(el => getComputedStyle(el, '::before').content)).toBe('none')
+        await expect(pill).toBeHidden()
+        await control.evaluate(el => { (el as HTMLButtonElement).disabled = false })
+      }
       const pillBefore = await pill.boundingBox()
       await page.mouse.move(before.control.x + before.control.width / 2 + 1, before.control.y + before.control.height / 2 + 1)
       const pillAfter = await pill.boundingBox()
@@ -93,7 +101,7 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 800, height: 600 
       expect(pillAfter?.y).toBeCloseTo((pillBefore?.y ?? 0) + 1, 1)
       expect(await geometry(control)).toEqual(before)
       if (source === target) {
-        await page.screenshot({ path: `/tmp/builder-1865/${target}-${viewport.width}.png`, animations: 'disabled' })
+        await page.screenshot({ path: `/tmp/builder-2085/rework-${target}-${viewport.width}.png`, animations: 'disabled' })
       }
       if (source !== target && originalClass !== null) {
         await control.evaluate((el, classes) => {

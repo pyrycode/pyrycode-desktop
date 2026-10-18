@@ -233,7 +233,7 @@ aria-label="Conversations">` root, including under static server rendering.
 
 Sidebar mutations require the clicked row or host's status to be `connected`;
 missing, reconnecting, disconnected and error entries fail closed. This covers chat/channel
-creation, conversation rename and Save as channel. The open chat never determines
+creation, conversation rename, Save as channel and pin/unpin. The open chat never determines
 availability. Held rows remain selectable; host and section folds remain usable. The
 existing workspace dialog state has no sidebar entry point.
 
@@ -275,9 +275,9 @@ which now serves the Chats tree alone. Both pens draw from one `RowPenControl` s
 class tokens, handler) built in `renderBody` for the two row partitions — see [the row's hover-revealed
 control](channel-list-row-hover-control.md) for the shared markup.
 
-Since #1441 the two trailing-control sets are **not** disjoint by section: a Recent row carries both
-its own Save-as-channel chevron and this pen, while a Channels row carries the pen alone (there is
-nothing to save on an already-promoted row). `renderBody` passes `onSaveAsChannel` to the Recent
+A Chats row carries its own Save-as-channel chevron and pen, while a Channels row carries
+Pin/Unpin and the pen
+(there is nothing to save on an already-promoted row). `renderBody` passes `onSaveAsChannel` to the Recent
 `.map` alone and a pen handler to both maps, so at most two trailing controls render per row, never
 the Save-as-channel chevron on a Channels row. The container owns each dialog's open/name state as
 its own local `useState` pair, rendered as siblings of `ChannelListView`. See [Save-as-channel
@@ -325,8 +325,8 @@ comparison operands, never rendered as labels or attributes.
 
 Pins are host-local and nullable (`ConversationSummary.pinned_at?: string | null`, [Core
 \#3538](https://github.com/pyrycode/pyrycode/issues/3538)) — the daemon decides what's pinned, this
-screen only displays it; see [Conversation list store § Received pin
-state](conversation-list-store.md#received-pin-state-since-2084) for the decode. `partitionSidebar(rows,
+screen requests changes but derives placement only from received state; see
+[Conversation list store § Received pin state](conversation-list-store.md#received-pin-state-since-2084) for the decode. `partitionSidebar(rows,
 serverIds)` wraps `partitionActive`: it starts from the active Channels partition, keeps only rows
 stamped with a **saved** host id (`serverIds`, the same join `groupByServer` uses — an unattributed or
 unpaired-host stamp is never eligible) and a non-null `pinned_at`, and removes exactly those rows from
@@ -380,13 +380,72 @@ whether that host's connection has resolved yet.
 static suite: `partitionSidebar` ordering (fractional precision, invalid-after-valid, UTF-16 ties,
 eligibility, frozen input) and markup (heading placement, escaped suffix and fallbacks, exactly one
 pinned-vs-host-tree selection, connecting-vs-down-vs-error coloring, empty-section omission).
-[`e2e/sidebar-pinned.spec.ts`](../../../e2e/sidebar-pinned.spec.ts) is the one mounted scenario: external
+[`e2e/sidebar-pinned.spec.ts`](../../../e2e/sidebar-pinned.spec.ts) is the mounted display scenario: external
 and correlated `conversation_updated` pushes that add/remove/reorder only the emitting host's pins,
 host-attributed rename and selection across a shared conversation ID, measured geometry against Figma,
 computed disconnected/error styling, and an actual profile relaunch that observes a successful saved
-list before quitting rather than re-seeding one. Local pin/unpin controls are a separate ticket
-(#2085); this screen only ever displays a pin the host already reports, including one changed from
-another device.
+list before quitting rather than re-seeding one. Local actions use the same authoritative placement
+path described below, including changes made from another device.
+
+#### Pin and unpin actions
+
+Every Channels row has a visible-at-rest **Pin channel** button immediately left of its pen;
+Pinned rows have **Unpin channel** in that slot. Chats have no pin action. The labels are both
+accessible names and control name pills. Inline Font Awesome Free thumbtack/thumbtack-slash paths
+render at 12px in `--color-primary`, matching Figma `869:13089` / `872:9638` / `872:9649`.
+The existing `.channel-list__rename` token still identifies the Edit channel pen, whose hover/focus
+reveal and dialog remain intact. Open, pin/unpin and edit are sibling buttons; activating a pin
+neither opens nor edits the channel. Connected rows have keyboard order **open → pin/unpin → edit**.
+
+Pin and pen have adjacent, non-overlapping **28×24px** hit areas. The title reserves 56px for them,
+so long names ellipsize before either button. Right-aligning the pin glyph within its hit area
+preserves the design's **20px glyph pitch** without borrowing the Chats chevron/pen's overlapping
+slots. A visible glyph alone cannot prove that both controls remain independently clickable.
+
+Both pin actions are disabled unless that row's host is `connected`, including while `connecting`.
+The container reads statuses and passes display/action inputs to pure `Row`; its callback rechecks
+`canMutateHost(row.serverId)` immediately before dispatch, so a stale rendered handler cannot write
+after disconnect. Pinned `disconnected`/`error` rows retain the error-colored name, host suffix and
+dot at 0.6 row opacity; `connecting` keeps normal row appearance while Unpin remains disabled.
+
+The [pin write path](daemon-connection-methods.md#channel-pin-writes) sends once through the owning
+host. No optimistic timestamp or placement is stored: held confirmation leaves the section and
+order unchanged. Correlated or unsolicited `conversationUpdated` refreshes only the emitting host;
+the authoritative list then moves a pin into Pinned or returns an unpin to its host's alphabetical
+Channels list. The last unpin removes Pinned and its rule. Refusals (including older hosts'
+`protocol.unknown_type`) and local encode/send failures leave placement unchanged. Repeated pinning
+preserves the timestamp on the host; the client never mints one or retries.
+
+#### Pin-action verification
+
+[`e2e/sidebar-pin-actions.spec.ts`](../../../e2e/sidebar-pin-actions.spec.ts),
+`sidebar pin actions route uniquely and wait for owning-host confirmation`, drives the visible
+controls through real preload/IPC/registry and encrypted fake connections across two hosts.
+It covers delayed confirmation, repeated pinning, unsolicited host-local refresh, refusal,
+unknown/mismatched/ambiguous ownership, stale activation, disconnected/error/connecting states and
+recovery. Received list events and a rendered-frame barrier fence no-send/no-move assertions;
+a short wait alone would allow those checks to pass before command processing.
+
+Recorded Linux x64 evidence for revision `369b9108` (2026-10-18), from
+[the verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2110#issuecomment-6255332291)
+and the retained dispatcher gate report:
+
+- Complete configured Playwright gate: **499 executed, 499 passed, 0 failed, 5 skipped**.
+  The named pin-action scenario above passed, as did both hover viewport cases,
+  `a row control names itself in a pill that follows the pointer, clear of the control` and
+  `a Channels row holds the Edit channel pen inside the same 24px row`.
+- Captured-client subset in that gate: **28 executed, 28 passed, 0 failed, 1 skipped**
+  (the existing system-prompt-reset exclusion).
+- Builder's guarded rename/promote/archive lifecycle replay: **3 executed, 3 passed,
+  0 failed, 0 skipped**, with 0 forbidden launches.
+- Dispatcher unit gate 4: **9,366 executed, 9,366 passed, 0 failed, 3 skipped**.
+  This retained count supersedes the verdict comment's different unit total; the supplied
+  report does not enumerate individual unit results.
+
+These are recorded fake-transport and captured replay results, not fresh current-provider live
+runs. No live acceptance was required for this command/UI slice; macOS was outside this Linux
+ticket's verification scope. The verifier also compared Electron captures at 1280×800 and 800×600
+with Figma, including long-title clearance and disabled host-down Unpin.
 
 ### Workspace data
 
@@ -505,12 +564,12 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
 
 #### Row control hover
 
-Each edit pen, section-create plus and Save-as-channel chevron paints its own
+Each edit pen, section-create plus, enabled pin/unpin and Save-as-channel chevron paints its own
 `--color-state-hover` rectangle with `--radius-xs` corners when the control itself
 is hovered. Row hover alone reveals the glyph without this layer; keyboard-only
 focus retains the existing outline and name pill without painting the layer.
 The layer extends 4px beyond each side of the SVG box: 20px square for the 12px
-conversation pens/chevron, 22px for the 14px host/workspace pens and 24px for
+conversation pens/chevron/pin, 22px for the 14px host/workspace pens and 24px for
 the 16px pluses.
 
 The shared `:hover::before` rule covers `.channel-list__host-edit`,
@@ -518,6 +577,11 @@ The shared `:hover::before` rule covers `.channel-list__host-edit`,
 `.channel-list__host-add`, `.channel-list__workspace-create`,
 `.channel-list__section-create` and `.channel-list__save`. Host-add and workspace
 controls remain retained CSS surfaces without sidebar entry points.
+Pin uses a separate `.channel-list__pin:enabled:hover::before` selector, with its 20px layer centered
+on the right-aligned glyph. Disabled pin/unpin paints no hover layer and reveals no pointer pill.
+Keep `:enabled` outside the shared `:is(...)`: its specificity would otherwise apply to every
+argument and override the later 22px edit / 24px create sizes. The hover spec checks those sizes
+and disabled pin behavior; name-pill and row-geometry specs retain open → pin → edit focus coverage.
 The absolutely positioned, non-interactive layer sits over the row fill and below
 the relatively positioned SVG. Sizing the paint from the larger hit box would
 give the wrong glyph clearance; changing button padding or dimensions would

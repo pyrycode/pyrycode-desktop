@@ -30,6 +30,7 @@ import type {
   ChangeWorkspacePayload,
   SetSystemPromptPayload,
   SetConversationMutedPayload,
+  SetConversationPinnedPayload,
   CreateWorkspaceFolderPayload,
   RenameWorkspacePayload,
   SetSessionSettingsPayload,
@@ -368,6 +369,7 @@ export type RendererCommand = (
   // Routed by conversation (#1595). The client-only attemptId is required and correlates exactly one
   // content-free conversationMuteResult; it never reaches the wire.
   | { type: 'setConversationMuted'; payload: SetConversationMutedPayload; attemptId: string }
+  | { type: 'setConversationPinned'; serverId: string; payload: SetConversationPinnedPayload }
   | { type: 'markConversationRead'; serverId: string; payload: { conversation_id: string; up_to: number } }
   | { type: 'createWorkspaceFolder'; payload: CreateWorkspaceFolderPayload; serverId?: string }
   | { type: 'renameWorkspace'; payload: RenameWorkspacePayload; serverId?: string; attemptId?: string }
@@ -612,6 +614,10 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       return 'payload' in value && isSetConversationMutedPayload(value.payload) &&
         'attemptId' in value && typeof value.attemptId === 'string' &&
         value.attemptId.length > 0 && value.attemptId.length <= 128
+    case 'setConversationPinned':
+      return 'serverId' in value && typeof value.serverId === 'string' &&
+        value.serverId.length > 0 && value.serverId.length <= 1024 &&
+        'payload' in value && isSetConversationPinnedPayload(value.payload)
     case 'createWorkspaceFolder':
       return (
         'payload' in value && isCreateWorkspaceFolderPayload(value.payload) && hasValidServerId(value)
@@ -1173,6 +1179,14 @@ function isSetConversationMutedPayload(value: unknown): value is SetConversation
   if (keys.length !== 2 || !('conversation_id' in value) || !('muted' in value)) return false
   if (typeof value.conversation_id !== 'string' || value.conversation_id.length === 0) return false
   return value.muted === true || value.muted === false
+}
+
+function isSetConversationPinnedPayload(value: unknown): value is SetConversationPinnedPayload {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const keys = Reflect.ownKeys(value)
+  return keys.length === 2 && keys.includes('conversation_id') && keys.includes('pinned') &&
+    'conversation_id' in value && typeof value.conversation_id === 'string' && value.conversation_id.length > 0 &&
+    'pinned' in value && (value.pinned === true || value.pinned === false)
 }
 
 /** The untrusted renderer→main boundary guard for the newSession payload (#1217). The

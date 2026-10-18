@@ -6,6 +6,8 @@ import { capturePairedApp } from './fixtures/capturePairedApp'
 import { mintChatInWorkspace } from './fixtures/mintChatRow'
 import { pairAnotherServerFromSettings } from './fixtures/pairingArrival'
 import { installHeldThreadRead } from './fixtures/heldThreadRead'
+import { installSavedTraversalReads } from './fixtures/savedTraversalReads'
+import { readMainProcess } from './fixtures/mainProcessRead'
 
 const stamp = '2026-10-15T00:00:00Z'
 const item = (id: number, text: string): ThreadItem => ({ id, rev: 1, order: id, kind: 'assistant_message',
@@ -51,12 +53,10 @@ for (const invalidation of [false, true]) for (const offline of [false, true]) t
   if (offline) await first.forwarder.close()
   const resumed = await launchPairedApp({ threadMode: 'native' }, { reuseUserDataDir: first.userDataDir,
     onLaunched: async app => {
-      await installHeldThreadRead(app, 'beforeThreadPage', 2)
-      await app.evaluate(({ ipcMain }) => {
-        ;(globalThis as any).savedReads = 0
-        ipcMain.on('pyry:diagnostic', (_event, record) => {
-          if (record.event === 'history-timeline-restore' && record.code === 'stored') (globalThis as any).savedReads++
-        })
+      const held = await installHeldThreadRead(app, 'beforeThreadPage', 2)
+      const saved = await installSavedTraversalReads(app)
+      await testInfo.attach('saved-traversal-setup', {
+        body: JSON.stringify({ held, saved }), contentType: 'application/json'
       })
     } })
   const { page } = resumed
@@ -68,7 +68,7 @@ for (const invalidation of [false, true]) for (const offline of [false, true]) t
   await expect.poll(() => scroller.evaluate(el => el.scrollTop)).toBeLessThan(10)
   for (let n = 0; n < 3; n++) {
     await scroller.press('ArrowUp')
-    await expect.poll(() => resumed.app.evaluate(() => (globalThis as any).savedReads)).toBe(n + 2)
+    await expect.poll(() => readMainProcess(resumed.app, () => (globalThis as any).savedReads), { timeout: 5_000 }).toBe(n + 2)
   }
   if (invalidation) await page.evaluate(async id => {
     const saved = await window.pyry.chatHistory({ operation: 'readThread', serverId: 'fake-daemon', conversationId: id })
@@ -82,12 +82,12 @@ for (const invalidation of [false, true]) for (const offline of [false, true]) t
   const anchor = page.locator(`[data-read-row="${invalidation ? 51 : 50}"]`)
   await anchor.evaluate(el => el.scrollIntoView({ block: 'start' }))
   await scroller.hover(); await page.mouse.wheel(0, -1)
-  await expect.poll(() => resumed.app.evaluate(() => (globalThis as any).heldThreadReads)).toBe(1)
+  await expect.poll(() => readMainProcess(resumed.app, () => (globalThis as any).heldThreadReads), { timeout: 5_000 }).toBe(1)
   const offset = () => anchor.evaluate(el => el.getBoundingClientRect().top)
   for (let n = 0; n < 5; n++) await page.mouse.wheel(0, -1)
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
   const before = await offset()
-  expect(await resumed.app.evaluate(() => (globalThis as any).heldThreadReads)).toBe(1)
+  await expect.poll(() => readMainProcess(resumed.app, () => (globalThis as any).heldThreadReads), { timeout: 5_000 }).toBe(1)
   await resumed.app.evaluate(({ ipcMain }) => ipcMain.emit('test:release-thread-read'))
   await expect(page.locator('[data-read-row="1"]')).toHaveCount(1)
   await expect.poll(offset).toBeCloseTo(before, 0)

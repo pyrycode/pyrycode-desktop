@@ -144,8 +144,36 @@ function remarkHostedLinks() {
     visit(tree)
   }
 }
-// Stable list: the subset registers syntax; the second plugin only narrows existing destinations.
-const remarkPlugins = [remarkGfmSubset, remarkHostedLinks]
+
+/** Link a whole allowed URL in inline code without changing its parsed label or source range. */
+function remarkCodeSpanLinks() {
+  return (tree: Root): void => {
+    const visit = (node: Nodes): void => {
+      if (node.type === 'link' || node.type === 'linkReference' || !('children' in node)) return
+      node.children.forEach((child, index) => {
+        if (child.type !== 'inlineCode') {
+          visit(child)
+          return
+        }
+        const candidate = child.value.trim()
+        if (/\s/.test(candidate)) return
+        const url = allowedLinkHref(candidate)
+        if (url === null) return
+        // Pending presentation must unwrap the synthetic anchor and code over the same source span.
+        node.children[index] = {
+          type: 'link', url, children: [child], position: child.position,
+          // mdast-to-hast normally URI-encodes link.url; preserve the admitted original here.
+          // urlTransform and webLink still enforce the existing policy before React escapes the href.
+          data: { hProperties: { href: url } }
+        }
+      })
+    }
+    visit(tree)
+  }
+}
+
+// Stable list: register syntax, narrow hosted destinations, then link whole inline-code URLs.
+const remarkPlugins = [remarkGfmSubset, remarkHostedLinks, remarkCodeSpanLinks]
 
 const LANGUAGE_PREFIX = 'language-'
 

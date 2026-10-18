@@ -84,3 +84,7 @@ None. Preserve mdast code and wrapper positions to satisfy the existing pending 
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-18
+
+## Revisions
+
+- 2026-10-18: The verbatim-href regression with Unicode and HTML-sensitive characters exposed `mdast-util-to-hast` URI-encoding `link.url`. Set the wrapper's `data.hProperties.href` to the same already-admitted trimmed URL so the original reaches the unchanged `urlTransform` and `webLink` gates, then normal React escaping. The security verdict remains PASS: no additional attributes or unchecked destinations are forwarded.

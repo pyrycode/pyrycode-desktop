@@ -12605,6 +12605,45 @@ describe('workspace rename attempt results', () => {
   })
 })
 
+describe('channel pin writes', () => {
+  it('requires authentication, rebuilds exact fields and sends each action once', async () => {
+    const { connection, drivers } = build()
+    const payload = { conversation_id: 'conv-42', pinned: false, serverId: 'smuggled' }
+    connection.setConversationPinned(payload)
+    connection.start(); await tick()
+    connection.setConversationPinned(payload)
+    expect(drivers[0].sent).toHaveLength(0)
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    for (const pinned of [true, true, false]) connection.setConversationPinned({ ...payload, pinned })
+    expect(drivers[0].sent.map(bytes => decodeEnvelope(bytes))).toEqual([true, true, false].map((pinned, i) => ({
+      id: i + 2, ts: FIXED_TS, type: 'set_conversation_pinned', payload: { conversation_id: 'conv-42', pinned }
+    })))
+    drivers[0].emit({ type: 'relay-link-down', code: 1006 })
+    connection.setConversationPinned(payload)
+    expect(drivers[0].sent).toHaveLength(3)
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    connection.setConversationPinned(payload)
+    expect(drivers[0].sent).toHaveLength(4)
+    connection.stop()
+    connection.setConversationPinned(payload)
+    expect(drivers[0].sent).toHaveLength(4)
+  })
+  it('contains encode and send failures without an authoritative mutation or leaked payload', async () => {
+    const { log, records } = captureLog()
+    const { connection, drivers, sink } = build({ throwOnSend: true, diagnosticLog: log })
+    connection.start(); await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    expect(() => connection.setConversationPinned({ conversation_id: 'secret', pinned: true })).not.toThrow()
+    expect(() => connection.setConversationPinned({ conversation_id: 'x'.repeat(MAX_PLAINTEXT_BYTES), pinned: true })).not.toThrow()
+    expect(emitted(sink).filter(e => e.type === 'conversationUpdated' || e.type === 'conversationsReceived')).toEqual([])
+    expect(records.filter(r => r.event === 'conversation-pin-failed')).toEqual([
+      { event: 'conversation-pin-failed', code: 'local-send' }, { event: 'conversation-pin-failed', code: 'local-send' }
+    ])
+    expect(JSON.stringify(records)).not.toContain('secret')
+    connection.stop()
+  })
+})
+
 describe('conversation mute write results (#1595)', () => {
   const RECORD = {
     id: 'conv-42', is_promoted: true, name: 'Kitchen', cwd: '/home/user/project',

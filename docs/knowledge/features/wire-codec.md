@@ -58,6 +58,29 @@ Mobile relies on Kotlin runtime defaults (`encodeDefaults = true`). TS interface
 - **Non-literal defaults need one constructor.** `makeHelloClientPayload` injects `protocol_versions: ['v2']` (reusing `PROTOCOL_VERSION` from `types.ts`) and the fixed `client_features` report below. `capabilities` is a caller argument defaulting to `[]`; production `loadDialConfig` in `daemonConnection` supplies `['interactive', 'multi_agent', 'stop_background_task', 'hosted_apps_v1']` through [hello exchange](hello-exchange.md). `interactive` enables the structured stream; `multi_agent` unlocks Codex conversations, frames and model rows on supporting v0.27.0+ daemons; `stop_background_task` detects support for that verb; `hosted_apps_v1` enables host-scoped discovery/resource negotiation with the background handlers installed. The advertised set belongs at the caller: the [capability probe](real-claude-liveness-e2e.md#capability-gated-skip--the-one-check-that-runs-after-the-daemon-exists) supplies exactly its spec's required set. Optional `lastEventId` and legacy `lastSeenTs` become `last_event_id` and `last_seen_ts` only when provided, never `null`. `HelloClientPayload` is the only encode-side payload with non-literal defaults, so it has one constructor. `Envelope` has no defaulted fields; callers build it directly.
 - **`client_version` gets an app-name prefix, added once, here.** `input.clientVersion` is the bare app version (`app.getVersion()`, e.g. `"0.1.0"`); the constructor writes `client_version` as `` `${CLIENT_APP_NAME}/${input.clientVersion}` `` (`CLIENT_APP_NAME = 'pyrycode-desktop'`), the `<app>/<MAJOR>.<MINOR>.<PATCH>` format the daemon parses (pyrycode `docs/protocol-mobile.md` § `hello`, "`client_version` format"; \#1612). The prefix is added inside this constructor rather than by the caller because the same bare `clientVersion` also feeds the relay `User-Agent` header and the session-start log banner, and prefixing it upstream would double-prefix both (see [daemon connection lifecycle](daemon-connection-lifecycle.md) `clientVersion` field). Once a daemon release enforces a minimum `client_version` it cannot parse, an unprefixed hello is rejected — desktop shipped this format ahead of that gate.
 
+### Channel pin protocol
+
+`SetConversationPinnedPayload` and the `set_conversation_pinned` envelope name mirror
+[Core #3538](https://github.com/pyrycode/pyrycode/issues/3538). The request body is exactly:
+
+```json
+{ "conversation_id": "channel-id", "pinned": false }
+```
+
+Both fields are required: `conversation_id` is a nonempty string and `pinned` is a strict boolean,
+`true` to pin and a present `false` to unpin. Do not omit false, add `serverId`, or send `pinned_at`.
+`buildSetConversationPinned` in `src/main/transport/setConversationPinnedEnvelope.ts` encodes the
+ordinary `{ id, type: 'set_conversation_pinned', ts, payload }` envelope; the authenticated
+connection rebuilds the payload from named fields before calling it. Envelope units assert exact
+fields for both boolean values; the [IPC admission boundary](daemon-connection-methods.md#channel-pin-writes)
+rejects malformed payloads and carries observed-host attribution separately.
+
+The host owns pin persistence: repeated pinning preserves the original timestamp, unpinning clears
+it, and pinning a non-channel is refused. Desktop uses `conversation_updated` followed by the
+owning host's authoritative re-list to read `pinned_at` and change placement. An error, including an
+older host's `protocol.unknown_type`, leaves placement unchanged; no pin-specific result event or
+capability negotiation is introduced. See [the sidebar contract](channel-list.md#pin-and-unpin-actions).
+
 ### Desktop feature report
 
 `HelloClientPayload.client_features?: string` mirrors the daemon's optional v2

@@ -31,6 +31,12 @@ and wire filtering to that connection and its builder. Its registry test records
 the forwarded object on alpha and proves beta receives nothing. See
 [Switch-agent request](switch-agent-request.md) for the two-host preload-to-wire proof.
 
+`setConversationPinned(payload)` likewise has a `viewOf` delegate, used after the
+conversation router validates the row's observed host and unique ownership. The registry
+forwards the payload unchanged once; the selected connection rebuilds the two wire fields
+and checks authentication. Registry unit coverage proves the other host receives no pin call;
+[the mounted sidebar scenario](channel-list.md#pin-action-verification) exercises the complete path.
+
 ## The entry set and its one invariant
 
 The registry holds an ordered `Entry[]` (`{ serverId, record, connection }`), and maintains one rule:

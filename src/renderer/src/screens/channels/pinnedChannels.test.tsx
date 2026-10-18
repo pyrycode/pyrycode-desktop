@@ -48,10 +48,22 @@ function markup(conversations: readonly ConversationSummary[], extra: Partial<Co
     hostLabels={new Map([['a', '<Host>']])} openConversationId="same" openServerId="a"
     onOpen={noop} onOpenSettings={noop} onOpenArchive={noop} onPairNewHost={noop}
     onCreateChat={noop} onCreateChannel={noop} onEditWorkspace={noop} onEditHost={noop}
-    onAddWorkspace={noop} onSaveAsChannel={noop} onRename={noop} onEditChannel={noop} {...extra} />)
+    onAddWorkspace={noop} onSaveAsChannel={noop} onRename={noop} onEditChannel={noop} onSetPinned={noop} {...extra} />)
 }
 
 describe('pinned row markup', () => {
+  it('renders pin/unpin before the pen and never on chats', () => {
+    const html = markup([row('pin'), row('normal', null), { ...row('chat', null), is_promoted: false }])
+    expect(html.match(/aria-label="Pin channel"/g)).toHaveLength(1)
+    expect(html.match(/aria-label="Unpin channel"/g)).toHaveLength(1)
+    expect(html.indexOf('aria-label="Unpin channel"')).toBeLessThan(html.indexOf('class="channel-list__rename"'))
+  })
+  it.each(['connecting', 'disconnected', 'error'] as const)('disables both actions while %s', type => {
+    const status: ConnectionStatus = type === 'error'
+      ? { type, error: { code: 'transport', message: 'Offline', retryable: true } } : { type }
+    const html = markup([row('pin'), row('normal', null)], { statuses: new Map([['a', status]]) })
+    expect(html.match(/class="channel-list__pin"[^>]*disabled=""/g)).toHaveLength(2)
+  })
   it('renders one global section before hosts with escaped suffix, fallbacks, selection and connected-only pens', () => {
     const html = markup([row('same'), { ...row('same', '', 'b'), name: null }])
     expect(html.indexOf('>Pinned<')).toBeLessThan(html.indexOf('channel-list__host'))

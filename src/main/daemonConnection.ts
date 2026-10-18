@@ -49,6 +49,7 @@ import { encodeEnvelope, parseJsonObject } from './transport/codec'
 import { buildRequestSystemPrompt } from './transport/requestSystemPromptEnvelope'
 import { buildSetSystemPrompt } from './transport/setSystemPromptEnvelope'
 import { buildSetConversationMuted } from './transport/setConversationMutedEnvelope'
+import { buildSetConversationPinned } from './transport/setConversationPinnedEnvelope'
 import { buildSwitchAgent } from './transport/switchAgentEnvelope'
 import { buildNewSession } from './transport/newSessionEnvelope'
 import { buildListConversations } from './transport/listConversationsEnvelope'
@@ -115,6 +116,7 @@ import {
   type RenameWorkspacePayload,
   type SetSystemPromptPayload,
   type SetConversationMutedPayload,
+  type SetConversationPinnedPayload,
   MAX_SYSTEM_PROMPT_BYTES,
   type RequestAttachmentPayload,
   type ReadWorkspaceFilePayload,
@@ -581,6 +583,8 @@ export interface DaemonConnection {
    * nothing and is cleared on the next dial. The attempt id never reaches the wire. Never throws.
    */
   setConversationMuted(payload: SetConversationMutedPayload, attemptId: string): void
+  /** One authenticated write; authoritative conversationUpdated/re-list owns placement. */
+  setConversationPinned(payload: SetConversationPinnedPayload): void
   /**
    * Encrypt a payload-carrying `set_session_settings` control envelope onto the live session — asks the
    * daemon to change one session's model / reasoning effort / YOLO (pyrycode #844/#845). Honors the
@@ -3841,6 +3845,21 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  function setConversationPinned(payload: SetConversationPinnedPayload): void {
+    if (driver === null || !authenticated) {
+      deps.diagnosticLog?.event({ event: 'conversation-pin-refused', code: 'not-connected' })
+      return
+    }
+    try {
+      const bytes = buildSetConversationPinned({ id: nextEnvelopeId++, ts: now(),
+        payload: { conversation_id: payload.conversation_id, pinned: payload.pinned } })
+      driver.sendMessage(bytes)
+      deps.diagnosticLog?.event({ event: 'conversation-pin-sent' })
+    } catch {
+      deps.diagnosticLog?.event({ event: 'conversation-pin-failed', code: 'local-send' })
+    }
+  }
+
   function setConversationMuted(payload: SetConversationMutedPayload, attemptId: string): void {
     if (driver === null) {
       conversationMuteResult(attemptId, 'rejected')
@@ -4438,6 +4457,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     setSystemPrompt,
     markConversationRead,
     setConversationMuted,
+    setConversationPinned,
     setSessionSettings,
     answerModal,
     cancelModal,

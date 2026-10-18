@@ -24,7 +24,7 @@ export interface ThreadQueryDeps {
 }
 type Scope = { id: string; restorePending: boolean; catchUp: boolean; older: boolean; recovery: boolean; resetRecovery: boolean;
   ready: boolean; exhausted: boolean; state: ThreadQueryState }
-type Pending = { scope: Scope; requestId: string; query: ThreadQuery; generation: symbol | undefined;
+type Pending = { scope: Scope; requestId: string; query: Exclude<ThreadQuery, { type: 'thread_read_tool_body' }>; generation: symbol | undefined;
   recovery: boolean; resetRecovery: boolean; cancelled: boolean; sent: boolean; captured?: { epoch: string; version: number };
   batch?: NonNullable<ReturnType<ThreadItemStore['beginBatch']>>; timer?: ReturnType<typeof setTimeout> }
 type Host = { connected: boolean; scope?: Scope; pending?: Pending }
@@ -100,6 +100,7 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
     if (host === null) return
     if (!p || p.requestId !== event.requestId || p.scope.id !== event.conversationId) return
     if (event.type === 'threadQueryFailed') { fail(host, h, p, event.reason); return }
+    if (event.reply.type === 'thread_tool_body') return
     const reply = event.reply, value = reply.payload
     if (value.conversation_id !== p.scope.id) return
     deadline(host, h, p)

@@ -28,9 +28,12 @@ export type ThreadUpdate =
 export type ThreadRepairReason = 'malformed' | 'sequence' | 'metadata' | 'limit' | 'final-length' | 'digest' | 'reconstructed' | 'expired'
 
 export type ThreadQuery =
+  | { type: 'thread_read_tool_body'; payload: { conversation_id: string; epoch: string; item_id: number; expected_rev: number } }
   | { type: 'thread_catch_up'; payload: { conversation_id: string; epoch: string; version: number; limit?: number } }
   | { type: 'thread_page'; payload: { conversation_id: string; before_order: number; limit?: number } }
 export type ThreadReply =
+  | { type: 'thread_tool_body'; payload: Routing & { item_id: number; rev: number; kind: 'tool_call' | 'agent' } &
+      ({ content: Record<string, unknown>; final: false } | { final: true }) }
   | { type: 'thread_items'; payload: Routing & { items: ThreadItem[]; final: false } }
   | { type: 'thread_items'; payload: Routing & { items: []; final: true } &
       ({ from_version: number } | { lower_order: number; upper_order: number; continuation: number; older_exists: boolean }) }

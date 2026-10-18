@@ -27,6 +27,15 @@ function logical(type: string, p: unknown): ThreadUpdate | ThreadReply | null {
   if (!record(p) || !routing(p)) return null
   const { conversation_id, epoch, version } = p
   if (typeof conversation_id !== 'string' || typeof epoch !== 'string' || !number(version)) return null
+  if (type === 'thread_tool_body') {
+    if (own(p, 'continuation') || own(p, 'base_rev') || !epoch || !number(p.item_id) || p.item_id === 0 || !number(p.rev) || p.rev === 0 ||
+        (p.kind !== 'tool_call' && p.kind !== 'agent')) return null
+    const route: { conversation_id: string; epoch: string; version: number; item_id: number; rev: number; kind: 'tool_call' | 'agent' } =
+      { conversation_id, epoch, version, item_id: p.item_id, rev: p.rev, kind: p.kind }
+    if (p.final === false && record(p.content)) return { type, payload: { ...route, content: p.content, final: false } }
+    if (p.final === true && !own(p, 'content')) return { type, payload: { ...route, final: true } }
+    return null
+  }
   if (type === 'thread_item_added' && fullItem(p.item)) {
     return { type, payload: { conversation_id, epoch, version, item: p.item } }
   }
@@ -63,21 +72,25 @@ type Part = { conversation_id: string; epoch: string; version: number; item_id: 
   base_rev?: number; data: string; continuation: { update_id: string; index: number; offset: number; total_bytes: number; final: boolean } }
 function part(type: string, p: unknown): p is Part {
   if (!record(p) || !routing(p) || !number(p.item_id) || !number(p.rev) ||
-    ((type === 'thread_item_added' || type === 'thread_items') ? own(p, 'base_rev') : !number(p.base_rev)) ||
+    ((type === 'thread_item_added' || type === 'thread_items' || type === 'thread_tool_body') ? own(p, 'base_rev') : !number(p.base_rev)) ||
     typeof p.data !== 'string' || p.data === '' || Buffer.from(p.data).toString('utf8') !== p.data ||
     !record(p.continuation)) return false
   if (type === 'thread_items' && ['items', 'final', 'from_version', 'lower_order', 'upper_order', 'older_exists'].some(k => own(p, k))) return false
+  if (type === 'thread_tool_body' && ['content', 'kind', 'final'].some(k => own(p, k))) return false
   const c = p.continuation
   return typeof c.update_id === 'string' && /^[a-f0-9]{64}$/.test(c.update_id) &&
     number(c.index) && number(c.offset) && number(c.total_bytes) && c.total_bytes > 0 && typeof c.final === 'boolean'
 }
 function metadata(type: string, p: Part, envelope: Envelope): string {
   return JSON.stringify([type, p.conversation_id, p.epoch, p.version, p.item_id, p.rev,
-    own(p, 'base_rev'), p.base_rev, p.continuation.total_bytes, own(envelope, 'session_id'), envelope.session_id, envelope.in_reply_to])
+    own(p, 'base_rev'), p.base_rev, p.continuation.total_bytes, own(envelope, 'session_id'), envelope.session_id,
+    own(envelope, 'conversation_id'), envelope.conversation_id, envelope.in_reply_to])
 }
 function matches(update: ThreadUpdate | ThreadReply, p: Part): boolean {
   const u = update.payload
   if (update.type === 'thread_reset') return false
+  if (update.type === 'thread_tool_body') return !update.payload.final && u.conversation_id === p.conversation_id &&
+    u.epoch === p.epoch && u.version === p.version && update.payload.item_id === p.item_id && update.payload.rev === p.rev
   if (update.type === 'thread_items') return update.payload.final === false && update.payload.items.length === 1 &&
     u.conversation_id === p.conversation_id && u.epoch === p.epoch && u.version === p.version &&
     update.payload.items[0].id === p.item_id && update.payload.items[0].rev === p.rev
@@ -91,24 +104,38 @@ export function createThreadUpdateReceiver(deliver: (event: ThreadDelivery) => v
   type Assembly = { request?: number; metadata: string; index: number; bytes: number; data: Buffer; timer: ReturnType<typeof setTimeout> | undefined }
   const pending = new Map<string, Assembly>()
   let buffered = 0
-  const queries = new Map<number, { requestId: string; query: ThreadQuery; captured?: { epoch: string; version: number } }>()
+  const queries = new Map<number, { requestId: string; query: ThreadQuery; captured?: { epoch: string; version: number };
+    body?: string; timer?: ReturnType<typeof setTimeout> }>()
   function fail(id: number, reason: ThreadQueryFailure): boolean {
     const q = queries.get(id)
     if (!q) return false
     queries.delete(id)
+    clearTimeout(q.timer)
     for (const [key, a] of pending) if (a.request === id) release(key)
     log?.event({ event: 'thread-query-failed', code: reason })
     deliver({ kind: 'thread-query-failed', conversationId: q.query.payload.conversation_id, requestId: q.requestId, inReplyTo: id, reason })
     return true
   }
   function publish(update: ThreadUpdate | ThreadReply, envelope: Envelope): void {
-    if (update.type !== 'thread_items' && update.type !== 'thread_reset') {
+    if (update.type !== 'thread_items' && update.type !== 'thread_reset' && update.type !== 'thread_tool_body') {
       deliver({ kind: 'thread-update', update, envelope }); return
     }
     const id = envelope.in_reply_to, q = id === undefined ? undefined : queries.get(id)
     if (id === undefined || !q) return
     const p = update.payload
     if (p.conversation_id !== q.query.payload.conversation_id) { fail(id, 'metadata'); return }
+    if (update.type === 'thread_tool_body') {
+      const v = update.payload, request = q.query
+      const capture = JSON.stringify([v.epoch, v.version, v.item_id, v.rev, v.kind,
+        own(envelope, 'session_id'), envelope.session_id, own(envelope, 'conversation_id'), envelope.conversation_id])
+      if (request.type !== 'thread_read_tool_body' || request.payload.epoch !== v.epoch ||
+          request.payload.item_id !== v.item_id || request.payload.expected_rev !== v.rev ||
+          (envelope.conversation_id !== undefined && envelope.conversation_id !== v.conversation_id) ||
+          (v.final ? q.body !== capture || [...pending.values()].some(a => a.request === id) : q.body !== undefined)) {
+        fail(id, 'metadata'); return
+      }
+      if (v.final) { queries.delete(id); clearTimeout(q.timer) } else q.body = capture
+    } else if (q.query.type === 'thread_read_tool_body') { fail(id, 'metadata'); return }
     if (update.type === 'thread_items') {
       if ((q.captured && (q.captured.epoch !== p.epoch || q.captured.version !== p.version)) ||
           (q.query.type === 'thread_catch_up' && q.query.payload.version > 0 && q.query.payload.epoch !== p.epoch)) {
@@ -125,7 +152,7 @@ export function createThreadUpdateReceiver(deliver: (event: ThreadDelivery) => v
         }
         queries.delete(id)
       }
-    } else {
+    } else if (update.type === 'thread_reset') {
       queries.delete(id)
       for (const [key, a] of pending) if (a.request === id) release(key)
     }
@@ -146,7 +173,16 @@ export function createThreadUpdateReceiver(deliver: (event: ThreadDelivery) => v
     deliver({ kind: 'thread-repair', conversationId, reason })
   }
   return {
-    register(id: number, requestId: string, query: ThreadQuery): void { queries.set(id, { requestId, query }) },
+    register(id: number, requestId: string, query: ThreadQuery): boolean {
+      queries.set(id, { requestId, query })
+      if (query.type === 'thread_read_tool_body') {
+        if ([...queries.values()].filter(q => q.query.type === 'thread_read_tool_body').length > 32) { fail(id, 'limit'); return false }
+        const q = queries.get(id)
+        if (q) q.timer = setTimeout(() => fail(id, 'expired'), 30000)
+      }
+      return true
+    },
+    cancel(requestId: string): void { for (const [id, q] of queries) if (q.requestId === requestId) fail(id, 'interrupted') },
     fail,
     reset(): void {
       for (const id of queries.keys()) fail(id, 'interrupted')
@@ -155,7 +191,7 @@ export function createThreadUpdateReceiver(deliver: (event: ThreadDelivery) => v
     },
     receive(envelope: Envelope): void {
       const p = envelope.payload
-      const history = envelope.type === 'thread_items' || envelope.type === 'thread_reset'
+      const history = envelope.type === 'thread_items' || envelope.type === 'thread_reset' || envelope.type === 'thread_tool_body'
       const request = history ? envelope.in_reply_to : undefined
       if (history && (request === undefined || !queries.has(request))) return
       if (history && (!record(p) || typeof p.conversation_id !== 'string')) { if (request !== undefined) fail(request, 'malformed'); return }

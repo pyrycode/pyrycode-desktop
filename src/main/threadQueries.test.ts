@@ -63,12 +63,21 @@ async function connected(serverId = 'a') {
 function routePreloadQueries(route: Parameters<typeof dispatchThreadQuery>[1]) {
   electron.send.mockImplementation((_channel, command) => {
     const cloned = structuredClone(command)
-    if (isRendererCommand(cloned) && cloned.type === 'queryThread') dispatchThreadQuery(cloned, route, {
+    if (isRendererCommand(cloned) && (cloned.type === 'queryThread' || cloned.type === 'cancelThreadQuery')) dispatchThreadQuery(cloned, route, {
       isDestroyed: () => false, webContents: { send: (_channel, e) => electron.listeners.forEach(listener => listener({}, structuredClone(e))) }
     })
   })
 }
 afterEach(() => { electron.listeners.clear(); electron.send.mockReset(); vi.useRealTimers() })
+it('body demands validate exact positive coordinates before entering the preload bridge', () => {
+  const command = { type: 'queryThread', serverId: 'a', requestId: 'body', query: {
+    type: 'thread_read_tool_body', payload: { conversation_id: 'c', epoch: 'e', item_id: 1, expected_rev: 8 } } }
+  expect(isRendererCommand(command)).toBe(true)
+  for (const field of ['item_id', 'expected_rev']) for (const value of [0, -1, .5, Number.MAX_SAFE_INTEGER + 1, null, '1'])
+    expect(isRendererCommand({ ...command, query: { ...command.query, payload: { ...command.query.payload, [field]: value } } })).toBe(false)
+  expect(isRendererCommand({ ...command, query: { ...command.query, payload: { ...command.query.payload, epoch: '' } } })).toBe(false)
+  expect(isRendererCommand({ ...command, query: { ...command.query, payload: { ...command.query.payload, cursor: null } } })).toBe(false)
+})
 it.each([undefined, 0])('initial empty-epoch catch-up reaches authenticated transport with limit %s', async limit => {
   const h = await connected()
   routePreloadQueries(id => id === 'a' ? h.connection : null)

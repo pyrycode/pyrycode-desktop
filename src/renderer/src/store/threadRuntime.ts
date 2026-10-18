@@ -16,6 +16,7 @@ import { subscribeChatHistoryRemoval } from './chatHistoryRemoval'
 import { replySuggestionStore } from './replySuggestionStore'
 import { createThreadTaskStops } from '../screens/conversation/threadTaskPresentation'
 import { createThreadRefusalActions, threadComposerReports } from '../screens/conversation/threadComposerReports'
+import { createThreadBodies } from './threadBodies'
 
 const key = (host: string, chat: string) => JSON.stringify([host, chat])
 const MAX_HELD_APPENDS = 256
@@ -59,6 +60,10 @@ export function createThreadRuntime(deps: {
   let held: StampedDaemonEvent[] = [], frameHandle: number | undefined
   let selected: { host: string; chat: string; generation: symbol; cancel?: () => void; configurationRefreshSession?: string;
     local?: { generation: symbol; cancel: () => void } } | undefined
+  const bodies = createThreadBodies({ send: deps.send, log: deps.log, scope(host, chat) {
+    const slice = items.getState().hosts.get(host)?.get(chat)
+    return slice ? { epoch: slice.snapshot.epoch, generation: slice.generation, selected: selected?.host === host && selected.chat === chat } : undefined
+  } })
   function localState(host: string, chat: string, value: ThreadQueryState): void {
     state.setState(s => ({ localQueries: new Map(s.localQueries).set(key(host, chat), value) }))
   }
@@ -148,6 +153,7 @@ export function createThreadRuntime(deps: {
     sync()
   }
   const offItems = items.subscribe(() => {
+    bodies.reconcile()
     if (selected?.local && items.getState().hosts.get(selected.host)?.get(selected.chat)?.generation !== selected.local.generation)
       cancelLocal()
     for (const [host, chats] of items.getState().hosts) for (const chat of chats.keys()) {
@@ -166,6 +172,7 @@ export function createThreadRuntime(deps: {
     if (offer) refusals.getState().observe(offer)
   }
   function remove(host: string, chat: string): void {
+    bodies.retire(host, chat, true)
     if (selected?.host === host && selected.chat === chat) { cancelLocal(); selected.cancel?.(); selected = undefined; query.cancelHost(host) }
     items.getState().deleteConversation(host, chat); sends.getState().deleteConversation(host, chat); refusals.getState().remove(host, chat); taskStops.getState().remove(host, chat)
     lives.get(key(host, chat))?.getState().dispatch({ type: 'dispose' }); lives.delete(key(host, chat))
@@ -179,6 +186,7 @@ export function createThreadRuntime(deps: {
     })
   }
   function removeHost(host: string): void {
+    bodies.retire(host, undefined, true)
     if (selected?.host === host) { cancelLocal(); selected.cancel?.(); selected = undefined }
     query.cancelHost(host)
     const prefix = '[' + JSON.stringify(host) + ','
@@ -198,7 +206,7 @@ export function createThreadRuntime(deps: {
   }
   const offRemoval = subscribeChatHistoryRemoval(host => removed => { if (removed) removeHost(host) })
   return {
-    items, sends, refusals, taskStops, state, live, isThread,
+    items, sends, refusals, taskStops, state, live, isThread, bodies,
     acceptsLifecycle(event: StampedDaemonEvent): boolean {
       if (this.acceptsSession(event)) return true
       if (!selected || event.serverId !== selected.host) return false
@@ -224,6 +232,7 @@ export function createThreadRuntime(deps: {
       observeReports(host, row.id)
     },
     open(host: string, chat: string) {
+      if (selected) bodies.retire(selected.host, selected.chat)
       cancelLocal()
       selected?.cancel?.()
       if (selected) query.input({ type: 'sync', serverId: selected.host, conversationId: null, connected: isLinked(selected.host) })
@@ -231,6 +240,7 @@ export function createThreadRuntime(deps: {
       selected = target
       return { done: restore(target), cancel() {
         if (selected !== target) return
+        bodies.retire(host, chat)
         cancelLocal()
         target.cancel?.(); selected = undefined
         query.input({ type: 'sync', serverId: host, conversationId: null, connected: isLinked(host) })
@@ -253,6 +263,7 @@ export function createThreadRuntime(deps: {
       handle(event)
     },
     suspend() {
+      bodies.suspend()
       flush()
       cancelLocal()
       selected?.cancel?.(); selected = undefined
@@ -264,6 +275,7 @@ export function createThreadRuntime(deps: {
       }
     },
     dispose() {
+      bodies.dispose()
       cancelLocal()
       disposed = true
       if (frameHandle !== undefined) deps.frame?.cancel(frameHandle)
@@ -281,6 +293,7 @@ export function createThreadRuntime(deps: {
   }
   function handle(event: StampedDaemonEvent): void {
     if (disposed || event.serverId === null) return
+    if (bodies.event(event)) return
     refusals.getState().event(event); taskStops.getState().event(event)
     const host = event.serverId
     if (event.type === 'connected') {

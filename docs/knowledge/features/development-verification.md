@@ -43,6 +43,16 @@ The probe proves addon load/open/query/close, not protected-profile persistence.
 History IPC cannot substitute for this pre-pair check because it requires paired
 host membership.
 
+Finish pre-verify's Node rebuild before Electron-native preparation and browser
+checks; running them concurrently can change the addon underneath a launched app.
+The [#2097 repair evidence](https://github.com/pyrycode/pyrycode-desktop/pull/2105)
+retains seven storage failures from that overlap in `rework-specs.json`. After
+sequential native preparation, `rework-final.json` recorded 37 executed/passed,
+0 failed/skipped, covering the complete thread-activation, whitespace and reader-menu
+specs. These reports are under `/tmp/builder-2097/`; the failed run remains failed.
+See [saved traversal diagnostics](e2e-harness-context-recovery.md#saved-traversal-diagnostics)
+for the separate listener-confirmation repair and accepted configured-gate evidence.
+
 The [effort-default verifier evidence](https://github.com/pyrycode/pyrycode-desktop/pull/2071#issuecomment-6220345807)
 records Linux x64 results for #2069. Failed unchanged-main evidence remains failed:
 **1 executed, 0 passed, 1 failed, 0 skipped**, zero forbidden launches. At request

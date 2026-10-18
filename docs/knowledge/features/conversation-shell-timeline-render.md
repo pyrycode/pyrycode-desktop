@@ -45,7 +45,9 @@ APIs and tests do not provide a fallback when a host lacks `thread`.
     settled renderer shows literal `**bold`.
 
   Markdown owns whitespace on both branches: the container's flex column and
-  `gap: var(--space-2)` provide the 8px block rhythm, with direct-child margins reset.
+  `gap: var(--space-4)` provide the 16 px top-level block rhythm, with direct-child
+  margins reset and flush container edges. Nested list/quote rhythm stays 8 px;
+  metadata/attachment margins remain separate at 12 px.
   `.code-block__body` preserves and wraps code whitespace. The assistant-tail
   `bubble--assistant-text` modifier and its `pre-wrap` rule have been removed.
   The renderer's security boundary is unchanged: no `rehypePlugins` or `skipHtml`,

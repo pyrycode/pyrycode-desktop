@@ -996,7 +996,7 @@ describe('createDaemonConnection', () => {
     const assertHello = (hello: Uint8Array): void => {
       expect(decodeEnvelope(hello).payload).toMatchObject({
         client_features: expected,
-        capabilities: ['interactive', 'thread', 'multi_agent', 'stop_background_task', 'hosted_apps_v1']
+        capabilities: ['interactive', 'thread', 'thread_expansion', 'multi_agent', 'stop_background_task', 'hosted_apps_v1']
       })
     }
     assertHello(drivers[0].config.session.hello)
@@ -1019,7 +1019,7 @@ describe('createDaemonConnection', () => {
     // buildClientHello in isolation, so this pins the production wiring, not the codec default.
     const envelope = decodeEnvelope(drivers[0].config.session.hello)
     const payload = envelope.payload as Record<string, unknown>
-    expect(payload.capabilities).toEqual(['interactive', 'thread', 'multi_agent', 'stop_background_task', 'hosted_apps_v1'])
+    expect(payload.capabilities).toEqual(['interactive', 'thread', 'thread_expansion', 'multi_agent', 'stop_background_task', 'hosted_apps_v1'])
   })
 
   it('decodes server_static_pubkey to the raw 32-byte key', async () => {

@@ -338,6 +338,7 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * the boundary.
  */
 export type RendererCommand = (
+  | { type: 'cancelThreadQuery'; serverId: string; requestId: string }
   | { type: 'queryThread'; serverId: string; requestId: string; query: ThreadQuery }
   | { type: 'requestHostSystemPrompt'; serverId: string; requestId: string }
   | { type: 'setHostSystemPrompt'; serverId: string; requestId: string; payload: SetHostSystemPromptPayload }
@@ -512,6 +513,9 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
   if ('payload' in value && typeof value.payload === 'object' && value.payload !== null &&
       ('conversation_id' in value.payload || 'session_id' in value.payload) && !hasValidThreadHost(value)) return false
   switch (value.type) {
+    case 'cancelThreadQuery':
+      return 'serverId' in value && typeof value.serverId === 'string' && value.serverId.length > 0 && value.serverId.length <= 1024 &&
+        'requestId' in value && typeof value.requestId === 'string' && value.requestId.length > 0 && value.requestId.length <= 1024
     case 'queryThread': {
       const text = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 1024
       const number = (v: unknown): boolean => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
@@ -520,6 +524,10 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       const q = value.query
       if (!('type' in q) || !('payload' in q) || typeof q.payload !== 'object' || q.payload === null || Array.isArray(q.payload)) return false
       const p = q.payload
+      if (q.type === 'thread_read_tool_body') return 'conversation_id' in p && text(p.conversation_id) &&
+        'epoch' in p && text(p.epoch) && 'item_id' in p && number(p.item_id) && typeof p.item_id === 'number' && p.item_id > 0 &&
+        'expected_rev' in p && number(p.expected_rev) && typeof p.expected_rev === 'number' && p.expected_rev > 0 &&
+        Object.keys(p).every(k => ['conversation_id', 'epoch', 'item_id', 'expected_rev'].includes(k))
       return 'conversation_id' in p && text(p.conversation_id) && (!('limit' in p) || number(p.limit)) &&
         (q.type === 'thread_catch_up' ? 'epoch' in p && typeof p.epoch === 'string' && p.epoch.length <= 1024 && 'version' in p && number(p.version) :
           q.type === 'thread_page' && 'before_order' in p && number(p.before_order))

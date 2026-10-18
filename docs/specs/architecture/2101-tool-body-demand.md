@@ -53,6 +53,16 @@ Test first in the existing main frame/preload harness and focused cache/runtime 
 ## Open Questions
 None. Keep complete queries separate in the coordinator by narrowing its pending query type and ignoring body replies.
 
+## Revisions
+2026-10-18: the cross-process frame/preload/runtime proof lives in `e2e/threadBodies.test.ts`, using the existing thread-query harness pattern locally. Importing renderer runtime from a main-process test violates the repository's separate composite TypeScript project boundaries. Production code remains typechecked in its owning project; Vitest runs the integration harness without adding a DOM environment. The implementation is smaller than forecast (under 800 written lines at final review), with two new exports and no fixture signature migration.
+Implemented lifecycle proofs (parameterized titles include each named mode):
+- `e2e/threadBodies.test.ts`: `runtime body tool_call traverses frames and preload, completes only at marker and reopens from cache` covers shared demand, one-consumer release, empty content, fragments and reopening.
+- `e2e/threadBodies.test.ts`: `late body fragments/data/marker cannot revive runtime after %s` covers release, navigation, disconnect, reset, epoch replacement, deletion, successful unpair and disposal.
+- `e2e/threadBodies.test.ts`: `navigation back to the same strings creates new demand ownership and never adopts a late old failure` and `two hosts with colliding identities keep frame results isolated through the real bridge and runtime` cover identity reuse.
+- `e2e/threadBodies.test.ts`: `reconnect leaves retained bodies stale until explicit fresh demand, and offline missing sends nothing` covers connection freshness; malformed-body cases cover explicit retry.
+- `src/renderer/src/store/threadBodies.test.ts`: exact active/queue, 128-lease, 64-entry and retained-byte boundary cases cover finite admission and eviction; `cancelled reconnect validation stays stale across %s and requires a new read` covers interrupted freshness.
+- `src/renderer/src/store/threadBodies.test.ts`: `retirement notifications cannot reenter demand and revive a leaving scope` and `navigation cannot silently retry a retained failure` cover subscription retirement and retained failure ownership.
+
 ## Security review
 **Verdict:** PASS
 - Trust boundaries: `isRendererCommand` validates coordinates/cancel IDs; main reconstructs allowlisted body payloads; `logical` and receiver correlation validate peer JSON before IPC. Unknown content is data only.

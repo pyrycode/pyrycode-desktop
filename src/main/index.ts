@@ -884,6 +884,7 @@ app.whenReady().then(() => {
         return
       }
       case 'queryThread':
+      case 'cancelThreadQuery':
         dispatchThreadQuery(command, serverId => servers.route(serverId), live.sink)
         return
       case 'requestHostSystemPrompt':

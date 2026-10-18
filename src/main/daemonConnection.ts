@@ -287,6 +287,7 @@ export interface DaemonConnection {
   hostedResources: ReturnType<typeof createHostedResources>
   hostedApps: ReturnType<typeof createHostedApps>
   queryThread(query: ThreadQuery, requestId: string): void
+  cancelThreadQuery?(requestId: string): void
   requestHostSystemPrompt(requestId: string): void
   setHostSystemPrompt(systemPrompt: string, requestId: string): void
   /** Idempotent. Emits `connecting`, then sources the inputs and constructs the driver. */
@@ -832,6 +833,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   let stopped = false
   let driver: NoiseRelayDriver | null = null
   let authenticated = false
+  let bodyCapable = false
   // A daemon whose accepted handshake lacks `thread` (#1908). Its driver is parked rather than stopped:
   // every outbound method sees no driver and stays inert, inbound frames are dropped, and the parked
   // driver's own supervisor keeps re-dialling after a drop, so a daemon update clears the state.
@@ -1278,6 +1280,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       case 'handshake-complete': {
         resetHosted()
         threadReceiver.reset()
+        bodyCapable = false
         let ack: HelloAckPayload
         try {
           ack = parseHelloAck(event.helloAck)
@@ -1304,6 +1307,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
           return
         }
         authenticated = true
+        bodyCapable = ack.server_id === deps.serverId && ['interactive', 'thread', 'thread_expansion'].every(c => ack.capabilities.includes(c))
         hostedResources.reset(ack.capabilities.includes('hosted_apps_v1'))
         hostedApps.reset(ack.server_id === deps.serverId && ack.capabilities.includes('hosted_apps_v1'))
         deliveryFailed = false
@@ -3036,7 +3040,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // Advertise `multi_agent` too (#1657): without it the daemon withholds Codex conversations,
       // their frames and Codex model rows, all of which the window now decodes per agent (#1649).
       // Advertise `stop_background_task` (#1770), detection only: the echo says the daemon takes the verb.
-      capabilities: [CAPABILITY_INTERACTIVE, 'thread', CAPABILITY_MULTI_AGENT, CAPABILITY_STOP_BACKGROUND_TASK, 'hosted_apps_v1']
+      capabilities: [CAPABILITY_INTERACTIVE, 'thread', 'thread_expansion', CAPABILITY_MULTI_AGENT, CAPABILITY_STOP_BACKGROUND_TASK, 'hosted_apps_v1']
     })
     return {
       connection: {
@@ -3325,12 +3329,17 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
 
   function queryThread(query: ThreadQuery, requestId: string): void {
     const id = nextEnvelopeId++
-    threadReceiver.register(id, requestId, query)
+    if (!threadReceiver.register(id, requestId, query)) return
     if (driver === null || !authenticated || stopped) { threadReceiver.fail(id, 'unavailable'); return }
+    if (query.type === 'thread_read_tool_body' && (!bodyCapable ||
+        !isRendererCommand({ type: 'queryThread', serverId: deps.serverId, requestId, query }))) {
+      threadReceiver.fail(id, 'unavailable'); return
+    }
     const p = query.payload
     const payload = { conversation_id: p.conversation_id,
-      ...(query.type === 'thread_catch_up' ? { epoch: query.payload.epoch, version: query.payload.version } : { before_order: query.payload.before_order }),
-      ...(p.limit === undefined ? {} : { limit: p.limit }) }
+      ...(query.type === 'thread_read_tool_body' ? { epoch: query.payload.epoch, item_id: query.payload.item_id, expected_rev: query.payload.expected_rev } :
+        query.type === 'thread_catch_up' ? { epoch: query.payload.epoch, version: query.payload.version } : { before_order: query.payload.before_order }),
+      ...('limit' in p && p.limit !== undefined ? { limit: p.limit } : {}) }
     try {
       const bytes = encodeEnvelope({ id, type: query.type, ts: now(), payload })
       driver.sendMessage(bytes, outcome => {
@@ -4409,6 +4418,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     setHostSystemPrompt,
     requestSystemPrompt,
     queryThread,
+    cancelThreadQuery: requestId => threadReceiver.cancel(requestId),
     requestConversations,
     requestRecentWorkspaces,
     createConversation,

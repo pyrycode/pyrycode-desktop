@@ -35,10 +35,10 @@ import { copyMessageText } from './copyMessageText'
 //   • `remarkGfmSubset` registers the GFM TABLE, TASK LIST and
 //     STRIKETHROUGH constructs and nothing else. `remark-gfm` itself is still never added: it is a
 //     BUNDLE of five unrelated extensions, and the two that matter here — autolink literals and
-//     footnotes — are separate packages that are NOT INSTALLED. So bare URLs and bare email addresses
-//     still render as plain text because there is no autolinking code in the dependency graph to
-//     suppress, not because a setting turns it off. Absence, not suppression: the same property as the
-//     `rehypePlugins` line above, arrived at the same way, and the reason the subset ships as
+//     footnotes — are separate packages that are NOT INSTALLED. Bare web URLs and email addresses
+//     still render as plain text. The narrow exception is admitted bare Obsidian open URLs: an mdast
+//     text transform links those without adding parser syntax. General autolink literals stay absent,
+//     like the `rehypePlugins` capability above, which is why the subset ships as
 //     per-construct packages rather than the bundle plus an override. THE COUNT IN THIS SENTENCE IS
 //     PART OF THE CONTRACT — a fourth construct here is a change to what this module can parse out of
 //     untrusted daemon text.
@@ -172,8 +172,62 @@ function remarkCodeSpanLinks() {
   }
 }
 
-// Stable list: register syntax, narrow hosted destinations, then link whole inline-code URLs.
-const remarkPlugins = [remarkGfmSubset, remarkHostedLinks, remarkCodeSpanLinks]
+/** Link only admitted bare Obsidian open candidates; general autolink syntax stays absent. */
+function remarkObsidianProseLinks() {
+  return (tree: Root): void => {
+    const visit = (node: { type: string; children?: Nodes[] }): void => {
+      if (node.type === 'link' || node.type === 'linkReference' || !node.children) return
+      const children: Nodes[] = []
+      for (const child of node.children) {
+        if (child.type !== 'text') {
+          visit(child)
+          children.push(child)
+          continue
+        }
+        const value = child.value
+        // Fixed literal, no quantifiers. Advance past the whole candidate even when rejected.
+        const starts = /obsidian:\/\/open/gi
+        let copied = 0
+        let match: RegExpExecArray | null
+        while ((match = starts.exec(value)) !== null) {
+          const start = match.index
+          let end = starts.lastIndex
+          let surplus = 0
+          while (end < value.length && !/[\s<>`"[\]]/.test(value[end])) {
+            if (value[end] === ')') surplus++
+            else if (value[end] === '(') surplus--
+            end++
+          }
+          starts.lastIndex = end
+          if (start > 0 && /[\w:/]/.test(value[start - 1])) continue
+          while (end > start) {
+            const last = value[end - 1]
+            if (/[.,;:!?]/.test(last)) end--
+            else if (last === ')' && surplus > 0) { surplus--; end-- }
+            else break
+          }
+          const url = allowedLinkHref(value.slice(start, end))
+          if (url === null) continue
+          if (start > copied) children.push({ type: 'text', value: value.slice(copied, start), position: child.position })
+          children.push({
+            type: 'link', url, children: [{ type: 'text', value: url }], position: child.position,
+            // Preserve the admitted string through mdast-to-hast, then the existing link gates.
+            data: { hProperties: { href: url } }
+          })
+          copied = end
+        }
+        // Conservative source ranges keep synthetic pending elements unlinked after text decoding.
+        if (copied === 0) children.push(child)
+        else if (copied < value.length) children.push({ type: 'text', value: value.slice(copied), position: child.position })
+      }
+      node.children = children
+    }
+    visit(tree)
+  }
+}
+
+// Stable list: register syntax, narrow hosted destinations, then apply the two link transforms.
+const remarkPlugins = [remarkGfmSubset, remarkHostedLinks, remarkCodeSpanLinks, remarkObsidianProseLinks]
 
 const LANGUAGE_PREFIX = 'language-'
 

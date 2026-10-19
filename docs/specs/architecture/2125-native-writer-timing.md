@@ -178,3 +178,9 @@ scenario passing without retry. macOS is outside this ticket's verification scop
 Final scope remains one reliability behaviour, no production files, one exported
 test helper, no consumer migrations, four acceptance criteria and two timing rejects;
 total written work remains below 350 lines and every sizing ceiling.
+
+Final checks after the last merge of `origin/main` (`0848c1fb`) passed: pre-verify
+five checks including seven timing regressions (`pre-verify-final.log`), application
+build (`build-final.log`) and docs guard. Electron ABI preparation was restored only
+after the Node gate finished (`electron-preparation-final.log`); all paths share the
+`/tmp/builder-2125/` evidence directory. No native check is left running.

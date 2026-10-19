@@ -87,7 +87,7 @@ export function createChatHistoryWriter(deps: {
     const node: MutationNode = { request, steps: mutationSteps(request) }
     const key = JSON.stringify([host, 'daemon-items', id]), prior = pending.get(key)
     if (prior && 'head' in prior && prior.tail.request.change.metadata.epoch === request.change.metadata.epoch &&
-      prior.tail.request.change.resetId === request.change.resetId) {
+      (request.change.resetId === undefined || prior.tail.request.change.resetId === request.change.resetId)) {
       prior.tail.next = node
       prior.tail = node
     } else pending.set(key, { serverId: host, head: node, tail: node })

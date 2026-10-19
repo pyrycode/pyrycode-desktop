@@ -109,7 +109,55 @@ it('bounded data prefixes reopen unfinished and retry to the exact separately ad
     await writer.stop()
   }
   expect(results[1]).toEqual(results[0])
-})
+}, 30000)
+
+it('separate, queued and lost-acknowledgement saves retain identical removals, extensions, arrival and ordered evidence', async () => {
+  const results: unknown[] = []
+  for (const mode of ['separate', 'queued', 'lost-ack'] as const) {
+    let lose = false
+    const { fresh, source, api, writer } = await cache(async (_request, execute) => {
+      const result = await execute()
+      if (lose) { lose = false; throw Error('lost acknowledgement') }
+      return result
+    })
+    api.acceptEpoch('a', 'c', 'e'); await writer.flush()
+    const slice = source.getState().hosts.get('a')!.get('c')!
+    const metadata = { ...slice.snapshot, items: undefined, ranges: undefined,
+      version: 100, checkpoint: 100, uncommittedVersion: 0 }
+    const item = (id: number, text = `fixture ${id}`, rev = 1) => ({ id, rev, kind: 'assistant_message',
+      order: id % 5, shown: true, active: false, status: 'finished', summary: '', content: { text } })
+    const admit = async (change: Extract<ChatHistoryRequest, { operation: 'mutateThread' }>['change']) => {
+      source.setState({ hosts: new Map([['a', new Map([['c', { ...slice, owned: change }]])]]) })
+      if (mode === 'separate') await writer.flush()
+    }
+    await admit({ metadata, acceptEpoch: false, items: Array.from({ length: 100 }, (_, n) => item(n)),
+      removeIds: [], ranges: [{ start: 10, end: 20 }], completion: { fromVersion: 0, version: 100 },
+      availability: { start: 10, available: false } })
+    if (mode === 'lost-ack') { lose = true; await writer.flush() }
+    await admit({ metadata: { ...metadata, version: 150, checkpoint: 150 }, acceptEpoch: false,
+      items: Array.from({ length: 80 }, (_, n) => item(n + 70, `fixture ${n + 70}`, 2)),
+      removeIds: Array.from({ length: 70 }, (_, n) => n),
+      ranges: Array.from({ length: 68 }, (_, n) => ({ start: 30 + n * 3, end: 31 + n * 3 })),
+      priorProgress: Array.from({ length: 65 }, () => ({ metadata })) })
+    await admit({ metadata: { ...metadata, version: 150, checkpoint: 150 }, acceptEpoch: false,
+      items: [item(70, 'fixture 70 extended', 2), item(0, 'returned')], removeIds: [], ranges: [],
+      priorProgress: [{ metadata: { ...metadata, version: 175, uncommittedVersion: 175 } }],
+      availability: { start: 20, available: true }, completion: { fromVersion: 100, version: 150 } })
+    await writer.flush()
+    const saved = await fresh().execute({ operation: 'readThread', serverId: 'a', conversationId: 'c' })
+    expect(saved).toMatchObject({ status: 'stored', snapshot: { thread: {
+      checkpoint: 150, version: 175, uncommittedVersion: 175, olderAvailable: false } } })
+    if (saved.status === 'stored' && saved.snapshot.kind === 'daemon-items') {
+      expect(saved.snapshot.thread.items).toHaveLength(81)
+      expect(saved.snapshot.thread.items.find(i => i.id === 70)).toEqual(item(70, 'fixture 70 extended', 2))
+      expect(saved.snapshot.thread.arrivalOrder?.at(-1)).toBe(0)
+    }
+    results.push(saved)
+    await writer.stop()
+  }
+  expect(results[1]).toEqual(results[0])
+  expect(results[2]).toEqual(results[0])
+}, 30000)
 
 it.each(['separate', 'coalesced', 'held-failure'] as const)('explicit same-epoch reset replaces owned history through %s saves', async mode => {
   let hold = false, release!: (result: ChatHistoryResult) => void
@@ -252,7 +300,9 @@ it('retry after a lost acknowledgement does not revive already completed repair 
   let loseAcknowledgement = true
   const { fresh, api, writer } = await cache(async (_request, execute) => {
     const result = await execute()
-    if (loseAcknowledgement) { loseAcknowledgement = false; throw Error('lost acknowledgement') }
+    if (loseAcknowledgement && _request.operation === 'mutateThread' && _request.change.metadata.checkpoint === 12) {
+      loseAcknowledgement = false; throw Error('lost acknowledgement')
+    }
     return result
   })
   try {

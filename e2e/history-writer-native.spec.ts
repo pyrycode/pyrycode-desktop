@@ -10,7 +10,7 @@ import { useState, useLayoutEffect } from 'react';
 import { createStore } from 'zustand/vanilla';
 import { createChatHistoryWriter } from './store/chatHistoryWriter';
 import { createConversationListStore } from './store/conversationListStore';
-const evidence = { persisted: 0, submitted: 0, admitted: 0, maxGap: 0, beats: 0, done: false, commit: 0, errors: [] };
+const evidence = { persisted: 0, submitted: 0, admitted: 0, maxGap: 0, beats: 0, done: false, commit: 0, committed: '', errors: [] };
 let observing = false, last = performance.now(), expected, writer;
 setInterval(() => { const now = performance.now();
   if (observing) { evidence.maxGap = Math.max(evidence.maxGap, now - last); evidence.beats++; }
@@ -18,7 +18,7 @@ setInterval(() => { const now = performance.now();
 }, 20);
 function StorageProbe() {
   const [mounted, mount] = useState(false), [text, setText] = useState('');
-  useLayoutEffect(() => { if (text) evidence.commit = performance.now(); }, [text]);
+  useLayoutEffect(() => { if (text) { evidence.commit = performance.now(); evidence.committed = text; } }, [text]);
   window.storageProbe = { evidence, async start(host, chat) {
     mount(true);
     const items = [];
@@ -29,12 +29,16 @@ function StorageProbe() {
         : kind === 'turn_end' ? { outcome: 'completed', stop_reason: 'end_turn' }
         : kind === 'session_divider' ? { reason: 'clear', occurred_at: '2026-10-19T00:00:00Z' }
         : { text: 'Synthetic ' + id };
-      items.push({ id, rev: 1, order: id, kind, status: kind === 'user_message' ? 'delivered' : 'finished',
+      if (kind === 'agent') Object.assign(content, { task_id: 'task-' + id,
+        task_link: { task_id: 'task-' + id, tool_call_id: 'tool-' + id } });
+      items.push({ id, rev: 1, ...(kind === 'tool_call' ? { parent: 8187 + n % 135 } : { order: id }),
+        kind, status: kind === 'user_message' ? 'delivered' : 'finished',
         shown: kind !== 'turn_end', active: false, summary: '', content });
     }
     const metadata = { hostId: host, conversationId: chat, epoch: 'storage-probe', version: 1,
       checkpoint: 1, uncommittedVersion: 0, repair: null, olderAvailable: false };
-    expected = { ...metadata, items, arrivalOrder: items.map(i => i.id), ranges: [{start: 0, end: 8334}] };
+    expected = { ...metadata, items: [...items].sort((a,b) => (a.order ?? Infinity) - (b.order ?? Infinity)),
+      arrivalOrder: items.map(i => i.id), ranges: [{start: 0, end: 8334}] };
     const threads = createStore(() => ({ hosts: new Map() }));
     writer = createChatHistoryWriter({ threads, lists: createConversationListStore(), receipt: () => null,
       schedule: () => () => {}, log: event => { if (event.code && event.code !== 'ok') evidence.errors.push(event.code); },
@@ -89,7 +93,9 @@ test('finite protected writer backlog preserves native keyboard and both event l
       await page.getByRole('textbox', { name: 'Storage input' }).focus()
       const dispatch = Date.now()
       await page.keyboard.type(text)
-      await expect(page.getByRole('textbox', { name: 'Storage input' })).toHaveValue(inputs.map(i => i.text).join('') + text)
+      const expectedText = inputs.map(i => i.text).join('') + text
+      await expect(page.getByRole('textbox', { name: 'Storage input' })).toHaveValue(expectedText)
+      await expect.poll(async () => (await evidence()).committed).toBe(expectedText)
       const latency = Date.now() - dispatch
       expect(latency).toBeLessThanOrEqual(1000)
       await expect.poll(async () => (await evidence()).persisted).toBeGreaterThan(before.persisted)
@@ -98,18 +104,20 @@ test('finite protected writer backlog preserves native keyboard and both event l
       expect(after.persisted).toBeLessThan(8333)
       expect(after.commit).toBeGreaterThan(0)
       inputs.push({ text, latency, before: before.persisted, after: after.persisted })
+      await info.attach('input-' + text, { body: JSON.stringify(inputs.at(-1)), contentType: 'application/json' })
     }
     await expect.poll(async () => (await evidence()).done, { timeout: 60000 }).toBe(true)
     const elapsed = Date.now() - started, final = await evidence()
-    expect(elapsed).toBeLessThanOrEqual(60000)
-    expect(final).toMatchObject({ admitted: 8333, persisted: 8333, errors: [] })
-    expect(final.maxGap).toBeLessThanOrEqual(1000)
     const main = await app.evaluate(() => {
       const beats = (globalThis as any).storageBeats
       beats.maxGap = Math.max(beats.maxGap, Date.now() - beats.last)
       beats.observing = false; clearInterval((globalThis as any).storageTimer)
       return beats
     })
+    await info.attach('native-storage-input', { body: JSON.stringify({ runtime, elapsed, final, main, inputs }), contentType: 'application/json' })
+    expect(elapsed).toBeLessThanOrEqual(60000)
+    expect(final).toMatchObject({ admitted: 8333, persisted: 8333, errors: [] })
+    expect(final.maxGap).toBeLessThanOrEqual(1000)
     expect(main.count).toBeGreaterThan(0)
     expect(main.maxGap).toBeLessThanOrEqual(1000)
     await page.evaluate(() => (window as any).storageProbe.flush())
@@ -121,6 +129,5 @@ test('finite protected writer backlog preserves native keyboard and both event l
       serverId: host, conversationId: chat }), [FIRST_SERVER_ID, SEEDED_ROW.id])
     expect(saved).toEqual({ status: 'stored', snapshot: { version: 1, kind: 'daemon-items', serverId: FIRST_SERVER_ID,
       conversationId: SEEDED_ROW.id, thread: expected } })
-    await info.attach('native-storage-input', { body: JSON.stringify({ runtime, elapsed, final, main, inputs }), contentType: 'application/json' })
   } finally { await server.close() }
 })

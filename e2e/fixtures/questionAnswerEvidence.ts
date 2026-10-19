@@ -102,6 +102,8 @@ export function createQuestionAnswerEvidence(subscribe = false) {
     }
     if (!item) return
     const content = record(item.content) ? item.content : {}
+    // Arming is earlier than delivery: all text observed before submission remains ineligible.
+    if (!submitted) exclude(item)
     remember(item)
     if (item.parent !== undefined || typeof item.turn !== 'string') return
     const firstEnd = item.kind === 'turn_end' && !ended.has(item.id)

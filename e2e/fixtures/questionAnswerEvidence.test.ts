@@ -68,6 +68,30 @@ describe('original question answer evidence', () => {
     const s = setup(); s.reply(confirmation); s.arm(); s.submit(); s.dismiss(); s.reply(confirmation); s.end()
     expect(s.proof.complete()).toBe(false)
   })
+  it.each([false, true])('excludes assistant text between arm and submission (shortened later: %s)', shortened => {
+    const s = setup(); s.arm(); s.reply(confirmation)
+    if (shortened) s.emit('thread_item_changed', {
+      item_id: 2, base_rev: 1, rev: 2, changes: { content: { text: '' } }
+    })
+    s.submit(); s.dismiss()
+    const rev = shortened ? 2 : 1
+    s.emit('thread_item_changed', { item_id: 2, base_rev: rev, rev: rev + 1, changes: { status: 'done' } })
+    s.end()
+    expect(s.proof.snapshot()).toMatchObject({ witnessed: false, completed: false })
+    expect(s.proof.complete()).toBe(false)
+  })
+  it.each([
+    { before: 'Before.', paired: false }, { before: 'Before.', paired: true },
+    { before: confirmation, paired: false }, { before: confirmation, paired: true }
+  ])('accepts a fresh append after excluding pre-submission text: %j', ({ before, paired }) => {
+    const s = setup(); s.arm(); s.reply(before); s.submit(); s.dismiss()
+    s.emit('thread_item_changed', { item_id: 2, base_rev: 1, rev: 2, changes: { status: 'done' } })
+    expect(s.proof.snapshot().witnessed).toBe(false)
+    s.emit('thread_text_append', { item_id: 2, base_rev: 2, rev: paired ? 2 : 3, text: confirmation })
+    s.end()
+    expect(s.proof.snapshot()).toMatchObject({ witnessed: true, completed: true, invalid: false })
+    expect(s.proof.complete()).toBe(true)
+  })
   const snapshotAssistant: ThreadItem = { id: 2, rev: 1, kind: 'assistant_message', turn: 'turn',
     status: 'done', active: false, shown: true, summary: '', content: { text: confirmation } }
   const snapshotEnd: ThreadItem = { ...snapshotAssistant, id: 9, kind: 'turn_end', content: {

@@ -7,6 +7,9 @@ import type { ChatHistoryRequest, ChatHistoryResult } from '@shared/chatHistory'
 import type { StampedDaemonEvent } from '@shared/ipc/events'
 import type { ConversationSummary } from '@shared/wire/types'
 
+const realTimeout = setTimeout
+const realClearTimeout = clearTimeout
+
 const row = (id: string): ConversationSummary => ({ id, name: id, cwd: '/', is_promoted: false,
   is_archived: false, last_message_ts: '', last_used_at: '', workspace_label: null })
 function harness(write = async (_request: ChatHistoryRequest): Promise<ChatHistoryResult> => ({ status: 'ok' })) {
@@ -45,6 +48,50 @@ const threadRequests = (h: ReturnType<typeof harness>) => h.save.mock.calls
   .map(([request]) => request).filter(request => request.operation === 'mutateThread')
 
 describe('chat history recording', () => {
+  it('flushes and stops a bounded backlog while the renderer clock stays paused', async () => {
+    const h = harness()
+    h.delta('seed'); await h.writer.flush(); h.save.mockClear()
+    const slice = h.threads.getState().hosts.get('a')!.get('chat')!
+    const items = Array.from({ length: 100 }, (_, n) => ({ id: n + 100, rev: 1, kind: 'user_message', content: { text: 'fixture' } }))
+    let delivered = 0
+    const turns: number[] = []
+    const { port1, port2 } = new MessageChannel()
+    port1.onmessage = () => { delivered++ }
+    h.save.mockImplementation(async () => {
+      turns.push(delivered)
+      port2.postMessage(null)
+      return { status: 'ok' }
+    })
+    let deadline: ReturnType<typeof setTimeout> | undefined
+    vi.useFakeTimers()
+    try {
+      h.threads.setState({ hosts: new Map([['a', new Map([['chat', { ...slice,
+        owned: { ...slice.owned!, acceptEpoch: false, items }
+      }]])]]) })
+      const completed = (async () => {
+        await h.writer.flush()
+        h.delta('after flush')
+        await h.writer.stop()
+      })()
+      await Promise.race([completed, new Promise<void>((_, reject) => {
+        deadline = realTimeout(() => reject(new Error('writer waited for the paused renderer clock')), 1000)
+      })])
+      const requests = threadRequests(h)
+      expect(turns).toEqual(requests.map((_, n) => n))
+      expect(delivered).toBe(requests.length)
+      expect(requests.flatMap(r => r.change.items.map(i => i.id))).toEqual([...items.map(i => i.id), 1])
+      expect(requests.at(-1)?.change.items[0]).toMatchObject({ id: 1, rev: 2, content: { text: 'seedafter flush' } })
+      for (const { change: c } of requests) expect(c.items.length + c.removeIds.length + c.ranges.length +
+        (c.priorProgress?.length ?? 0) + 1).toBeLessThanOrEqual(32)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      if (deadline !== undefined) realClearTimeout(deadline)
+      await vi.runAllTimersAsync()
+      vi.useRealTimers()
+      await h.writer.stop()
+      port1.close(); port2.close()
+    }
+  })
   it('coalesces distinct queued items within the same counted budget', async () => {
     const h = harness()
     h.delta('seed'); await h.writer.flush(); h.save.mockClear()
@@ -74,14 +121,21 @@ describe('chat history recording', () => {
       ranges: Array.from({ length: 69 }, (_, n) => ({ start: n * 3, end: n * 3 + 1 })),
       priorProgress: Array.from({ length: 67 }, () => ({ metadata })) }
     let beats = 0
-    const timer = setInterval(() => beats++, 0)
+    const { port1, port2 } = new MessageChannel()
+    port1.onmessage = () => { beats++ }
+    h.save.mockImplementation(async () => {
+      port2.postMessage(null)
+      return h.save.mock.calls.length === failAt ? { status: 'error', code: 'write-failed' } : { status: 'ok' }
+    })
     h.threads.setState({ hosts: new Map([['a', new Map([['chat', { ...slice, owned: change }]])]]) })
-    await h.writer.flush()
-    expect(h.save).toHaveBeenCalledTimes(3)
-    const failed = threadRequests(h).at(-1)
-    failAt = -1
-    await h.writer.stop()
-    clearInterval(timer)
+    let failed: ChatHistoryRequest | undefined
+    try {
+      await h.writer.flush()
+      expect(h.save).toHaveBeenCalledTimes(3)
+      failed = threadRequests(h).at(-1)
+      failAt = -1
+      await h.writer.stop()
+    } finally { port1.close(); port2.close() }
     const requests = threadRequests(h)
     expect(requests[3]).toEqual(failed)
     for (const { change: c } of requests) expect(c.items.length + c.removeIds.length + c.ranges.length +
@@ -91,7 +145,7 @@ describe('chat history recording', () => {
     expect(requests.flatMap(r => r.change.ranges)).toHaveLength(69)
     expect(requests.flatMap(r => [...r.change.priorProgress ?? [], r.change])
       .filter(p => p.metadata.checkpoint === 100)).toHaveLength(68)
-    expect(beats).toBeGreaterThan(5)
+    expect(beats).toBe(requests.length)
   })
   it.each(['reset', 'epoch', 'delete', 'unpair', 'failed-unpair'] as const)('fences a held bounded cursor after %s with the same chat on another host', async action => {
     let release: (result: ChatHistoryResult) => void = () => {}

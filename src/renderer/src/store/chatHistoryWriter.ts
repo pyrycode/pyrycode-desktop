@@ -150,7 +150,12 @@ export function createChatHistoryWriter(deps: {
           if (ok) node.ready = undefined
         }
         if (!ok) failed.add(key)
-        await new Promise<void>(resolve => setTimeout(resolve, 0))
+        // Yield a task even when elapsed renderer time is paused during a close flush.
+        await new Promise<void>(resolve => {
+          const { port1, port2 } = new MessageChannel()
+          port1.onmessage = () => { port1.close(); port2.close(); resolve() }
+          port2.postMessage(null)
+        })
         continue
       }
       pending.delete(key)

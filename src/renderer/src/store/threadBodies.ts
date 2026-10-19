@@ -223,6 +223,8 @@ export function createThreadBodies(deps: {
         if (e.request.kind !== 'children' || p.conversation_id !== e.request.conversationId || p.epoch !== e.request.epoch ||
             p.item_id !== e.request.itemId || p.rev !== e.request.revision) { fail(e, 'metadata'); return true }
         const children = e.replacing ? [] : e.state.page?.children ?? []
+        const identities = new Set(children.map(c => c.id))
+        if (p.children.some(c => identities.has(c.id))) { fail(e, 'metadata'); return true }
         const completedCursors = e.replacing ? [] : e.state.page?.completedCursors ?? []
         const completed = p.final && e.cursor ? [...completedCursors, e.cursor] : completedCursors
         const next: ChildPage = { children: [...children, ...p.children], version: p.version, complete: p.final && !p.more,

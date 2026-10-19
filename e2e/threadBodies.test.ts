@@ -245,6 +245,7 @@ it.each([
 })
 it.each([
   ['descending ties', { children: [child(3), child(2)] }], ['duplicate tuple', { children: [child(2), child(2)] }],
+  ['duplicate identity', { children: [child(2), child(2, 1)] }],
   ['over row limit', { children: [child(2), child(3), child(4)] }], ['data more', { more: false }],
   ['fragment', { continuation: { index: 0 }, data: 'x' }], ['wrong epoch', { epoch: 'other' }],
   ['wrong rev', { rev: 9 }], ['wrong conversation', { conversation_id: 'other' }]
@@ -267,7 +268,7 @@ it.each([
   h.emit(frame('thread_children', { ...childEnd(), ...change }, id, envelope))
   expect(lease.getState()).toMatchObject({ type: 'failed', page: { children: [child(2)], complete: false } }); h.close()
 })
-it.each(['version', 'tuple', 'second-data', 'aggregate-bytes'])('child reply boundary rejects %s', async mode => {
+it.each(['version', 'tuple', 'identity', 'second-data', 'aggregate-bytes'])('child reply boundary rejects %s', async mode => {
   const h = await bodyRuntime(), lease = h.r.children.demand({ ...childRequest, limit: 256 }), id = childReads(h)[0].id
   if (mode === 'aggregate-bytes') {
     // Each summary stays valid; two envelopes together exceed the page budget.
@@ -280,7 +281,7 @@ it.each(['version', 'tuple', 'second-data', 'aggregate-bytes'])('child reply bou
   } else {
     h.emit(frame('thread_children', childPage(), id)); h.emit(frame('thread_children', childEnd(true), id))
     lease.continue(childCursor(2)); const next = childReads(h)[1].id
-    h.emit(frame('thread_children', { ...childPage(), children: [child(mode === 'tuple' ? 2 : 3)], version: mode === 'version' ? 1 : 0 }, next))
+    h.emit(frame('thread_children', { ...childPage(), children: [child(mode === 'tuple' || mode === 'identity' ? 2 : 3, mode === 'identity' ? 1 : 0)], version: mode === 'version' ? 1 : 0 }, next))
     if (mode === 'second-data') h.emit(frame('thread_children', childPage([child(4)]), next))
   }
   expect(lease.getState().type).toBe('failed'); h.close()

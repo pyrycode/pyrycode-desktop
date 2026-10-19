@@ -52,6 +52,7 @@ function logical(type: string, p: unknown): ThreadUpdate | ThreadReply | null {
   if (type === 'thread_children') {
     if (!epoch || !number(p.item_id) || p.item_id === 0 || !number(p.rev) || p.rev === 0 || !Array.isArray(p.children) ||
         !p.children.every(summary) || own(p, 'continuation') || p.children.length > 256 ||
+        new Set(p.children.map(c => c.id)).size !== p.children.length ||
         Object.keys(p).some(k => !['conversation_id', 'epoch', 'version', 'item_id', 'rev', 'children', 'final', 'more', 'cursor'].includes(k)) ||
         !p.children.every((v, i, list) => v.parent === p.item_id && (i === 0 || after(v, list[i - 1])))) return null
     const route = { conversation_id, epoch, version, item_id: p.item_id, rev: p.rev, children: p.children }

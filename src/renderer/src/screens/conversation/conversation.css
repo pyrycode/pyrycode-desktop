@@ -7072,8 +7072,8 @@ button.top-overlay-pill:hover,
   font-weight: var(--text-body-medium-weight);
 }
 
-/* The only scroll box, so the note scrolls beneath the fixed bar. Body-large on-surface per the drawn
-   body; the .bubble__markdown rules inside give the headings, lists, code blocks and quotes. */
+/* The only scroll box, so the note scrolls beneath the fixed bar. Body-medium on-secondary-container
+   matches thread prose (Figma 552:2851); shared Markdown rules supply block and code treatment. */
 .markdown-reader__body {
   position: absolute;
   inset: 0;
@@ -7084,11 +7084,11 @@ button.top-overlay-pill:hover,
   min-height: 0;
   overflow-y: auto;
   overflow-wrap: anywhere;
-  color: var(--color-on-surface);
-  font-size: var(--text-body-large-size);
-  line-height: var(--text-body-large-line);
-  letter-spacing: var(--text-body-large-tracking);
-  font-weight: var(--text-body-large-weight);
+  color: var(--color-on-secondary-container);
+  font-size: var(--text-body-medium-size);
+  line-height: var(--text-body-medium-line);
+  letter-spacing: var(--text-body-medium-tracking);
+  font-weight: var(--text-body-medium-weight);
 }
 
 /* Secondary small button (Figma 347:6645); the card's gap places it after every report/cut marker. */

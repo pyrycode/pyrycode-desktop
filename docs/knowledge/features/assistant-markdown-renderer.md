@@ -150,6 +150,15 @@ first and last blocks flush with the container. Nested list-item and blockquote
 rhythm stays 8 px (`--space-2`). Metadata and file/image attachments sit outside
 this container and retain their separate 12 px (`--space-3`) margins.
 
+Prose type still comes from each caller's ancestor. Reusing `AssistantMarkdown`
+and `.bubble__markdown` does not supply the message bubble's inherited body size
+or ink. The [reader's scroll body](conversation-shell-markdown-reader.md#body-typography)
+therefore sets body-medium (Roboto 14/20 px, 0.25 px tracking) and On Secondary
+Container explicitly. Quotes and links inherit that type while retaining their
+bar and Primary underlined link treatment; fenced code keeps its own Mono 12/20
+rules. Verify a new surface's computed inheritance in the browser rather than
+inferring it from shared markup.
+
 `onOpenMarkdownPath` and `onOpenHostedApp` are optional, forwarded through
 `ConversationScreen` and both conversation timelines to `TimelineRow`. Both reply
 branches receive both callbacks; streaming forwards them to every frozen unit and

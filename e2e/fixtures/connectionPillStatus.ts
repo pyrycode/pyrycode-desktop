@@ -4,7 +4,8 @@ import { DAEMON_EVENT_CHANNEL, type StampedDaemonEvent } from '../../src/shared/
 import { isTransientContextLoss, NOT_YET_AVAILABLE, readMainProcess } from './mainProcessRead'
 
 type Receipt = { expected: string; count: number; off: () => void }
-type RendererProbe = typeof globalThis & { __connectionPillReceipts?: Map<string, Receipt> }
+// A null receipt is a completion fence, retained for callbacks that execute late.
+type RendererProbe = typeof globalThis & { __connectionPillReceipts?: Map<string, Receipt | null> }
 type MainProbe = typeof globalThis & { __connectionPillSends?: Set<string> }
 
 export async function confirmConnectionPillStatus(
@@ -16,39 +17,43 @@ export async function confirmConnectionPillStatus(
   // Metadata is confined to this test's IPC injection, never the daemon wire.
   const marked = { ...event, __connectionPillDelivery: token }
   const expired = () => new Error('Connection-pill receipt was not confirmed within five seconds')
-  async function bounded<T>(operation: Promise<T>): Promise<T> {
+  async function bounded<T>(operation: () => Promise<T>): Promise<T> {
     const remaining = deadline - Date.now()
     if (remaining <= 0) throw expired()
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
-      return await Promise.race([operation, new Promise<never>((_, reject) => {
+      return await Promise.race([operation(), new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(expired()), remaining)
       })])
     } finally { clearTimeout(timer) }
   }
   async function available<T>(operation: () => Promise<T>): Promise<T | typeof NOT_YET_AVAILABLE> {
-    try { return await bounded(operation()) }
+    try { return await bounded(operation) }
     catch (error) {
       if (isTransientContextLoss(error)) return NOT_YET_AVAILABLE
       throw error
     }
   }
   try {
-    await bounded(page.evaluate(({ token, event }) => {
+    await bounded(() => page.evaluate(({ token, event, deadline }) => {
       const target = globalThis as RendererProbe
       const receipts = target.__connectionPillReceipts ??= new Map()
+      if (receipts.has(token) || Date.now() >= deadline) return
       const receipt: Receipt = { expected: JSON.stringify(event), count: 0, off: () => {} }
-      receipt.off = window.pyry.onDaemonEvent(value => {
+      const off = window.pyry.onDaemonEvent(value => {
         if (JSON.stringify(value) === receipt.expected) receipt.count++
       })
+      // Renderer-owned expiry releases the listener even if disposal cannot execute.
+      const timer = setTimeout(() => { receipts.set(token, null); receipt.off() }, deadline - Date.now())
+      receipt.off = () => { clearTimeout(timer); off() }
       receipts.set(token, receipt)
-    }, { phase: 'install', token, event: marked }))
+    }, { phase: 'install', token, event: marked, deadline }))
     let attempts = 0, ambiguous = false
     async function send(): Promise<void> {
       attempts++
       ambiguous = false
       try {
-        await bounded(app.evaluate(({ BrowserWindow }, { channel, event, token, deadline }) => {
+        await bounded(() => app.evaluate(({ BrowserWindow }, { channel, event, token, deadline }) => {
           const target = globalThis as MainProbe
           const sent = target.__connectionPillSends ??= new Set()
           if (sent.has(token) || Date.now() >= deadline) return
@@ -73,20 +78,27 @@ export async function confirmConnectionPillStatus(
       if (count === 1) return
       if (count !== NOT_YET_AVAILABLE && count > 1) throw new Error('Duplicate connection-pill receipt')
       if (count === 0 && ambiguous && attempts < 2) {
-        const sent = await bounded(readMainProcess<string[]>(app, () =>
+        const sent = await bounded(() => readMainProcess<string[]>(app, () =>
           [...((globalThis as MainProbe).__connectionPillSends ?? [])]))
         // Only conclusive absence authorizes recovery. A queued IPC is awaited.
         if (sent !== NOT_YET_AVAILABLE && !sent.includes(token)) await send()
       }
-      await bounded(new Promise<void>(resolve => setTimeout(resolve, 100)))
+      await bounded(() => new Promise<void>(resolve => setTimeout(resolve, 100)))
     }
     throw expired()
   } finally {
-    // A single cleanup, including after lost observer-install acknowledgement.
-    await page.evaluate(({ token }) => {
-      const receipts = (globalThis as RendererProbe).__connectionPillReceipts
-      receipts?.get(token)?.off()
-      receipts?.delete(token)
-    }, { phase: 'dispose', token })
+    for (;;) {
+      const disposed = await available(() => page.evaluate(({ token }) => {
+        const receipts = (globalThis as RendererProbe).__connectionPillReceipts ??= new Map()
+        const receipt = receipts.get(token)
+        // Fence installation before disposing. Repeating this mutation is idempotent.
+        receipts.set(token, null)
+        receipt?.off()
+        return true
+      }, { phase: 'dispose', token }))
+      if (disposed === true) break
+      // Only an acknowledged disposal confirms cleanup; unavailable is inconclusive.
+      await bounded(() => new Promise<void>(resolve => setTimeout(resolve, 100)))
+    }
   }
 }

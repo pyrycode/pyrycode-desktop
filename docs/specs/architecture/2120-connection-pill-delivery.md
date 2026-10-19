@@ -96,3 +96,72 @@ Linux x64, candidate `7272d281a2b5e60bea36133437b7b58c0d5ad28a`, containing main
 The dispatcher-owned complete configured application gate remains pending; it must
 include the hidden-row case passing without retry. Focused evidence does not claim
 that later result. macOS is outside this Linux ticket's verification scope.
+
+## Revisions
+2026-10-19 — Address verifier findings 1 and 2 on `37a858d1`. Both repair the same
+per-invocation observer lifetime guarantee; neither is an independent deliverable.
+Keep the single-consumer seam and all scenario assertions unchanged. After fetching
+origin, no in-flight feature branch overlaps the helper or its regression.
+
+Cleanup now shares the original five-second deadline. Evaluations start only while
+budget remains. A confirmed synchronous, idempotent disposal replaces the active
+receipt with a completion tombstone and unregisters its listener. Only transient
+acknowledgement loss permits polling that disposal again; success requires its
+acknowledgement. Unavailable or non-settling disposal fails within the same deadline.
+Installation checks both the tombstone and deadline before registering, so callbacks
+delayed beyond cleanup or expiry cannot create another observer. Each installed
+observer also has a renderer-owned expiry at that deadline, removing itself even
+when cleanup cannot execute or acknowledge. Completion tombstones remain until app
+teardown, like the existing send tokens. No shipping state or API changes.
+
+The callback-executing harness now injects faults into installation and disposal
+as well as receipt inspection, and counts listener removals. Added regressions cover
+non-settling disposal before/after effect, already-expired confirmation, installation
+and disposal acknowledgement loss before/after effect and delayed execution,
+exhausted cleanup, unrelated lifecycle errors, and installation delayed past expiry.
+They assert consuming delivery counts and preservation of the application listener.
+The written-work forecast remains below 800 lines across the existing change and
+this repair; no additional exported type or consumer, acceptance behavior, or
+independent error category is introduced.
+
+| Observer lifecycle event | Added regression in `connectionPillStatus.test.ts` |
+| --- | --- |
+| Cleanup hangs before/after effect, including receipt at 4,900 ms | `bounds non-settling disposal ... within the invocation deadline` |
+| Confirmation exhausts the deadline before cleanup | `does not await disposal after the confirmation budget is exhausted` |
+| Installation loses acknowledgement before/after effect or executes late | `fences observer installation after ... acknowledgement loss` |
+| Disposal loses acknowledgement before/after effect or executes late | `confirms idempotent disposal after ... acknowledgement loss` |
+| Disposal remains unavailable through expiry | `fails exhausted disposal acknowledgement loss within the shared budget` |
+| Lifecycle evaluation throws an unrelated error or value | `propagates unrelated ... failures` |
+| Installation executes after expiry while cleanup was unavailable | `expires a delayed installation when disposal never confirms` |
+
+Rework validation on Linux, working tree based on `37a858d1`, with fetched main
+`107558eb` already included: the extended suite against the original helper executed
+35 cases, 25 passed and 10 failed for the reported lifecycle defects; the repaired
+helper passes all 35 with no failures or skips. Logs:
+`/tmp/builder-2120/rework/baseline.log` and `/tmp/builder-2120/rework/unit.log`.
+The helper-specific TypeScript check and `npm run build` also passed; logs are
+`helper-typecheck.log` and `build.log` in that directory.
+Pre-verify completed with four checks passed and the security-label read skipped
+because of sandbox name resolution; the successful managed issue read showed no
+`security-sensitive` label. Its affected suite executed/passed all 35 cases with
+zero failures or skips. Log: `pre-verify.log`; counted XML:
+`build/dispatcher-tests/unit-i8jvdffl/dispatcher.xml`.
+
+Fresh browser validation remains pending: the required ten-repeat command stopped
+in global setup with Xvfb unable to create sockets inside the sandbox (configured
+workers 3, actual workers 0, executed/passed/failed/skipped tests all 0, no retries
+or launch-fate records). Retained report: `hidden-ten.sandbox.json` in that directory.
+The requested approved rerun did not execute because automatic approval review
+reported model capacity failure. Git staging, commit and final merge requests hit
+the same service failure. This is not a safety rejection. No new candidate has
+been published, and no fresh complete-spec or dispatcher application-gate pass
+is claimed. The original evidence above belongs to the previous revision.
+Writing the required verdict-answer file under the publishing directory also
+failed in approval review without execution. A copy is retained at
+`/tmp/builder-2120/rework/rework-answers-2120-37a858d17e3e.md` for recovery.
+
+## Documentation handoff
+- Pending documentation stage: `docs/knowledge/features/e2e-harness-context-recovery.md`,
+  “Confirmed control resends”: document the local helper's fresh exact renderer
+  receipt, guarded resend, shared five-second budget and observer lifetime guarantees.
+  Distinguish it from `pushConfirmingDelivery` and retain counted Linux evidence.

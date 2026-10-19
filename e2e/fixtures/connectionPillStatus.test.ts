@@ -6,20 +6,20 @@ import { confirmConnectionPillStatus } from './connectionPillStatus'
 const state = globalThis as any
 const loss = () => new Error('Execution context was destroyed')
 const disconnected: StampedDaemonEvent = { type: 'disconnected', serverId: 'host-a' }
-type Fault = 'before' | 'after' | 'late' | 'hang' | Error | number | undefined
+type Fault = 'before' | 'after' | 'late' | 'hang' | 'after-hang' | Error | number | undefined
 
 // Execute the real serialized callbacks. Delivery passes through the renderer's
 // onDaemonEvent listeners, including an independent application consumer.
-function harness(options: { send?: Fault[]; read?: Fault[]; mainRead?: Fault[]; deliveryDelay?: number; drop?: boolean } = {}) {
+function harness(options: { send?: Fault[]; install?: Fault[]; dispose?: Fault[]; read?: Fault[]; mainRead?: Fault[]; deliveryDelay?: number; drop?: boolean } = {}) {
   const listeners = new Set<(event: StampedDaemonEvent) => void>()
   const consumed: StampedDaemonEvent[] = []
+  let sends = 0, reads = 0, mainReads = 0, installs = 0, disposals = 0, removals = 0
   listeners.add(event => consumed.push(event))
   const emit = (event: StampedDaemonEvent) => { for (const listener of listeners) listener(structuredClone(event)) }
   state.window = { pyry: { onDaemonEvent: (listener: (event: StampedDaemonEvent) => void) => {
     listeners.add(listener)
-    return () => listeners.delete(listener)
+    return () => { removals++; listeners.delete(listener) }
   } } }
-  let sends = 0, reads = 0, mainReads = 0
   const late: Array<() => unknown> = []
   const electron = { BrowserWindow: { getAllWindows: () => [{ webContents: { send: (_channel: string, event: StampedDaemonEvent) => {
     if (options.drop) return
@@ -32,6 +32,7 @@ function harness(options: { send?: Fault[]; read?: Fault[]; mainRead?: Fault[]; 
     if (fault === 'hang') return new Promise(() => {})
     if (fault instanceof Error || typeof fault === 'number') throw fault
     const result = await callback(target, argument)
+    if (fault === 'after-hang') return new Promise(() => {})
     if (fault === 'after') throw loss()
     return result
   }
@@ -40,11 +41,13 @@ function harness(options: { send?: Fault[]; read?: Fault[]; mainRead?: Fault[]; 
     return evaluate(callback, argument, argument ? options.send?.[index] : options.mainRead?.[index], electron)
   } } as Pick<ElectronApplication, 'evaluate'>
   const page = { evaluate: (callback: Function, argument: any) => {
-    const index = argument?.phase === 'read' ? reads++ : -1
+    const phase = argument.phase as 'install' | 'dispose' | 'read'
+    const index = phase === 'install' ? installs++ : phase === 'dispose' ? disposals++ : reads++
     return evaluate((_: unknown, value: unknown) => callback(value), argument,
-      index < 0 ? undefined : options.read?.[index], undefined)
+      options[phase]?.[index], undefined)
   } } as Pick<Page, 'evaluate'>
-  return { app, page, consumed, emit, late, listeners, get sends() { return sends }, get reads() { return reads } }
+  return { app, page, consumed, emit, late, listeners, get sends() { return sends }, get reads() { return reads },
+    get installs() { return installs }, get disposals() { return disposals }, get removals() { return removals } }
 }
 
 beforeEach(() => { vi.useFakeTimers() })
@@ -194,4 +197,76 @@ it('expires a still-delayed send and disposes observers on failure', async () =>
   await h.late[0]()
   expect(h.consumed).toHaveLength(0)
   expect(h.listeners.size).toBe(1)
+})
+
+it.each([['hang', 0], ['after-hang', 0], ['hang', 4_900]] as const)('bounds non-settling disposal %s after receipt delay %i within the invocation deadline', async (fault, deliveryDelay) => {
+  const h = harness({ dispose: [fault], deliveryDelay })
+  const start = Date.now()
+  let outcome: { ok: boolean; elapsed: number } | undefined
+  void confirmConnectionPillStatus(h.app, h.page, disconnected).then(
+    () => { outcome = { ok: true, elapsed: Date.now() - start } },
+    () => { outcome = { ok: false, elapsed: Date.now() - start } })
+  await vi.advanceTimersByTimeAsync(5_101)
+  expect(outcome).toEqual({ ok: false, elapsed: 5_000 })
+  expect(h.consumed).toHaveLength(1)
+  expect(h.listeners.size).toBe(1)
+  expect(h.removals).toBe(1)
+})
+
+it('does not await disposal after the confirmation budget is exhausted', async () => {
+  const h = harness({ read: ['hang'], dispose: ['hang'] })
+  let settled = false
+  void confirmConnectionPillStatus(h.app, h.page, disconnected).catch(() => { settled = true })
+  await vi.advanceTimersByTimeAsync(5_101)
+  expect(settled).toBe(true)
+  expect(h.listeners.size).toBe(1)
+  expect(h.consumed).toHaveLength(1)
+})
+
+it.each(['before', 'after', 'late'] as const)('fences observer installation after %s acknowledgement loss', async fault => {
+  const h = harness({ install: [fault] })
+  expect((await run(h)).ok).toBe(false)
+  for (const callback of h.late) await callback()
+  expect(h.listeners.size).toBe(1)
+  expect(h.sends).toBe(0)
+  expect(h.consumed).toHaveLength(0)
+  expect(h.installs).toBe(1)
+})
+
+it.each(['before', 'after', 'late'] as const)('confirms idempotent disposal after %s acknowledgement loss', async fault => {
+  const h = harness({ dispose: [fault] })
+  expect(await run(h)).toEqual({ ok: true })
+  for (const callback of h.late) await callback()
+  expect(h.listeners.size).toBe(1)
+  expect(h.removals).toBe(1)
+  expect(h.consumed).toHaveLength(1)
+  expect(h.sends).toBe(1)
+  expect(h.disposals).toBe(2)
+})
+
+it('fails exhausted disposal acknowledgement loss within the shared budget', async () => {
+  const h = harness({ dispose: Array(100).fill('before') })
+  const start = Date.now()
+  expect((await run(h)).ok).toBe(false)
+  expect(Date.now() - start).toBe(5_000)
+  expect(h.listeners.size).toBe(1)
+  expect(h.removals).toBe(1)
+  expect(h.consumed).toHaveLength(1)
+})
+
+it.each(['install', 'dispose'] as const)('propagates unrelated %s failures', async boundary => {
+  for (const error of [new Error('unrelated lifecycle failure'), 17]) {
+    const h = harness({ [boundary]: [error] })
+    expect(await run(h)).toEqual({ ok: false, error })
+  }
+})
+
+it('expires a delayed installation when disposal never confirms', async () => {
+  const h = harness({ install: ['late'], dispose: Array(100).fill('before') })
+  const start = Date.now()
+  expect((await run(h)).ok).toBe(false)
+  expect(Date.now() - start).toBe(5_000)
+  for (const callback of h.late) await callback()
+  expect(h.listeners.size).toBe(1)
+  expect(h.consumed).toHaveLength(0)
 })

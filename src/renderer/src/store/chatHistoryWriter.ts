@@ -97,9 +97,11 @@ export function createChatHistoryWriter(deps: {
   async function drain(): Promise<void> {
     const failed = new Set<string>()
     while (pending.size > 0) {
-      const next = Array.from(pending).find(([key, snapshot]) => !failed.has(key) && !paused.has(snapshot.serverId))
-      if (next === undefined) break
-      const [key, snapshot] = next
+      const entries = pending.entries()
+      let next = entries.next()
+      while (!next.done && (failed.has(next.value[0]) || paused.has(next.value[1].serverId))) next = entries.next()
+      if (next.done) break
+      const [key, snapshot] = next.value
       const generation = generations.get(snapshot.serverId)
       if ('head' in snapshot) {
         const node = snapshot.head

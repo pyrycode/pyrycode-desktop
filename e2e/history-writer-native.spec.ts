@@ -50,7 +50,8 @@ function StorageProbe() {
     threads.setState({ hosts: new Map([[host, new Map([[chat, { snapshot: {}, owned: { metadata, items,
       removeIds: [], ranges: expected.ranges, acceptEpoch: true, completion: { fromVersion: 0, version: 1 },
       availability: { start: 0, available: false } } }]])]]) });
-    await writer.flush(); evidence.done = true; observing = false;
+    await writer.flush(); evidence.maxGap = Math.max(evidence.maxGap, performance.now() - last);
+    evidence.done = true; observing = false;
   }, expected: () => expected, flush: () => writer.flush() };
   return mounted ? <input aria-label="Storage input" value={text} onChange={e => setText(e.target.value)} /> : <App />;
 }
@@ -69,6 +70,11 @@ test('finite protected writer backlog preserves native keyboard and both event l
     preview: { host: '127.0.0.1', port: 0 }, logLevel: 'silent' })
   try {
     const { page, app, userDataDir } = await launchPairedApp({}, { productionSecrets: true, rendererUrl: server.resolvedUrls!.local[0] })
+    // Positively settle the pairing drive's tiny initial thread before isolating its presentation.
+    await expect.poll(() => page.evaluate(async ([host, chat]) => {
+      const saved = await window.pyry.chatHistory({ operation: 'readThread', serverId: host, conversationId: chat })
+      return saved.status === 'stored' && saved.snapshot.kind === 'daemon-items' ? saved.snapshot.thread.checkpoint : 0
+    }, [FIRST_SERVER_ID, SEEDED_ROW.id]))).toBeGreaterThan(0)
     const runtime = await app.evaluate(({ safeStorage }) => {
       if (!safeStorage.isEncryptionAvailable()) throw Error('OS protection unavailable')
       const backend = process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : 'os-keychain'

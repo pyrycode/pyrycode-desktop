@@ -15,20 +15,30 @@ work without validating/serializing the held item array. Production supplies
 `threadRuntime.items`; see [restore/query ownership](thread-runtime.md#restore-recovery-and-cleanup).
 Local unaccepted sends and session prompts are not durable cache content.
 
-The renderer coalesces bursts on a 200 ms timer per host/conversation/epoch. It
-retains highest item revisions (including strict text-only prefix growth at an equal revision when all other fields match), explicit removals and unioned ranges, while preserving
-metadata/completion/boundary observations in order. An admitted new epoch or explicit
-reset supersedes prior pending ownership. A reset has a unique `resetId`, retained
-through coalescing and recorded in the protected header for idempotent retry after
-a lost acknowledgement. Reaccepting the same epoch without reset preserves saved
-history. Omitted items and memory-only holder loss never imply removal or reset;
-pending ownership survives holder deletion/recreation and navigation.
+The renderer uses a 200 ms capture debounce and an ordered linked queue per
+host/conversation. Immutable owned changes are linked without scanning the backlog.
+Only an unstarted tail of distinct items/metadata may coalesce within 32 counted
+units; removals, ranges, repeated identities and owner/reset barriers stay serial.
+Ordered application retains revisions, equal-revision text extensions, placement,
+ranges and progress evidence. An admitted new epoch or explicit reset supersedes
+prior pending ownership. A unique `resetId` survives exact retry and is recorded
+in the protected header. Reaccepting the same epoch without reset preserves history.
+Omission and holder loss imply no deletion/reset; pending work survives navigation
+and holder recreation.
 
-One serial drain takes a batch while later received changes accumulate separately.
-Success acknowledges only that batch. Failure rejoins it before newer pending work,
-subject to reset/epoch supersession and host/deletion fences. A failed scope is not
-retried again in that drain and failure schedules no immediate retry timer; a later
-explicit flush or received event can retry. This retains work without spinning.
+One serial drain submits at most 32 items/removals/ranges/progress observations per
+request and yields a MessageChannel task between submissions, even with paused
+renderer timers. Success advances only the current request cursor. Failure retains
+that exact request before newer queued work, subject to ownership fences, and
+suppresses its key for the rest of the drain. It schedules no immediate retry timer;
+a later explicit flush or received event retries with the same bounds.
+Split saves retain a separate protected persistence obligation until all their
+parts and original ordered progress are durable. Interrupted full/page reads fail
+closed, even when the saved checkpoint already covers the incoming version. Exact
+accepted acknowledgements are idempotent; authorized reset/replacement/deletion can
+supersede abandoned work. See the
+[complete obligation and retry contract](chat-history-api.md#owned-authoritative-mutations).
+
 List canonical-value comparison still suppresses unchanged received lists and bursts
 that return to the last successfully saved list value; it does not compare whole
 thread snapshots.

@@ -177,3 +177,28 @@ Linux x64, production/test source `bc7c8add` (repair `b58552ca`, preceding plan/
 - Supplementary `typecheck:client-tests` remains red with six identical pre-existing TS2339 diagnostics on candidate and unchanged main. Exact comparison logs: `/tmp/builder-2088-obligation-client-typecheck.log`, `/tmp/builder-2088-client-baseline.log`. Separate follow-up #2119 is in Backlog with `priority:low`; no related code/assertions were changed or skipped here. Production build/typecheck, pre-verify and both affected runtime scenarios pass.
 
 Verifier finding 1 is fixed in `b58552ca`; finding 2 remains fixed in retained `2f09af90`. Required numbered answers are recorded in the publishing handoff. Documentation requirements above remain pending for the documentation stage. Complete configured unit/application acceptance remains dispatcher-owned. macOS is outside this Linux ticket's verification scope; no provider credentials or live daemon check was required.
+
+## Revisions — paused-clock shutdown (2026-10-19)
+
+Verifier finding 1 on `fbc2aaa4` identifies shutdown suspended on `drain`'s renderer timer when application tests pause the clock. Replace only the between-submission wait with a one-shot `MessageChannel` task. Close both ports on delivery before resuming the drain. This preserves a real event-loop boundary without depending on elapsed renderer time; the ordinary 200 ms capture debounce remains clock-controlled. No ownership, persistence-obligation, acknowledgement, retry or teardown ordering changes.
+
+Files read: `src/renderer/src/store/chatHistoryWriter.ts` → `drain`, `flush`, `stop`; `src/renderer/src/store/chatHistoryWriter.test.ts` → `harness` and bounded-work heartbeat assertion; `e2e/indexed-history-lifecycle.spec.ts` → both buffered-close/exact-offline-reopen cases; `e2e/permission-resolution-notices.spec.ts` → `freezeTime` and paused-clock teardown; the history API/native testing and development-verification overviews → runtime preparation and proof boundaries. No in-flight feature branch overlaps the two writer files.
+
+Test first: a bounded backlog must explicitly flush, then admit more work and stop, while timers stay frozen. Assert complete ordered requests, bounded sizes and final admitted items. Observe independent posted tasks between writes so replacing the yield with a microtask would fail. Rerun the existing four named application regressions without relaxing buffered-close/reopen or notice assertions, followed by the native 8333-item probe, packaged protection proof and both guarded thread/history replays on Linux. Full configured acceptance remains dispatcher-owned.
+
+Sizing: the same correctness repair and its regression proof; approximately 90 additional written lines, no new exported types, state, failure branches or consumer updates. The ticket's documented verification-floor exception remains applicable.
+
+## Security review — paused-clock shutdown
+
+**Verdict:** PASS
+
+- Trust boundaries: the channel carries only a local wake-up constant inside `drain`; it receives no daemon data and crosses no IPC authority boundary. Main admission remains independent.
+- Tokens/secrets, storage and cryptography: no credential, protected record, path, schema, algorithm or persistence identity changes.
+- Electron: built-in renderer message ports need no Node integration or bridge extension; sandbox, context isolation and navigation settings stay intact.
+- Network/I/O: no socket, relay, frame or timeout changes; the existing production IPC/protected-storage path is reused.
+- Errors/logs: no new failure classification or logged data; existing static writer diagnostics remain.
+- Concurrency: one awaited task per bounded submission; both ports close before resolution. The existing drain promise owns it through flush/stop, and generation/queue fences still run around each write. No retry loop or abandoned recurring task is added.
+- Threat model: hostile daemon and compromised-renderer admission remain bounded and independently parsed; relay confidentiality and disk protection continue through Noise/safeStorage. Local task scheduling grants no daemon-completion or owner authority.
+
+**Reviewer:** builder (self-review per `builder/security-review.md`)
+**Date:** 2026-10-19

@@ -10,9 +10,11 @@ export type ThreadBodyState = (
   | { type: 'ready'; content: Record<string, unknown>; stale: boolean }
   | { type: 'missing' | 'loading' | 'failed'; reason: string; content?: Record<string, unknown>; stale: true }) & { page?: ChildPage }
 type Lease = { active: boolean; listener?: (state: ThreadBodyState) => void }
+type ChildAdmission = { failure?: { reason: string } }
 type Entry = { request: Request; generation: symbol | undefined; leases: Set<Lease>; state: ThreadBodyState;
   connection?: symbol; requestId?: string; staged?: Record<string, unknown>; bytes: number;
-  timer?: ReturnType<typeof setTimeout>; queued: boolean; cursor?: ThreadChildCursor; replacing?: boolean }
+  timer?: ReturnType<typeof setTimeout>; queued: boolean; cursor?: ThreadChildCursor; replacing?: boolean;
+  admission?: ChildAdmission; acknowledgedFailure?: ChildAdmission['failure'] }
 const missing = (reason: string): ThreadBodyState => ({ type: 'missing', reason, stale: true })
 
 /** Session-only bodies. This writer never receives a canonical store mutation capability. */
@@ -44,7 +46,8 @@ export function createThreadBodies(deps: {
       deps.send({ type: 'cancelThreadQuery', serverId: e.request.serverId, requestId: id })
     }
   }
-  function fail(e: Entry, reason: string): void {
+  function fail(e: Entry, reason: string, newFailure = true): void {
+    if (e.admission && newFailure) e.admission.failure = { reason }
     const content = retained(e)
     cancel(e); e.state = { type: 'failed', reason, stale: true, ...(content ? { content } : {}), ...page(e) }
     measure(e); trim()
@@ -75,17 +78,17 @@ export function createThreadBodies(deps: {
       catch { fail(e, 'send-failed') }
     }
   }
-  function start(e: Entry, explicitRetry = false): void {
+  function start(e: Entry): void {
     if (disposed || retiring > 0 || !e.leases.size) return
-    if (e.request.kind === 'children' && !explicitRetry) {
-      // Successful pages keep their limit-specific identity; failure admission belongs to the parent scope.
-      const failed = [...entries.values()].find(x => x.generation === e.generation &&
-        x.state.type === 'failed' && key(x.request, false) === key(e.request, false))
-      if (failed?.state.type === 'failed') { fail(e, failed.state.reason); return }
+    const failure = e.admission?.failure
+    if (failure && failure !== e.acknowledgedFailure) {
+      // Refusing admission must not revoke another enumeration's explicit retry.
+      fail(e, failure.reason, false); return
     }
     const c = connections.get(e.request.serverId), content = retained(e)
     if (!c) { e.state = content ? { type: 'ready', content, stale: true, ...page(e) } : missing('offline'); measure(e); trim(); return }
     if (!c.supported) {
+      if (e.admission) e.admission.failure = { reason: 'unsupported' }
       e.state = { type: 'failed', reason: 'unsupported', stale: true, ...(content ? { content } : {}), ...page(e) }
       measure(e); trim()
       deps.log({ event: 'thread-body', code: 'unsupported' }); return
@@ -105,6 +108,7 @@ export function createThreadBodies(deps: {
       const listeners: Array<(state: ThreadBodyState) => void> = []
       // Revoke every affected lease before cancellation or notifications can call back into this writer.
       for (const [, e] of affected) {
+        e.acknowledgedFailure = undefined
         for (const lease of e.leases) {
           lease.active = false; leaseCount--
           if (lease.listener) listeners.push(lease.listener)
@@ -159,7 +163,10 @@ export function createThreadBodies(deps: {
           victim[1].state = missing('evicted'); victim[1].bytes = 0
           entries.delete(victim[0])
         }
-        e = { request: { ...request }, generation: scope?.generation, leases: new Set(), state: missing('unfetched'), bytes: 0, queued: false }
+        const admission = request.kind === 'children' ? [...entries.values()].find(x => x.generation === scope?.generation &&
+          key(x.request, false) === key(request, false))?.admission ?? {} : undefined
+        e = { request: { ...request }, generation: scope?.generation, leases: new Set(), state: missing('unfetched'), bytes: 0,
+          queued: false, admission }
         entries.set(id, e)
       }
       // Map order is the cache's bounded LRU list; touching never changes canonical item order.
@@ -168,7 +175,7 @@ export function createThreadBodies(deps: {
       entry.leases.add(lease); leaseCount++
       if (!entry.requestId && !entry.queued && entry.state.type !== 'failed' &&
           (entry.state.type !== 'ready' || entry.state.stale || entry.connection !== connections.get(request.serverId)?.token)) {
-        entry.cursor = undefined; entry.replacing = true; start(entry)
+        entry.cursor = undefined; entry.replacing = true; entry.acknowledgedFailure = undefined; start(entry)
       }
       listener?.(entry.state)
       return {
@@ -184,7 +191,8 @@ export function createThreadBodies(deps: {
           }
         },
         retry() { if (!disposed && retiring === 0 && lease.active && entry.state.type === 'failed') {
-          entry.cursor = undefined; entry.replacing = true; start(entry, true); notify(entry)
+          entry.cursor = undefined; entry.replacing = true; entry.acknowledgedFailure = entry.admission?.failure
+          start(entry); notify(entry)
         } },
         continue(cursor: ThreadChildCursor) {
           if (disposed || retiring > 0 || !lease.active || request.kind !== 'children' || entry.state.type === 'failed') return

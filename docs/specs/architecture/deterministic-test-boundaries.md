@@ -65,3 +65,19 @@ remain Playwright-owned. A running async callback cannot be cancelled genericall
 cleanup owns it. Worker display ownership isolates X state, not CPU or native secret services. Product
 layout-neutral hover and bounded renderer batching remain independent changes with their existing design
 and runtime acceptance requirements.
+
+## Final candidate review
+
+Candidate implementation `b1bd18b` preserves the tested source apart from the explicit packaged-probe
+worker-display fix. Complete Mac units: 9733 passed, 0 failed, 6 existing skips. Typecheck, client-test
+typecheck, build and docs guard pass. The affected-file pre-verifier passes main ancestry, removed-string,
+typecheck and all 10 command-control regressions; its ticket-label check does not apply to this branch.
+Guarded final recorded clients: 29 passed, 0 failed, 1 existing fixme, zero retries/forbidden launches.
+
+Fractal desktop runtime, implementation `63d6812`, two workers/retry zero: complete native gate 505
+passed, 1 failed, 5 existing skips. The only failure was the packaged probe, whose child launched without
+DISPLAY after display ownership moved out of global setup. Runtime stderr identified the missing X
+server. `b1bd18b` explicitly passes `withWorkerDisplay` to that child without changing protection or
+history assertions; the corrected native case passes 1/1 on the same runtime, retry zero. A complete
+confirmation run on this final implementation is retained separately. Its counted result and deployed
+merge revision are recorded in PR #2132. No old failed report is represented as a successful full run.

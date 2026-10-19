@@ -88,10 +88,18 @@ it('bounded data prefixes reopen unfinished and retry to the exact separately ad
     })
     api.acceptEpoch('a', 'c', 'e')
     await writer.flush()
-    const batch = api.beginBatch('a', 'c', 'e')!
-    batch.applyItems(Array.from({ length: 100 }, (_, id) => ({ id, rev: 1, kind: 'assistant_message',
-      order: id % 7, shown: true, active: false, status: 'finished', summary: '', content: { text: `fixture ${id}` } })), 100)
-    batch.commit({ fromVersion: 0, version: 100, ranges: [{ start: 0, end: 101 }], olderAvailable: false })
+    const held = source.getState().hosts.get('a')!.get('c')!
+    const items = Array.from({ length: 100 }, (_, id) => ({ id, rev: 1, kind: 'assistant_message',
+      order: id % 7, shown: true, active: false, status: 'finished', summary: '', content: { text: `fixture ${id}` } }))
+    const ranges = [{ start: 0, end: 101 }]
+    const metadata = { hostId: 'a', conversationId: 'c', epoch: 'e', version: 100, checkpoint: 100,
+      uncommittedVersion: 0, repair: null, olderAvailable: false }
+    source.setState({ hosts: new Map([['a', new Map([['c', { ...held,
+      snapshot: { ...metadata, items: [...items].sort((a, b) => a.order - b.order), ranges,
+        arrivalOrder: items.map(i => i.id) },
+      owned: { metadata, items, ranges, removeIds: [], acceptEpoch: false,
+        completion: { fromVersion: 0, version: 100 }, availability: { start: 0, available: false } }
+    }]])]]) })
     await writer.flush()
     if (fail) {
       const partial = await fresh().execute({ operation: 'readThread', serverId: 'a', conversationId: 'c' })

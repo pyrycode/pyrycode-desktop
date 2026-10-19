@@ -2,7 +2,8 @@ import { mkdtemp } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { build, loadConfigFromFile, preview } from 'vite'
-import { test, expect, FIRST_SERVER_ID, SEEDED_ROW } from './fixtures/launchPairedApp'
+import { test, expect, FIRST_SERVER_ID, SEEDED_ROW, seedConversationsFrame, emptyThreadWindow } from './fixtures/launchPairedApp'
+import { decodeEnvelope } from '../src/main/transport/codec'
 
 // Isolate storage from renderer admission and whole-conversation presentation. No product UI changes.
 const source = `
@@ -69,14 +70,20 @@ test('finite protected writer backlog preserves native keyboard and both event l
   const server = await preview({ configFile: false, root: resolve('src/renderer'), build: { outDir },
     preview: { host: '127.0.0.1', port: 0 }, logLevel: 'silent' })
   try {
-    const { page, app, userDataDir } = await launchPairedApp({}, { productionSecrets: true, rendererUrl: server.resolvedUrls!.local[0] })
+    const { page, app, userDataDir } = await launchPairedApp({ threadMode: 'native', buildReplyFrames: bytes => {
+      const request = decodeEnvelope(bytes)
+      return request.type === 'list_conversations' ? [seedConversationsFrame()]
+        : request.type === 'thread_catch_up' ? [emptyThreadWindow(request)] : []
+    } }, { productionSecrets: true, rendererUrl: server.resolvedUrls!.local[0] })
     // Positively settle the pairing drive's tiny initial thread before isolating its presentation.
     await expect.poll(() => page.evaluate(async ([host, chat]) => {
       const saved = await window.pyry.chatHistory({ operation: 'readThread', serverId: host, conversationId: chat })
       return saved.status === 'stored' && saved.snapshot.kind === 'daemon-items' ? saved.snapshot.thread.checkpoint : 0
-    }, [FIRST_SERVER_ID, SEEDED_ROW.id]))).toBeGreaterThan(0)
-    const runtime = await app.evaluate(({ safeStorage }) => {
+    }, [FIRST_SERVER_ID, SEEDED_ROW.id])).toBeGreaterThan(0)
+    const runtime = await app.evaluate(({ safeStorage, app }) => {
       if (!safeStorage.isEncryptionAvailable()) throw Error('OS protection unavailable')
+      if (app.commandLine.hasSwitch('password-store') || app.commandLine.hasSwitch('use-mock-keychain'))
+        throw Error('mock protection switches remain enabled')
       const backend = process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : 'os-keychain'
       if (backend === 'basic_text' || process.env.PYRY_TEST_SECRET_BACKEND === '1') throw Error('production protection required')
       const beats = { maxGap: 0, count: 0, last: Date.now(), observing: true }

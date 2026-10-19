@@ -394,7 +394,8 @@ export const test = base.extend<PairedAppFixtures>({
       // stays here: the scenario's env and its per-run user-data dir are this fixture's business.
       let launchIndex = 0
       const app = await launchIsolatedApp({
-        args: ['.', `--user-data-dir=${userDataDir}`],
+        args: [...(control.productionSecrets ? ['-r', join(process.cwd(), 'e2e/fixtures/productionSecrets.cjs')] : []),
+          '.', `--user-data-dir=${userDataDir}`],
         env,
         fate: {
           ...fate,

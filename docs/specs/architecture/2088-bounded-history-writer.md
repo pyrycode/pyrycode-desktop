@@ -73,3 +73,7 @@ None. Queueing original observations is simpler than rebuilding a coalesced inde
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-19
+
+## Revisions
+
+2026-10-19: Native execution showed that Playwright's Electron loader forces `password-store=basic` and `use-mock-keychain`, independently of the application's test-backend flag. The native-only `productionSecrets` launch option also requires a pre-readiness fixture hook removing those mock-protection switches. It preserves sandbox/process isolation settings and asserts the selected real backend at runtime. The failed ordinary launch remains retained under `/tmp/builder-2088/native-run2*`; it establishes no storage/input pass.

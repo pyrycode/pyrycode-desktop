@@ -30,6 +30,7 @@ export function createQueueTurnEvidence(options: {
     if (thread) {
       if (event.type !== 'threadUpdate' && event.type !== 'threadReply') return
       const update = event.type === 'threadUpdate' ? event.update : event.reply
+      if (update.type === 'thread_tool_body') return
       const p = update.payload
       const companion = appendCompanion
       appendCompanion = undefined

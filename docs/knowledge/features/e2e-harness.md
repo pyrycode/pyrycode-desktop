@@ -87,6 +87,36 @@ restart while retaining the daemon and its conversations.
 - **Playwright:** `testDir: './e2e'` and `testMatch: '**/*.spec.ts'` in `playwright.config.ts`.
 - **Vitest:** `include: ['src/**/*.{test,spec}.{ts,tsx}', 'e2e/**/*.test.ts']` in `vitest.config.ts`. Within `e2e/`, the suffix separates pure fixture unit tests from browser specs. `fakeDaemonSetup.test.ts`, for example, runs a local HTTP server without launching Electron.
 
+### Scalar turn evidence
+
+[`completedHandoverReply`](../../../e2e/fixtures/lunaHandoverProof.ts),
+[`createQueueTurnEvidence`](../../../e2e/fixtures/queueTurnEvidence.ts) and
+[`createCodexChannelProof`](../../../e2e/fixtures/codexChannelProof.ts) fold full
+thread items and explicitly narrow patches to `thread_item_changed` or
+`thread_text_append` before reading scalar revision/text fields.
+`thread_tool_body` data and final replies cannot supply assistant text, fresh
+handover activity, queue markers/IDs or turn completion, even when their content
+resembles the expected answer or a successful terminal. The fixture regressions
+cover same-epoch replies for both held and missing item IDs, incomplete evidence
+staying incomplete, and completed evidence surviving later detail reads.
+
+In the queue reducer, ignore tool detail **before** clearing `appendCompanion`.
+A field change can be followed by its text suffix at the same item revision and
+thread version. A detail reply between them can leave the current snapshot
+unchanged while destroying the pending match and causing the legitimate suffix
+to be rejected. Interleave data/final replies inside that pair, then require the
+marker and a real completion. Retain the existing same-revision duplicate-suffix
+rejection; broadly accepting equal revisions would weaken the evidence.
+
+The Codex channel scenario's `observe` passes the shared collector's `record` to
+its exposed callback and retains subscription/stop ownership. Its unit tests use
+that same reducer. The collector retains settings/models/acknowledgements/created
+projections and host/chat/epoch-qualified item facts used by `deltas` and `ends`.
+Keep the revision, ownership and completion assertions alongside the exclusions;
+ignoring every event would otherwise satisfy an unchanged-snapshot check.
+See [counted Linux validation and replay limits](development-verification-what-each-test-tier-proves.md#scalar-client-evidence-validation)
+and the [fixture typechecking boundary](e2e-harness-limitations.md#edge-cases-and-limitations).
+
 ### Desktop isolation (default-tier launches)
 
 See [Desktop isolation (default-tier launches)](e2e-harness-desktop-isolation.md#desktop-isolation-default-tier-launches) for window presentation, renderer throttling and real-pointer observations.

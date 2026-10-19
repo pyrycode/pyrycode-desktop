@@ -132,3 +132,37 @@ Errors remain the existing replacement Error with no cause. Parser codes are all
 - Prior native capture retained under `/tmp/builder-1983/native-prior-20261019/desktop/`: 398 executed, 397 passed, 1 failed, 1 skipped, 0 retries, mute passed. Failure: `thread-focused ArrowUp releases following during streaming`; skip: `an independent input-enabled cover preserves isolated hover` because a never-shown window receives no pointer from the display. All 456 setup records opened. These are historical results at `e8281ae4`, not acceptance of this repair revision.
 
 Only macOS is verified by this ticket; other operating systems are outside its verification scope. Subsequent evidence-only plan commits do not change the tested implementation tree.
+
+## Returned full-suite evidence
+
+2026-10-19: read completed task `1c09b4ac6e58ce7f6f97d670ce41180fa19050515e17d5c3edc9e642c3d0c91d` into fresh `/tmp/builder-1983/native-final-20261019-review/desktop/` and inspected all six returned artifacts. This supersedes the pending-result statement above.
+
+- Reviewed implementation: `fdd49d04635408dbd8a6cbe69d53089ace54377b`, macOS arm64. Managed invocation: `node node_modules/@playwright/test/cli.js test --config=playwright.config.ts`, with no file, grep, shard or project filter. All three configured projects (`native-writer`, `clipboard`, `parallel`) ran with four configured/actual workers, repeatEach 1 and retries 0. Returned configuration SHA256 `0d1fb967aa3b3d66275b736ec63bc55142dff69708eb297cce6ff3d4898d2643` matches that revision's file.
+- Complete result: **517 executed, 510 passed, 7 failed, 3 skipped, 0 retries/flaky**, accounting for all 520 configured cases; no top-level report errors. Installation and build succeeded in `execution.log`. The gate remains **failed**, not accepted as green.
+- The unchanged named mute-command scenario was present and passed once at retry index 0. Its earlier ten consecutive retry-disabled passes remain recorded above; neither the scenario nor its owning-host, settlement, unclaimed-ID or list-refresh assertions changed.
+- All **566** setup records contain attempt 1, outcome/responder `opened`, `listenerMatchesDial: true`, upgrade/connection observed, no parser observation/rejection and no failure class. No setup failure or retry occurred. This corroborates the controlled ownership repair; it does not identify the historical HTTP responder.
+- Fresh artifacts: `capture.json`, `playwright.json`, `playwright.list.log`, `execution.log`, `playwright.config.ts`, `fake-daemon-setup.json` in the directory above. Playwright report SHA256: `df8e5423094a38eb1fa1bd7b8dd61423d5e62c3ee4b63883b2999e00c8626636`; setup attachment SHA256: `4eaa0143896ef14fff584310af55da5acc8b69e4f96ca2131729b1e250c8e8a5`. The managed task retains the portable originals.
+
+Every remaining failure is in `visible-tail-read.spec.ts`, at `focusVisibleTailWindow`'s acknowledged native-state mismatch (`Visible-tail window is not visible and focused`), before the read-publication assertions:
+
+| Failed scenario | Result |
+| --- | --- |
+| `read setup is reused across committed same-row deltas on short and long threads` | failed, retry 0 |
+| `stable callbacks exclude hidden, queued and received but uncommitted tails` | failed, retry 0 |
+| `committed folded tails require focus, uncovered viewport and a closed reader` | failed, retry 0 |
+| `late read contract rechecks the committed tail while visible` | failed, retry 0 |
+| `late read contract rechecks the committed tail while blurred` | failed, retry 0 |
+| `late read contract rechecks the committed tail while reader-covered` | failed, retry 0 |
+| `late read contract rechecks the committed tail while above-tail` | failed, retry 0 |
+
+All seven launch-fate attachments report running at outcome, exit 0, no signal and no teardown failure. The focus helper/spec are unchanged by this branch. No open matching tracker existed; filed [#2150](https://github.com/pyrycode/pyrycode-desktop/issues/2150) in Backlog at priority:low for this separate macOS boundary. Closed #2074 covered transient acknowledgement loss on Linux; it does not establish a cause for these acknowledged native-state mismatches. No focus assertion, retry setting or skip was changed here, and no accepted-inherited-failure verdict is claimed. Verifier owns full-gate triage.
+
+All three existing skips are retained:
+
+- `desktop-isolation.spec.ts` → `an independent input-enabled cover preserves isolated hover`: explicit reason, `a never-shown window receives no pointer from the display`.
+- Recorded `claude-system-prompt` → `real claude picks up a saved channel system prompt at Reset session`: existing `test.fixme`; report supplies no description. Source documents the upstream daemon's frozen session argv not refreshing a saved prompt on reset.
+- `sidebar-pinned.spec.ts` → `blocked on #2089 — unpair an unreachable saved host after relaunch`: existing `test.skip`; report supplies no description. Source links #2089's unpair hang reproduced without pins on main.
+
+Current main was merged in `20008086` before this evidence review. Relative to the tested implementation, that merge changes the independent thread-scroll-work scenario and knowledge/spec documentation; setup/forwarder and mute/focus scenarios are unchanged. No duplicate native capture was requested for this evidence-only follow-up.
+
+After that merge, fresh install, both sequential pre-verify checks and `npm run build` pass: setup **21 executed/passed**, forwarder **16 executed/passed**, zero failures/skips, all five pre-verify checks green in each run. `npm run check:docs` and `git diff --check` also pass. Fresh logs are `/tmp/builder-1983/result-review-install.log`, `result-review-preverify-setup.log`, `result-review-preverify-forwarder.log`, `result-review-build.log` and `result-review-docs.log`; counted unit JSON/XML and invocation records are copied to `/tmp/builder-1983/result-review-unit-evidence/`. This follow-up changes only plan evidence; no further Electron launch or provider/live test was required. macOS remains the only verified operating system.

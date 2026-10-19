@@ -40,11 +40,12 @@ const recording = (): Recording => ({
     { connection: 3, direction: 'daemon', message: message(3, 'conversations') }
   ]
 })
-type ReplayHook = (deps: { daemon: object; exchange: RecordedExchange; recording: Recording },
+type ReplayHook = (deps: { daemon: object; exchange: RecordedExchange; recording: Recording;
+  relay?: { whenServerFramesForwarded: (count: number) => Promise<void> } },
   use: () => Promise<void>) => Promise<void>
 const registeredHook = (registered as unknown as { _clientReplay: [ReplayHook, object] })._clientReplay[0]
 const replayHook: ReplayHook = (deps, use) => registeredHook({ ...deps,
-  relay: { whenServerFramesForwarded: async () => {} } } as any, use)
+  relay: deps.relay ?? { whenServerFramesForwarded: async () => {} } } as any, use)
 
 afterAll(() => { vi.unstubAllEnvs() })
 afterEach(() => {
@@ -90,6 +91,7 @@ it('settles the delayed resumed list and sends both replies before exit and inde
       await outgoing
       await withIsolatedElectronApp(async () => {
         order.push('independent-connection')
+        console.info(JSON.stringify({ retirementOrdering: order, ...exchange.stats() }))
         exchange.reconnect()
         exchange.reply(encodeEnvelope(message(2, 'list_conversations')))
       })
@@ -110,6 +112,38 @@ it('failure cleanup bypasses settlement and preserves the scenario error', async
     withIsolatedElectronApp(async () => { throw primary }))).rejects.toBe(primary)
   expect(apps[0].child.exitCode).toBe(0)
   expect(order).toEqual(['exit-1'])
+  expect(clientAppLifecycle.closing).toBeUndefined()
+})
+
+it.each(['forwarded', 'failed'] as const)('retirement waits for relay forwarding: %s', async mode => {
+  const order: string[] = [], apps = processes(order), capture = recording()
+  const exchange = new RecordedExchange(capture), primary = new Error('relay delivery failed')
+  let confirm = () => {}, fail = (_error: Error) => {}, started = () => {}
+  const forwarding = new Promise<void>((resolve, reject) => { confirm = resolve; fail = reject })
+  const observed = new Promise<void>(resolve => { started = resolve })
+  const relay = { whenServerFramesForwarded: vi.fn((_count: number) => {
+    order.push('relay-wait'); started(); return forwarding
+  }) }
+  const outcome = replayHook({ daemon: {}, exchange, recording: capture, relay }, () =>
+    withIsolatedElectronApp(async profile => {
+      exchange.reply(encodeEnvelope(message(2, 'list_conversations')))
+      order.push('prefix-complete')
+      await profile.close()
+    })).then(() => undefined, error => error)
+  await observed
+  // Matching/emission alone cannot retire the process: the relay has not confirmed its writes.
+  expect(relay.whenServerFramesForwarded).toHaveBeenCalledTimes(1)
+  expect(relay.whenServerFramesForwarded).toHaveBeenCalledWith(2)
+  expect(exchange.stats()).toEqual({ matchedRequests: 1, emittedFrames: 1, remainingRequests: 3 })
+  expect(apps[0].child.exitCode).toBeNull()
+  expect(order).toEqual(['prefix-complete', 'relay-wait'])
+  order.push(mode === 'forwarded' ? 'relay-forwarded' : 'relay-failed')
+  if (mode === 'forwarded') confirm()
+  else fail(primary)
+  expect(await outcome).toBe(mode === 'forwarded' ? undefined : primary)
+  expect(apps[0].child.exitCode).toBe(0)
+  expect(order.at(-1)).toBe('exit-1')
+  expect(clientAppLifecycle.opened).toBeUndefined()
   expect(clientAppLifecycle.closing).toBeUndefined()
 })
 

@@ -175,6 +175,14 @@ saved/live restoration fixes merged in PR #2058.
 
 ## Validation evidence
 
+The [completed-profile retirement contract and Linux evidence](recorded-tests.md#replay-contract)
+record the final connection-completion then relay-forwarding boundary, five fresh
+three-worker paired batches (20 executed/passed, 0 failed/skipped), subsequent
+guarded replay (29 executed/passed, 0 failed, 1 existing fixme), and both named
+history/thread cases passed without retry in the configured application gate
+(515 executed/passed, 0 failed, 5 skipped). This closes the later retirement
+acceptance; #2129 is closed. Earlier failed runs remain historical failures.
+
 The [saved-title observation evidence](knowledge/features/development-verification.md#protected-saved-list-title-observation)
 records the controlled stored-null mechanism, 11 passing regressions, five
 three-worker paired batches (20 passed), the complete guarded recorded run

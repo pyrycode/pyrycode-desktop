@@ -83,6 +83,13 @@ row geometry reads without copying or enumerating all children; no candidate mea
 anchor. Searching unfiltered rectangles would be incorrect: hidden rows report viewport-zero
 rectangles, breaking monotonic order, and long collapsed runs must not become anchors.
 
+The same membership index maps source IDs (`data-read-row`) and run headers
+(`data-run-row`) to direct children. Membership or source/run identity changes
+refresh it; root replacement and teardown clear it. `rememberTop` resolves the
+reading row's `data-thread-controllers` through that map, nearest ancestor first,
+and remembers their offsets. Repeating source-row queries on every measurement
+would regress unchanged-membership read/scroll work; empty controller IDs are ignored.
+
 A subtree `MutationObserver` distinguishes direct-child membership changes from mutations
 inside existing rows. Pending records are drained before lookup/layout synchronization,
 so committed collapse or expansion is reflected before resize delivery. Descendant text,
@@ -403,12 +410,40 @@ cost are separate concerns. No live-Claude or visual comparison was required or 
 The injectable [daemon item view](conversation-shell-timeline-render.md#supplied-daemon-item-presentation)
 calls `useThreadScrollPin(conversationId, visibleItems, onOlder)`. The immutable
 presentation token combines the snapshot item list and pending local sends through
-a memoized array; upward paging uses the supplied `onOlder` callback. A held reader's
+a memoized array whose identity also changes with tool/run expansion and admitted
+source IDs; upward paging uses the supplied `onOlder` callback. A held reader's
 remembered anchor includes that token. A changed list
 restores the surviving direct-child row to its measured viewport position before
 paint, covering older-item prepends (including at offset zero) and content revisions
 above the reader. Following readers use the existing bottom pin as rows append/grow.
 Native anchoring remains enabled for non-React growth such as decoded images.
+
+`ThreadItemsView` checks full ancestor and enclosing-run visibility before adaptation
+or mounting, admitting up to 256 newly visible source IDs per turn. A cancellable
+zero-delay timer continues admission between chunks; dependency changes cancel old
+work, and unmount clears it. Host/conversation/epoch remounts reset admission and
+expansion. Closed rows are excluded immediately, even if previously admitted; their
+latest held revision is adapted only when reopened. This uses already-held complete
+items without detail reads or idle prefetch. It does not repair incoming-update
+batching (#2079) or activate compact delivery (#2128). The 64-row prototype spent
+too much work repeating layout reconciliation to complete the generated workload.
+
+Local expansion and admission call `ThreadPin.layoutChanged` on the active pin,
+including the application's parent-owned pin. A still-visible reading row keeps
+its exact remembered viewport offset. If collapse removes it, reconciliation selects
+the nearest surviving controlling header from the membership index and clamps the
+complete header between measured top-chrome bottom and input-chrome top, accounting
+for its height. Clamping against the scroller rectangle alone can hide the header
+behind translucent chrome. `Go to agent` reveals ancestors, immediately admits its
+destination and scrolls to the card without changing that card's expansion. It then
+records the post-navigation anchor; reveal-state cleanup must not undo that explicit
+movement with stale compensation.
+
+Admission or a controlling header cannot supply a descendant's read evidence. Only
+the actual committed, visible source row and its paired snapshot revision can authorize publication;
+closed descendants, folded members, run headers and launch markers cannot substitute.
+Reopening a revised source must commit before geometry callbacks can publish its
+new target. See [authoritative read publication](conversation-shell.md#authoritative-thread-read-publication).
 
 `snapshot.version` is protocol progress, not a presentation-change counter. A completed
 older batch may insert rows while the store retains its existing version through
@@ -457,9 +492,11 @@ Before checking preservation, agent 10's `1 tool` and agent 30's `0 tools` certi
 the reparent projection committed. Rendered row 5 certifies the older insertion.
 Each update then settles before comparison with the original row-100 baseline;
 unchanged pre-update geometry cannot satisfy these commit barriers. The cases retain
-the <0.5px position tolerance, distance from bottom greater than 100px, child DOM
-identity, expansion, lifecycle and host/chat/epoch reuse checks. Optional supplied
-read-observer inputs stay disabled; no production scroll behavior changed.
+the <0.5px position tolerance, distance from bottom greater than 100px, source
+identity, expansion, lifecycle and host/chat/epoch reuse checks. Descendants now
+unmount while closed, so reopening checks source/expansion retention rather than
+DOM-object equality. Optional supplied read-observer inputs stay disabled in these
+agent-placement cases; the held-item workload below separately checks read publication.
 
 The [diagnosis and commands](../../specs/architecture/1964-agent-reparent-scroll-reliability.md#revisions)
 pin independent main at `bbcd894329a4a4410d0c10cd797e4f1bb05634d8`
@@ -496,6 +533,61 @@ resets after updates were introduced. Dispatcher verifier gate 6 separately reco
 both agent cases executed/passed (2/2, 0 failed/skipped). The supplied gate report
 contains no full verifier-gate pass. This is fake-transport supplied-renderer
 evidence; live Claude was not required.
+
+### Deferred expansion verification
+
+The [accepted verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2131#issuecomment-6264353342)
+records Linux x64 at `4532a83c551ecd4a1661eb83f8d930a7a8c7ad62` on
+2026-10-19. The complete configured Playwright run executed/passed 509, failed 0,
+skipped 5, with zero retries/flaky results. The named
+`defers 8333 held items and commits real composer input during unfinished expansion`
+case was present and passed with **8,334 already-held inert items**: 516 source rows
+mounted before actual keyboard input and 1,028 at composer commit, **240.7 ms**
+latency against the 1000 ms limit, positive later expansion progress and eventual
+completion. Work was not paused for input. Action-specific processing/React-commit
+barriers precede absence and latency assertions. Closed-revision reopening,
+visible-only read publication, nested/group expansion retention and both anchor
+checks passed; the folded branch is positively located above the surviving reader
+before collapse. The separate final builder workload ran 1 executed/passed,
+0 failed/skipped, with 336 ms input latency. See the
+[plan's retained evidence](../../specs/architecture/2127-visible-thread-presentation.md#chrome-anchor-rework-validation-2026-10-19).
+
+Both native-window variants of `collapse keeps the focused agent header between
+real application chrome` were present and passed in the 509-case run. At 1280×800
+and 800×600 they retain button focus while scrolling into a long descendant, press
+Enter, require committed collapse and descendant absence, and repeat after reopening.
+All four measurements place the complete header at y=105–143, below top chrome
+ending at 105 and above input chrome starting at 609 or 409. Supplied fixtures without
+application chrome could not establish this visibility. The focused final builder
+mounted report ran 8 executed/passed, 0 failed/skipped, including these two cases,
+all four existing application tool-group cases, settled-row reuse and unchanged
+short/long read-work counts. Workload and chrome-anchor launches exited normally
+without teardown failures. Integrated captures `chrome-anchor-1280.png` (1280×773)
+and `chrome-anchor-800.png` (800×573) under `/tmp/builder-2127/` were reviewed against
+Figma nodes `155:553` and `726:5376`; header structure, borders, joins and indentation
+remain consistent.
+
+The configured captured-client scenario `daemon-built thread streams, places an
+agent, reconnects, resets and reopens saved items` was present and passed:
+1 executed/passed, 0 failed/skipped, 45 matched requests, 378 emitted frames and
+zero remaining requests. The builder's guarded replay also ran 1 executed/passed,
+0 failed/skipped, zero forbidden launches, retaining original assertions and strict
+requests. Capture provenance in `e2e/recordings/claude-thread.json` remains Desktop
+`00ec821f9380b00cf2dfc0dd4817ee15584106a5` and daemon
+`58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`. This is captured replay, with no fresh
+provider, physical-effect, encryption or native-transport claim. Other operating
+systems are outside this Linux ticket's verification scope.
+
+Historical failures remain retained rather than converted into passes: the original
+`/tmp/builder-2127/thread-items-final.json` contains the workload completion-deadline
+failure alongside twelve ordinary passes. First invocations under
+`rework-held-and-groups` and `chrome-anchor-held` ended with SIGTERM before result
+reports; their empty JSON/stderr are not counted test passes or completed runs.
+The plan records process cleanup before the completed reruns. The final green
+results do not erase those attempts or the earlier verifier findings. Large-expansion
+completion now allows 120 seconds under shared-runner load; the real input-commit
+limit remains 1000 ms. These proofs isolate held-item expansion from received-update
+processing and do not establish compact delivery or overall scroll smoothness.
 
 ## Inline question growth
 

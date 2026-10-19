@@ -65,3 +65,17 @@ Retained reports under `/tmp/builder-2138/`:
 - `unit.xml`, `build.log`, `electron-native.log`, `daemon-build.txt`, `daemon-sha256.txt`: focused unit counts, build and native preparation, source/checksum proof.
 
 The earlier `replay.log` and `live.log` remain failed reports, superseded only after fixing their test-only TSX comparison error. No acceptance assertion was skipped and #2129 required no change.
+
+## Rework validation evidence
+Linux x64, 2026-10-19, implementation `5d06a2c7bcd080ea5b80817b2cf50166be3e5de8`, main `3fbfcfdb5944`. The extracted text-only matcher first failed the identical-text/missing-row regression (22 passed, 1 failed); requiring the native row ID made all 23 tests pass. Pre-verify passed all five checks with 23 executed/passed, 0 failed/skipped. Client-test typecheck and build passed. Electron SQLite preparation completed after pre-verify's Node preparation and before either browser launch.
+
+The exact named scenario passed guarded replay and real Claude once each, both with 0 failed/skipped/flaky and retries 0. Replay started `2026-10-19T11:27:28.148Z`, matched 45 requests, emitted 378 frames, left 0 requests and recorded 0 forbidden launches. Live started `2026-10-19T11:27:49.423Z`, duration 27,366ms, with Desktop `5d06a2c7bcd080ea5b80817b2cf50166be3e5de8` and daemon `664305939d73e5a146457503081d8232fcca5407`. The isolated binary's clean VCS metadata and SHA-256 `ba2831b24dd8f880c0a707fb694bab8b99cfe2535d76eaa6129dbf11e4d0b869` were checked again. Authenticated capabilities: `interactive`, `multi_agent`, `stop_background_task`, `thread`, `thread_expansion`, `thread_compact`. Captures, prompts and provenance remain unchanged; replay adds no live acceptance. macOS remains outside scope.
+
+Retained fresh reports under `/tmp/builder-2138/`:
+
+- `rework-live.log`: counted JSON and revision/capability attachment; SHA-256 `2b26c55149a6640c221bd8fd3d79df63011ff47f464756bdb3e590848a065e18`.
+- `rework-live-stderr.log`: launcher counts; SHA-256 `de15904c455ebe2a7e85a21a4c24c002ff62908bc0a2f0edf9409877f620f735`.
+- `rework-replay.log`: build, counted JSON, complete exchange and guard result; SHA-256 `c144e9eda77645212d41f9bf66cc74073258e09ffe40f03fcd4b2078d67b0c49`.
+- `rework-unit.xml`, `rework-pre-verify-ready.log`, `rework-client-typecheck.log`, `rework-build.log`, `rework-electron-native.log`: successful focused checks and sequential native preparation.
+
+`rework-pre-verify.log` retains the earlier prerequisite failure before unit execution: the initial interrupted dependency installation lacked Electron's executable. Its package install script restored the executable before the successful gate. No acceptance assertion was skipped or weakened, and #2129 was unchanged.

@@ -1,4 +1,4 @@
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { parseRecording, RecordedExchange, type Recording } from './recordedExchange'
 import { encodeEnvelope, decodeEnvelope } from '../../src/main/transport/codec'
 const message = (id: number, type: string, payload = {}) => ({ id, type, ts: '2026-10-16T00:00:00Z', payload })
@@ -81,4 +81,71 @@ it('requires the actual captured transport close after all preceding daemon fram
   expect(() => replay.assertComplete()).not.toThrow()
   const missing = new RecordedExchange(recording)
   expect(() => missing.reply(encodeEnvelope(message(2, 'list_conversations')))).toThrow('transport boundary mismatch')
+})
+
+it('settles only the current connection without needing a future request', async () => {
+  const replay = new RecordedExchange(fixture())
+  const pending = replay.settleConnection()
+  const frames = replay.reply(encodeEnvelope(message(2, 'list_conversations')))
+  expect(frames).toHaveLength(1)
+  await pending
+  expect(replay.stats().remainingRequests).toBe(1)
+  expect(() => replay.assertComplete()).toThrow('incomplete')
+  replay.reconnect()
+  const next = replay.settleConnection()
+  replay.reply(encodeEnvelope(message(2, 'list_conversations')))
+  await next
+  await replay.settleConnection()
+  replay.assertComplete()
+})
+
+it('bounds a persistent missing prefix, keeps failure sticky and removes the deadline', async () => {
+  vi.useFakeTimers()
+  try {
+    const replay = new RecordedExchange(fixture())
+    const pending = replay.settleConnection()
+    const failure = expect(pending).rejects.toThrow('connection prefix incomplete')
+    await vi.advanceTimersByTimeAsync(5_000)
+    await failure
+    expect(vi.getTimerCount()).toBe(0)
+    expect(() => replay.reply(encodeEnvelope(message(2, 'list_conversations')))).toThrow('connection prefix incomplete')
+    await expect(replay.settleConnection()).rejects.toThrow('connection prefix incomplete')
+    expect(() => replay.assertComplete()).toThrow('connection prefix incomplete')
+  } finally { vi.useRealTimers() }
+})
+
+it('rejects unreleased test-side actions without waiting or releasing their frames', async () => {
+  vi.useFakeTimers()
+  try {
+    const capture = fixture()
+    capture.barriers = [{ before: 1, name: 'release-tool' }]
+    const replay = new RecordedExchange(capture)
+    replay.reply(encodeEnvelope(message(2, 'list_conversations')))
+    await expect(replay.settleConnection()).rejects.toThrow('connection has unreleased checkpoint')
+    expect(replay.stats().emittedFrames).toBe(0)
+    expect(vi.getTimerCount()).toBe(0)
+  } finally { vi.useRealTimers() }
+})
+
+it('propagates a concurrent mismatch unchanged and clears all settlement waiters', async () => {
+  vi.useFakeTimers()
+  try {
+    const replay = new RecordedExchange(fixture())
+    const waits = [replay.settleConnection(), replay.settleConnection()]
+    const outcomes = Promise.all(waits.map(wait => wait.catch(error => error)))
+    let failure: unknown
+    try { replay.reconnect() } catch (error) { failure = error }
+    expect(await outcomes).toEqual([failure, failure])
+    expect(vi.getTimerCount()).toBe(0)
+    expect(() => replay.assertComplete()).toThrow('connection mismatch')
+  } finally { vi.useRealTimers() }
+})
+
+it('does not require a checkpoint belonging to the independent next connection', async () => {
+  const capture = fixture()
+  capture.barriers = [{ before: 2, name: 'next-profile-action' }]
+  const replay = new RecordedExchange(capture)
+  replay.reply(encodeEnvelope(message(2, 'list_conversations')))
+  await replay.settleConnection()
+  expect(() => replay.reconnect()).toThrow('connection mismatch')
 })

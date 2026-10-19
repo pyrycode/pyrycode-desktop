@@ -579,16 +579,19 @@ export async function withIsolatedElectronApp(
   const userDataDir = await mkdtemp(join(tmpdir(), 'pyry-e2e-realclaude-'))
   let current: ElectronApplication | null = null
   let relaunching = false
-  const close = async (app: ElectronApplication): Promise<void> => {
+  const close = async (app: ElectronApplication, completed: boolean): Promise<void> => {
     const child = app.process()
+    let failed = false, primary: unknown
     try {
-      await clientAppLifecycle.closing?.(app)
-    } finally {
+      await clientAppLifecycle.closing?.(app, completed)
+    } catch (error) { failed = true; primary = error }
+    try {
       await app.close()
       await expect.poll(() => child.exitCode !== null || child.signalCode !== null, {
         message: 'Electron process exited before relaunch', timeout: 15_000
       }).toBe(true)
-    }
+    } catch (error) { if (!failed) throw error }
+    if (failed) throw primary
   }
   const launch = async (): Promise<IsolatedElectronApp> => {
     const app = await electron.launch({
@@ -604,15 +607,15 @@ export async function withIsolatedElectronApp(
       app, page, userDataDir,
       async close() {
         if (current !== app || relaunching) throw new Error('close fixture: stale app handle')
-        await close(app)
         current = null
+        await close(app, true)
       },
       async relaunch(whileClosed) {
         if (current !== app || relaunching) throw new Error('restart fixture: stale app handle')
         relaunching = true
         try {
-          await close(app)
           current = null
+          await close(app, true)
           await whileClosed?.()
           return await launch()
         } finally {
@@ -624,6 +627,11 @@ export async function withIsolatedElectronApp(
   try {
     try {
       await run(await launch())
+      if (current !== null) {
+        const app = current
+        current = null
+        await close(app, true)
+      }
     } finally {
       // Best-effort, like launchPairedApp.ts's drain: a throwing `finally` would REPLACE the causal error
       // the developer needs, and would abort the unwind before the outer `rm` — leaving the
@@ -631,7 +639,7 @@ export async function withIsolatedElectronApp(
       // a close error can carry the launch argv, which embeds `--user-data-dir=<path>`, and this file's
       // no-echo rule extends to teardown diagnostics.
       try {
-        if (current !== null) await close(current)
+        if (current !== null) await close(current, false)
         current = null
       } catch {
         // best-effort

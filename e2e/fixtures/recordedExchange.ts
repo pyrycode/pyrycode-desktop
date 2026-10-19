@@ -198,6 +198,31 @@ export class RecordedExchange {
       finish()
     })
   }
+  async settleConnection(): Promise<void> {
+    if (this.failure) throw this.failure
+    const connection = this.connection
+    const next = this.recording.wire.findIndex(entry => (entry.connection ?? 1) > connection)
+    const end = next < 0 ? this.recording.wire.length : next
+    const checkpoint = this.recording.barriers?.[this.barrier]
+    if (checkpoint && checkpoint.before < end)
+      return this.fail('Recorded exchange connection has unreleased checkpoint')
+    if (this.index === end) return
+    await new Promise<void>((resolve, reject) => {
+      const cleanup = (): void => { clearTimeout(timer); this.progress.delete(finish) }
+      const finish = (): void => {
+        if (this.failure) { cleanup(); reject(this.failure); return }
+        if (this.index === end) { cleanup(); resolve() }
+      }
+      const timer = setTimeout(() => {
+        this.failure ??= new Error('Recorded exchange connection prefix incomplete')
+        this.notifyProgress()
+      }, 5_000)
+      this.progress.add(finish)
+      finish()
+    })
+    // handleTransport sends the entire returned reply batch synchronously before
+    // these promise continuations resume. Never close from inside drain's matcher.
+  }
   private notifyProgress(): void { for (const finish of [...this.progress]) finish() }
   private drain(): Uint8Array[] {
     const frames: Uint8Array[] = []

@@ -211,7 +211,13 @@ const replay = base.extend<ReplayFixtures>({
       if (first) { exchange.setDeviceId(identity.deviceId); first = false }
       else exchange.bindCurrentDevice(identity.deviceId)
     }
-    try { await use() } finally { delete clientAppLifecycle.opened }
+    clientAppLifecycle.closing = async (_app, completed) => {
+      if (completed) await exchange.settleConnection()
+    }
+    try { await use() } finally {
+      delete clientAppLifecycle.opened
+      delete clientAppLifecycle.closing
+    }
   }, { auto: true }],
   page: async ({ daemon }, use) => { void daemon; await withIsolatedElectronApp(({ page }) => use(page)) }
 })

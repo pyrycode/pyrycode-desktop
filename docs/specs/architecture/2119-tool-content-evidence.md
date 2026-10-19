@@ -9,6 +9,7 @@
 - `src/shared/wire/thread.ts` → `ThreadReply`, `ThreadUpdate`: tool-body data/final variants have no scalar base revision or append text.
 - `vitest.config.ts`, `tsconfig.client-tests.json`, `package.json`: existing fixture unit discovery and supplementary compiler coverage.
 - `docs/knowledge/INDEX.md`, `docs/knowledge/features/development-verification.md`, `docs/knowledge/features/development-verification-what-each-test-tier-proves.md`, `docs/recorded-tests.md`: counted proof boundaries and sequential Node/Electron native preparation.
+- `docs/knowledge/features/e2e-harness.md`, `docs/knowledge/features/e2e-harness-limitations.md`: built-app execution and the separate fixture-unit typechecking boundary.
 
 ## Context
 The scalar discriminant guards already landed in #2102. Lock their admission invariant with typed regression events; no production, wire, IPC or visible behavior changes. This is one useful behavior slice, including its one-consumer Codex testability extraction. No ADR is needed.
@@ -28,11 +29,11 @@ Collector state remains per observer: event array and host/chat/epoch-qualified 
 ## State transitions and identity reuse
 | Event | Regression coverage |
 | --- | --- |
-| Same-epoch tool data/final replies, repeated for held and missing IDs | Each suite's tool-body exclusion regression |
-| Incomplete turn followed by unrelated detail, then real scalar changes/appends/completion | Each suite's tool-body exclusion regression |
-| Completed turn followed by more detail replies | Each suite's tool-body exclusion regression |
-| Duplicate/stale scalar revisions and same-revision queue suffix | Existing handover revision and queue suffix tests; Codex revision regression |
-| Equal item IDs across host/chat/epoch owners | Codex ownership regression; existing handover ownership/reset regressions |
+| Same-epoch tool data/final replies, repeated for held and missing IDs | `excludes tool-body data and final replies for item %i` in each of the three fixture suites |
+| Incomplete turn followed by unrelated detail, then real scalar changes/appends/completion | The same three parameterized exclusion tests |
+| Completed turn followed by more detail replies | The same three parameterized exclusion tests |
+| Duplicate/stale scalar revisions and same-revision queue suffix | `folds only correlated newer revisions without duplicate text`; `retains the captured field-change/text-suffix pair at one revision without counting a duplicate suffix`; `retains Codex scalar revision checks and host/chat/epoch ownership` |
+| Equal item IDs across host/chat/epoch owners | `retains Codex scalar revision checks and host/chat/epoch ownership`; `cannot combine different epochs, sessions, agents or child-agent replies`; `same-epoch reset discards held items before identifiers are reused` |
 
 ## Error handling
 No new failure mode. Tool detail is ignored by explicit scalar event guards; existing queue invalid-patch detection and handover completion rejection remain unchanged.
@@ -50,3 +51,14 @@ None.
 2026-10-19: The unchanged client-test compiler scope follows scenario imports and does not include fixture unit files. A separate scratch TypeScript project exposed stale correlation fields and unchecked queue constructors in the existing suites. Make these constructors conform to the real event types, retaining every revision/ownership and suffix/duplicate assertion; run the separate unit-input typecheck as additional validation without changing repository compiler coverage.
 
 2026-10-19: Interleaving detail replies between a queue field change and its legitimate same-revision suffix reproduced lost marker evidence in both held/missing-ID cases. The existing discriminant guard was below the clearing of `appendCompanion`. Return on `thread_tool_body` before touching that scalar bookkeeping; keep the existing explicit scalar guards and suffix/duplicate rules. The new queue regression now interleaves data/final replies inside that pair. This is the same evidence-admission invariant, with one additional test-only early-return branch and no production change.
+
+## Validation evidence
+Linux x86_64, 2026-10-19; implementation `f9195f1f`, merged main `4f5684078da7befcc83cf73b5c9bf6a928cb5360`.
+
+- Fixture units: 68 executed/passed, 0 failed/skipped (`/tmp/builder-2119/units-final.log`); handover 45, queue 20, Codex 3.
+- Each fixture's pre-verify passed all five checks; queue repeated after the suffix repair. Logs: `/tmp/builder-2119/preverify-handover.log`, `preverify-queue-final.log`, `preverify-codex.log`.
+- Unchanged `npm run typecheck:client-tests` and the separate scratch fixture-unit TypeScript project passed with zero diagnostics (`client-typecheck-final.log`, `regression-typecheck-final.log` in the same directory). `npm run check:docs` and the normal build passed; the final build also ran inside replay.
+- Full configured `npm run e2e:recorded`: 29 executed/passed, 0 failed, 1 existing system-prompt Reset fixme skipped, 0 retries/flaky tests; one worker, 146 seconds. Codex and all five queue scenarios were present/passed. All 29 recorded-exchange attachments had zero remaining requests; executable guard reported zero forbidden launches. Fresh report/log/results: `/tmp/builder-2119/recorded-final.json`, `recorded-final.log`, `recorded-results/`. Attachments retain each capture's source revisions and request/frame counts.
+- Controlled historical catch-all: six TS2339 diagnostics across the three reducers, queue 18 passed/2 deliberately failed/0 skipped (`historical-catchall-typecheck.log`, `historical-catchall-units.log`). Actual suffix-interleaving regression before repair: 18 passed/2 failed/0 skipped (`interleaved-detail-red.log`). These red controls are separate from acceptance.
+
+Captured client replay establishes no fresh provider, transport or physical-effect acceptance. macOS is outside this Linux ticket's verification scope.

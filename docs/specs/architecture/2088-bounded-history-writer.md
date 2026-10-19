@@ -118,3 +118,32 @@ Rework validation on Linux x64, after merging unchanged main `5afde437b5e9`: `/t
 
 - Pending documentation stage: `docs/knowledge/features/chat-history-api.md`, **Owned authoritative mutations** — document the final 32-unit capture/coalescing/submission budget, ordered progress, durable acknowledgement, explicit/event-triggered retry, ownership supersession and stop behavior after the partial-durability repair is resolved.
 - Pending documentation stage: `docs/knowledge/features/chat-history-testing-native.md`, **Native runtime and packaged proof** — document `productionSecrets` removing Playwright mock-protection switches before readiness, backend assertions, counted Linux input/heartbeat/reopen evidence and the exclusions for renderer admission, import, conversion and replacement. Preserve failed captures and captured-client provenance separately.
+
+## Revisions — independent persistence obligation (2026-10-19)
+
+The refined ticket permits an additive internal contract. Finding 1 cannot be fixed by neutral daemon progress. Preserve the retained queue and introduce optional `change.persistence: { id, part, parts }` only for split saves. The UUID is generated once when a generator starts; part counts are computed from array lengths in constant work. Each independently parsed part still contains at most 32 counted facts/observations. Retries retain the exact request and identity.
+
+Main stores a protected pending `{ id, next, parts }` in the existing header, plus a stable persistence owner identity. A small indexed `history_save_parts` journal retains encrypted identity/owner bindings and per-part request digests. Its records contain no item content. Journal entries survive scope deletion to reject previously accepted requests against recreated scope strings; full replacement rotates the persistence owner even at the same epoch. This avoids an ever-growing header or scanning prior receipts. Receipt retention is deliberate: removing acknowledged identities would lose stale-replay rejection. Snapshot format versions and daemon contracts remain unchanged.
+
+Within the existing `mutateThread` transaction, main checks a known save's exact scope/owner before any reset, rejects changed replays, skipped parts, wrong totals and unrelated writes, and records each accepted part atomically with its data. Exact accepted replays return without folding progress again, including a final acknowledgement replay while a newer save is pending. Only the expected last part retires its pending marker. No completion certificate, repair or unfinished version is synthesized. Existing explicit epoch/reset supersession, replacement and deletion remain available; their internal validation may inspect a pending prefix, whereas public full/opening/newest/before reads return `unreadable` before traversal.
+
+Lifecycle coverage added in the existing protected-cache/main suites: checkpoint 100 with incoming version 100/50, each with/without certificate; all four read operations fail closed after second-part failure, exact retry and fresh reopen; lost prefix/final acknowledgements; duplicate old endings during a new save; wrong continuation/changed part; reset/epoch/replacement/deletion/host removal and reused scope strings; abandoned stopped writer. Existing 37 ownership assertions, including the five repaired in `2f09af90`, remain intact. The native 8333-item probe, packaged protection check and guarded thread/history captured scenarios rerun on Linux.
+
+Sizing: one observable repair with its regression/native verification floor, approximately 1100 total written lines including retained work and plan revisions; this is the ticket's explicit verification-floor exception. Three production files, no new exported types, no required consumer updates, four acceptance behaviours, fewer than ten protocol reject classes. An unused obligation contract cannot ship independently. Overlap: #2079 only appends a separate protected-cache test and consumes none of this design.
+
+Documentation pending: `docs/knowledge/features/chat-history-api.md`, **Owned authoritative mutations**, and `docs/knowledge/decisions/0014-authenticated-owned-thread-mutations.md`, **Decision**/**Consequences** — independent persistence obligation, interrupted fail-closed reads, exact retry and supersession, retained acknowledgement identity, separation from daemon completion; final capture/coalescing/submission budget, ordered progress, explicit/event retry and stop behavior. The existing native documentation handoff remains pending.
+
+## Security review — revised internal contract
+
+**Verdict:** PASS
+
+- Trust boundaries/Electron: `parseChatHistoryRequest` admits only exact bounded UUID/sequence fields and at most 32 facts when persistence is present. Main independently validates them. The identity confers no epoch/reset/daemon completion authority. No new channel or process privilege.
+- Tokens/cryptography: UUIDs use WebCrypto randomness; they are local correlation identities, not credentials. Journal and pending headers use the existing OS-protected encryption and exact owner/scope bindings, with no new cryptographic primitive, key or nonce.
+- Storage: only main's existing userData database gains an indexed encrypted receipt journal. No daemon paths or plaintext item content. Receipt, data and pending changes share the existing yielding atomic transaction. Corruption and unavailable protection fail closed.
+- Network/I/O: no relay, frame, handshake, URL, credential or socket changes. Existing transport security remains in main.
+- Errors/logging: existing static `write-failed`/`unreadable` classifications; no item text, identities, encryption bytes or request digests are logged.
+- Concurrency: journal owner binding precedes supersession; pending sequence rejects gaps, changed replay and unrelated saves. Exact old acknowledgements cannot clear a newer marker. Existing writer generations and stop fences remain; no retry timer is introduced.
+- Threat model: a hostile daemon still passes retained item validation; a compromised renderer can request only existing authorized operations and cannot create daemon completion authority with a persistence identity. Relay confidentiality and disk credential protection remain existing Noise/safeStorage boundaries.
+
+**Reviewer:** builder (self-review per `builder/security-review.md`)
+**Date:** 2026-10-19

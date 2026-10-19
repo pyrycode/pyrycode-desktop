@@ -133,6 +133,21 @@ describe('original question answer evidence', () => {
     expect(s.proof.snapshot().witnessed).toBe(!sameItem)
     expect(s.proof.complete()).toBe(!sameItem)
   })
+  it.each([false, true])('never erases excluded text with a shorter or absent snapshot body (already armed: %s)', armed => {
+    for (const first of ['live', 'snapshot']) for (const rev of [1, 2]) for (const content of [{ text: 'Before.' }, {}]) {
+      const s = setup()
+      const known = { ...snapshotAssistant, content: { text: 'Before.' + confirmation } }
+      if (first === 'live') s.emit('thread_item_added', { item: known })
+      else s.snapshot([known])
+      if (armed) s.arm()
+      s.snapshot([{ ...snapshotAssistant, rev, content }])
+      if (!armed) s.arm()
+      s.submit(); s.dismiss()
+      s.emit('thread_item_added', { item: { ...known, rev: 3 } }); s.end()
+      expect(s.proof.snapshot().witnessed).toBe(false)
+      expect(s.proof.complete()).toBe(false)
+    }
+  })
   it('rejects snapshot-only text and text on another route, turn or nested item', () => {
     for (const fault of ['snapshot', 'host', 'chat', 'turn', 'nested']) {
       const s = setup(); s.arm(); s.submit(); s.dismiss()

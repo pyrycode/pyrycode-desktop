@@ -15,6 +15,12 @@ export function createQuestionAnswerEvidence(subscribe = false) {
   const ended = new Set<number>()
   let companion: { id: number; rev: number; version: number } | undefined
   const record = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+  function exclude(item: Held): void {
+    if (item.kind !== 'assistant_message' || !record(item.content) || typeof item.content.text !== 'string') return
+    const before = baseline.get(item.id) ?? ''
+    // A shorter snapshot or a later arm cannot erase text already excluded from the witness.
+    if (item.content.text.startsWith(before)) baseline.set(item.id, item.content.text)
+  }
   function remember(item: Held): void {
     const content = record(item.content) ? item.content : {}
     // Retain only fields needed by this proof, never complete tool input/output or daemon envelopes.
@@ -57,10 +63,11 @@ export function createQuestionAnswerEvidence(subscribe = false) {
         const old = items.get(item.id)
         if (old && old.rev > item.rev) continue
         if (companion?.id === item.id) companion = undefined
+        if (old) exclude(old)
+        exclude(item)
         remember(item)
         // Snapshots exclude already-seen content and identities, even after arming; never prove freshness.
         if (item.kind === 'turn_end') ended.add(item.id)
-        else if (record(item.content) && typeof item.content.text === 'string') baseline.set(item.id, item.content.text)
       }
       return
     }
@@ -113,8 +120,7 @@ export function createQuestionAnswerEvidence(subscribe = false) {
   function arm(value: { confirmation: string; answers: Submission['answers'] }): boolean {
     if (armed || !outstanding || !host || !turn || !epoch || !value.confirmation) return false
     confirmation = value.confirmation; expected = JSON.stringify(value.answers); armed = true
-    for (const item of items.values()) if (item.kind === 'assistant_message' && record(item.content) && typeof item.content.text === 'string')
-      baseline.set(item.id, item.content.text)
+    for (const item of items.values()) exclude(item)
     return true
   }
   const complete = () => armed && submitted && dismissed && witnessed && completed && !invalid

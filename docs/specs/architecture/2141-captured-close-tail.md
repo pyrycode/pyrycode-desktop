@@ -171,3 +171,49 @@ Default committed-recording validation keeps the normal automatic profile.
 The close scheduler, capture bytes, strict matcher and original assertions remain
 unchanged. Earlier failures above remain failed evidence. This is still one
 behaviour slice, approximately 450 written lines, within the original boundaries.
+
+## Final Linux evidence after #2149
+The current-source retained-input hold above is resolved. Linux x64 replay built
+clean revision `3372c1f318aa4da6d46c4638fd0ce4dccb990998`, with main
+`d21005516f38a2966d34f13074fe87db8d911695` merged. Both build profiles report
+`sourceDirty: false`; their complete bundle hashes are in the logs below.
+This run changes only the plan; the previously committed repair is unchanged.
+Counts here are executed / passed / failed / skipped. Artifacts are under
+`/tmp/builder-2141/`, and earlier failed reports remain untouched.
+
+- `npm install --no-audit --no-fund` passed (`resumed-install.log`).
+- `python3 /work/Projects/pyrycode-desktop-agents/bin/pre-verify-check --test-file e2e/fixtures/recordedLifecycle.test.ts`:
+  **5 checks passed**, affected tests **26 / 26 / 0 / 0**
+  (`resumed-pre-verify-approved.log`). Node-native preparation completed first.
+- `npm test -- e2e/fixtures/recordedLifecycle.test.ts e2e/fixtures/recordedExchange.test.ts e2e/fixtures/exchangeCapture.test.ts --maxWorkers=4 --minWorkers=1`:
+  **48 / 48 / 0 / 0** (`resumed-controls.log`), including actual encrypted relay
+  close observation and every planned tail rejection/lifecycle control.
+- `npm run typecheck:client-tests` and `npm run build` passed
+  (`resumed-client-typecheck.log`, `resumed-build-approved.log`).
+- `npm run rebuild:electron` passed after the Node checks
+  (`resumed-electron-native.log`); no native preparation overlapped replay.
+- `PYRY_CLIENT_RECORDING_DIR=/tmp/builder-2137/capture-3 PLAYWRIGHT_JSON_OUTPUT_NAME=/tmp/builder-2141/resumed-retained-question.json node scripts/run-offline-replay.mjs --profile complete-thread --grep "real claude changes model during a question and resumes with the original answer" --retries 0 --reporter=list,json,./e2e/reporters/zeroExecutedGate.ts`:
+  **1 / 1 / 0 / 0**, retry 0, **38 matched / 201 emitted / 0 remaining**,
+  **zero forbidden launches** (`resumed-retained-question.log/.json`). Original
+  shared assertions and final exchange completion passed. The raw input checksum
+  remains `24bbe5dff65241a77dda96cbd262c9185925d88f6168439a1679b576b984dac1`;
+  its capture provenance and all four original closes are unchanged. The runner
+  restored normal output successfully.
+- `PLAYWRIGHT_JSON_OUTPUT_NAME=/tmp/builder-2141/resumed-committed-recordings.json npm run e2e:recorded -- --retries 0 --reporter=list,json,./e2e/reporters/zeroExecutedGate.ts`:
+  **29 / 29 / 0 / 1**, no retries/flaky outcomes, **zero forbidden launches**
+  (`resumed-committed-recordings.log/.json`). All 29 exchange attachments complete:
+  **773 matched / 3216 emitted / 0 remaining**. Normal profile build/typecheck
+  passed. The sole existing fixme remains explicit:
+  `real claude picks up a saved channel system prompt at Reset session`.
+
+Report SHA-256: retained JSON
+`52d7349d0dd12303ed0a67491cc74fdd40a2d1518196d80e71b3fba63cf488ce`,
+log `321c8c959c985adc0d4aca4e7f679eafbf331e985691412b159e1c7aabaae5cf`;
+committed-suite JSON
+`fc36d201c2b7f888540c23d5dd1528429b12a665fbb84e370c656fccf8e37cd2`,
+log `1d2fdbc6e539688f9489b87384be21f8674042032c6537cb3e41720b031d158d`.
+Initial sandbox pre-verify was stopped after its label-read restriction, and the
+sandbox build failed at Git provenance with EPERM; their logs remain preserved
+as `resumed-pre-verify.log` and `resumed-build.log`. Approved reruns above passed.
+These are offline replay results only; no fresh provider or physical acceptance
+is claimed. macOS remains outside this Linux ticket's verification scope.

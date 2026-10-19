@@ -153,11 +153,16 @@ The recording was unchanged by both freshness repairs.
 Earlier failed captures and replays remain failed. The superseded `66430593`
 capture-3 report contains the same named scenario, 1 executed/passed, 0 failed/skipped,
 retry 0, but its exchange closed connection 1 at wire index 47 before three trailing
-requests assigned to that connection. Strict replay refused reconnect with 9 matched
-requests, 29 remaining and 0 forbidden launches (`replay.json`). No close boundary,
-matcher or capture bytes were relaxed. The separate close-ordering defect remains
-tracked in [#2141](https://github.com/pyrycode/pyrycode-desktop/issues/2141);
-the older clean daemon produced the independently successful capture-4 above.
+requests assigned to that connection. Historical `replay.json` remains failed:
+1 executed, 0 passed, 1 failed, 0 skipped, retry 0; strict replay refused reconnect
+with 9 matched requests, 38 emitted frames, 29 remaining and 0 forbidden launches.
+The separate close-ordering repair now has
+[combined retained-input acceptance](development-verification.md#captured-close-client-tails):
+the unchanged capture-3 passed on clean current source with complete-thread
+selection, 1 executed/passed, 0 failed/skipped, 38 matched / 201 emitted /
+0 remaining and zero forbidden launches. That offline pass preserves the original
+close chronology, strict matcher and capture bytes; it adds no fresh live proof.
+The older clean daemon produced the independently successful capture-4 above.
 Red freshness controls, interrupted-install/native-preparation failures and exploratory
 capture failures remain separately retained in the plan; none is a successful fixture.
 The last pre-submission reproducer run recorded 47 executed, 44 passed, 3 failed and

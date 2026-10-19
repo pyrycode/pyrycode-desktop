@@ -141,7 +141,15 @@ the release-file ordering, remains. Successful live-only assertions also mark
 causal checkpoints: offline waits for their actual recorded message prefix but
 never executes or claims the filesystem/OS proof.
 
-Observed push-overload closes are recorded at the exact application-message prefix with their actual WebSocket code. Replay forwards every preceding encrypted frame before reproducing that local close; explicit application reconnects and profile relaunches still come from the shared scenario. Capture adapters remain separate build inputs.
+Observed push-overload closes retain their raw application-message position and
+actual WebSocket code. Capture observes client calls before sending, so trailing
+calls can still belong to the closing connection without proving successful
+socket writes. Replay exactly matches only its finite contiguous client-only
+tail before reproducing the close, after forwarding every preceding encrypted
+frame. No daemon frame crosses the raw close, and checkpoints and connection
+ownership remain enforced. Explicit reconnects and profile relaunches still come
+from the shared scenario. Capture adapters remain separate build inputs. See the
+[close scheduling contract](recorded-tests.md#replay-contract).
 
 The evidence observers also retain native identity semantics: queue markers include an ordered same-revision suffix, and a completed permission turn is counted once even when reconnect returns its item again. These repairs preserve every original matcher and strengthen the meaning of completion. An AST audit retains all 1,028 original expect expressions, plus all 1,036 from merged baseline `aebee62f`, normalizing only type assertions and the equivalent read-only inspection wrapper.
 
@@ -174,6 +182,40 @@ wins the merge; a replacement item invalidates it. This integrates with the
 saved/live restoration fixes merged in PR #2058.
 
 ## Validation evidence
+
+Replay evidence identifies the executed build separately from capture provenance.
+Default replay uses normal output and checks automatic projection policy, including
+compact selection when accepted capabilities permit it. Explicit
+`node scripts/run-offline-replay.mjs --profile complete-thread --retries 0` builds
+the current source's complete route for the whole run, including creation and
+reconnect, then restores normal output after success or failure. Both profiles
+retain the executable guard, original shared assertions, full-envelope matching,
+captured capabilities, causal barriers and completion checks. Neither supplies
+fresh provider behavior or physical transport proof. The
+[replay contract](recorded-tests.md#replay-contract) gives the exact retained-input
+selection, restoration failure behavior and separate revision/dirty/profile,
+bundle-hash, input-checksum and capture-source fields.
+
+The [combined Linux retained-input acceptance](knowledge/features/development-verification.md#captured-close-client-tails)
+resolves the earlier close-ordering hold. On clean build revision
+`3372c1f318aa4da6d46c4638fd0ce4dccb990998`, the unchanged retained question input
+(`24bbe5df…dac1`, captured from Desktop `ef097bfc` / daemon `66430593`, Claude
+2.1.280) passed the original named question-answer scenario under
+`--profile complete-thread`: 1 executed/passed, 0 failed/skipped, retries zero,
+38 matched / 201 emitted / 0 remaining and zero forbidden launches. All four
+original closes remain consumed with their captured codes and positions intact.
+The linked evidence carries the full input checksum, daemon binary checksum,
+bundle provenance and commands separately from the executed build identity.
+
+The subsequent complete guarded normal-profile committed-recording suite recorded
+29 executed/passed, 0 failed, 1 skipped, retries zero and zero forbidden launches;
+all 29 exchanges completed at 773 matched / 3,216 emitted / 0 remaining. The
+excluded `real claude picks up a saved channel system prompt at Reset session`
+remains an explicit fixme. Earlier retained-input runs remain failed: compatibility
+alone forwarded the prefix but left 29 requests outstanding, while automatic
+selection failed earlier on a compact request. Offline completion establishes no
+fresh provider behavior or physical transport acceptance; macOS is outside this
+Linux ticket's verification scope.
 
 The [completed-profile retirement contract and Linux evidence](recorded-tests.md#replay-contract)
 record the final connection-completion then relay-forwarding boundary, five fresh

@@ -29,6 +29,187 @@ On the client, trace the actual inbound parser rather than trusting an old symbo
 A shared model-row lookup can govern behaviour as well as display text.
 Read all callers before broadening what an empty identifier means.
 
+## Replay build policy and provenance
+
+An unchanged successful capture can fail strict replay after application selection
+policy changes. A complete-thread capture may already grant `thread_compact`, so
+automatic selection now sends a compact query it never recorded. Use the explicit
+[complete-thread build invocation](../../recorded-tests.md#replay-contract) to
+exercise the current source's existing complete route; keep default replay and
+production compact-demand controls on normal automatic selection. Changing
+capabilities or stripping projection would hide the contract difference.
+
+Build identity must come from compilation-time metadata and output hashes, not
+`git HEAD` observed later during replay. The runner refuses mismatched build
+profiles, so interrupted compatibility output cannot silently masquerade as normal.
+Keep executed revision/dirty status/profile and bundle hashes separate from raw
+input checksum and capture source. An absent temporary capture path is not proof
+that its bytes are unavailable: check immutable repository history and verify the
+required checksum before substituting input or reporting missing access.
+
+Synthetic thread replies need separate data and final frames, as the production
+parser requires. Connection/composer readiness also does not prove the opening
+query dispatched: wait for its positive content visibility barrier or poll the
+matched count before asserting it. The accepted review retains a nonblocking
+timing finding where the compatibility control checks that count too early.
+
+### Counted Linux compatibility validation
+
+These are retained results accepted by the
+[PR #2151 verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2151#issuecomment-6275916553),
+not documentation-stage runs. Builder profile runs compiled clean source
+`fc64084e9df76dfd11481b18571c7313ee7e28bc`; reviewed head
+`12a162e1281b1362e7549726a59ae213ab53b168` differs only in the plan. The
+[recovery evidence](../../specs/architecture/2149-complete-thread-replay.md#retained-input-recovery-and-final-linux-evidence--2026-10-19)
+retains commands, report hashes, all bundle hashes and historical failures under
+`/tmp/builder-2149/`. The builder browser runs in the table used retries 0 and
+reported zero forbidden launches.
+
+| Check | Executed / passed / failed / skipped |
+| --- | --- |
+| Profile, guard and strict-exchange units | 22 / 22 / 0 / 0 |
+| Normal compact-demand and profile controls | 6 / 6 / 0 / 0 |
+| Compatibility controls and committed-input shared question | 3 / 3 / 0 / 0 |
+| Complete guarded normal committed-recording suite | 29 / 29 / 0 / 1 |
+| Exact retained question, default profile | 1 / 0 / 1 / 0 |
+| Exact retained question, complete-thread profile | 1 / 0 / 1 / 0 |
+| Supplied dispatcher unit gate 4 | 9810 / 9810 / 0 / 3 |
+| Supplied dispatcher application gate 7 | 517 / 517 / 0 / 5 |
+
+The named control `complete-thread profile selects complete on opening, creation
+and reconnect; normal rejects strictly` was present and passed in application
+gate 7 and both builder profiles. Compatibility matched 3 complete queries, emitted
+8 frames and left zero requests across initial opening, creation and same-ID
+reconnect. Normal selection asserted `projection: 'compact-v1'` and sticky strict
+rejection. Changed projection, version and envelope-field controls also passed.
+Both successful and failed compatibility runs restored normal output.
+
+`real claude changes model during a question and resumes with the original answer`
+was present and passed in gate 7 and the builder's committed-input compatibility
+run (29 matched requests, 136 emitted frames, zero remaining). That committed input
+has SHA-256 `6de35feed0dcf02764da0765a4af03234314ff691a29cc975bf82c3e8d498d6b`,
+capture Desktop `5788a683ab580647008eaf2b292631607c407ab8`, daemon
+`58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`. The complete committed suite completed
+29 exchanges, 773 requests and 3,216 frames, zero remaining. Its one skip,
+`real claude picks up a saved channel system prompt at Reset session`, was also
+explicitly skipped in gate 7 and remains a fixme.
+
+The separate retained input's checksum is
+`24bbe5dff65241a77dda96cbd262c9185925d88f6168439a1679b576b984dac1`,
+capture Desktop `ef097bfc29324437d067d65360558b8e77be8f40`, daemon
+`664305939d73e5a146457503081d8232fcca5407`. Default preserves the strict step-4
+mismatch before close, followed by worker exit 7; no completion attachment exists,
+so remaining requests are unknown. Compatibility accepts the original complete
+`thread_catch_up` at index 22 and records 9 matched requests, 38 emitted frames,
+29 remaining. The observed reconnect and unchanged close-forwarding invariant
+(39 successful server writes including Noise before close 4413) establish prefix
+socket forwarding through index 47, without renderer acknowledgement. Subsequent
+connection mismatch and the original visibility assertion fail. Both historical
+full retained scenarios remain failed. The subsequent
+[combined retained-input acceptance](#captured-close-client-tails) resolves the
+hold using the compatibility profile together with the close-scheduler repair.
+
+Earlier attempts remain failed: each of two invalid combined data/final fixtures
+recorded 2 executed / 1 passed / 1 failed / 0 skipped; the missing-Electron launch
+executed zero tests. An overly broad control invocation recorded 1 executed /
+0 passed / 1 failed / 6 skipped and a nonzero forbidden-launch count when it selected
+an unrelated native-writer dependency. It is excluded from the corrected focused
+evidence above, which used `--project parallel --no-deps` under the same guard.
+No fresh provider, live encryption or physical transport proof is claimed. macOS
+is outside this Linux ticket's verification scope.
+
+## Captured-close client tails
+
+A capture adapter observes a client call before the actual session sends it;
+observation is not evidence of a successful socket write. A session can remain
+available after link-down until reconnect, so raw chronology can legitimately
+place client calls after its close. Moving those calls to the next connection or
+rewriting the close would erase the captured identity and conceal a replay defect.
+
+`RecordedExchange` derives the close boundary from only the contiguous client-only
+suffix on the closing connection. Exact matching consumes that finite tail before
+the observer receives the original code once. The existing relay observer waits
+for successful writes of the preceding server-frame prefix. No daemon frame may
+cross the raw close; same-connection daemon data beyond it fails. No-tail closes
+retain their original position. Unreleased checkpoints, strict connection/device
+binding, sticky mismatch failures, the five-second connection-prefix deadline,
+successful-profile retirement and final `assertComplete()` remain authoritative.
+Test the actual encrypted relay close and reconnect, since a `reconnect()` unit
+alone cannot prove the observer or forwarding boundary. See the
+[full replay contract](../../recorded-tests.md#replay-contract).
+
+Historical-source replay can isolate a fixture repair without establishing
+current-source acceptance. A current build can fail before the recorded close
+because automatic projection selection changes its outgoing contract. Use the
+explicit complete-thread build profile for the combined proof while keeping
+strict envelopes, authenticated capabilities and capture bytes intact.
+
+### Counted Linux retained-input acceptance
+
+These are retained results accepted by the
+[PR #2152 verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2152#issuecomment-6276614031),
+not documentation-stage executions. Both profiles compiled clean revision
+`3372c1f318aa4da6d46c4638fd0ce4dccb990998`, with main
+`d21005516f38a2966d34f13074fe87db8d911695` merged and `sourceDirty: false`.
+Reviewed head `bd3a079265b8e2af905a78a1453f818918652751` changes only the plan.
+The [final evidence](../../specs/architecture/2141-captured-close-tail.md#final-linux-evidence-after-2149)
+retains exact commands, report/log hashes and artifacts under `/tmp/builder-2141/`;
+the replay logs identify each profile and its seven emitted bundle hashes.
+
+The retained `/tmp/builder-2137/capture-3/claude-question-answer.json` remains
+SHA-256 `24bbe5dff65241a77dda96cbd262c9185925d88f6168439a1679b576b984dac1`.
+Its capture source is Desktop `ef097bfc29324437d067d65360558b8e77be8f40`, daemon
+`664305939d73e5a146457503081d8232fcca5407`, Linux daemon binary SHA-256
+`ba2831b24dd8f880c0a707fb694bab8b99cfe2535d76eaa6129dbf11e4d0b869`,
+Claude `2.1.280`. Raw close 4413 remains before index 47; calls 47–49 still
+belong to connection 1 and connection 2 starts at 50. All four original closes
+are consumed without changing the recording or substituting the committed input.
+
+| Check | Executed / passed / failed / skipped |
+| --- | --- |
+| Original premature-close regression, retained failure | 9 / 8 / 1 / 0 |
+| Final capture/exchange/lifecycle controls | 48 / 48 / 0 / 0 |
+| Exact retained question, guarded complete-thread profile | 1 / 1 / 0 / 0 |
+| Complete guarded normal committed-recording suite | 29 / 29 / 0 / 1 |
+| Supplied dispatcher unit gate 4 | 9823 / 9823 / 0 / 3 |
+| Supplied dispatcher application gate 7 | 517 / 517 / 0 / 5 |
+
+`real claude changes model during a question and resumes with the original answer`
+is present and passed in `resumed-retained-question.json`: retries zero,
+38 matched requests / 201 emitted frames / 0 remaining, zero forbidden launches,
+original assertions and final completion passed. The command uses the retained
+directory with `node scripts/run-offline-replay.mjs --profile complete-thread`
+and the exact scenario grep, `--retries 0`. Normal output restoration succeeded.
+It is also present and passed in dispatcher application gate 7; that gate uses
+committed input and does not substitute for the separate retained-input proof.
+
+The subsequent `npm run e2e:recorded -- --retries 0` report,
+`resumed-committed-recordings.json`, has no flaky outcomes or forbidden launches.
+All 29 exchange attachments complete: 773 matched / 3,216 emitted / 0 remaining.
+The sole skipped fixme, also skipped in application gate 7, remains
+`real claude picks up a saved channel system prompt at Reset session`.
+Pre-verify's five checks passed (26 affected tests executed/passed, 0 failed/skipped),
+as did client-test typecheck and build; Electron native preparation followed the
+completed Node checks.
+
+The supplied unit gate explicitly records these named controls present and passed:
+
+- `replays a captured close only after its exact old-connection client-only suffix`
+- `requires the actual captured transport close after all preceding daemon frames`
+- `bounds a missing captured-close tail with the existing connection deadline`
+- `cannot drain across an unreleased checkpoint in the captured tail`
+- `never forwards same-connection daemon data beyond a captured close`
+- `delivers the prefix then observes the actual relay close and reconnect after tail matching`
+
+The focused controls also retain changed/duplicate/extra/future-connection request
+rejection, repeated draining and sticky failures. Historical
+`/tmp/builder-2137/replay.json` and `.log` remain failed: the named scenario
+executed once, 0 passed, 1 failed, 0 skipped, retries zero, 9 matched / 38 emitted /
+29 remaining and zero forbidden launches. Earlier current-source projection
+mismatches and compatibility-only failures remain failed in the linked plan.
+These Linux results establish offline correctness only, with no fresh provider or
+physical transport acceptance. macOS is outside this ticket's verification scope.
+
 ## Replay native storage prerequisite
 
 Node and Electron require different `better-sqlite3` native addon ABIs. Rebuild

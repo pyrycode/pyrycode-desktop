@@ -8,7 +8,91 @@ The scenario inventory, protected tickets and live-only proof boundaries are in 
 
 Each `e2e/recordings/*.json` identifies its source Desktop commit, daemon source revision and binary checksum, Claude version, capture time and authenticated capabilities. Version 2 also records sequential authenticated connection lifetimes and explicit test-side causal checkpoints. Observed retryable transport closes carry their actual close code and message prefix; replay forwards every preceding frame before closing the local socket. Version 1 remains readable for older captures from PR #2036.
 
-Replay uses the normal Desktop build, native thread mode, the existing encrypted fake daemon and a local forwarding relay. It never invokes the older event-to-thread publisher. Every outgoing envelope field and complete payload must match. Only fresh request IDs/timestamps and explicitly bound opaque identities vary. The same identity binds once across requests, replies and connections. Text, permission choices, routes, cursors and unknown extra fields remain part of the comparison.
+Capture preserves raw close positions and each call's actual connection identity.
+The capture-only session adapter observes a client call before delegating to
+`sendMessage`; that observation does not prove a successful socket write. A
+session retained until reconnect can therefore have observed calls after its
+recorded link-down event. These calls remain in their original connection.
+
+Replay derives a finite close position by scanning only the contiguous client-only
+suffix on that same connection after the raw close. It exactly matches those
+requests before notifying the transport-close observer once with the original
+code and preceding server-frame count. The relay waits for successful socket
+writes of that prefix before closing. No daemon frame crosses the raw close;
+same-connection daemon data beyond it fails. A close without a tail keeps its
+existing position. No recording bytes or connection assignments change.
+
+An unreleased causal checkpoint still blocks tail matching. Missing calls fail
+within the existing five-second connection-completion bound; changed, duplicate,
+extra and future-connection requests remain fatal and sticky. Reconnect cannot
+skip the old connection's requests or borrow future replies, and final
+`assertComplete()` still checks the entire exchange. See the
+[captured-close controls and counted Linux acceptance](knowledge/features/development-verification.md#captured-close-client-tails).
+
+Replay uses the normal Desktop build by default, native thread mode, the existing encrypted fake daemon and a local forwarding relay. It never invokes the older event-to-thread publisher. Every outgoing envelope field and complete payload must match. Only fresh request IDs/timestamps and explicitly bound opaque identities vary. The same identity binds once across requests, replies and connections. Text, permission choices, routes, cursors and unknown extra fields remain part of the comparison.
+
+For older complete-thread recordings whose accepted capabilities already include
+`thread_expansion,thread_compact`, explicitly select the test-only build profile:
+
+```sh
+node scripts/run-offline-replay.mjs --profile complete-thread --retries 0
+```
+
+This builds the current Desktop source with
+`e2e/recordings/complete-thread.config.ts` and runs the original shared assertions
+under the executable guard. Its build alias supplies omitted opening options at
+both ordinary opening and created-conversation activation, selecting the existing
+complete authoritative route throughout the run, including accepted reconnects.
+Default replay, with no `--profile`, uses the existing normal output and verifies
+automatic projection selection: a compact-capable accepted handshake produces
+`projection: 'compact-v1'`. Compatibility verifies the current source's complete
+route. Neither profile establishes fresh provider behavior or physical transport
+proof. Production compact-demand coverage continues to use the normal build.
+
+The compatibility configuration contains no capture adapter. Selection happens
+before application dispatch; normal builds have no environment, IPC or renderer
+state switch for it. There is no mismatch fallback, per-request adaptation or
+projection stripping. Full envelopes, identities, accepted capabilities, input
+bytes, original assertions, causal barriers and exchange-completion checks remain
+unchanged; wrong-profile and changed-payload controls still reject strictly.
+
+Compatibility temporarily builds into the ordinary `out/` directory, then rebuilds
+normal output in `finally` after success, replay failure or compatibility-build
+failure. Restoration failure fails the command. Run builds and replay sequentially
+with no competing consumers of that output. The runner refuses a build whose
+recorded profile differs from the requested one, including compatibility output
+left by an interrupted process; `npm run build` restores normal output explicitly.
+Unknown profile selections fail before launch. The default invocation does not
+rebuild the application.
+
+`replayExecutedBuild` reports compilation-time `desktopRevision`, `sourceDirty`
+and `profile` from `out/main/build-provenance.json`, plus `bundles`, the SHA-256
+map of emitted JavaScript, HTML, CSS and JSON outputs. These identify the executed
+build rather than the checkout at replay time. Separately, each `replay-input`
+attachment records `scenario`, raw-byte `inputSha256` and `captureSource` (the
+original Desktop/daemon revisions, daemon binary checksum, Claude version and
+capture time). Exchange counts retain capture provenance; a current build never
+rewrites the capture's source identity.
+
+For the retained question input, preserve the original selection and add only the
+explicit profile argument:
+
+```sh
+PYRY_CLIENT_RECORDING_DIR=/tmp/builder-2137/capture-3 \
+node scripts/run-offline-replay.mjs --profile complete-thread \
+  --grep "real claude changes model during a question and resumes with the original answer" --retries 0
+```
+
+Verify input SHA-256
+`24bbe5dff65241a77dda96cbd262c9185925d88f6168439a1679b576b984dac1`.
+The [combined Linux retained-input acceptance](knowledge/features/development-verification.md#captured-close-client-tails)
+records the named case present and passed on clean current source
+`3372c1f318aa4da6d46c4638fd0ce4dccb990998`: 1 executed/passed, 0 failed/skipped,
+retries zero, 38 matched requests / 201 emitted frames / 0 remaining, and zero
+forbidden launches. Complete-thread selection and finite tail scheduling are
+both required for that input. The earlier default-profile mismatch and
+compatibility-only close-ordering failures remain failed evidence; forwarding a
+prefix alone did not establish completion. This is offline replay proof only.
 
 After installing dependencies or rebuilding SQLite for Node unit tests, run
 `npm run rebuild:electron` before replay. Node and Electron require different

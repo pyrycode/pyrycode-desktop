@@ -1,4 +1,4 @@
-import { test, expect, SEEDED_ROW, seedConversationsFrame, emptyThreadWindow } from './fixtures/launchPairedApp'
+import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { SendMessagePayload } from '../src/shared/wire/types'
 import type { ThreadItem } from '../src/shared/wire/thread'
@@ -17,7 +17,12 @@ test('typed resets receive only ack and leave no Sending or tail row after later
     helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
       const request = decodeEnvelope(bytes)
       if (request.type === 'list_conversations') return [seedConversationsFrame()]
-      if (request.type === 'thread_catch_up') return [emptyThreadWindow(request)]
+      if (request.type === 'thread_catch_up') return [
+        frame('thread_items', { conversation_id: SEEDED_ROW.id, epoch: 'fixture-epoch', version: 1,
+          items: [item(1, 'assistant_message', { text: 'Before reset' })], final: false }, request.id),
+        frame('thread_items', { conversation_id: SEEDED_ROW.id, epoch: 'fixture-epoch', version: 1,
+          items: [], final: true, lower_order: 0, upper_order: 2, continuation: 0, older_exists: false }, request.id)
+      ]
       if (request.type === 'send_message') {
         sends.push(request.payload as SendMessagePayload)
         // Native mode is essential: no fixture-generated user_message may settle a reset.
@@ -38,11 +43,12 @@ test('typed resets receive only ack and leave no Sending or tail row after later
   }
   stdout.on('data', observe)
   try {
+    await expect(page.getByText('Before reset', { exact: true })).toBeVisible()
     const identity = await page.evaluate(() => window.pyry.deviceIdentity())
     expect(identity.ok).toBe(true)
     if (!identity.ok) throw Error('fixture identity unavailable')
     const box = page.locator('.composer__input')
-    let version = 1, nextItem = 1
+    let version = 1, nextItem = 2
     const add = (value: ThreadItem) => daemon.pushFrame(frame('thread_item_added', {
       conversation_id: SEEDED_ROW.id, epoch: 'fixture-epoch', version: ++version, item: value
     }))

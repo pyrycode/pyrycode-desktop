@@ -8,6 +8,7 @@ import { pairAnotherServerFromSettings } from './fixtures/pairingArrival'
 import { installHeldThreadRead } from './fixtures/heldThreadRead'
 import { installSavedTraversalReads } from './fixtures/savedTraversalReads'
 import { readMainProcess } from './fixtures/mainProcessRead'
+import { readCertifiedCheckpoint } from './fixtures/certifiedCheckpoint'
 
 const stamp = '2026-10-15T00:00:00Z'
 const item = (id: number, text: string): ThreadItem => ({ id, rev: 1, order: id, kind: 'assistant_message',
@@ -491,8 +492,10 @@ test('current thread prompts remain answerable during pending and failed initial
 
 test('restore overlapping live content retains complete progress across an interrupted catch-up and epoch replacement', async ({ launchPairedApp }, testInfo) => {
   const requests: Envelope[] = []
+  let connectionGeneration = 1
   let interrupt = false, reset = false, overlapped = false, holdReply = false
-  let { page, app, daemon, forwarder, userDataDir } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
+  let { page, app, daemon, forwarder, userDataDir } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities: ['interactive', 'thread'] },
+    buildReconnectFrames: () => { connectionGeneration++; return [] }, buildReplyFrames: bytes => {
     const request = decodeEnvelope(bytes); requests.push(request)
     if (request.type === 'list_conversations') return [seedConversationsFrame({ ...SEEDED_ROW, current_session_id: 'session' })]
     if (request.type !== 'thread_catch_up') return []
@@ -532,13 +535,47 @@ test('restore overlapping live content retains complete progress across an inter
   await app.close()
   holdReply = true
   const resumed = await launchPairedApp({ threadMode: 'native' }, { reuseUserDataDir: userDataDir, onLaunched: async app => {
+    await app.evaluate(({ ipcMain }, owner) => {
+      const state = globalThis as any
+      state.checkpointTrace = []
+      state.checkpointWriteAcknowledged = false
+      ipcMain.on('pyry:diagnostic', (_event, value) => {
+        if (['thread-query-state', 'thread-query-completed', 'thread-query-failed', 'thread-items-batch',
+          'thread-items-restored', 'thread-items-epoch', 'history-writer-result'].includes(value.event))
+          state.checkpointTrace.push({ event: value.event, code: value.code, at: Date.now() })
+      })
+      const original = (ipcMain as any)._invokeHandlers.get('pyry:chat-history')
+      ipcMain.removeHandler('pyry:chat-history')
+      ipcMain.handle('pyry:chat-history', async (event, request) => {
+        const started = Date.now()
+        const result = await original(event, request)
+        if (request.operation === 'mutateThread') state.checkpointTrace.push({ event: 'protected-write',
+          checkpoint: request.change.metadata.checkpoint, completion: request.change.completion,
+          status: result.status, code: result.code, started, at: Date.now() })
+        if (request.operation === 'readThread') state.checkpointTrace.push({ event: 'protected-read',
+          checkpoint: result.snapshot?.thread?.checkpoint, status: result.status, started, at: Date.now() })
+        if (request.operation === 'mutateThread' && request.serverId === owner.host && request.conversationId === owner.chat &&
+          request.change.metadata.epoch === 'epoch' && request.change.metadata.checkpoint === 25 &&
+          request.change.completion?.fromVersion === 20 && request.change.completion.version === 25 && result.status === 'ok')
+          state.checkpointWriteAcknowledged = true
+        return result
+      })
+    }, { host: 'fake-daemon', chat: SEEDED_ROW.id })
     const evidence = await installHeldThreadRead(app)
     await testInfo.attach('held-thread-read-setup', { body: JSON.stringify(evidence), contentType: 'application/json' })
   } })
   page = resumed.page; app = resumed.app
   await page.getByText(SEEDED_ROW.name!, { exact: true }).first().click()
   await expect.poll(() => app.evaluate(() => (globalThis as any).heldThreadReads)).toBe(1)
-  await page.evaluate(() => { (globalThis as any).overlapReceived = false; (globalThis as any).unfinishedReceipts = 0; window.pyry.onDaemonEvent(event => {
+  await page.evaluate(() => { (globalThis as any).overlapReceived = false; (globalThis as any).unfinishedReceipts = 0;
+    (globalThis as any).checkpointReceipts = [];
+    window.pyry.onDaemonEvent(event => {
+    if (event.type === 'connected') (globalThis as any).checkpointReceipts.push({ event: event.type, connection: event.ack.conn_id })
+    if (event.type === 'threadReply') (globalThis as any).checkpointReceipts.push({ event: event.type,
+      request: event.requestId, wireRequest: event.correlation.in_reply_to, version: event.reply.payload.version,
+      final: 'final' in event.reply.payload && event.reply.payload.final })
+    if (event.type === 'threadQueryFailed') (globalThis as any).checkpointReceipts.push({ event: event.type,
+      request: event.requestId, wireRequest: event.inReplyTo, reason: event.reason })
     if (event.type === 'threadUpdate') (globalThis as any).overlapReceived = true
     if (event.type === 'threadReply' && event.reply.type === 'thread_items' && !event.reply.payload.final && event.reply.payload.version === 30)
       (globalThis as any).unfinishedReceipts++
@@ -568,10 +605,24 @@ test('restore overlapping live content retains complete progress across an inter
   daemon.pushFrame(frame('thread_items', { conversation_id: SEEDED_ROW.id, epoch: 'epoch', version: 25,
     items: [], final: true, from_version: 20 }, heldReply.id))
   // Reconnect is ordered after the completion is persisted, not merely dispatched.
-  await expect.poll(() => page.evaluate(async id => {
-    const result = await window.pyry.chatHistory({ operation: 'readThread', serverId: 'fake-daemon', conversationId: id })
-    return result.status === 'stored' && result.snapshot.kind === 'daemon-items' ? result.snapshot.thread.checkpoint : null
-  }, SEEDED_ROW.id)).toBe(25)
+  try {
+    // Full readThread authenticates hundreds of protected rows synchronously. Poll only the
+    // exact write acknowledgement first, so a pre-write read cannot consume the poll's budget.
+    const checkpoint = await readCertifiedCheckpoint(
+      () => readMainProcess(app, () => (globalThis as any).checkpointWriteAcknowledged === true),
+      () => page.evaluate(async id => {
+        const result = await window.pyry.chatHistory({ operation: 'readThread', serverId: 'fake-daemon', conversationId: id })
+        return result.status === 'stored' && result.snapshot.kind === 'daemon-items' ? result.snapshot.thread.checkpoint : null
+      }, SEEDED_ROW.id))
+    expect(checkpoint).toBe(25)
+  } finally {
+    await testInfo.attach('checkpoint-completion-trace', { contentType: 'application/json', body: JSON.stringify({
+      wireRequest: heldReply.id, connectionGeneration,
+      query: { epoch: heldReply.payload.epoch, version: heldReply.payload.version },
+      receipts: await page.evaluate(() => (globalThis as any).checkpointReceipts),
+      persistence: await readMainProcess(app, () => (globalThis as any).checkpointTrace)
+    }) })
+  }
   holdReply = false
   interrupt = true; forwarder.dropClientLeg()
   await expect(page.getByText('Unfinished catch-up content', { exact: true })).toBeVisible()

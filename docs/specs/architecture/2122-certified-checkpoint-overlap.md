@@ -76,3 +76,39 @@ Retain typed history status/error results and existing bounded query failures. A
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-19
+
+## Revisions
+
+2026-10-19 — Causal diagnosis selected scenario synchronization, with no production change.
+The three-worker traced comparison reproduced six checkpoint failures out of ten;
+all ten received the correlated terminal, committed the batch in memory and acknowledged
+the exact protected 20→25 completion write. Timed observations show a full saved read
+admitted before certification/write, occupying main for 2.2–2.4 seconds in the timed
+sample. A second full read can exceed the existing five-second poll deadline under
+three-worker contention. This is an expensive pre-write observation, not missing
+completion authority. No arbitrary delay or timeout change is needed.
+
+`readCertifiedCheckpoint(acknowledged, read)` polls only a lightweight read-only
+observation of the real exact certified write acknowledgement, then performs one full
+protected read. The scenario's main-process wrapper observes the original handler's
+returned `ok` only for the exact host/conversation/epoch and 20→25 certificate; it
+does not flush, commit, send, hold or release anything. Existing batch lifecycle
+diagnostics independently establish in-memory completion, and renderer receipt
+records correlate the terminal to its wire/caller request. The fake daemon's
+reconnect hook counts connection lifetimes without supplying extra frames.
+
+The original durable checkpoint assertion remains exactly 25, before reconnect.
+The deterministic expensive-reader regression fails against the extracted original
+polling sequence (one full read before acknowledgement, expected zero), then passes
+with acknowledgement-first admission. Further tests retain incomplete/unavailable
+inspection, actual stale/missing read results and fatal inspection errors. Existing
+mounted coverage retains every transition in the table above. Production replay is
+not required because only scenario observations and scheduling changed.
+
+Security re-review: PASS. The wrapper delegates the existing validated protected
+handler once and records only numeric progress, fixed status classifications and
+synthetic correlation. Read inspection never replays setup, held release, frames or
+reconnect. No new application IPC, storage, credential or completion authority.
+
+Final size remains below 650 written lines with zero production files, one new
+exported helper and no consumer migration or new application reject branch.

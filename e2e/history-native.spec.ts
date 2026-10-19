@@ -4,13 +4,15 @@ import { promisify } from 'node:util'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { withWorkerDisplay } from './fixtures/runDisplay'
 
 test('packaged protected history commits and reopens with production encryption', async ({}, testInfo) => {
   test.skip(process.platform !== 'linux' && process.platform !== 'darwin', 'Packaged history native proof supports Linux and macOS only')
   test.setTimeout(300_000)
   const directory = await mkdtemp(join(tmpdir(), 'pyry-history-native-'))
+  const env = await withWorkerDisplay(process.env as Record<string, string>)
   const result = await promisify(execFile)(process.execPath, ['scripts/history-native-smoke.mjs', directory],
-    { timeout: 240_000, maxBuffer: 4 * 1024 * 1024 })
+    { env, timeout: 240_000, maxBuffer: 4 * 1024 * 1024 })
   console.log(result.stdout)
   await testInfo.attach('history-native.stdout', { body: result.stdout, contentType: 'text/plain' })
   await testInfo.attach('history-native.stderr', { body: result.stderr, contentType: 'text/plain' })

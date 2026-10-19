@@ -2,6 +2,26 @@
 
 Read tolerance and confirmation before resending mutations or native setup. See the [harness overview](e2e-harness.md).
 
+## Shared main-process command ownership
+
+`electronLaunch` installs `mainProcessControl` on every returned local application. Existing
+value-based `app.evaluate` calls now use app-owned operation identities and receipts. A synchronous
+`Runtime.evaluate` dispatch registers the operation before executing the client-owned callback.
+Synchronous results and asynchronous promises remain owned by the application; the inspector only
+reads receipts with `awaitPromise: false`. Losing a dispatch acknowledgement retries the same
+identity, which cannot repeat the callback. Callback errors are outcomes and propagate unchanged,
+including errors whose text resembles a transport loss. Unrelated inspector errors fail immediately.
+A shared 30-second deadline bounds dispatch and observation; an expired callback cannot start late.
+Registry entries expire at that deadline, and each application has its own registry.
+
+This adapter changes test control only. It adds no application IPC endpoint, listener in the normal
+build, daemon message or dependency. Renderer input, DOM assertions and BrowserWindow handles remain
+Playwright-owned. Callbacks must be client-owned and arguments/results must be values serializable by
+Node's V8 serializer. The local Playwright inspector session is an internal API, so dependency upgrades
+must retain adapter fault tests and native smoke/replay coverage. A timed-out asynchronous callback
+already executing is not automatically cancelled; failure cleanup still owns application shutdown.
+Legacy recovery helpers remain useful for their focused fault contracts and specialized handle reads.
+
 ## Tolerating a transient inspection-context loss on reads
 
 `app.evaluate` can raise Playwright's `Execution context was destroyed, most likely because of a

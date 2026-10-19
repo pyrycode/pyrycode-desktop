@@ -1,4 +1,6 @@
 import { _electron as playwrightElectron } from '@playwright/test'
+import { installMainProcessControl } from './mainProcessControl'
+import { withWorkerDisplay } from './runDisplay'
 
 // Check the runner's environment, not the child options: callers may replace the child env.
 export const electron = {
@@ -10,6 +12,13 @@ export const electron = {
           'Do not unset CODEX_SANDBOX or change Electron security settings.'
       )
     }
-    return playwrightElectron.launch(options)
+    const env = await withWorkerDisplay(options?.env)
+    const app = await playwrightElectron.launch({ ...options, env })
+    try { installMainProcessControl(app) }
+    catch (error) {
+      try { await app.close() } catch { /* Preserve the setup error. */ }
+      throw error
+    }
+    return app
   }
 }

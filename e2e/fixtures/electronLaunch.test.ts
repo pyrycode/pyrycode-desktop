@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 
-const { launchSpy } = vi.hoisted(() => ({ launchSpy: vi.fn() }))
+const { launchSpy, installSpy } = vi.hoisted(() => ({ launchSpy: vi.fn(), installSpy: vi.fn() }))
 vi.mock('@playwright/test', () => ({ _electron: { launch: launchSpy } }))
+vi.mock('./mainProcessControl', () => ({ installMainProcessControl: installSpy }))
+vi.mock('./runDisplay', () => ({ withWorkerDisplay: async (env: unknown) => env }))
 
 import { electron } from './electronLaunch'
 
@@ -10,6 +12,7 @@ afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllEnvs()
   launchSpy.mockReset()
+  installSpy.mockReset()
 })
 
 describe('Electron test launch', () => {
@@ -35,6 +38,7 @@ describe('Electron test launch', () => {
     expect(await electron.launch(options)).toBe(app)
     expect(launchSpy).toHaveBeenCalledOnce()
     expect(launchSpy).toHaveBeenCalledWith(options)
+    expect(installSpy).toHaveBeenCalledWith(app)
   })
 
   it('does not apply the macOS restriction on other platforms', async () => {
@@ -42,5 +46,14 @@ describe('Electron test launch', () => {
     vi.stubEnv('CODEX_SANDBOX', 'seatbelt')
     await electron.launch({ args: ['.'] })
     expect(launchSpy).toHaveBeenCalledOnce()
+  })
+
+  it('closes an acquired app if command control cannot be initialized', async () => {
+    const failure = Error('incompatible inspector')
+    const app = { close: vi.fn(async () => {}) }
+    launchSpy.mockResolvedValue(app)
+    installSpy.mockImplementationOnce(() => { throw failure })
+    await expect(electron.launch({ args: ['.'] })).rejects.toBe(failure)
+    expect(app.close).toHaveBeenCalledOnce()
   })
 })

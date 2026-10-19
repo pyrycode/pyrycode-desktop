@@ -2,26 +2,11 @@ import { spawn } from 'node:child_process'
 import { accessSync, constants } from 'node:fs'
 import { delimiter, join } from 'node:path'
 
-// One X display per Playwright run (Linux only). Both configs name this module as `globalSetup`, so it
-// runs once in the runner process before any worker starts, whatever command started the run: the
-// dispatcher's verifier gate, its baseline re-run with `-g`, the live gate, `npm run e2e`, or an agent's
-// own focused `npx playwright test`. Workers inherit `process.env` from the runner after global setup,
-// and every launch site copies `process.env` into Electron's environment, so each Electron process of
-// the run draws on the display started here.
-//
-// WHY. The agent container starts one Xvfb on `:99` and every process in it inherits `DISPLAY=:99`: the
-// gate's workers, a builder's focused run and the background live gate all draw on one software-rendered
-// X server at once. Separate runs then share that server's clipboard, which the `clipboard` project in
-// playwright.config.ts can only serialise WITHIN one run, and they share its pointer, focus and server
-// thread. A run with its own display shares none of that with any other run.
-//
-// PER RUN, NOT PER WORKER. The workers of one run already avoid each other on a shared display: launched
-// windows ignore the display's pointer (#1813), Playwright emulates page focus for every Electron page,
-// the clipboard specs run one at a time in their own project, and the display does not reset between
-// apps (`-noreset`, below). Nor is the server itself a bottleneck: measured 2026-10-15 in the agent
-// image, the shared server used 15 s of CPU across a 16-minute four-worker run with a builder-style run
-// beside it, under 2 percent of one core. A display per worker would also need the launch sites to pick
-// a display by worker index rather than inherit one, for no mechanism that is known to remain.
+// Each Linux Playwright worker acquires one private X display at its first Electron launch.
+// Global setup validates the policy before workers start; electronLaunch applies the worker's
+// display to every app, including live and replay fixtures. Native focus, pointer and clipboard
+// state cannot cross worker or run boundaries. Apps within a scenario still share one display.
+// Existing pointer protection remains useful for deliberately overlapping windows in that scenario.
 //
 // Opt-out: `PYRY_E2E_DISPLAY=inherit` keeps the inherited `DISPLAY`, for example to watch a run on a
 // Linux desktop session. `PYRY_E2E_SHOW_WINDOW` cannot be that switch: the agent container sets it for
@@ -180,13 +165,22 @@ export async function startRunDisplay(): Promise<RunDisplay> {
 }
 
 /**
- * Playwright global setup. Gives the run its own display when the plan says so and returns the global
- * teardown that stops it; otherwise changes nothing.
+ * Validate before collection. Resource ownership belongs to workers rather than the runner.
  */
-export default async function globalSetup(): Promise<(() => Promise<void>) | undefined> {
-  const plan = planRunDisplay(process.env, process.platform, xvfbOnPath())
-  if (plan.kind === 'inherit') return undefined
-  const own = await startRunDisplay()
-  process.env.DISPLAY = own.display
-  return own.stop
+export default async function globalSetup(): Promise<undefined> {
+  planRunDisplay(process.env, process.platform, xvfbOnPath())
+  return undefined
+}
+
+// Module state is private to a Playwright worker process. The stdin guard in startRunDisplay closes
+// the server when that process exits, including abrupt worker termination. Concurrent launches in one
+// worker share one acquisition; app restarts never reset the display or its clipboard.
+let workerDisplay: Promise<RunDisplay> | undefined
+export async function withWorkerDisplay(
+  env: Record<string, string> | undefined
+): Promise<Record<string, string> | undefined> {
+  if (planRunDisplay(process.env, process.platform, xvfbOnPath()).kind === 'inherit') return env
+  workerDisplay ??= startRunDisplay()
+  const own = await workerDisplay
+  return { ...(env ?? process.env) as Record<string, string>, DISPLAY: own.display }
 }

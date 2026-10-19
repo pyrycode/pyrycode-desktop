@@ -50,6 +50,8 @@ export interface FakeRelayForwarder {
   closeClientLeg(code: number): void
   /** Replay an observed close only after this many server frames have been forwarded, in order. */
   closeClientAfterServerFrames(count: number, code: number): void
+  /** Wait for actual successful socket writes, not replay's count of generated frames. */
+  whenServerFramesForwarded(count: number, timeoutMs?: number): Promise<void>
   /**
    * Terminates both legs and closes the server. Idempotent: a second call returns the same
    * promise and never re-closes. Mirrors the existing startRelay close contract.
@@ -121,6 +123,23 @@ export function startFakeRelayForwarder(): Promise<FakeRelayForwarder> {
   let closePromise: Promise<void> | null = null
 
   let serverFrames = 0
+  const deliveryWaiters = new Set<() => void>()
+  let deliveryError: Error | undefined
+  const notifyDelivery = (): void => { for (const finish of [...deliveryWaiters]) finish() }
+  function whenServerFramesForwarded(count: number, timeoutMs = 5_000): Promise<void> {
+    if (!Number.isSafeInteger(count) || count < 0) return Promise.reject(new Error('Invalid replay delivery boundary'))
+    return new Promise((resolve, reject) => {
+      const cleanup = (): void => { clearTimeout(timer); deliveryWaiters.delete(finish) }
+      const finish = (): void => {
+        if (deliveryError) { cleanup(); reject(deliveryError) }
+        else if (serverFrames >= count) { cleanup(); resolve() }
+        else if (closed) { cleanup(); reject(new Error('fake relay: closed before frame delivery')) }
+      }
+      const timer = setTimeout(() => { cleanup(); reject(new Error('fake relay: frame delivery incomplete')) }, timeoutMs)
+      deliveryWaiters.add(finish)
+      finish()
+    })
+  }
   let pendingClose: { count: number; code: number } | undefined
   const flushClose = (): void => {
     if (!pendingClose || serverFrames < pendingClose.count) return
@@ -183,8 +202,11 @@ export function startFakeRelayForwarder(): Promise<FakeRelayForwarder> {
       // Byte-for-byte, opcode-preserving: forward the normalised bytes and the isBinary flag
       // verbatim so a binary frame stays binary and a text frame stays text. The relay never
       // reads, parses, or branches on frame content.
-      dest.send(toBytes(data), { binary: isBinary }, () => {
-        if (leg === 'server') { serverFrames++; flushClose() }
+      dest.send(toBytes(data), { binary: isBinary }, (error) => {
+        if (leg !== 'server') return
+        if (error) deliveryError ??= new Error('fake relay: frame delivery failed')
+        else { serverFrames++; flushClose() }
+        notifyDelivery()
       })
     })
 
@@ -235,6 +257,7 @@ export function startFakeRelayForwarder(): Promise<FakeRelayForwarder> {
   function close(): Promise<void> {
     if (closePromise !== null) return closePromise
     closed = true
+    notifyDelivery()
     clearReadyTimer()
     // Unblock an awaiting consumer if teardown beats both legs; a no-op once ready has settled.
     if (!readySettled) {
@@ -262,6 +285,7 @@ export function startFakeRelayForwarder(): Promise<FakeRelayForwarder> {
         dropClientLeg,
         closeClientLeg,
         closeClientAfterServerFrames,
+        whenServerFramesForwarded,
         close
       })
     })

@@ -2,6 +2,7 @@ import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
 import { encodeEnvelope, decodeEnvelope } from '../src/main/transport/codec'
 import type { EnvelopeType } from '../src/shared/wire/types'
 import type { Page } from '@playwright/test'
+import { installPausedClock } from './fixtures/pausedClock'
 
 const OTHER = { ...SEEDED_ROW, id: 'resolution-other', name: 'Other resolution discussion' }
 const frame = (type: EnvelopeType, payload: unknown) => encodeEnvelope({
@@ -24,8 +25,7 @@ const open = async (page: Page, name: string) => {
 }
 const freezeTime = async (page: Page) => {
   const instant = new Date('2026-10-01T12:00:00Z')
-  await page.clock.install({ time: instant })
-  await page.clock.pauseAt(instant)
+  await installPausedClock(page, instant)
 }
 
 // Only synthetic frames and DOM are inspected; no pairing material or answer tokens are serialized.

@@ -106,3 +106,27 @@ No new production failure mode or retry is introduced.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-19
+
+## Revisions
+
+2026-10-19: instrumented A/B/A comparison at `c7e6db3a` retained in
+`/tmp/builder-2125/{alone,contended,alone-after}.json` (each retries zero).
+Configured workers three throughout; actual workers 1/3/1. All use Linux x64,
+Electron 33.4.11 / Node 20.18.3 / ABI 130 and real `gnome_libsecret`.
+The first isolated run failed actual drain at 66,817 ms (runner 66,958 ms),
+with 8,333 durable items, 271 submissions, no errors, main gap 668 ms.
+The contended run executed 25: 24 passed, native failed main heartbeat at
+1,005 ms; actual drain 58,773 ms, renderer gap 44.5 ms, inputs 150/250/307 ms.
+The final isolated run passed actual drain at 54,057 ms, main gap 149 ms,
+renderer gap 44.3 ms, inputs 123/20/23 ms; exact reopen and both clean exits passed.
+Unrelated compilation was observed during both isolated runs; the first failure
+remains a genuine failure, not attributed to polling or internal suite contention.
+
+The comparison demonstrates the native proof can fail heartbeat under concurrent
+packaged-history/hosted-view execution while its workload deadline passes. Choose
+the planned localized prerequisite project to remove this competition, retaining
+all thresholds. The initial isolated overrun remains a reliability concern to check
+in the five consecutive final runs; scheduling is not claimed to cure external load.
+No shared fixture or product changes. Open scheduling question resolved by this
+measured correction; final repeated native evidence and complete dispatcher gate
+remain required before acceptance.

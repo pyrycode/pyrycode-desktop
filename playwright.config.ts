@@ -10,6 +10,7 @@ import { availableParallelism } from 'node:os'
 
 const REAL_TIER = /(^|\/)real-[^/]*\.spec\.ts$/
 const CAPTURE_TIER = /(^|\/)capture-[^/]*\.spec\.ts$/
+const NATIVE_WRITER = /(^|\/)history-writer-native\.spec\.ts$/
 
 // The specs that write or read the operating system clipboard, which every Electron process on the
 // machine shares. Two of them overlapping would read each other's text. A new spec that copies or pastes
@@ -76,11 +77,16 @@ export default defineConfig({
   // the fully serial run.
   fullyParallel: false,
   workers: workerCount(),
-  // The clipboard project is listed first so its single worker starts at once rather than running its
-  // specs one after another at the end, after the parallel ones have finished.
+  // After the native deadline proof, clipboard starts alongside parallel so its serial
+  // cases do not accumulate at the end of the run.
   projects: [
-    { name: 'clipboard', testMatch: CLIPBOARD_SPECS, workers: 1 },
-    { name: 'parallel', testIgnore: [REAL_TIER, CAPTURE_TIER, ...CLIPBOARD_SPECS] }
+    // This deadline proof must finish before competing Electron launches. A single-worker
+    // project alone would still overlap the other projects. Dependencies isolate only this
+    // scenario; clipboard and parallel retain their existing concurrency after it completes.
+    { name: 'native-writer', testMatch: NATIVE_WRITER, workers: 1 },
+    { name: 'clipboard', testMatch: CLIPBOARD_SPECS, workers: 1, dependencies: ['native-writer'] },
+    { name: 'parallel', testIgnore: [REAL_TIER, CAPTURE_TIER, NATIVE_WRITER, ...CLIPBOARD_SPECS],
+      dependencies: ['native-writer'] }
   ],
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,

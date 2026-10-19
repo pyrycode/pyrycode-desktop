@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, expect, it, vi } from 'vitest'
 import { setImmediate as nextTurn } from 'node:timers/promises'
 import type { ElectronApplication, Page } from '@playwright/test'
 import { encodeEnvelope } from '../../src/main/transport/codec'
@@ -7,7 +7,7 @@ import { clientAppLifecycle } from './clientAppLifecycle'
 import { withIsolatedElectronApp } from './realDaemon'
 import { test as registered } from './clientScenario'
 
-vi.hoisted(() => { process.env.PYRY_CLIENT_MODE = 'replay' })
+vi.hoisted(() => { vi.stubEnv('PYRY_CLIENT_MODE', 'replay') })
 vi.mock('@playwright/test', async original => {
   const actual = await original<typeof import('@playwright/test')>()
   const extend = (fixtures: object) => ({ ...fixtures, extend })
@@ -44,6 +44,7 @@ type ReplayHook = (deps: { daemon: object; exchange: RecordedExchange; recording
   use: () => Promise<void>) => Promise<void>
 const replayHook = (registered as unknown as { _clientReplay: [ReplayHook, object] })._clientReplay[0]
 
+afterAll(() => { vi.unstubAllEnvs() })
 afterEach(() => {
   delete clientAppLifecycle.opened
   delete clientAppLifecycle.closing

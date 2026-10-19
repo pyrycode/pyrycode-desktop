@@ -112,3 +112,64 @@ reconnect. No new application IPC, storage, credential or completion authority.
 
 Final size remains below 650 written lines with zero production files, one new
 exported helper and no consumer migration or new application reject branch.
+
+## Validation evidence
+
+Linux x64, 2026-10-19; implementation `ed0ea8f7`, plan-first commit `dc56f4ad`,
+final merged main `fa9e20e7`. Reports are under `/tmp/builder-2122/`.
+The ten-run source has the same helper/scenario behavior as the implementation
+commit (subsequent edits expanded helper tests and indented the reader callback).
+
+| Check | Executed / passed / failed / skipped | Evidence |
+| --- | --- | --- |
+| Traced original checkpoint poll, ten repetitions | 10 / 4 / 6 / 0 | `traced-native-before.json`, `.stderr` |
+| Timed original ordering, three repetitions | 3 / 3 / 0 / 0 | `timed-before.json`, `.stderr`; diagnostic only, not a repair pass |
+| Deterministic extracted old polling sequence | 1 / 0 / 1 / 0 | `controlled-before-clean.log`; full read admitted before acknowledgement |
+| Repaired deterministic regression | 1 / 1 / 0 / 0 | `controlled-after.log` |
+| Final helper + held-read units | 20 / 20 / 0 / 0 | `focused-final.log`; all six new helper tests and fourteen existing setup tests |
+| Existing runtime, coordinator, item-store, writer and held-read units | 111 / 111 / 0 / 0 | `owner-baseline.log`; production unchanged |
+| Repaired mounted case, ten repetitions | 10 / 10 / 0 / 0 | `after-ten.json`, `.stderr` |
+| Complete thread-activation spec after sequential native preparation | 20 / 20 / 0 / 0 | `spec-sequential-final.json`, `.stderr` |
+
+Commands for the ten-run comparisons:
+`npx playwright test e2e/thread-activation.spec.ts --grep 'restore overlapping live content retains complete progress across an interrupted catch-up and epoch replacement$' --repeat-each 10 --workers 3 --retries 0 --reporter=json`.
+Configured projects remain `clipboard` and `parallel`; the named case uses `parallel`.
+Configured and actual concurrent workers: three, parallel slots 0/1/2. Ten worker
+process indices reflect repeat scheduling, not ten simultaneous workers. No retries.
+
+Complete-spec command: `npx playwright test e2e/thread-activation.spec.ts --workers 3 --retries 0 --reporter=json`.
+Three configured workers, one actual worker because this single file remains serial;
+projects/scheduling unchanged, no retries, skips, flaky results or top-level errors.
+All ten repaired traces and the complete-spec trace show connection generation 2,
+wire request 7, correlated terminal version 25, begun/committed in-memory batch,
+acknowledged protected certificate `{ fromVersion: 20, version: 25 }`, followed by
+the full protected read returning checkpoint 25. The named case then passes both
+interrupted version-30 reconnect assertions, replacement epoch and retired exclusions.
+The ten-run report retains twenty clean launch exits and ten held-read setups
+(each one installation, one inspection, zero context losses); the complete spec
+retains twenty-six clean launch exits and one identical held-read setup. No teardown failures.
+
+Representative timed original ordering: full read returned checkpoint 20 after
+2318 ms; batch commit occurred one millisecond later; exact certified write returned
+`ok` four milliseconds after that; the next full read took 2355 ms and returned 25.
+The six failing original traces independently retain successful exact writes and
+in-memory commits, so the failed poll is not evidence of a failed certificate/write.
+
+Final checks after merging main: `npm install --no-audit --no-fund`,
+`python3 "$AGENTS_REPO_PATH/bin/pre-verify-check" --test-file e2e/fixtures/certifiedCheckpoint.test.ts`
+(five checks passed; six affected units executed/passed), and `npm run build` pass.
+Logs: `pre-verify.log`, `build-after-preverify.log`. Node preparation in pre-verify
+completed before `npm run rebuild:electron` (`electron-preparation-final.log`) and
+the successful complete-spec run.
+
+Preserved invalid attempts: `baseline.json` executed zero because sandbox Xvfb
+socket creation failed; `baseline-native.json` failed ten launches before Electron
+installation completed; `traced-before.json` failed ten initial storage predicates
+before SQLite preparation. `spec-final.json` executed twenty with thirteen passed
+and seven storage setup failures because the builder mistakenly overlapped Node ABI
+rebuilding with Electron. These remain failures, superseded for acceptance by the
+sequentially prepared complete-spec run; no production follow-up is warranted.
+
+The dispatcher-owned complete configured application gate remains pending, including
+this named case without retry. No production-path replay or live provider run was
+required or claimed; macOS is outside this Linux ticket's verification scope.

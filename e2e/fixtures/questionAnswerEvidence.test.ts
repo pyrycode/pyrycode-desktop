@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { DaemonEvent } from '../../src/shared/ipc/events'
+import type { ThreadItem } from '../../src/shared/wire/thread'
 import { createQuestionAnswerEvidence } from './questionAnswerEvidence'
 
 const confirmation = 'confirmation-unique-after-surface'
@@ -25,8 +26,12 @@ function setup() {
   const arm = () => proof.arm({ confirmation, answers })
   const reply = (text = `Unlike LRU, LRU cache is chosen. Confirmation: ${confirmation}`, turn = 'turn', extra = {}) =>
     item('assistant_message', 2, { text }, turn, extra)
+  const snapshot = (items: ThreadItem[], host = 'host', chat = 'chat', epoch = 'epoch') => proof.observe({
+    type: 'threadReply', serverId: host, conversationId: chat, correlation: { id: 1, ts: '' },
+    reply: { type: 'thread_items', payload: { conversation_id: chat, epoch, version: 1, items, final: false } }
+  })
   const finish = () => { submit(); dismiss(); reply(); end() }
-  return { proof, emit, item, shown, dismiss, submit, end, arm, reply, finish }
+  return { proof, emit, item, shown, dismiss, submit, end, arm, reply, snapshot, finish }
 }
 
 describe('original question answer evidence', () => {
@@ -63,11 +68,66 @@ describe('original question answer evidence', () => {
     const s = setup(); s.reply(confirmation); s.arm(); s.submit(); s.dismiss(); s.reply(confirmation); s.end()
     expect(s.proof.complete()).toBe(false)
   })
+  const snapshotAssistant: ThreadItem = { id: 2, rev: 1, kind: 'assistant_message', turn: 'turn',
+    status: 'done', active: false, shown: true, summary: '', content: { text: confirmation } }
+  const snapshotEnd: ThreadItem = { ...snapshotAssistant, id: 9, kind: 'turn_end', content: {
+    stop_reason: 'end_turn', is_error: false, outcome: 'success', terminal_reason: 'completed'
+  } }
+  it('rejects a pre-arm snapshot replayed as identical live assistant and terminal items', () => {
+    const s = setup(); s.snapshot([snapshotAssistant, snapshotEnd]); s.arm(); s.submit(); s.dismiss()
+    s.emit('thread_item_added', { item: snapshotAssistant })
+    s.emit('thread_item_added', { item: snapshotEnd })
+    expect(s.proof.snapshot()).toMatchObject({ witnessed: false, completed: false })
+    expect(s.proof.complete()).toBe(false)
+  })
+  it.each([false, true])('excludes snapshot text before live replay (already armed: %s)', armed => {
+    for (const rev of [1, 2]) {
+      const s = setup()
+      if (armed) s.arm()
+      s.snapshot([snapshotAssistant])
+      if (!armed) s.arm()
+      s.submit(); s.dismiss()
+      s.emit('thread_item_added', { item: { ...snapshotAssistant, rev } }); s.end()
+      expect(s.proof.snapshot().witnessed).toBe(false)
+      expect(s.proof.complete()).toBe(false)
+    }
+  })
+  it.each([false, true])('excludes snapshot terminal identity before live replay (already armed: %s)', armed => {
+    for (const rev of [1, 2]) {
+      const s = setup()
+      if (armed) s.arm()
+      s.snapshot([snapshotEnd])
+      if (!armed) s.arm()
+      s.submit(); s.dismiss(); s.reply()
+      s.emit('thread_item_added', { item: { ...snapshotEnd, rev } })
+      expect(s.proof.snapshot()).toMatchObject({ witnessed: true, completed: false })
+      expect(s.proof.complete()).toBe(false)
+    }
+  })
+  it('excludes snapshot text received after submission before a live replay', () => {
+    const s = setup(); s.arm(); s.submit(); s.dismiss(); s.snapshot([snapshotAssistant])
+    s.emit('thread_item_added', { item: { ...snapshotAssistant, rev: 2 } }); s.end()
+    expect(s.proof.snapshot().witnessed).toBe(false)
+    expect(s.proof.complete()).toBe(false)
+  })
+  it('accepts fresh live append and completion after a snapshot baseline without rolling revisions back', () => {
+    const s = setup(); s.snapshot([{ ...snapshotAssistant, rev: 2, content: { text: 'Before.' } }])
+    s.snapshot([{ ...snapshotAssistant, content: { text: 'Older.' } }]); s.arm()
+    s.submit(); s.dismiss()
+    s.emit('thread_text_append', { item_id: 2, base_rev: 2, rev: 3, text: confirmation })
+    s.end()
+    expect(s.proof.complete()).toBe(true)
+  })
+  it('ignores snapshot exclusions from another host or conversation', () => {
+    for (const [host, chat] of [['other', 'chat'], ['host', 'other']]) {
+      const s = setup(); s.snapshot([snapshotAssistant, snapshotEnd], host, chat); s.arm(); s.finish()
+      expect(s.proof.complete()).toBe(true)
+    }
+  })
   it('rejects snapshot-only text and text on another route, turn or nested item', () => {
     for (const fault of ['snapshot', 'host', 'chat', 'turn', 'nested']) {
       const s = setup(); s.arm(); s.submit(); s.dismiss()
-      if (fault === 'snapshot') s.proof.observe({ type: 'threadReply', serverId: 'host', conversationId: 'chat',
-        reply: { type: 'thread_items', payload: { epoch: 'epoch', items: [{ id: 2, kind: 'assistant_message', turn: 'turn', content: { text: confirmation } }] } } } as unknown as DaemonEvent)
+      if (fault === 'snapshot') s.snapshot([snapshotAssistant])
       else if (fault === 'turn' || fault === 'nested') s.reply(confirmation, fault === 'turn' ? 'other' : 'turn', fault === 'nested' ? { parent: 1 } : {})
       else s.emit('thread_item_added', { item: { id: 2, rev: 1, kind: 'assistant_message', turn: 'turn', content: { text: confirmation } } }, fault === 'host' ? 'other' : 'host', fault === 'chat' ? 'other' : 'chat')
       s.end(); expect(s.proof.complete()).toBe(false)

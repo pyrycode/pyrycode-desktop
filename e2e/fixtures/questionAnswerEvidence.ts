@@ -15,6 +15,16 @@ export function createQuestionAnswerEvidence(subscribe = false) {
   const ended = new Set<number>()
   let companion: { id: number; rev: number; version: number } | undefined
   const record = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+  function remember(item: Held): void {
+    const content = record(item.content) ? item.content : {}
+    // Retain only fields needed by this proof, never complete tool input/output or daemon envelopes.
+    items.set(item.id, { id: item.id, kind: item.kind, rev: item.rev, parent: item.parent, turn: item.turn,
+      content: item.kind === 'assistant_message' ? { text: content.text }
+        : item.kind === 'tool_call' ? { name: content.name } : {
+          stop_reason: content.stop_reason, is_error: content.is_error, outcome: content.outcome,
+          terminal_reason: content.terminal_reason, error_category: content.error_category
+        } })
+  }
   function submit(value: Submission): void {
     if (!armed) return
     if (submitted || value.serverId !== host || value.conversationId !== conversation || value.batchId !== batch ||
@@ -35,6 +45,24 @@ export function createQuestionAnswerEvidence(subscribe = false) {
     if (event.type === 'questionDismissed' && event.serverId === host && event.questionBatchId === batch) {
       outstanding = false
       if (armed && submitted && event.outcome === 'answered') dismissed = true
+    }
+    if (event.type === 'threadReply' && event.reply.type === 'thread_items' &&
+        event.serverId === host && event.conversationId === conversation && event.reply.payload.conversation_id === conversation) {
+      const p = event.reply.payload
+      if (epoch && epoch !== p.epoch) { invalid = true; failure = 'epoch'; return }
+      epoch = p.epoch
+      companion = undefined
+      for (const item of p.items) {
+        if (item.parent !== undefined || typeof item.turn !== 'string' ||
+            item.kind !== 'assistant_message' && item.kind !== 'turn_end') continue
+        const old = items.get(item.id)
+        if (old && old.rev > item.rev) continue
+        remember(item)
+        // Snapshots exclude already-seen content and identities, even after arming; never prove freshness.
+        if (item.kind === 'turn_end') ended.add(item.id)
+        else if (record(item.content) && typeof item.content.text === 'string') baseline.set(item.id, item.content.text)
+      }
+      return
     }
     if (event.type !== 'threadUpdate' || event.serverId !== host || event.conversationId !== conversation ||
         event.update.payload.conversation_id !== conversation) return
@@ -67,13 +95,7 @@ export function createQuestionAnswerEvidence(subscribe = false) {
     }
     if (!item) return
     const content = record(item.content) ? item.content : {}
-    // Retain only fields needed by this proof, never complete tool input/output or daemon envelopes.
-    items.set(item.id, { id: item.id, kind: item.kind, rev: item.rev, parent: item.parent, turn: item.turn,
-      content: item.kind === 'assistant_message' ? { text: content.text }
-        : item.kind === 'tool_call' ? { name: content.name } : {
-          stop_reason: content.stop_reason, is_error: content.is_error, outcome: content.outcome,
-          terminal_reason: content.terminal_reason, error_category: content.error_category
-        } })
+    remember(item)
     if (item.parent !== undefined || typeof item.turn !== 'string') return
     const firstEnd = item.kind === 'turn_end' && !ended.has(item.id)
     if (item.kind === 'turn_end') ended.add(item.id)

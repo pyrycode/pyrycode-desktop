@@ -25,7 +25,7 @@ The observer subscribes before sending the trigger. Native live updates carry or
 | --- | --- |
 | Accepted model change while batch outstanding | shared question scenario checks the same batch before answering |
 | Wrong/replaced batch, host or conversation | evidence controls reject foreign submission/dismissal/update |
-| Replayed old assistant item or changed prefix | controls reject stale content and snapshot-only witness |
+| Replayed old assistant item or changed prefix | controls reject stale content and snapshot-only witness; `rejects a pre-arm snapshot replayed as identical live assistant and terminal items` covers snapshot-to-live reuse |
 | Repeated item updates or completion | controls retain identity, require witness before matching completion |
 | Missing/error/foreign terminal completion | controls reject each; shared scenario waits before probing |
 
@@ -45,6 +45,8 @@ None. Live capture and replay results will be recorded after execution.
 
 2026-10-19: the second capture passed the complete answer proof, then exposed an existing probe sampling race: native live state reasserted Sonnet before the ensuing system/init announced Opus. The probe now waits for the original expected Opus announcement before retaining its unchanged changed-model assertions and attachment. No assertion is removed or production behavior changed.
 
+2026-10-19 rework, verifier finding 1: `observe` must retain same-route, same-epoch `thread_items` assistant text/revisions and terminal identities as exclusion evidence. Snapshots never establish the original tool turn, witness or completion. A later live replay, including a higher revision with unchanged text or an already-seen terminal identity, cannot supply freshness. Snapshot text received after arming/submission also advances the exclusion baseline; genuine subsequent live appends remain eligible. Controls cover the exact snapshot-before-arm replay, stale text and stale terminal independently before/after arming, post-submission snapshots, wrong routes and fresh live appends without revision rollback. Six new controls first failed with 29 existing controls passing (`/tmp/builder-2137/rework-controls-red.log`); all 35 then passed (`/tmp/builder-2137/rework-controls-green.log`) before adding two further timing/routing controls. This repairs the existing freshness invariant without changing the scenario, recording, production code or shared replay infrastructure. No in-flight feature branch overlaps the two evidence files. Rework estimate: under 180 authored lines, no new exports or consumers, one observable repair; the existing generated-recording verification-floor exception remains unchanged.
+
 ## Validation evidence
 - Linux real capture: `real claude changes model during a question and resumes with the original answer`, 1 executed/passed, 0 failed/skipped, retry 0. Counted report `/tmp/builder-2137/capture-3.json`, stderr `/tmp/builder-2137/capture-3.stderr.log`; report attachments retain resolved target, public route/turn identity, every positive evidence gate and capture provenance.
 - Capture source: Desktop `ef097bfc29324437d067d65360558b8e77be8f40`, daemon `664305939d73e5a146457503081d8232fcca5407`, clean Go VCS metadata; isolated binary `/tmp/builder-2137/pyry`, SHA-256 `ba2831b24dd8f880c0a707fb694bab8b99cfe2535d76eaa6129dbf11e4d0b869`, Claude `2.1.280`. Authenticated capabilities: `interactive`, `multi_agent`, `stop_background_task`, `thread`, `thread_expansion`, `thread_compact`.
@@ -62,3 +64,7 @@ The earlier capture candidate above is superseded by the byte-identical successf
 The same required named scenario passed fresh capture: 1 executed/passed, 0 failed/skipped, retries 0 (`/tmp/builder-2137/capture-4.json`, `/tmp/builder-2137/capture-4.stderr.log`). Guarded integrated replay passed: 1 executed/passed, 0 failed/skipped, retries 0, 29 matched requests, 136 emitted frames, zero remaining requests and zero forbidden launches (`/tmp/builder-2137/replay-final.json`, `/tmp/builder-2137/replay-final.log`). Normal-build live acceptance also passed against the newer `66430593` daemon, as retained above. macOS is outside this Linux ticket's verification scope.
 
 The earlier close-ordering replay failures remain failed and are tracked in #2141 (Backlog, priority:low). This ticket changes no shared capture/replay infrastructure, outgoing matcher or production code. Only the final target recording is replaced; no test is skipped.
+
+## Documentation handoff
+- Pending documentation stage, from the verifier: update the recorded-test inventory and verification knowledge with the two-question, post-surface confirmation proof, including snapshot exclusion baselines and original-turn terminal identity once repaired.
+- Pending documentation stage, from the verifier: carry forward the counted Linux live/capture/replay evidence and distinct daemon revisions; preserve the separate failed-capture/replay history and #2141 follow-up.

@@ -195,7 +195,8 @@ export function createThreadRuntime(deps: {
     if (!selected?.projection) return
     const { host, chat } = selected, snapshot = presentation(host, chat)
     if (!snapshot) return
-    sends.getState().settle(snapshot); taskStops.getState().settle(snapshot)
+    // The mounted compact presentation settles Stops with its independently admitted live identities.
+    sends.getState().settle(snapshot)
     observeReports(host, chat)
   })
   function observeReports(host: string, chat: string): void {

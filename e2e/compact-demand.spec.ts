@@ -14,6 +14,86 @@ const header = (id: number, parent = 0, kind = 'tool_call'): ThreadSummary => ({
   rev: 1, status: 'done', active: false, shown: true, headline: `Inspect ${id}`, detail_omitted: true,
   subtree_version: 10000, session: 'session' })
 
+for (const retained of [false, true]) test(`compact recovery and closed-parent live tasks, retained complete=${retained}`, async ({ launchPairedApp }) => {
+  test.setTimeout(90000)
+  const grants = retained ? ['interactive', 'thread', 'stop_background_task'] : [...capabilities, 'stop_background_task']
+  const requests: Envelope[] = [], route = { conversation_id: SEEDED_ROW.id, epoch: 'controls' }
+  const refusal = (rev: number) => ({ ...full(2, ''), rev, kind: 'notice', subtype: 'model_refusal_fallback',
+    content: { original_model: 'opus', fallback_model: 'sonnet', scope: 'session', refusal_category: '', banner: 'Fallback' } })
+  const { page, app, daemon, forwarder } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities: grants }, buildReplyFrames: bytes => {
+    const request = decodeEnvelope(bytes); requests.push(request)
+    if (request.type === 'list_conversations') return [seedConversationsFrame({ ...SEEDED_ROW, agent: 'claude', current_session_id: 'session' })]
+    if (request.type === 'thread_catch_up') {
+      const compact = request.payload.projection === 'compact-v1', version = compact ? 20 : 10
+      return [frame('thread_items', { ...route, version, ...(compact ? { projection: 'compact-v1', headers: [{ ...header(5, 0, 'agent'), subtree_version: version }] } : {}),
+        items: [full(1, compact ? 'Compact controls' : 'Retained controls'), refusal(compact ? 2 : 1)], final: false }, request.id),
+      frame('thread_items', { ...route, version, ...(compact ? { projection: 'compact-v1' } : {}), items: [], final: true,
+        lower_order: 0, upper_order: 6, continuation: 0, older_exists: false }, request.id)]
+    }
+    return []
+  } })
+  if (retained) {
+    await expect(page.getByText('Retained controls', { exact: true })).toBeVisible()
+    await expect.poll(() => page.evaluate(async id => {
+      const result = await window.pyry.chatHistory({ operation: 'readThread', serverId: 'fake-daemon', conversationId: id })
+      return result.status === 'stored' && result.snapshot.kind === 'daemon-items'
+        ? result.snapshot.thread.items.find(item => item.id === 2)?.rev : null
+    }, SEEDED_ROW.id)).toBe(1)
+    grants.push('thread_expansion', 'thread_compact'); forwarder.dropClientLeg()
+  }
+  await expect(page.getByText('Compact controls', { exact: true })).toBeVisible()
+  const receipts = requests.filter(r => r.type === 'mark_conversation_read').length
+  const writes = () => requests.filter(r => r.type === 'set_session_settings')
+  const action = page.getByRole('button', { name: 'Switch back', exact: true })
+  await expect(action).toBeEnabled()
+  await action.click()
+  await expect.poll(() => writes().length).toBe(1)
+  expect(writes()[0].payload).toEqual({ session_id: 'session', model: 'opus' })
+  await expect(action).toBeDisabled()
+  const chip = page.locator('[data-read-row="5"] .tool-row__chip--toggle').first()
+  await expect(chip).toHaveAttribute('aria-expanded', 'false')
+  const progress = (session = 'session', chat = SEEDED_ROW.id) => encodeEnvelope({ id: 91, type: 'background_task_progress',
+    ts: '2026-10-19T00:00:00Z', session_id: session, payload: { conversation_id: chat, task_id: 'live-task',
+      description: 'Admitted live activity', subagent_type: '', last_tool_name: 'Read', total_tokens: 42, tool_uses: 2, duration_ms: 1000, truncated_fields: null } })
+  daemon.pushFrame(progress('old-session')); daemon.pushFrame(progress('session', 'other'))
+  daemon.pushFrame(frame('thread_compact_update', { ...route, projection: 'compact-v1', from_version: 20, version: 21,
+    progress: false, item: full(3, 'Isolation barrier') }))
+  await expect(page.getByText('Isolation barrier', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '1 task running', exact: true })).toHaveCount(0)
+  daemon.pushFrame(progress())
+  // The menu entry remains available while the refusal occupies the composer status slot.
+  await page.getByRole('button', { name: 'More actions', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Background tasks', exact: true }).click()
+  const panel = page.getByRole('dialog', { name: 'Background tasks' })
+  await expect(panel).toContainText('Admitted live activity')
+  const stop = panel.getByRole('button', { name: 'Stop task', exact: true })
+  await stop.click()
+  await expect.poll(() => requests.filter(r => r.type === 'stop_background_task').length).toBe(1)
+  expect(requests.find(r => r.type === 'stop_background_task')?.payload).toEqual({ conversation_id: SEEDED_ROW.id, task_id: 'live-task' })
+  await expect(stop).toBeDisabled()
+  daemon.pushFrame(frame('thread_compact_update', { ...route, projection: 'compact-v1', from_version: 21, version: 22,
+    progress: false, item: full(4, 'Pending barrier') }))
+  await expect(page.getByText('Pending barrier', { exact: true })).toBeVisible()
+  await expect(stop).toBeDisabled()
+  await capturePairedApp(app, page, `/tmp/builder-2128/compact-controls-${retained}.png`)
+  await panel.getByRole('button', { name: 'Close', exact: true }).click(); await expect(panel).toHaveCount(0)
+  await expect(chip).toHaveAttribute('aria-expanded', 'false')
+  await expect(page.locator('.tool-row__body')).toHaveCount(0)
+  expect(requests.filter(r => r.type === 'thread_read_children' || r.type === 'thread_read_tool_body')).toHaveLength(0)
+  expect(requests.filter(r => r.type === 'mark_conversation_read')).toHaveLength(receipts)
+  // A replacement summary withdraws live action identities without reading a body.
+  daemon.pushFrame(frame('conversations', { conversations: [{ ...SEEDED_ROW, current_session_id: 'replacement' }] }))
+  await expect(action).toHaveCount(0)
+  daemon.pushFrame(progress('replacement'))
+  daemon.pushFrame(frame('thread_compact_update', { ...route, projection: 'compact-v1', from_version: 22, version: 23,
+    progress: false, item: full(6, 'Missing agent barrier') }))
+  await expect(page.getByText('Missing agent barrier', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'More actions', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Background tasks', exact: true }).click()
+  await expect(panel.locator('li')).toHaveCount(0)
+  await expect(panel.getByRole('button', { name: 'Stop task', exact: true })).toHaveCount(0)
+})
+
 test('production compact demand keeps 8333 source items off the wire until visible expansion', async ({ launchPairedApp }, info) => {
   test.setTimeout(120000)
   const requests: Envelope[] = [], details = () => requests.filter(r => r.type === 'thread_read_children' || r.type === 'thread_read_tool_body')

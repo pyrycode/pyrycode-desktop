@@ -169,7 +169,7 @@ import { EditChatDialogView, requestRenameConversation } from '../channels/EditC
 // whose lifetime has to be the dialog's open lifetime. It imports nothing from this directory, so this
 // is the one-way seam `EditChatDialog` already crosses, not a cycle.
 import { EditChannelDialog } from '../channels/EditChannelDialog'
-import { BackgroundTaskPanelView } from './BackgroundTaskPanel'
+import { backgroundTaskStopSupported, BackgroundTaskPanelView } from './BackgroundTaskPanel'
 import type { RendererCommand } from '@shared/ipc/commands'
 
 // Conversation content comes from daemon items and locally unaccepted sends.
@@ -192,6 +192,13 @@ export interface ConversationScreenProps {
   // passes neither and the screen keeps its own state, which is what leaves every existing render unchanged.
   backgroundTasksOpen?: boolean
   onBackgroundTasksOpenChange?: (open: boolean) => void
+}
+
+function liveTaskIdentities(snapshot: ThreadSnapshot, input: ReturnType<typeof threadLiveInputs>, agent: string | undefined): NonNullable<ThreadTaskInputs['liveTasks']> {
+  return input.sessionId && agent ? input.taskProgress.filter(reading => reading.conversationId === snapshot.conversationId &&
+    reading.envelopeSessionId === input.sessionId).map(reading => ({ hostId: snapshot.hostId,
+      conversationId: snapshot.conversationId, epoch: snapshot.epoch, session: input.sessionId ?? undefined,
+      agent, taskId: reading.taskId, progress: reading })) : []
 }
 
 export function ConversationScreen({
@@ -236,9 +243,6 @@ export function ConversationScreen({
   const localSend = useStore(threadRuntime.sends, s => selectedHost === null || openConversationId === null
     ? null : s.select(selectedHost, openConversationId))
   const liveInput = useMemo(() => threadLiveInputs(liveState, localSend?.localSendPending), [liveState, localSend])
-  const composerReports = useMemo(() => authoritativeSnapshot
-    ? threadComposerReports(authoritativeSnapshot, liveInput.sessionId, localSend?.reportsClearedThrough, liveInput.activity.turnRunning)
-    : null, [authoritativeSnapshot, liveInput.sessionId, liveInput.activity.turnRunning, localSend?.reportsClearedThrough])
   const taskStops = useStore(threadRuntime.taskStops, s => s.entries)
   const queryKey = JSON.stringify([selectedHost, openConversationId])
   const networkQueryState = useStore(threadRuntime.state, s => s.queries.get(queryKey))
@@ -252,6 +256,22 @@ export function ConversationScreen({
   const threadConnection = useSessionStore(s => selectedHost === null ? undefined : s.statuses.get(selectedHost))
   const threadSummary = useConversationListStore(s => authoritative
     ? s.byServer.get(selectedHost)?.find(row => row.id === openConversationId) : undefined)
+  const taskInputs = useMemo((): ThreadTaskInputs => ({ stops: taskStops,
+    liveTasks: compactSelected && authoritativeSnapshot ? liveTaskIdentities(authoritativeSnapshot, liveInput, threadSummary?.agent) : [],
+    progress: authoritativeSnapshot ? liveInput.taskProgress.flatMap(reading => authoritativeSnapshot.items.filter(item =>
+      item.session === reading.envelopeSessionId && item.active === true && typeof item.content === 'object' && item.content !== null && 'task_id' in item.content && item.content.task_id === reading.taskId).map(item => ({
+        hostId: authoritativeSnapshot.hostId, conversationId: authoritativeSnapshot.conversationId, epoch: authoritativeSnapshot.epoch,
+        session: typeof item.session === 'string' ? item.session : undefined,
+        agent: typeof item.agent === 'string' ? item.agent : undefined, taskId: reading.taskId, creatingItemId: item.id, progress: reading
+      }))) : [], connection: selectedHost !== null && threadConnection ? { hostId: selectedHost, status: threadConnection } : undefined
+  }), [taskStops, compactSelected, authoritativeSnapshot, liveInput, threadSummary?.agent, selectedHost, threadConnection])
+  useEffect(() => {
+    if (compactSelected && authoritativeSnapshot) threadRuntime.taskStops.getState().settle(authoritativeSnapshot, taskInputs)
+  }, [compactSelected, authoritativeSnapshot, taskInputs])
+  const composerReports = useMemo(() => authoritativeSnapshot ? {
+    ...threadComposerReports(authoritativeSnapshot, liveInput.sessionId, localSend?.reportsClearedThrough, liveInput.activity.turnRunning),
+    taskCount: threadTaskPresentations(authoritativeSnapshot, taskInputs).filter(task => task.active).length
+  } : null, [authoritativeSnapshot, liveInput.sessionId, liveInput.activity.turnRunning, localSend?.reportsClearedThrough, taskInputs])
   useEffect(() => {
     const dispatch = agentSwitchStore.getState().dispatch
     dispatch({ type: 'paneChanged', pane: selectedHost === null || openConversationId === null
@@ -403,15 +423,16 @@ export function ConversationScreen({
           ? { hostId: selectedHost, conversationId: openConversationId, ...localSend } : undefined,
           connection: selectedHost !== null && threadConnection ? { hostId: selectedHost, status: threadConnection } : undefined,
           onAction: (serverId, command) => sendConversationCommand({ ...command, serverId }) }}
-        taskInputs={{ stops: taskStops, progress: liveInput.taskProgress.flatMap(reading => authoritativeSnapshot.items.filter(item =>
-          item.session === reading.envelopeSessionId && item.active === true && typeof item.content === 'object' && item.content !== null && 'task_id' in item.content && item.content.task_id === reading.taskId).map(item => ({
-            hostId: authoritativeSnapshot.hostId, conversationId: authoritativeSnapshot.conversationId, epoch: authoritativeSnapshot.epoch,
-            session: typeof item.session === 'string' ? item.session : undefined,
-            agent: typeof item.agent === 'string' ? item.agent : undefined, taskId: reading.taskId, creatingItemId: item.id, progress: reading
-          }))), connection: selectedHost !== null && threadConnection ? { hostId: selectedHost, status: threadConnection } : undefined,
+        taskInputs={{ ...taskInputs,
           onStopTask: (serverId, conversationId, taskId) => {
+            const selection = threadRuntime.state.getState().selection
+            if (selection?.host !== serverId || selection.chat !== conversationId) return
             const snapshot = threadRuntime.presentation(serverId, conversationId)
-            if (!snapshot || !threadRuntime.taskStops.getState().begin(snapshot, taskId)) return
+            const agent = conversationListStore.getState().byServer.get(serverId)?.find(row => row.id === conversationId)?.agent
+            if (!snapshot || !backgroundTaskStopSupported(sessionStore.getState().statuses.get(serverId), 'claude')) return
+            const current = threadLiveInputs(threadRuntime.live(serverId, conversationId).getState())
+            const liveTasks = selection.projection === 'compact-v1' ? liveTaskIdentities(snapshot, current, agent) : []
+            if (!threadRuntime.taskStops.getState().begin(snapshot, taskId, { liveTasks })) return
             try { sendConversationCommand({ type: 'stopBackgroundTask', serverId, payload: { conversation_id: conversationId, task_id: taskId } }) }
             catch { threadRuntime.taskStops.getState().event({ type: 'backgroundTaskStopRejected', serverId, conversationId, taskId }) }
           } }}
@@ -1145,7 +1166,7 @@ function CompactRow({ source, snapshot, expanded, toggle, changed }: {
   const count = source.kind === 'agent' && typeof source.public_child_count === 'number' ? ` · ${source.public_child_count} direct children` : ''
   if (item?.kind !== 'toolCall') return <p className="session-delimiter__title">Summary: {typeof source.headline === 'string' ? source.headline : 'Unavailable summary'}</p>
   return <>
-    <ToolRow item={item} running={typeof source.active === 'boolean' ? source.active : undefined} expansion={{ expanded: open, onToggle: () => { setLaunchOpen(false); toggle(source.id) } }}
+    <ToolRow item={item} headerExpandable running={typeof source.active === 'boolean' ? source.active : undefined} expansion={{ expanded: open, onToggle: () => { setLaunchOpen(false); toggle(source.id) } }}
       suppliedOutcome={{ label: (typeof source.status === 'string' ? source.status : 'Status unknown') + count,
         failed: source.status === 'failed', denied: source.status === 'denied' }} />
     {typeof source.error_summary === 'string' && <p role="status">{source.error_summary}</p>}
@@ -2166,6 +2187,7 @@ export function ToolRow({
   defaultExpanded = false,
   group,
   expansion,
+  headerExpandable = false,
   running,
   suppliedOutcome
 }: {
@@ -2173,13 +2195,14 @@ export function ToolRow({
   defaultExpanded?: boolean
   group?: { count: number; running: boolean; background?: boolean }
   expansion?: { expanded: boolean; onToggle: () => void }
+  headerExpandable?: boolean
   running?: boolean
   suppliedOutcome?: { label: string; failed: boolean; denied: boolean }
 }): JSX.Element {
   const { result, denial } = item
   const elapsed = suppliedOutcome !== undefined ? running === true ? item.elapsedSeconds : undefined
     : running !== false && !group?.background && result === null && denial === undefined ? item.elapsedSeconds : undefined
-  const expandable = expansion !== undefined || group !== undefined || result !== null || denial !== undefined || (running !== undefined && item.input !== undefined)
+  const expandable = headerExpandable || group !== undefined || result !== null || denial !== undefined || (running !== undefined && item.input !== undefined)
   const [localExpanded, setExpanded] = useState(defaultExpanded)
   const expanded = expansion?.expanded ?? localExpanded
   const rowClass = suppliedOutcome !== undefined
@@ -4648,7 +4671,7 @@ function ComposerErrorSlotControl({
     const currentSession = sessionIdStore.getState().sessionId
     const currentWrites = runSettingsWriteStore.getState()
     const serverId = conversationHostNow(currentId ?? null)
-    const currentItem = source && threadRuntime.items.getState().snapshot(source.host, source.chat)
+    const currentItem = source && threadRuntime.presentation(source.host, source.chat)
     const stillOwn = source && currentItem?.epoch === source.epoch && currentItem.items.some(item => item.id === source.item && item.rev === source.rev)
     if (currentId === undefined || currentId !== open?.id || !offer ||
         (!source || !stillOwn || source.host !== serverId || source.session !== currentSession || ownAction?.changeId !== undefined) ||

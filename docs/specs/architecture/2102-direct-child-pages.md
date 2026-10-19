@@ -95,3 +95,8 @@ Linux execution at implementation `cda1a1a5`, after merging main `5afde437`:
 - Fresh logs: `/tmp/builder-2102-preverify-final.log`, `/tmp/builder-2102-build-final.log`, `/tmp/builder-2102-affected-final.log`, `/tmp/builder-2102-recorded-final.log`.
 - These are synthetic bridge and historical captured-client results, with no new provider, cryptography or native-transport acceptance claim. macOS is outside this Linux ticket's verification scope.
 - Final written work remains below 800 lines including plan revisions; two new exported DTOs and eight production files. The earlier verification-floor overage forecast was unnecessary in the final implementation.
+
+### Rework verification — 2026-10-19
+Linux implementation `87b98e6b`, after final merge of main `5afde437`: all three added cases reproduced the bypass before implementation; afterwards both affected Vitest files passed, 146 executed/passed, zero failed/skipped. Pre-verify passed all five checks, including 121 received-frame cases. Build, client-test typecheck, docs guard and sequential Node/Electron native preparation passed.
+
+Guarded replay selected `daemon-built thread streams, places an agent, reconnects, resets and reopens saved items`: 1 executed/passed, zero failed/skipped, zero forbidden launches. Original assertions and strict outgoing matching remain intact. Logs: `/tmp/builder-2102/rework-preverify.log`, `/tmp/builder-2102/rework-build.log`, `/tmp/builder-2102/rework-client-typecheck.log`, `/tmp/builder-2102/rework-electron-native.log`, `/tmp/builder-2102/rework-recorded.log`. These remain synthetic client-handling results; macOS and fresh provider acceptance are outside this Linux repair's verification scope.

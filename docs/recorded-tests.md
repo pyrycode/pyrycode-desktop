@@ -39,6 +39,14 @@ A successful explicit profile close or relaunch first settles that connection's 
 
 `scenarioEffect` marks an external test action before capture executes it. Replay releases only the subsequent actual recorded frames. `liveProof` executes the original filesystem, registry or process assertions during capture/live runs; replay waits for the exact recorded prefix at their successful checkpoint. Offline success does not establish those physical facts.
 
+Explicit `scenarioInput` values also preserve inputs generated during a scenario.
+The [question-answer scenario](client-replay-migration.md#question-answer-proof) generates
+its confirmation only after the batch appears and reuses that captured value in replay.
+Its interpretation proof excludes snapshots and all pre-submission assistant text;
+only fresh original-turn confirmation followed by matching normal completion can count.
+The [Linux acceptance record](knowledge/features/development-verification-live-test-diagnosis.md#question-answer-linux-acceptance)
+keeps the successful replacement capture, guarded replay and separate live run distinct.
+
 ## Capture every scenario
 
 Commit the source first. Build an isolated daemon with Go VCS metadata from clean source, then use the configured dedicated test login. Credentials belong only in the execution environment, never command arguments or chat. The Codex scenario also requires its isolated test login.

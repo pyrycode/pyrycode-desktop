@@ -484,7 +484,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
     const owned = serverId === undefined ? created : { ...created, serverId }
     activateConversation(activateDeps, owned)
     if (serverId !== undefined) {
-      localRead.current = threadRuntime.open(serverId, created.id)
+      localRead.current = threadRuntime.open(serverId, created.id, { projection: 'auto' })
     }
     cancelCreatedInitialization.current = initializeCreatedConversationAfterList(
       created.id, serverId, activateDeps.requestConversationConfig
@@ -554,7 +554,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
     activateConversation(activateDeps, conversation)
     if ('serverId' in conversation && typeof conversation.serverId === 'string') {
       setSavedTimelineTarget({ serverId: conversation.serverId, conversationId: conversation.id })
-      localRead.current = threadRuntime.open(conversation.serverId, conversation.id)
+      localRead.current = threadRuntime.open(conversation.serverId, conversation.id, { projection: 'auto' })
     }
     setPaneKey(JSON.stringify([
       'serverId' in conversation && typeof conversation.serverId === 'string' ? conversation.serverId : null,

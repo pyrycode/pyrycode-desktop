@@ -27,8 +27,9 @@ actions and local-count read bookkeeping. Shared row/types/translators remain at
 their existing paths. #2029 separately retired renderer legacy saved IO; main/IPC
 and saved-format/storage retirement remain #2025 and #2026 respectively.
 
-Composer reports read canonical items for the bound session; status and session
-errors read admitted host/conversation/session live state. Without a snapshot,
+Composer reports read the selected complete/compact presentation for the bound
+session; status and session errors read admitted host/conversation/session
+live state. Without a snapshot,
 content reports and item previews are empty; without a binding, current-session
 reports and live activity are empty. Existing items, unaccepted local sends and independently admitted
 prompts keep their own lifetimes. None of these missing inputs activates a legacy
@@ -39,14 +40,20 @@ Collapsed agents keep their headers; folded tool runs keep their run headers. Th
 descendants/members and closed bodies are unmounted, and full message/body adaptation
 and body-only formatting wait until local expansion makes them visible. Closing
 previously expanded content restores that deferral, including for revisions received
-while closed. Source-ID expansion state survives collapse, reopen, prepends and
-reparenting; remounted descendants can be new DOM elements. Headlines, counts,
+while closed. Complete-route source-ID expansion state survives collapse, reopen,
+prepends and reparenting; remounted descendants can be new DOM elements. Headlines, counts,
 lifecycle, launch markers, joins and indentation keep their existing presentation.
-Expansion uses complete items already held locally, with no network detail reads.
+On the complete route expansion uses items already held locally. Production selects
+[compact delivery](thread-runtime-compact.md) from the owning accepted handshake;
+visible tool expansion leases its body, while agent expansion leases only direct-child
+summaries, with separate launch-body demand and explicit cursor paging. Grouped-run
+expansion reveals headers only. Summary rows never become invented full messages.
 Questions, approvals, actionable errors, delivery feedback, task status and
 current-session controls keep their independently owned availability. Composer
-reports and notifications continue to use complete `threadItemPresentations`
-independently of local expansion.
+reports use selected facts independently of local expansion; compact live task
+controls require [admitted identities](conversation-shell-turn-status.md#session-scoped-live-presentation).
+Compact facts supply no complete read/persistence evidence, including when complete
+history remains held.
 
 Accepted user items without a positive order sit at the tail in snapshot first-arrival
 order. Delivery revises that same scoped item into its supplied positive position,
@@ -418,7 +425,7 @@ The [thread runtime](thread-runtime.md) defines current rendering and live contr
 The authoritative view shares the screen's actual scroll pin. Its ordinary
 Background tasks menu and task-count pill control the same drawer.
 Current-session hook stops, refusals, errors and foreground tools come from
-canonical reports and live readings, so a missing legacy timeline cannot hide them.
+selected reports/header status and live readings, so a missing legacy timeline cannot hide them.
 Tool rows with unchanged immutable source facts reuse their presentation while
 another row streams. Frozen headers and complete bodies use separate source-object
 caches; rebuilding headers on unrelated deltas would defeat `TimelineToolRow`

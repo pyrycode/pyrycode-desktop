@@ -137,8 +137,9 @@ test('real claude changes model during a question and resumes with the original 
       { confirmation, answers })).toBe(true)
     await trailing.click()
     await expect(panel).toHaveCount(0)
-    await expect.poll(() => page.evaluate(() => (window as unknown as EvidenceWindow).questionAnswerEvidence.complete()),
-      { timeout: TURN_TIMEOUT_MS, message: 'original batch requires matching answer, daemon dismissal, fresh confirmation and normal original-turn completion' }).toBe(true)
+    await expect.poll(() => page.evaluate(() => (window as unknown as EvidenceWindow).questionAnswerEvidence.snapshot()),
+      { timeout: TURN_TIMEOUT_MS, message: 'original batch requires matching answer, daemon dismissal, fresh confirmation and normal original-turn completion' })
+      .toEqual({ armed: true, submitted: true, dismissed: true, witnessed: true, completed: true, invalid: false, failure: '' })
     await expect(page.locator('[data-thread-role="assistant"]').filter({ hasText: confirmation })).toHaveCount(1)
     await expect(page.locator(CURSOR_SELECTOR)).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
 
@@ -161,6 +162,11 @@ test('real claude changes model during a question and resumes with the original 
     }, { timeout: TURN_TIMEOUT_MS }).toBeGreaterThan(0)
     await expect(page.locator(CURSOR_SELECTOR)).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
   } finally {
+    await testInfo.attach('question-answer-evidence', { contentType: 'application/json', body: JSON.stringify(
+      await page.evaluate(() => {
+        const proof = (window as unknown as EvidenceWindow).questionAnswerEvidence
+        return { identity: proof.identity(), gates: proof.snapshot() }
+      })) })
     await page.evaluate(() => {
       const w = window as unknown as EvidenceWindow
       w.questionModelEvidence.stop(); w.questionAnswerEvidence.stop()

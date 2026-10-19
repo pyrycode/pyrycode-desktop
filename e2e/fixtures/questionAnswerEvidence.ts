@@ -9,6 +9,7 @@ export function createQuestionAnswerEvidence(subscribe = false) {
   let host = '', conversation = '', batch = '', epoch = '', turn = ''
   let outstanding = false, armed = false, submitted = false, dismissed = false, witnessed = false, completed = false, invalid = false
   let confirmation = '', expected = ''
+  let failure = ''
   const items = new Map<number, Held>()
   const baseline = new Map<number, string>()
   const ended = new Set<number>()
@@ -17,7 +18,7 @@ export function createQuestionAnswerEvidence(subscribe = false) {
   function submit(value: Submission): void {
     if (!armed) return
     if (submitted || value.serverId !== host || value.conversationId !== conversation || value.batchId !== batch ||
-        JSON.stringify(value.answers) !== expected) { invalid = true; return }
+        JSON.stringify(value.answers) !== expected) { invalid = true; failure = 'submission'; return }
     submitted = true
   }
   function observe(event: DaemonEvent): void {
@@ -29,7 +30,7 @@ export function createQuestionAnswerEvidence(subscribe = false) {
       if (!batch && (!host || event.serverId === host && event.conversationId === conversation)) {
         host = event.serverId ?? ''; conversation = event.conversationId; batch = event.questionBatchId; outstanding = true
       }
-      else if (event.serverId === host && event.conversationId === conversation && event.questionBatchId !== batch) invalid = true
+      else if (event.serverId === host && event.conversationId === conversation && event.questionBatchId !== batch) { invalid = true; failure = 'batch-replaced' }
     }
     if (event.type === 'questionDismissed' && event.serverId === host && event.questionBatchId === batch) {
       outstanding = false
@@ -39,7 +40,7 @@ export function createQuestionAnswerEvidence(subscribe = false) {
         event.update.payload.conversation_id !== conversation) return
     const { update } = event
     const p = update.payload
-    if (epoch && epoch !== p.epoch) { invalid = true; return }
+    if (epoch && epoch !== p.epoch) { invalid = true; failure = 'epoch'; return }
     epoch = p.epoch
     const previousCompanion = companion
     companion = undefined
@@ -54,7 +55,7 @@ export function createQuestionAnswerEvidence(subscribe = false) {
       const paired = update.type === 'thread_text_append' && p.rev === p.base_rev &&
         previousCompanion?.id === update.payload.item_id && previousCompanion.rev === p.rev && previousCompanion.version === p.version
       if (old && old.rev >= p.rev && !paired) return
-      if (!old || old.rev !== p.base_rev) { invalid = true; return }
+      if (!old || old.rev !== p.base_rev) { invalid = true; failure = 'revision'; return }
       if (update.type === 'thread_item_changed') {
         item = { ...old, ...update.payload.changes, rev: p.rev }
         companion = { id: old.id, rev: p.rev, version: p.version }
@@ -78,7 +79,7 @@ export function createQuestionAnswerEvidence(subscribe = false) {
     if (!armed || !submitted || item.turn !== turn) return
     if (item.kind === 'assistant_message' && typeof content.text === 'string') {
       const before = baseline.get(item.id) ?? ''
-      if (!content.text.startsWith(before)) { invalid = true; return }
+      if (!content.text.startsWith(before)) { invalid = true; failure = 'prefix'; return }
       if (content.text.slice(before.length).includes(confirmation)) witnessed = true
     }
     if (firstEnd && witnessed && content.stop_reason === 'end_turn' && content.is_error !== true &&
@@ -94,7 +95,8 @@ export function createQuestionAnswerEvidence(subscribe = false) {
   }
   const complete = () => armed && submitted && dismissed && witnessed && completed && !invalid
   const identity = () => ({ host, conversation, batch, turn, outstanding })
-  const proof = { observe, submit, arm, complete, identity, stop: () => {} }
+  const snapshot = () => ({ armed, submitted, dismissed, witnessed, completed, invalid, failure })
+  const proof = { observe, submit, arm, complete, identity, snapshot, stop: () => {} }
   if (subscribe) {
     proof.stop = window.pyry.onDaemonEvent(observe)
     ;(window as typeof window & { questionAnswerEvidence: typeof proof }).questionAnswerEvidence = proof

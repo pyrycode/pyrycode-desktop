@@ -266,6 +266,47 @@ would misattribute the same way it would for `pendingSettings`.
 either, which is accepted as correct rather than a regression — a session id this client cannot tie to
 a request it sent is exactly the input that index must not accept.
 
+# Compact projection queries and live delivery
+
+The hello advertises `thread_compact`; main admits explicit `compact-v1` queries
+only after the owning accepted handshake also includes `interactive`, `thread`
+and `thread_expansion`. Capability advertisement alone never changes delivery.
+Ordinary complete queries keep their existing contract. Runtime selection,
+`queryThread`, command dispatch, the named connection and typed preload delivery
+preserve the projection. Main revalidates direct query callers and reconstructs
+outbound fields by name. Unknown projections/extra query fields refuse;
+compact `thread_page` additionally requires a nonempty epoch, while version-zero
+`thread_catch_up` can initialize with an empty epoch.
+
+Compact `thread_items` accepts full ordered non-tool/agent roots and optional
+tool/agent `headers` validated with the child-summary guard, restricted to parent
+zero. Duplicate IDs across the mixed data payload fail. Headers carry
+`detail_omitted: true`; headline/error summary limits and absent optional facts
+retain the child contract. The separate successful marker has empty `items` and
+no `headers`. Correlation checks the sent projection, conversation, capture
+epoch/version and supplied envelope routing. Compact page replies match the
+requested epoch; scoped reset preserves projection and requires a nonempty epoch.
+Malformed summaries, mismatches and refused reads settle through existing static,
+content-free classifications without fallback.
+
+`thread_compact_update` becomes host-stamped `threadCompactUpdate` through the
+production connection/preload bridge. It requires `projection: 'compact-v1'`, a
+nonempty epoch, increasing `from_version`/`version` and exactly one eligible full
+root, header, or hidden-only `progress: true` with neither item nor header.
+Supplied envelope conversation must match the payload. Unrelated renderer bridges
+explicitly ignore this separately owned event.
+
+Fragments preserve projection and compact interval metadata in assembly identity;
+the existing whole-payload digest, contiguous offsets, UTF-8 validation, 8 MiB
+logical/16 MiB aggregate bounds, eight assemblies and 30-second expiry still
+apply. Assembly final cannot certify query success. In compact mode, locally
+cancelling obsolete detail does not free the daemon's unfinished-query slot:
+the [runtime lane](thread-runtime-compact.md#demanded-detail-refresh-and-retirement)
+waits for terminal delivery/expiry, settles the detail owner first and rechecks
+failure admission immediately before the next wire dispatch. See
+[independent compact evidence](thread-runtime-compact.md#root-facts-and-independent-evidence)
+and [counted received-frame validation](thread-runtime-compact.md#validation-evidence).
+
 # Bounded thread body reads
 
 `loadDialConfig` advertises `thread_expansion` alongside `interactive` and `thread`.

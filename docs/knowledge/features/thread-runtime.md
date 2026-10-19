@@ -9,8 +9,9 @@ provide the rows, composer, menus, prompts, task drawer and scrolling.
 
 ## Accepted capability and host routing
 
-The client hello requests `interactive`, `thread` and `thread_expansion`. Main
-checks each host's accepted handshake independently. A handshake without `thread` produces
+The client hello requests `interactive`, `thread`, `thread_expansion` and
+`thread_compact`. Main checks each host's accepted handshake independently.
+A handshake without `thread` produces
 `update-required` with a daemon cause and no `connected` event. The existing failed
 host treatment names the daemon and offers no app download link. That host draws
 no conversation rows and sends no content or recovery requests.
@@ -27,13 +28,26 @@ Conversation commands capture the selected or retained host. Main resolves that
 explicit host through the paired registry. A last claimant of an equal conversation
 ID cannot redirect the request. Device identity is a separate authenticated fact.
 On-demand bodies and child pages additionally require the current owning
-handshake to accept all three capabilities; unsupported expansion leaves complete
-reading available.
+handshake to accept `interactive`, `thread` and `thread_expansion`; unsupported
+expansion leaves complete reading available.
+
+## Explicit compact projection
+
+`runtime.open(host, chat, { projection: 'compact-v1' })` explicitly selects a
+separate session-only owner after negotiation of `interactive`, `thread`,
+`thread_expansion` and `thread_compact`. Ordinary opening stays complete;
+advertisement alone cannot select compact delivery. Presentation and integrated
+activation belong to #2081.
+
+See [compact runtime](thread-runtime-compact.md) for root coverage/checkpoints,
+consumed live progress, demanded detail freshness, wire-lane admission, lifecycle
+fences and offline state, and its [counted Linux evidence](thread-runtime-compact.md#validation-evidence).
+[ADR 0016](../decisions/0016-session-only-compact-projection.md) records the boundary.
 
 ## Restore, recovery and cleanup
 
-Opening first starts an owned protected `openThreadPage` with limit 200 through
-`readSavedTimeline`. The partial projection selects newest shown identities plus
+Complete opening first starts an owned protected `openThreadPage` with limit 200
+through `readSavedTimeline`. The partial projection selects newest shown identities plus
 active/recorded dependencies, preserving saved progress and sparse arrival order.
 A legacy saved timeline is never drawn or converted. Protected indexed storage is
 the application backend; ordinary fresh-owner reads decode only selected facts and
@@ -206,8 +220,9 @@ continue to use complete views, including the existing readable saved-complete
 route. Expansion replies are consumed before complete-query batch admission and
 write no canonical item, coverage, completion certificate or read receipt. Neither
 operation prefetches bodies, nested rows or another page. Row-control wiring is
-deferred to #2081; compact selection and live ancestor invalidation remain outside
-this operation (#2103 owns ancestor invalidation). No detail persistence is added.
+deferred to #2081. Explicit compact selection now supplies
+[ancestor invalidation and demanded refresh](thread-runtime-compact.md#demanded-detail-refresh-and-retirement).
+No detail persistence is added.
 
 ## On-demand child pages
 

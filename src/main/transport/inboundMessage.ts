@@ -3621,6 +3621,7 @@ function parseInboundPayload(envelope: Envelope, plaintext: Uint8Array, diagnost
   // whole call (including hashPlaintext) when no logger is injected — absent-logger costs nothing.
   switch (envelope.type) {
     case 'thread_items':
+    case 'thread_compact_update':
     case 'thread_tool_body':
     case 'thread_children':
     case 'thread_reset':

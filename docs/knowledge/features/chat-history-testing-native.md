@@ -98,13 +98,116 @@ admission changes. This proves ordinary writer/storage liveness; renderer admiss
 import, retained-format conversion and full replacement (`replaceThread`) are excluded.
 Compact transport and lazy presentation remain separate work.
 
+#### Completion clock and scheduling
+
+The renderer records monotonic `admittedAt` immediately before the owned store update
+and `completedAt` immediately after awaited `writer.flush()`. The local
+[`writerWorkloadDuration`](../../../e2e/historyWriterTiming.ts) helper requires finite,
+ordered timestamps and an actual duration at most **60,000 ms**, inclusive. Missing
+completion fails even if a completion flag is supplied. Runner `runnerElapsed` and
+renderer `observedAt` are separate diagnostics: setup before admission and delayed
+polling after flush must not count as workload time. Completion polling has a bounded
+65,000 ms allowance with 100 ms intervals; this observation allowance cannot make an
+actual overdue workload pass. The seven
+[timing regressions](../../../e2e/historyWriterTiming.test.ts) accept a 60,000 ms flush
+observed later and reject overdue, missing, reversed and non-finite timestamps.
+
+The `native-storage-input` attachment is collected in `finally` on assertion/poll
+failure as well as success, before owner closure. It retains partial admitted/durable
+counts, submissions, writer error codes, both timestamps, actual and runner durations,
+input measurements, heartbeat counts/gaps, runtime/backend identity and worker/retry
+identity. Failed renderer/main diagnostic reads receive static stage codes alongside
+any successful reads. Main heartbeat timing is monotonic too, includes the final
+observation gap and stops on failure. Diagnostics must survive a deadline failure;
+attaching only after a successful completion poll would lose the evidence needed to
+distinguish missing completion from slow work or late observation.
+
+[`playwright.config.ts`](../../../playwright.config.ts) collects this scenario exactly
+once in the one-worker `native-writer` prerequisite project and excludes it from
+`parallel`. Both `clipboard` and `parallel` depend on it. Merely giving a project one
+worker still lets other projects overlap its Electron workload; dependency ordering
+prevents that competition. Afterward, clipboard retains its one-worker cap and runs
+alongside unrelated parallel specs with the existing global worker allocation. Project
+ordering addresses measured competing-test heartbeat sensitivity, not arbitrary
+external host load; all workload, keyboard and heartbeat limits remain unchanged.
+
+#### Counted timing repair validation
+
+The [timing repair plan](../../specs/architecture/2125-native-writer-timing.md#validation-evidence),
+[cause record](https://github.com/pyrycode/pyrycode-desktop/issues/2125#issuecomment-6270913277)
+and [accepted verifier review](https://github.com/pyrycode/pyrycode-desktop/pull/2147#issuecomment-6271861915)
+retain Linux x64 evidence for implementation
+`adc274e938cbe810ab3ed0431a2544557eed99bf`, reviewed at `c0af1abac12017d702a87f79551d990687c86116`.
+All native runs below report Electron 33.4.11 / embedded Node 20.18.3 / ABI 130 and
+real `gnome_libsecret`, with production-backend assertions preserved. These are
+retained native encryption/input executions, not fresh runs by documentation or
+captured-client replay. macOS is outside this Linux ticket's verification scope.
+
+The controlled comparison used three configured workers and retries zero throughout.
+On instrumented revision `c7e6db3a`, `/tmp/builder-2125/contended.json` ran the native,
+packaged-history and hosted-view specs with three actual workers: **25 executed,
+24 passed, 1 failed, 0 skipped**. The native drain met the deadline at 58,773 ms,
+but its main heartbeat failed at 1,005 ms (renderer 44.5 ms, keyboard 150/250/307 ms).
+The identical selection after ordering, `/tmp/builder-2125/ordered.json`, used two
+actual workers after the prerequisite: **25 executed/passed, 0 failed/skipped**.
+Native actual/runner durations were 46,404.8/46,486.0 ms, keyboard
+153.4/18.0/96.9 ms and renderer/main gaps 33.9/146.8 ms. Competitors began 886 ms
+after native completion. `collection.json` collected 519 ordinary cases, including
+this scenario exactly once. Reports have matching `.stderr` files.
+
+Failed comparisons remain failed. The initial isolated `alone.json` at `c7e6db3a`
+executed/failed **1**, passed/skipped **0**, with one actual worker: actual drain
+66,817 ms, runner observation 66,958 ms, 8,333 durable items, 271 submissions and no
+writer errors. Its retained failure diagnostics prove actual overdue completion is
+rejected. `alone-after.json` separately executed/passed **1**, failed/skipped **0**,
+at 54,057 ms with main/renderer gaps 149/44.3 ms. Unrelated compilation was observed
+during both isolated runs. No cause is claimed for that isolated overrun, and
+ordering cannot eliminate external host load. Historical runner-only failures at 60,347/60,458 ms cannot
+retrospectively establish actual admission-to-flush duration.
+
+Five consecutive exact native runs on the implementation revision above each used
+three configured/one actual worker, retries zero, and **1 executed/passed,
+0 failed/skipped**. Each retained one 8,333-item admission, 271 submissions, no
+writer/diagnostic errors, advancing unfinished durable counts around all three
+inputs, explicit flush, exact fresh protected-owner equality and two clean exits
+with no signals or teardown failures. Artifacts are `/tmp/builder-2125/final-N.json`,
+matching `.stderr` files and `final-N-results/` directories. Heartbeats below give
+sample count / maximum gap; all times are milliseconds.
+
+| Report | Actual drain | Runner observation | Keyboard x/y/z | Renderer beats/gap | Main beats/gap |
+| --- | ---: | ---: | --- | --- | --- |
+| `final-1.json` | 44,443.7 | 44,488.5 | 131.2 / 129.4 / 33.5 | 2,223 / 31.9 | 960 / 166.4 |
+| `final-2.json` | 49,975.8 | 50,063.4 | 135.1 / 117.4 / 21.1 | 2,499 / 38.7 | 1,065 / 168.0 |
+| `final-3.json` | 55,347.6 | 55,437.0 | 172.2 / 203.1 / 189.6 | 2,766 / 51.3 | 1,106 / 175.1 |
+| `final-4.json` | 54,828.4 | 54,907.8 | 163.1 / 188.1 / 220.7 | 2,739 / 49.9 | 1,111 / 278.8 |
+| `final-5.json` | 48,970.3 | 49,031.0 | 22.3 / 144.2 / 77.5 | 2,449 / 26.8 | 1,064 / 377.2 |
+
+The seven timing regressions executed/passed **7**, failed/skipped **0**. The
+dispatcher-owned complete configured application gate 7 executed **514**:
+**513 passed, 1 failed, 5 skipped**, three configured/actual workers and zero retries.
+The exact `finite protected writer backlog preserves native keyboard and both event loops`
+scenario was collected once and passed its first attempt: **1 executed/passed,
+0 failed/skipped**. Actual drain was **42,937.9 ms**, runner observation **43,060.0 ms**;
+keyboard 146.2/133.7/14.8 ms with durable counts 62→124, 124→186, 186→248;
+renderer 2,147 samples / 25.5 ms maximum gap, main 987 / 115.3 ms. All 8,333 items
+persisted in 271 submissions, with no errors, exact fresh reopen and two clean exits.
+Other cases began 813 ms after native completion. The verifier inspected
+`verifier-gate_#2125_7.log` and accepted this native result without retry. The complete
+run's unrelated scroll failure remains failed on #2140; its selected dispatcher
+rerun `2026-10-19T16-15-00-239Z_verifier-gate-rerun_#2125.log` executed/passed **3**,
+failed/skipped **0**, retries zero, including the native prerequisite. That later
+result does not turn the original full run into a failure-free run.
+
+#### Earlier writer validation
+
 Recorded Linux x64 evidence for final writer source `ce3a6be7`, reviewed at
 `3a9e7a9a`, is retained in the
 [plan](../../specs/architecture/2088-bounded-history-writer.md) and
 [accepted verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2117#issuecomment-6259224620).
 These are retained executions, not new runs by documentation. macOS is outside this
 Linux ticket's verification scope; no provider credential or fresh live daemon run
-was required.
+was required. The durations below are the earlier runner-measured intervals, not
+renderer admission-to-flush timestamps.
 
 | Recorded execution | Executed / passed / failed / skipped | Native observations |
 | --- | --- | --- |

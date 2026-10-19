@@ -18,6 +18,10 @@ describe('chat history records and requests', () => {
       { ...persistence, extra: true }, { ...persistence, part: 0.5 }]) expect(() => parse({ persistence: p })).toThrow()
     expect(() => parse({ removeIds: Array.from({ length: 32 }, (_, i) => i) })).toThrow()
     expect(() => parse({ priorProgress: Array.from({ length: 32 }, () => ({ metadata: change.metadata })) })).toThrow()
+    let visited = 0
+    const oversized = Array.from({ length: 1000 }, () => ({ get id() { visited++; return 1 } }))
+    expect(() => parse({ items: oversized })).toThrow()
+    expect(visited).toBe(0)
     expect(parse({ removeIds: Array.from({ length: 31 }, (_, i) => i) })).toMatchObject({ change: { persistence } })
   })
   it('admits bounded opaque recovery only on before-page requests and detached partial pages', () => {

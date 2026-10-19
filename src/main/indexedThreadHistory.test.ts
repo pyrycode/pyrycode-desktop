@@ -32,6 +32,24 @@ const ask = (operation: string, extra: object = {}, serverId = 'Host', conversat
   ({ operation, serverId, ...(operation === 'removeServer' ? {} : { conversationId }), ...extra })
 const put = (s: { serverId: string; conversationId: string } = snapshot()) => ask('replaceThread', { snapshot: s }, s.serverId, s.conversationId)
 const newest = (limit = 2) => ask('newestThreadPage', { limit })
+it('rolls back a failed data part and its obligation atomically before exact fresh-owner retry', async () => {
+  const h = setup(), s = snapshot(0), id = '12345678-1234-4234-8234-123456789abc'
+  await h.store.execute(put(s))
+  const items = Array.from({ length: 31 }, (_, id) => ({ id, rev: 1, kind: 'future' }))
+  const request = parseChatHistoryRequest(owned(s, { items, persistence: { id, part: 0, parts: 2 } }))
+  if (request.operation !== 'mutateThread') throw Error('missing mutation')
+  expect(await h.store.executeMutation(request, async () => { throw Error('injected turn failure') }))
+    .toEqual(error('write-failed'))
+  h.database.close()
+  const fresh = h.fresh().store
+  expect(await fresh.execute(ask('readThread'))).toEqual(stored(s))
+  expect(await fresh.execute(request)).toEqual({ status: 'ok' })
+  expect(await fresh.execute(ask('readThread'))).toEqual(error('unreadable'))
+  expect(await fresh.execute(owned(s, { persistence: { id, part: 1, parts: 2 } }))).toEqual({ status: 'ok' })
+  expect(await fresh.execute(ask('readThread'))).toEqual(stored({ ...s, thread: {
+    ...s.thread, items, arrivalOrder: items.map(i => i.id) } }))
+})
+
 it('protects ordered save parts and exact acknowledgements independently of daemon fences', async () => {
   const h = setup(), s = snapshot(0)
   await h.store.execute(put(s))

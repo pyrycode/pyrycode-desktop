@@ -118,6 +118,7 @@ Rework validation on Linux x64, after merging unchanged main `5afde437b5e9`: `/t
 
 - Pending documentation stage: `docs/knowledge/features/chat-history-api.md`, **Owned authoritative mutations** — document the final 32-unit capture/coalescing/submission budget, ordered progress, durable acknowledgement, explicit/event-triggered retry, ownership supersession and stop behavior after the partial-durability repair is resolved.
 - Pending documentation stage: `docs/knowledge/features/chat-history-testing-native.md`, **Native runtime and packaged proof** — document `productionSecrets` removing Playwright mock-protection switches before readiness, backend assertions, counted Linux input/heartbeat/reopen evidence and the exclusions for renderer admission, import, conversion and replacement. Preserve failed captures and captured-client provenance separately.
+- Pending documentation stage (refined contract): `docs/knowledge/features/chat-history-api.md`, **Owned authoritative mutations**, and `docs/knowledge/decisions/0014-authenticated-owned-thread-mutations.md`, **Decision**/**Consequences** — independent persistence obligation, fail-closed interrupted reads, retry/supersession rules and separation from daemon completion authority; final capture/coalescing/submission budget, ordered progress, durable acknowledgement, event/explicit retry and stop behavior.
 
 ## Revisions — independent persistence obligation (2026-10-19)
 
@@ -151,3 +152,15 @@ Documentation pending: `docs/knowledge/features/chat-history-api.md`, **Owned au
 ## Revisions — schema admission (2026-10-19)
 
 The receipt journal is a versioned database schema-8 addition, admitted by `historyDatabase.open` and created atomically by the first split mutation. This adds one production file read/touched (`src/main/historyDatabase.ts` → `open`); snapshot format version 1 stays unchanged. Older executables reject schema 8 instead of silently ignoring pending persistence state. Opening conversion of a different retained scope preserves schema 8; `protects ordered save parts and exact acknowledgements independently of daemon fences` covers this alongside host isolation and duplicate acknowledgements.
+
+The persistence budget is checked from raw array lengths before item/progress decoding at shared/main admission. The admission regression uses getter-counted oversized input to prove rejection visits no item payload. Ordinary requests without persistence retain their existing limits.
+
+Additional lifecycle/identity verification:
+
+| Transition | Exact regression |
+| --- | --- |
+| Interrupted covered save and matching retry | `covered checkpoint save stays unreadable until exact retry: version=%s certificate=%s` |
+| Accepted prefix/final acknowledgement replay | `lost %s acknowledgement retries without resurrecting obligations`; `protects ordered save parts and exact acknowledgements independently of daemon fences` |
+| Transaction turn fails before durable acknowledgement | `rolls back a failed data part and its obligation atomically before exact fresh-owner retry` |
+| Reset/epoch/replacement/deletion/unpair and reused coordinates | `retires an abandoned save on %s and rejects stale parts after scope reuse` |
+| Stop after repeated failure | `stop leaves repeatedly failed admitted work protected without spinning or manufacturing completion` |

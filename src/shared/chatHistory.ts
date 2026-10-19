@@ -234,6 +234,17 @@ export function parseChatHistoryRequest(value: unknown): ChatHistoryRequest {
     if (Object.keys(v).some(k => !['operation', 'serverId', 'conversationId', 'change'].includes(k))) return invalid()
     const conversationId = id(v.conversationId), c = record(v.change)
     if (Object.keys(c).some(k => !['metadata', 'acceptEpoch', 'resetId', 'persistence', 'completion', 'availability', 'priorProgress', 'items', 'removeIds', 'ranges'].includes(k))) return invalid()
+    const persistence = optional(c.persistence, value => {
+      const p = record(value), token = id(p.id), part = readId(p.part), parts = readId(p.parts)
+      if (Object.keys(p).some(k => !['id', 'part', 'parts'].includes(k)) ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(token) ||
+        parts < 2 || parts > MAX_CHAT_HISTORY_ITEMS || part >= parts ||
+        !Array.isArray(c.items) || !Array.isArray(c.removeIds) || !Array.isArray(c.ranges) ||
+        c.priorProgress !== undefined && !Array.isArray(c.priorProgress) ||
+        c.items.length + c.removeIds.length + c.ranges.length +
+          (Array.isArray(c.priorProgress) ? c.priorProgress.length : 0) + 1 > 32) return invalid()
+      return { id: token, part, parts }
+    })
     const metadata = retainedMetadata(c.metadata, serverId, conversationId)
     const progress = (value: unknown): ThreadProgress => {
       const p = record(value)
@@ -262,14 +273,6 @@ export function parseChatHistoryRequest(value: unknown): ChatHistoryRequest {
     const removeIds = array(c.removeIds, readId), ids = new Set(items.map(i => i.id))
     if (ids.size !== items.length || new Set(removeIds).size !== removeIds.length || removeIds.some(id => ids.has(id))) return invalid()
     const ranges = retainedRanges(c.ranges)
-    const persistence = optional(c.persistence, value => {
-      const p = record(value), token = id(p.id), part = readId(p.part), parts = readId(p.parts)
-      if (Object.keys(p).some(k => !['id', 'part', 'parts'].includes(k)) ||
-        !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(token) ||
-        parts < 2 || parts > MAX_CHAT_HISTORY_ITEMS || part >= parts ||
-        items.length + removeIds.length + ranges.length + (priorProgress?.length ?? 0) + 1 > 32) return invalid()
-      return { id: token, part, parts }
-    })
     return { operation: 'mutateThread', serverId, conversationId, change: {
       ...progress(c), acceptEpoch: bool(c.acceptEpoch),
       ...(c.resetId === undefined ? {} : { resetId: id(c.resetId) }),

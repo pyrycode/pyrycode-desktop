@@ -92,3 +92,14 @@ Linux x64, native scenario source committed in `57248c27f66974f038c96f5e10f8082c
 - Failed captures remain separate: `native.log` failed collection (zero executed); `native-run2.json` failed before admission because Playwright forced mock protection; `native-run3.json` failed the initial version-zero fixture barrier before admission. The final fixture explicitly supplies and durably observes a version-one initial thread. Earlier failed unit/pre-verify logs remain in the same scratch directory; they are not counted as passes.
 
 macOS is outside this Linux ticket's verification scope. No provider credentials or live daemon run was required.
+
+### Final bounded-coalescing candidate
+
+Source: `52924914` (production writer and final regression fixtures).
+
+- `writer-coalesced.log`: 26 executed/passed; `cache-coalesced.log`: 27 executed/passed, zero failed/skipped in either file. `build-coalesced.log` and the build in `replay-final.log` passed. `pre-verify-coalesced.log`: three mechanical gates passed; its typecheck/unit actions were intentionally skipped because the current build/typecheck and exact affected files ran separately with the native ABI prepared for each runtime.
+- `replay-final.json` / `replay-final.log`: both original client scenarios executed/passed, zero failed/skipped/retries, zero forbidden live launches. `claude-thread` matched 45 requests/emitted 378 frames; `daemon-history-on-open` matched 32/emitted 63; both have zero remaining requests. Capture provenance: Desktop `00ec821f9380b00cf2dfc0dd4817ee15584106a5`, daemon `58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`, daemon binary SHA256 `5f5b3b9ce42eda74024637f4929dd720d36c1226ce6e370eb62fbe9e6b22f7c0`. Original assertions, captures and strict matchers are unchanged.
+- Earlier `replay.json` (1 passed/1 failed) and `replay-history-rerun.json` (1 failed) retain the coverage-deadline failure that drove bounded tail coalescing; the new candidate's complete exchanges above supersede neither those failed captures nor their recorded outcomes.
+- `native-final.json` / `native-final.log`: final candidate executed/passed 1, failed/skipped/retries 0. Real `gnome_libsecret`, Electron 33.4.11 / Node 20.18.3 / ABI 130. One admission, 8333 persisted items, 271 bounded submissions; full drain 43000 ms. Keyboard commits 167/142/142 ms, bracketed by durable counts 62→124, 124→186, 186→217, all unfinished. Main 979 heartbeats / maximum gap 109 ms; renderer 2110 / 22.4 ms. Exact fresh-owner reopen passed; both app exits 0, no signals or teardown failures. The earlier packaged proof uses unchanged main/storage/protection code.
+
+Final written scope remains below 800 lines, with no new exported type or consumer signature change. One independently useful history-persistence repair and its verification floor remain together.

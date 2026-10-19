@@ -35,9 +35,13 @@ expansion leaves complete reading available.
 
 `runtime.open(host, chat, { projection: 'compact-v1' })` explicitly selects a
 separate session-only owner after negotiation of `interactive`, `thread`,
-`thread_expansion` and `thread_compact`. Ordinary opening stays complete;
-advertisement alone cannot select compact delivery. Presentation and integrated
-activation belong to #2081.
+`thread_expansion` and `thread_compact`. Production opening, including creation,
+uses `projection: 'auto'` to select compact from that owning host's accepted
+handshake. Omitted options retain complete delivery. Automatic recovery selects
+from the current accepted connection before dispatching queries; advertisement
+alone cannot select compact delivery. Offline compact reopening exposes session-held
+facts without disk restoration or reads. Compact failure requires explicit Retry
+and cannot select complete as a fallback.
 
 See [compact runtime](thread-runtime-compact.md) for root coverage/checkpoints,
 consumed live progress, demanded detail freshness, wire-lane admission, lifecycle
@@ -215,12 +219,12 @@ conversation deletion and successful unpair clear the corresponding entries;
 disposal clears all entries, timers and subscriptions. Navigation/disconnect
 retain failure admission until explicit retry or lifecycle clearing.
 
-Bodies and child pages remain session memory only. Normal opening and presentation
-continue to use complete views, including the existing readable saved-complete
-route. Expansion replies are consumed before complete-query batch admission and
+Bodies and child pages remain session memory only. Production compact presentation
+mounts visible [body/direct-child leases](thread-runtime-compact.md#demanded-detail-refresh-and-retirement);
+complete delivery keeps locally held expansion and readable saved-complete history.
+Expansion replies are consumed before complete-query batch admission and
 write no canonical item, coverage, completion certificate or read receipt. Neither
-operation prefetches bodies, nested rows or another page. Row-control wiring is
-deferred to #2081. Explicit compact selection now supplies
+operation prefetches bodies, nested rows or another page. Compact selection supplies
 [ancestor invalidation and demanded refresh](thread-runtime-compact.md#demanded-detail-refresh-and-retirement).
 No detail persistence is added.
 
@@ -339,9 +343,12 @@ echo or placement; it does not assert final delivery. Terminal or hidden items
 can settle a send even when they are the first observed revision.
 
 Queued actions use genuine `content.queued_msg_id` handles with owning coordinates.
-Send now additionally requires the session's reported capability. Task membership,
-activity and saved attribution come from linked daemon items rather than a legacy
-roster. Stop retains the recorded agent and owning-host capability checks.
+Send now additionally requires the session's reported capability. Complete task
+membership, activity and saved attribution come from linked daemon items. Compact
+additionally admits current-session live task identities with an actual task ID and
+explicit owning-summary agent, without inventing tool linkage. No legacy roster
+supplies membership. Stop retains agent and owning-host capability checks; see
+[live task authority](conversation-shell-turn-status.md#session-scoped-live-presentation).
 
 ## Live controls and read publication
 
@@ -363,8 +370,10 @@ The prompt slot reuses existing permission, consent and questionnaire components
 Replies retain the original host and prompt object. Session replacement and
 reconnect invalidate stale handles. Rejection feedback survives reconnect.
 Current prompts remain usable during pending or failed initial history recovery.
-Composer hook stops, refusal offers and foreground-tool reports derive from current
-canonical items. Session errors come from admitted live readings. Without a snapshot
+Composer hook stops and refusal offers derive from full items in the selected
+`presentation(host, chat)`, including admitted compact roots. Foreground-tool status
+can also use compact headers. Retained complete items cannot override selected
+compact facts. Session errors come from admitted live readings. Without a snapshot
 there are no content-derived reports or item previews; without a session binding
 there are no current-session reports or admitted live activity. Available daemon
 items and local unaccepted sends retain their own presentation authority. Neither
@@ -383,8 +392,8 @@ Background tasks menu, count pill and close action share drawer state. Immutable
 source items retain presentation identity while another row streams. Presentation
 memoization is restricted to frozen inputs so mutable supplied fixtures stay fresh.
 
-Read publication uses the committed immutable snapshot, received owning summary
-and a certified newest/catch-up completion watermark. Visibility, ordered shown
+Complete-route read publication uses the committed immutable snapshot, received
+owning summary and a certified newest/catch-up completion watermark. Visibility, ordered shown
 content, reader coverage and repair/unfinished fences remain required. Sending a
 read command is distinct from received daemon acknowledgement. Every host-stamped
 sidebar row uses `last_shown_version` for unread state before its first opening;
@@ -393,6 +402,9 @@ legacy local read stamps cannot replace a missing authoritative mark.
 branch. The publisher requires the authoritative epoch and shown watermark;
 `latest_entry_id` and local counts cannot supply missing eligibility. Observation
 cleanup, acknowledgement and reconnect retry retain their existing ownership fences.
+Compact display facts have zero complete version/checkpoint and no ranges; production
+supplies no read observer inputs for them, even with a retained complete checkpoint.
+See [compact evidence separation](thread-runtime-compact.md#root-facts-and-independent-evidence).
 
 ## Validation boundaries
 

@@ -87,6 +87,9 @@ function sessionDividerReason(c: Record<string, unknown>): 'clear' | 'idle_evict
 const presentationStatuses = new Set(['running', 'done', 'failed', 'denied', 'interrupted', 'queued', 'written', 'delivered', 'lost', 'dropped',
   'finished', 'stopped', 'stopping', 'ended_with_session', 'gone'])
 function presentation(s: Held, scope: 'body' | 'header' | 'index' = 'body'): ThreadItem | null {
+  // A summary adapts only to a visual header, never to a message or an actionable identity.
+  if (s.detail_omitted === true) return (s.kind === 'agent' || s.kind === 'tool_call') && typeof s.headline === 'string'
+    ? { kind: 'toolCall', turnId: '', toolUseId: '', name: s.headline, inputSummary: '', result: null } : null
   const c = record(s.content)
   if (!c || typeof s.status !== 'string' || !presentationStatuses.has(s.status)) return null
   const turnId = text(s.turn) ?? ''

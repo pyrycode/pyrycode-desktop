@@ -124,11 +124,12 @@ availability, slot priority and the 800px layout check.
 
 ## Refusal Switch back
 
-`ComposerErrorSlotControl` reads only the active conversation's live refusal offer.
-The latest fallback qualifies only with exact `scope: 'session'` and nonempty original
-and fallback identifiers. Local/unknown scopes and no-fallback records create no
-offer; history cannot create or revive one. The button requires a connected state
-and an addressable session id (neither `null` nor `''`).
+`ComposerErrorSlotControl` reads the active conversation's selected refusal offer
+for the bound current session. The latest fallback qualifies only with exact
+`scope: 'session'` and nonempty original and fallback identifiers. Local/unknown
+scopes and no-fallback records create no offer; an older session's history cannot
+create or revive one. The button requires a connected state and an addressable
+session id (neither `null` nor `''`).
 
 Switch back uses `changeSetting`, the same path as [ComposerModelMenu](composer-model-menu.md),
 with the original identifier unchanged. It preserves the draft and sends one
@@ -136,6 +137,18 @@ with the original identifier unchanged. It preserves the draft and sends one
 the active conversation, exact offer object, connection, session id and pending-model
 guards at click time. The button stays visible but disabled while the offer has a
 `changeId` or the settings store has a pending model write.
+
+Production offers come from admitted full items in the selected
+`threadRuntime.presentation(host, chat)`, including compact full roots beneath a
+closed parent. Switch back revalidates that presentation's host, conversation,
+session, epoch, item ID and revision at click time. Checking `threadRuntime.items`
+instead would silently reject a compact-only refusal or its newer revision while
+older complete history is retained. Headers and rendered detail bodies cannot
+create an offer, and selected compact facts carry no complete read/persistence
+evidence. Current-session task controls independently use
+[admitted full/live identities](conversation-shell-turn-status.md#session-scoped-live-presentation);
+neither control requires opening the parent. Both retained-complete variants pass
+in the [counted compact coverage](thread-runtime-compact.md#production-activation-and-visible-demand).
 
 A correlated rejection retains the offer and shows “Could not change the model —
 try again.” beside the retry button. Retry clears that feedback; confirmation retires

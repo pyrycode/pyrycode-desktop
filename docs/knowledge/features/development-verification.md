@@ -140,6 +140,104 @@ Offline replay establishes no fresh provider/daemon or physical-effect evidence;
 macOS is outside this Linux ticket's verification scope. The SQLite ABI
 prerequisite above still applies independently of inspection availability.
 
+## Actual submitted-turn reply evidence
+
+The daemon-built scenario in
+[`real-claude-thread.spec.ts`](../../../e2e/real-claude-thread.spec.ts) records the
+actual assistant replies. Requested `THREAD_AGENT`/`THREAD_RESET` wording remains
+in the captured outgoing prompts, but does not determine success. Its single-consumer
+[`threadReplyEvidence`](../../../e2e/fixtures/threadReplyEvidence.ts) collector runs
+synchronously in the page and observes sends through CDP without replacing the preload API.
+It filters both stamped and payload conversation routes to the created chat on the paired host.
+
+Before each send, baseline the existing item and turn identities. Bind the fresh delivered
+top-level user item to the outbound message ID. Native user items have no turn field, so
+select the first fresh top-level work after that delivery's order in the same epoch,
+session and agent, before the next user delivery. Require a fresh, nonempty, done/inactive
+assistant and a later normal `turn_end` with the same attribution: `end_turn`, done/inactive,
+without an error or unsuccessful outcome. Nested items, including replies carrying
+`parent_tool_use_id`, cannot qualify. Neither old items, another chat's completion nor an
+unrelated turn can supply the evidence.
+
+Stable reply identity is host + conversation + epoch + item ID. Revisions and update
+versions describe changes to that item, not a fresh reply. Apply full revisions and
+base-matched text appends, including one immediately ordered same-version/same-revision
+suffix companion; duplicate replay must not append it twice. Record settled native text
+and session/agent/turn attribution. After the observed connection count advances, require
+the first reply's identity and exact text to remain. After the additional reset delimiter,
+take a new baseline and require a distinct reply identity and turn.
+
+Protected `readThread` inspection must contain both recorded top-level replies with their
+exact identities, attribution and original text before profile retirement. After full
+process exit and same-profile relaunch, first assert there is no open conversation thread,
+then inspect protected history again before opening the saved chat. This prevents network
+history-on-open from repairing a missing saved reply. Missing or changed items and
+pre-reset substitution fail. Retain agent placement before/after reconnect, capability
+checks, and the saved list/title observation with its string assertion. The null saved-title
+race belongs to [#2129](https://github.com/pyrycode/pyrycode-desktop/issues/2129);
+reply selection adds no fallback title, sleeps or mutation retries.
+
+Rendered persistence needs identity as well as text: two turns can legitimately return
+identical words, letting one body satisfy two text-only searches. In one poll, snapshot
+each assistant body's nearest `data-read-row` ID and body text, then require both recorded
+IDs with their expected text. The open conversation supplies host/conversation/epoch scope;
+the row supplies the numeric item ID. Playwright's TSX transformation prevented React
+server rendering of the imported view in this runner. Use the existing `markdownPlainText`
+parser for expected body text, remove code-block headers/copy buttons and task marks from
+cloned rendered bodies, and remove whitespace for the rendered comparison. Cursor and
+statistics chrome are not reply text; native/saved comparisons still use exact original text.
+
+The deterministic [collector and comparison tests](../../../e2e/fixtures/threadReplyEvidence.test.ts)
+cover non-marker text, legitimate item updates, stale/wrong-route/wrong-turn/nested evidence,
+missing or abnormal completion, missing/changed saved items and pre-reset substitution.
+Equal-text rendering coverage requires both identified rows, rejecting either missing row,
+duplicated substitutes, missing/substituted IDs and changed body content.
+
+### Counted Linux thread validation
+
+These are retained builder results accepted by the verifier for
+[PR #2139](https://github.com/pyrycode/pyrycode-desktop/pull/2139), not documentation reruns.
+On Linux x64, 2026-10-19, implementation
+`5d06a2c7bcd080ea5b80817b2cf50166be3e5de8` was reviewed at
+`39dfe1bbe3b299cd9afa9ddb159bb88d33d19c57`; the later commit records evidence only.
+The [plan's rework evidence](../../specs/architecture/2138-actual-thread-replies.md#rework-validation-evidence)
+retains reports and their SHA-256 hashes under `/tmp/builder-2138/`:
+
+| Check | Executed / passed / failed / skipped | Report |
+| --- | --- | --- |
+| Targeted `threadReplyEvidence.test.ts`, including identical-text identity regression | 23 / 23 / 0 / 0 | `rework-unit.xml`, `rework-pre-verify-ready.log` |
+| Exact guarded `claude-thread` replay | 1 / 1 / 0 / 0 | `rework-replay.log` |
+| Exact scenario against real Claude | 1 / 1 / 0 / 0 | `rework-live.log`, `rework-live-stderr.log` |
+
+Both browser reports contain and pass
+`daemon-built thread streams, places an agent, reconnects, resets and reopens saved items`,
+with retries 0 and no flaky results. Replay started `2026-10-19T11:27:28.148Z`, matched
+45 requests, emitted 378 frames, left 0 outstanding requests and recorded 0 forbidden
+launches. Captures, provenance and outgoing prompts are unchanged. This is offline
+evidence; the separate live run establishes the required current provider/daemon behavior.
+Pre-verify's five checks, client-test typecheck and build passed. Electron SQLite preparation
+completed after Node preparation and before either browser launch.
+
+Live started `2026-10-19T11:27:49.423Z` and took 27,366ms. The isolated
+`/tmp/builder-2138/pyry` used clean daemon source
+`664305939d73e5a146457503081d8232fcca5407`, `vcs.modified=false`, Linux amd64,
+SHA-256 `ba2831b24dd8f880c0a707fb694bab8b99cfe2535d76eaa6129dbf11e4d0b869`.
+The live attachment records the Desktop/daemon revisions and authenticated capabilities
+`interactive`, `multi_agent`, `stop_background_task`, `thread`, `thread_expansion`,
+`thread_compact`. Earlier TSX-comparison failures and the interrupted-install prerequisite
+failure remain failed reports in the plan. The identical-text regression failed before
+the identity repair; the final 23-test run includes it passing.
+macOS is outside this Linux ticket's verification scope.
+
+The supplied dispatcher unit gate records 9,699 executed/passed, 0 failed, 3 skipped.
+Its application gate records 509 executed, 507 passed, 2 failed, 5 skipped and explicitly
+lists the named thread scenario as passed. This is captured-client evidence. The accepted
+verifier stage `c8c14257cda146cdfec2e2e28e11cc55b6d19627fae7a061dfde2ffa22ae77ae`
+reports PASS after the two unrelated failures passed same-tree reruns, tracked on
+[#2125](https://github.com/pyrycode/pyrycode-desktop/issues/2125) and
+[#2140](https://github.com/pyrycode/pyrycode-desktop/issues/2140). The original complete
+application run retains its two failures; the supplied gate report records no overall pass.
+
 ## Owned history mutation evidence
 
 A one-item edit after full replacement can conceal an unbounded production append

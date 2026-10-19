@@ -53,6 +53,10 @@ Unknown profile, build failure, replay failure and restoration failure yield non
 ## Open Questions
 - Required retained bytes are absent locally; supported provisioning is pending. SHA-256 must equal `24bbe5dff65241a77dda96cbd262c9185925d88f6168439a1679b576b984dac1` before the exact scenario runs. This does not prevent independent implementation/controls; it prevents claiming completed acceptance.
 
+## Revisions
+- 2026-10-19: Build evidence must identify the source that actually produced the bundle, rather than the checkout at replay time. `buildProvenance` emits revision/dirty/profile metadata during compilation; replay hashes the output and refuses a mismatched profile. This also detects a compatibility output left behind by an interrupted process. No runtime application override is introduced.
+- 2026-10-19: The synthetic application control uses separate data and final frames, as the production parser requires. Its earlier combined-frame failures remain failed evidence; complete query matching had already succeeded. Reconnect supplies a newer item revision/version and its original checkpoint cursor.
+
 ## Documentation handoff
 - Pending documentation stage: `docs/recorded-tests.md`, “Replay contract”: explicit compatibility invocation, build isolation/restoration, executed revision/profile/bundle hashes/input checksum separately from capture provenance; current-source complete route versus default automatic projection, with no fresh provider or physical transport proof.
 - Pending documentation stage: `docs/client-replay-migration.md`, replay evidence description: retain the same complete-route/default-policy distinction.

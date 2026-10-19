@@ -77,6 +77,40 @@ async function cache(intercept?: (request: ChatHistoryRequest, execute: () => Pr
   return { fresh, source, api, writer }
 }
 
+it('bounded data prefixes reopen unfinished and retry to the exact separately admitted state', async () => {
+  const results: unknown[] = []
+  for (const fail of [false, true]) {
+    let submissions = 0, failing = fail
+    const { fresh, source, api, writer } = await cache(async (request, execute) => {
+      if (request.operation === 'mutateThread' && ++submissions === 4 && failing)
+        return { status: 'error', code: 'write-failed' }
+      return execute()
+    })
+    api.acceptEpoch('a', 'c', 'e')
+    await writer.flush()
+    const batch = api.beginBatch('a', 'c', 'e')!
+    batch.applyItems(Array.from({ length: 100 }, (_, id) => ({ id, rev: 1, kind: 'assistant_message',
+      order: id % 7, shown: true, active: false, status: 'finished', summary: '', content: { text: `fixture ${id}` } })), 100)
+    batch.commit({ fromVersion: 0, version: 100, ranges: [{ start: 0, end: 101 }], olderAvailable: false })
+    await writer.flush()
+    if (fail) {
+      const partial = await fresh().execute({ operation: 'readThread', serverId: 'a', conversationId: 'c' })
+      expect(partial).toMatchObject({ status: 'stored', snapshot: { thread: { checkpoint: 0, version: 100 } } })
+      if (partial.status === 'stored' && partial.snapshot.kind === 'daemon-items') {
+        expect(partial.snapshot.thread.items.length).toBeGreaterThan(0)
+        expect(partial.snapshot.thread.items.length).toBeLessThan(100)
+      }
+      failing = false
+      await writer.flush()
+    }
+    const saved = await fresh().execute({ operation: 'readThread', serverId: 'a', conversationId: 'c' })
+    expect(saved).toMatchObject({ status: 'stored', snapshot: { thread: source.getState().snapshot('a', 'c') } })
+    results.push(saved)
+    await writer.stop()
+  }
+  expect(results[1]).toEqual(results[0])
+})
+
 it.each(['separate', 'coalesced', 'held-failure'] as const)('explicit same-epoch reset replaces owned history through %s saves', async mode => {
   let hold = false, release!: (result: ChatHistoryResult) => void
   const { fresh, api, writer } = await cache((_request, execute) => hold ? new Promise(resolve => { release = resolve }) : execute())

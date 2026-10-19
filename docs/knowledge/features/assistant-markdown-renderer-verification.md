@@ -40,6 +40,54 @@ and preserved spacing. Retained capture references are
 `/tmp/verifier-2113/{streaming,settled}-{1280,800}.png` and `/tmp/builder-2106/`.
 No provider/live proof is required; macOS is outside this Linux ticket's scope.
 
+## Heading spacing
+
+`e2e/assistant-whitespace.spec.ts`'s “H1–H6 spacing preserves adjacent, nested and
+outside edges while replies grow at 1280” and its 800-wide counterpart measure
+all six levels between non-heading blocks, adjacent headings, first/last headings,
+heading-only messages and headings inside lists/quotes. Each fixture is checked
+while streaming, after an observed appended paragraph and after settlement.
+Positive block and nested-heading counts prevent empty geometry from passing.
+The expected gaps are literal 20/12 px at heading/non-heading boundaries,
+16 px between adjacent headings or non-headings, and 8 px inside lists/quotes.
+Both outside offsets must be zero. Typography retains the separate six-level
+regression above.
+
+Parameterize the viewport and resize once per launch. Repeated resizing inside
+the fixture/phase loop lost Electron's main evaluation context during one of
+42 resize calls (retained failure in `/tmp/builder-2107/final/`). Separate
+viewport cases keep every geometry assertion without that repeated resize loop.
+Appending before settlement changes a heading-only or final-heading fixture:
+its settled edge check then proves the appended form only. The committed test
+has this nonblocking coverage gap; unchanged settled edges were verified
+separately, not added to the regression.
+
+The [accepted Linux verifier verdict for #2107](https://github.com/pyrycode/pyrycode-desktop/pull/2115#issuecomment-6256805856)
+at `127ce946` records the PR's post-merge focused whitespace/reader run:
+19 executed, 19 passed, 0 failed and 0 skipped. Both named spacing viewport
+cases and the six-level typography case were present and passed, along with
+“the reader menu copies the note three ways and refreshes it (#1630)”. That
+reader-menu check now expects 12 px from H1 to paragraph at both widths,
+inherited through the shared `.bubble__markdown` container. Additional
+reader-specific coverage is owned by #2100; the merged #2106 typography stays
+unchanged by the spacing rules.
+
+The same verdict records separate scratch Electron checks: 2 executed/passed,
+0 failed/skipped, at 1280×800 and 800×800 windows. Those measured unchanged
+H1–H6 heading-only and final-heading replies while streaming and settled, with
+zero outside offsets. Each width retained 16 measured states in
+`/tmp/verifier-2115/current/metrics-{1280,800}.json`. The verifier's local unit
+report `build/dispatcher-tests/unit-pg2765kl/dispatcher.xml` records
+9,523 executed/passed, 0 failed and 3 skipped, including AssistantMarkdown
+(157 passed) and StreamingAssistantMarkdown (75 passed), neither with skips.
+Build preceded Electron checks. These are recorded Linux results, not tests
+run by documentation; macOS is outside this ticket's verification scope.
+
+The verifier compared fresh synthetic streaming/settled captures at the reviewed
+head with Figma `883:13431`, retaining main's typography. Captures are
+`/tmp/verifier-2115/current/{streaming,settled}-{1280,800}.png`, with content
+sizes 1280×773 and 800×773. No provider/live run is required for this CSS behavior.
+
 ## Rendering and spacing
 
 `hostedAppLink.test.ts` pins the exact raw grammar. `hostedAppLinks.test.tsx`
@@ -65,10 +113,11 @@ computed styles and geometry for markdown-owned whitespace and cursor placement.
 
 Block spacing requires measured rectangles as well as computed `row-gap`: UA block
 margins can add space while the declared gap still looks correct. The settled
-“consecutive markdown blocks sit one spacing token apart, flush at the bubble edges”
-case guards block count, every gap and both zero edges. “streaming markdown blocks
-keep 16 px gaps through settlement” measures seven blocks before and after settlement
-at 1280×800 and 800×800 window sizes. The nested list/quote case retains 8 px checks.
+“markdown blocks keep heading spacing and flush bubble edges” case guards block
+count, every gap and both zero edges. “streaming markdown blocks keep heading
+spacing through settlement” measures seven blocks before and after settlement
+at 1280×800 and 800×800 window sizes. Both expect 20/12 px at heading boundaries
+and 16 px elsewhere. The nested list/quote case retains 8 px checks.
 The [reader menu scenario](conversation-shell-markdown-reader.md#note-actions-menu)
 measures its loaded note at both sizes, accounting for escaped-HTML text items.
 

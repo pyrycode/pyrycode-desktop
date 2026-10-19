@@ -1033,7 +1033,7 @@ test('a fenced code block wraps inside the bubble measure rather than spilling o
   expect(thread.scrollWidth).toBeLessThanOrEqual(thread.clientWidth + SUBPIXEL_TOLERANCE_PX)
 })
 
-test('consecutive markdown blocks sit one spacing token apart, flush at the bubble edges', async ({
+test('markdown blocks keep heading spacing and flush bubble edges', async ({
   launchPairedApp
 }) => {
   const { page } = await launchPairedApp({ buildReplyFrames })
@@ -1050,11 +1050,8 @@ test('consecutive markdown blocks sit one spacing token apart, flush at the bubb
   // AC4 — the declared rhythm is the token, not a literal.
   expect(rhythm.rowGapPx).toBe(rhythm.spaceTokenPx)
 
-  // ...and the MEASURED rhythm is that same value. This is the load-bearing half: live UA block margins
-  // would add ~14-16px on top of the gap while `row-gap` still read 16px.
-  for (const gap of rhythm.blockGapsPx) {
-    expect(Math.abs(gap - rhythm.spaceTokenPx)).toBeLessThanOrEqual(SUBPIXEL_TOLERANCE_PX)
-  }
+  // Measure heading boundaries as well as the unchanged non-heading rhythm.
+  for (const [i, gap] of rhythm.blockGapsPx.entries()) expect(gap).toBeCloseTo([20, 12, 16, 16][i], 1)
 
   // AC4's other half — the first and last block add no extra space inside the bubble. Free from flex
   // `gap`, which applies strictly BETWEEN items, once the UA margins are gone.
@@ -1062,7 +1059,7 @@ test('consecutive markdown blocks sit one spacing token apart, flush at the bubb
   expect(Math.abs(rhythm.lastOffsetPx)).toBeLessThanOrEqual(SUBPIXEL_TOLERANCE_PX)
 })
 
-test('streaming markdown blocks keep 16 px gaps through settlement', async ({ launchPairedApp }) => {
+test('streaming markdown blocks keep heading spacing through settlement', async ({ launchPairedApp }) => {
   const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: inbound => {
     const envelope = decodeEnvelope(inbound)
     if (envelope.type !== 'send_message') return [seedConversationsFrame()]
@@ -1085,13 +1082,79 @@ test('streaming markdown blocks keep 16 px gaps through settlement', async ({ la
       const rhythm = await readRhythmMetrics(page, 0)
       expect(rhythm.blockCount).toBe(7)
       expect(rhythm.rowGapPx).toBe(16)
-      for (const gap of rhythm.blockGapsPx) expect(gap).toBeCloseTo(16, 1)
+      for (const [i, gap] of rhythm.blockGapsPx.entries()) expect(gap).toBeCloseTo([20, 12, 16, 16, 16, 16][i], 1)
       expect(rhythm.firstOffsetPx).toBeCloseTo(0, 1)
       expect(rhythm.lastOffsetPx).toBeCloseTo(0, 1)
-      await capturePairedApp(app, page, `/tmp/builder-2097/${phase}-${width}.png`)
+      await page.locator('.conversation__thread').evaluate(el => { el.scrollTop = 0 })
+      await capturePairedApp(app, page, `/tmp/builder-2107/${phase}-${width}.png`)
     }
   }
 })
+
+for (const width of [1280, 800]) {
+  test(`H1–H6 spacing preserves adjacent, nested and outside edges while replies grow at ${width}`, async ({ launchPairedApp }) => {
+    const levels = [1, 2, 3, 4, 5, 6]
+    const nested = levels.flatMap(level => ['Before nested heading.', '', `${'#'.repeat(level)} Nested ${level}`, '', 'After nested heading.', ''])
+    const source = [
+      '# First heading', 'Before heading.',
+      ...levels.flatMap(level => [`${'#'.repeat(level)} Level ${level}`, 'After heading.']),
+      '## Adjacent one', '### Adjacent two',
+      nested.map(line => `> ${line}`).join('\n'),
+      ['- Before list heading.', ...nested.slice(1).map(line => `  ${line}`)].join('\n'),
+      '###### Last heading'
+    ].join('\n\n')
+    const { page, app, daemon } = await launchPairedApp({})
+    await app.evaluate(({ BrowserWindow }, value) => BrowserWindow.getAllWindows()[0].setSize(value, 800), width)
+    for (const [index, text] of [source, ...levels.map(level => `${'#'.repeat(level)} Heading only`)].entries()) {
+      const turn = index + 41
+      daemon.pushFrame(assistantDeltaFrame(turn, text))
+      const bubble = page.locator('[data-thread-role="assistant"]').last()
+      const markdown = bubble.locator('.bubble__markdown')
+      await expect(bubble.locator('.bubble__cursor')).toBeVisible()
+      await expect(markdown.locator(':scope > *')).toHaveCount(index === 0 ? 19 : 1)
+      for (const phase of ['streaming', 'appended', 'settled']) {
+        if (phase === 'appended') {
+          daemon.pushFrame(encodeEnvelope({ id: 1, type: 'assistant_delta', ts: FIXED_TS, payload: {
+            conversation_id: SEEDED_ROW.id, turn_id: `turn-${turn}`, seq: 1, text: '\n\nAppended paragraph.'
+          } satisfies AssistantDeltaPayload }))
+          await expect(markdown.locator(':scope > :last-child')).toHaveText('Appended paragraph.')
+        }
+        if (phase === 'settled') {
+          daemon.pushFrame(turnEndFrame(turn))
+          await expect(bubble.locator('.bubble__cursor')).toHaveCount(0)
+        } else {
+          await expect(bubble.locator('.bubble__cursor')).toBeVisible()
+        }
+        const metrics = await markdown.evaluate(el => {
+          const children = Array.from(el.children)
+          const rects = children.map(child => child.getBoundingClientRect())
+          const box = el.getBoundingClientRect()
+          const nestedParents = Array.from(el.querySelectorAll('li, blockquote'))
+          return {
+            tags: children.map(child => child.tagName),
+            gaps: rects.slice(1).map((rect, i) => rect.top - rects[i].bottom),
+            edges: [rects[0].top - box.top, box.bottom - rects[rects.length - 1].bottom],
+            nested: nestedParents.flatMap(parent => Array.from(parent.children)
+              .filter(child => /^H[1-6]$/.test(child.tagName)).map(heading => {
+                const rect = heading.getBoundingClientRect()
+                return [rect.top - heading.previousElementSibling!.getBoundingClientRect().bottom,
+                  heading.nextElementSibling!.getBoundingClientRect().top - rect.bottom]
+              }))
+          }
+        })
+        const heading = (tag: string): boolean => /^H[1-6]$/.test(tag)
+        expect(metrics.tags).toHaveLength((index === 0 ? 19 : 1) + (phase === 'streaming' ? 0 : 1))
+        for (const [i, gap] of metrics.gaps.entries()) {
+          const before = heading(metrics.tags[i]), after = heading(metrics.tags[i + 1])
+          expect(gap).toBeCloseTo(before === after ? 16 : after ? 20 : 12, 1)
+        }
+        for (const edge of metrics.edges) expect(edge).toBeCloseTo(0, 1)
+        expect(metrics.nested).toHaveLength(index === 0 ? 12 : 0)
+        for (const gaps of metrics.nested) for (const gap of gaps) expect(gap).toBeCloseTo(8, 1)
+      }
+    }
+  })
+}
 
 test('all six markdown heading levels share the scale while streaming and settled', async ({ launchPairedApp }) => {
   const headings = [

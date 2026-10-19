@@ -834,6 +834,17 @@ button.top-overlay-pill:hover,
   margin-block: 0;
 }
 
+/* Heading boundaries use 20 px before and 12 px after (Figma 883:13431).
+   Adjust the existing flex gap only between a heading and a non-heading sibling:
+   adjacent headings keep 16 px, outer edges stay flush, and nested rhythm stays 8 px. */
+.bubble__markdown > :not(h1, h2, h3, h4, h5, h6) + :is(h1, h2, h3, h4, h5, h6) {
+  margin-block-start: calc(var(--space-5) - var(--space-4));
+}
+
+.bubble__markdown > :is(h1, h2, h3, h4, h5, h6) + :not(h1, h2, h3, h4, h5, h6) {
+  margin-block-start: calc(var(--space-3) - var(--space-4));
+}
+
 /* Shared Markdown scale (Figma 892:13442): settled replies, streaming replies and the reader.
    Descendant selectors include headings inside lists and quotes. Spacing remains owned by
    the existing block rhythm rules; inline code keeps its monospace family and inherits size. */

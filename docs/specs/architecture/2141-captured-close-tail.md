@@ -40,13 +40,14 @@ for actual successful server-frame socket writes as before. Teardown is unchange
 ## State transitions and identity reuse
 | Event | Control in `recordedLifecycle.test.ts` |
 | --- | --- |
-| Close, old-session calls, reconnect; request IDs reused on next connection | capture-to-replay close-tail regression |
-| Close without tail, repeated draining | existing close control and regression's exactly-once observer assertion |
-| Missing tail | default connection deadline, sticky failure and final-completion control |
-| Changed/duplicate/extra/future-connection request | parameterized strict tail rejection controls |
-| Checkpoint within tail | unreleased checkpoint control, explicit release only |
-| Daemon frame beyond close | boundary rejection control |
-| Actual relay socket close | close observer wired to `closeClientAfterServerFrames` control |
+| Close, old-session calls, reconnect; request IDs reused on next connection; repeated draining | `replays a captured close only after its exact old-connection client-only suffix` |
+| Close without tail | `requires the actual captured transport close after all preceding daemon frames` |
+| Missing tail | `bounds a missing captured-close tail with the existing connection deadline` |
+| Changed/duplicate/extra/future-connection request | `keeps %s fatal while draining the captured client tail` |
+| Extra call after closure, including end of recording | `rejects extra calls after closing the drained tail (final connection: %s)` |
+| Checkpoint within tail | `cannot drain across an unreleased checkpoint in the captured tail` |
+| Daemon frame beyond close | `never forwards same-connection daemon data beyond a captured close` |
+| Actual relay socket close | `delivers the prefix then observes the actual relay close and reconnect after tail matching` |
 
 ## Error handling
 Reuse sticky matcher and transport-boundary failures. Missing calls use the

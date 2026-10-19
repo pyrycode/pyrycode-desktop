@@ -161,3 +161,13 @@ the explicitly pending current-main retained-capture acceptance.
 
 These checks establish offline correctness only. No fresh provider or physical
 transport acceptance is claimed. macOS is outside this Linux ticket's scope.
+
+## Revisions — resumed after #2149, 2026-10-19
+#2149 is merged in main `d21005516f38a2966d34f13074fe87db8d911695`.
+Use its explicit `--profile complete-thread` for the unchanged retained input;
+the current source selects its existing complete route at both `PairedShell`
+opening sites and across reconnects. The runner restores normal output afterward.
+Default committed-recording validation keeps the normal automatic profile.
+The close scheduler, capture bytes, strict matcher and original assertions remain
+unchanged. Earlier failures above remain failed evidence. This is still one
+behaviour slice, approximately 450 written lines, within the original boundaries.

@@ -38,7 +38,7 @@ Unrelated storage and fake-suite work remains under its existing owners.
 | `real-claude-queue-drop.spec.ts` | Mid-turn enqueue, drop before drain, no later queued turn | Real gate file and genuinely running child |
 | `real-claude-queue-send-now.spec.ts` | Send now inside the current turn | Real tool entered/release gate and child consumption |
 | `real-claude-system-prompt.spec.ts` | Stored prompt at spawn; a save leaves current session unchanged | Actual system-prompt application; existing reset fixme remains explicit |
-| `real-claude-thread.spec.ts` | Daemon-built stream, agent placement, reconnect, reset and saved reopen | Real agent execution and transport restart |
+| `real-claude-thread.spec.ts` | Daemon-built stream, agent placement, reconnect, reset, exact protected saved-list title and saved-reply reopen | Real agent execution and transport restart |
 | `real-daemon-archive-order.spec.ts` | Archived channels sorted by use | Daemon registry timestamps independently checked |
 | `real-daemon-conversation-lifecycle.spec.ts` | Archive, restore, deletion and reply-gated navigation | Real registry operations |
 | `real-daemon-create-channel.spec.ts` | Named promoted channel, default workspace and dialog close | Real daemon creation semantics |
@@ -174,6 +174,14 @@ wins the merge; a replacement item invalidates it. This integrates with the
 saved/live restoration fixes merged in PR #2058.
 
 ## Validation evidence
+
+The [saved-title observation evidence](knowledge/features/development-verification.md#protected-saved-list-title-observation)
+records the controlled stored-null mechanism, 11 passing regressions, five
+three-worker paired batches (20 passed), the complete guarded recorded run
+(29 passed, one existing system-prompt-reset fixme), and both named relaunch cases
+passing without retry in the 515-case Linux application gate. Full executed,
+failed and skipped counts and unchanged capture provenance are retained there.
+The controlled delay does not establish the historical failure's production cause.
 
 The [Linux relaunch repair evidence](knowledge/features/development-verification.md#replay-inspection-after-profile-relaunch)
 records five consecutive two-worker paired runs, the complete guarded recorded

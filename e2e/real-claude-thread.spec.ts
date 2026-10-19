@@ -7,6 +7,7 @@ import { confirmCreateChat } from './fixtures/confirmCreateChat'
 
 import { watchPhaseReconnect, readPhaseReconnect } from './fixtures/phaseReconnectEvidence'
 import { createThreadReplyEvidence, renderedRepliesMatch, savedRepliesMatch, type RecordedReply } from './fixtures/threadReplyEvidence'
+import { readSavedListTitle } from './fixtures/savedListTitle'
 
 type ProofWindow = typeof window & { threadReplyEvidence: ReturnType<typeof createThreadReplyEvidence> }
 async function savedThread(page: Page, host: string, conversation: string) {
@@ -90,11 +91,9 @@ test('daemon-built thread streams, places an agent, reconnects, resets and reope
       await renderedReplies(page, replies)
       await expect(page.locator('.bubble__cursor')).toHaveCount(0, { timeout: 120_000 })
       await expect.poll(async () => savedRepliesMatch(await savedThread(page, host, id), replies)).toBe(true)
-      const title = await page.evaluate(async ({ host, id }) => {
-        const result = await window.pyry.chatHistory({ operation: 'readList', serverId: host })
-        return result.status === 'stored' && result.snapshot.kind === 'list'
-          ? result.snapshot.conversations.find(row => row.id === id)?.name : null
-      }, { host: daemon.pairFields.server, id })
+      const title = await readSavedListTitle(() => page.evaluate(
+        host => window.pyry.chatHistory({ operation: 'readList', serverId: host }), host
+      ), host, id)
       expect(typeof title).toBe('string')
       const actualCapabilities = await page.evaluate(() => (window as ProofWindow).threadReplyEvidence.capabilities())
       expect(actualCapabilities).toEqual(expect.arrayContaining(['interactive', 'thread']))

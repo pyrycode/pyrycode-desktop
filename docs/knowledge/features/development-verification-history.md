@@ -107,6 +107,105 @@ two macOS-only badge cases and macOS last-window reopening. No production change
 or live-Claude proof was required. The [plan](../../specs/architecture/1978-saturated-history-save-observation.md)
 records commands and separates the recovered excerpt from instrumented evidence.
 
+### Certified checkpoint inspection verification
+
+The restore-overlap case in [`thread-activation.spec.ts`](../../../e2e/thread-activation.spec.ts),
+`restore overlapping live content retains complete progress across an interrupted catch-up and epoch replacement`,
+separates terminal receipt/admission, in-memory completion and protected write acknowledgement
+from the final full saved read. The [acknowledgement-first inspection contract](e2e-harness-context-recovery.md#certified-checkpoint-inspection)
+prevents an expensive pre-write read from consuming the assertion budget. This changes
+scenario synchronization only; production certification, storage, protocol and API behavior
+are unchanged.
+
+The [accepted verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2133#issuecomment-6262520577)
+records Linux x64 evidence on 2026-10-19, implementation `ed0ea8f7`, reviewed head
+`ba208a6d1f01d201b6a615a950568328b501023b`. In the traced original ten-run comparison,
+all ten cases received the correlated terminal, committed the batch in memory and
+acknowledged the exact protected 20→25 completion write, including the six failed
+checkpoint assertions. A timed sample's initial full read returned 20 after 2318 ms;
+commitment followed one millisecond later, write acknowledgement four milliseconds after
+commitment, and a second 2355 ms read returned 25. Thus those failures demonstrate
+inspection ordering/contention rather than lost certification or a failed protected write.
+
+The expensive-reader regression fails the extracted original polling sequence because
+it admits a full read before acknowledgement, then passes with the repaired ordering.
+Its six helper cases also retain pending/unavailable inspection, actual stale/missing
+full-read results and fatal inspection errors. A passing unchanged rerun alone would
+not establish this repair.
+
+Retained builder reports under `/tmp/builder-2122/`:
+
+| Check | Executed / passed / failed / skipped | Report |
+| --- | --- | --- |
+| Traced original named case, ten repetitions | 10 / 4 / 6 / 0 | `traced-native-before.json` |
+| Timed original ordering, diagnostic only | 3 / 3 / 0 / 0 | `timed-before.json` |
+| Deterministic original polling sequence | 1 / 0 / 1 / 0 | `controlled-before-clean.log` |
+| Repaired deterministic regression | 1 / 1 / 0 / 0 | `controlled-after.log` |
+| Final checkpoint-helper and held-read units | 20 / 20 / 0 / 0 | `focused-final.log` |
+| Existing runtime/coordinator/item-store/writer/held-read units | 111 / 111 / 0 / 0 | `owner-baseline.log` |
+| Repaired named case, ten repetitions | 10 / 10 / 0 / 0 | `after-ten.json` |
+| Complete thread-activation spec, sequential native preparation | 20 / 20 / 0 / 0 | `spec-sequential-final.json` |
+
+Both ten-run comparisons used the retained gate configuration, with unchanged
+`clipboard`/`parallel` projects and the named case in `parallel`:
+
+```bash
+npx playwright test e2e/thread-activation.spec.ts --grep 'restore overlapping live content retains complete progress across an interrupted catch-up and epoch replacement$' --repeat-each 10 --workers 3 --retries 0 --reporter=json
+npx playwright test e2e/thread-activation.spec.ts --workers 3 --retries 0 --reporter=json
+```
+
+The repaired ten-run report has three configured/actual concurrent workers (slots 0/1/2);
+ten worker process indices reflect repeat scheduling. The complete spec has three
+configured/one actual worker because the file remains serial. The named case is present
+and passed in both, with no retries, skips, flaky results or top-level errors. Matching
+`.stderr` files and setup/launch attachments remain with the reports. The ten-run report
+has twenty clean launch exits and ten held-read setups, each one installation, one
+inspection and zero context losses; the complete spec has twenty-six clean exits and
+one identical setup, without teardown failures.
+
+Every repaired trace records generation 2, wire request 7, correlated terminal version 25,
+in-memory batch commitment, acknowledged exact completion `{ fromVersion: 20, version: 25 }`,
+then full protected read checkpoint 25. The mounted case preserves the newer live revision,
+one overlapping item and saved-only row; bounded opening shows 200 shown items plus the active
+dependency and excludes the older row. Catch-up starts at 20; the full durable read must
+return 25 before reconnect, and both interrupted version-30 replies reconnect from 25.
+Replacement epoch content commits before late retired-content exclusions, with no legacy
+history/replay request. All host/conversation, request, epoch, generation, revision and
+completion-certificate fences remain intact.
+
+The completed dispatcher application run, `npx playwright test --reporter=json`, records
+**506 executed, 505 passed, 1 failed, 5 skipped**, three configured/actual workers, zero
+retries. The named overlap case is present and passed on its first attempt, with the exact
+write/read trace, confirmed held-read setup and two clean launch exits. The supplied gate
+report also explicitly confirms passing captured-client cases
+`daemon-built thread streams, places an agent, reconnects, resets and reopens saved items`
+and `a real daemon lazily fills a served gap after more than 200 entries written while Electron is closed`.
+These are replay results, not fresh live-daemon/provider evidence. The supplied unit gate
+records **9,664 executed/passed, 0 failed, 3 skipped**.
+
+The accepted verdict is PASS under the dispatcher's accepted-flake policy: the unrelated
+native-writer failure is tracked in [#2125](https://github.com/pyrycode/pyrycode-desktop/issues/2125),
+and its dispatcher rerun records **3 executed/passed, 0 failed/skipped**, including that
+failed test. The original complete run remains failed; no overall verifier gate pass is
+recorded in the supplied gate report. Reports are `verifier-gate_#2122_7.log` and
+`2026-10-19T07-55-51-485Z_verifier-gate-rerun_#2122.log` under the agents logs directory.
+
+Earlier invalid native-preparation attempts remain failures: `baseline.json` executed zero
+because sandbox Xvfb socket creation failed; `baseline-native.json` failed ten launches
+before Electron installation completed; `traced-before.json` failed ten initial storage
+predicates before SQLite preparation. `spec-final.json` recorded **20 executed, 13 passed,
+7 failed, 0 skipped** when Node ABI rebuilding overlapped Electron. Acceptance uses the
+later sequentially prepared complete spec, not reclassification of those failures.
+Complete Node preparation before `npm run rebuild:electron` and Electron execution;
+the [native storage prerequisite](development-verification.md#replay-native-storage-prerequisite)
+applies independently of inspection ordering.
+
+The [plan](../../specs/architecture/2122-certified-checkpoint-overlap.md#validation-evidence)
+retains exact revision/command correspondence, preparation/build logs and earlier attempts.
+These are recorded results, not documentation-stage executions. Production-path targeted
+replay was conditional on production changes and was not required; no live-provider run
+or visual change was required or claimed. macOS is outside this Linux ticket's scope.
+
 ### Known-gap recovery verification
 
 `historyGaps.test.ts` exercises admission, one-entry/multi-page and older holes,

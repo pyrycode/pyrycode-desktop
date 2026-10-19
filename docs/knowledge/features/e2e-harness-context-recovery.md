@@ -419,11 +419,40 @@ running at outcome and closed cleanly. The named run records the same setup coun
 zero losses. At `02e7034ad859a672ef9a75128f5d126192826e46`, the complete Linux default-tier
 gate records 432 executed/passed, 0 failed, 10 skipped, two actual workers and zero retries;
 the named case is present and passed, with one installation, one inspection, zero losses
-and clean launch fate. Its exact checkpoint 20, overlap retained once, complete progress
-21 after interruption, replacement epoch, stale-content exclusion and no-legacy-request
-assertions and positive receipt barriers remain intact. Controlled failures and the
+and clean launch fate. At that revision, assertions covered checkpoint 20, overlap retained
+once, complete progress 21 after interruption, replacement epoch, stale-content exclusion
+and no legacy requests, with positive receipt barriers. The current sequence certifies
+checkpoint 25 before reconnect, as described below. Controlled failures and the
 observed recovered acknowledgement establish the confirmation mechanism; the upstream
 Electron/Playwright trigger behind context destruction remains unknown.
+
+### Certified checkpoint inspection
+
+Held-read registration confirms setup, not terminal reply completion. In the restore-overlap
+case, a full `readThread` authenticates hundreds of protected rows synchronously in main.
+Polling it before the final write can spend the assertion deadline returning a snapshot
+admitted before certification, even when the exact completion write later succeeds.
+
+[`readCertifiedCheckpoint`](../../../e2e/fixtures/certifiedCheckpoint.ts) first polls a
+lightweight read-only acknowledgement through `readMainProcess`, then performs one full
+protected read. The scenario wrapper delegates the existing `pyry:chat-history` handler
+once per request and records acknowledgement only after its real `ok` result for
+`mutateThread`, the exact host/conversation, epoch, checkpoint 25 and completed interval
+`{ fromVersion: 20, version: 25 }`. It supplies no completion authority: the
+[correlated terminal certificate](thread-item-store.md#reply-certification-and-recovery)
+and [owned mutation rules](chat-history-api.md#owned-authoritative-mutations) still apply.
+A successful flush or durable prefix cannot substitute for daemon completion.
+
+The helper returns the actual full-read result, including stale checkpoint 20 or missing
+history; the caller still requires exactly 25 before reconnect. Unavailable or pending
+acknowledgement does not admit a full read, and fatal inspection errors fail. Only reads
+are polled; installation, held release, injected frames and reconnect remain single effects.
+No timeout increase, fixed delay, test retry or synthetic flush/commit is involved.
+The `checkpoint-completion-trace` attachment separates synthetic request/connection
+identity, terminal receipt, in-memory batch lifecycle and protected write/read outcomes,
+without item contents or arbitrary error text. See the
+[causal comparison and counted Linux evidence](development-verification-history.md#certified-checkpoint-inspection-verification)
+for the deterministic regression, unchanged overlap assertions and accepted gate result.
 
 ### Saved traversal diagnostics
 

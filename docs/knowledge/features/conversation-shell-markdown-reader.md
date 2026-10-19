@@ -86,9 +86,11 @@ One new file, `src/renderer/src/screens/conversation/MarkdownReader.tsx`.
   `<AssistantMarkdown text={state.text} />` inside `.bubble__markdown` when loaded (reusing
   the reply's own markdown CSS — headings, code chrome, tables, task marks — rather than
   restating it), and an empty `aria-busy="true"` box while loading. Top-level blocks
-  share the reply's 16 px (`--space-4`) gap and zero direct-child block margins:
-  no extra space above the first or below the last block inside the Markdown
-  container. Reader body padding remains separate. Nested list/quote rhythm stays
+  share the reply's base 16 px (`--space-4`) gap and direct-child margin reset.
+  The shared sibling rules give H1–H6 20 px before and 12 px after when next to
+  non-heading blocks; adjacent headings retain 16 px. First/last blocks stay flush,
+  including heading-only content. See [heading spacing](assistant-markdown-renderer.md#configuration-and-usage).
+  Reader body padding remains separate. Nested list/quote rhythm stays
   8 px; the reply's metadata/attachment margins remain 12 px outside that container.
   **No `onOpenMarkdownPath`
   is passed** — a link inside a note renders as plain text or a plain external link exactly
@@ -209,7 +211,7 @@ row and reading the clipboard back are Playwright's job —
 clipboard back through main the way `e2e/message-copy.spec.ts` already does, including
 `clipboard.readHTML()` for the HTML flavour.
 
-That menu scenario also measures the loaded note's 16 px heading-to-paragraph gap
+That menu scenario also measures the loaded note's 12 px heading-to-paragraph gap
 and flush container edges at 1280×800 and 800×800 window sizes. Escaped raw HTML
 becomes bare text and therefore anonymous flex items: `el.children` omits them,
 so adjacent element rectangles spanning those items do not measure one gap. Keep

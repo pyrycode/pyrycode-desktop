@@ -43,7 +43,7 @@ presentation. The stable reader callback and
 allow unchanged settled replies to reuse their render on new deltas. Memoization
 changes no security rule below.
 
-Rendering parses `text` synchronously without store access or effect hooks. The module-private `CodeBlock` holds a local DOM ref for user-activated copying; `AssistantMarkdown` emits no wrapper element of its own (`react-markdown` v10 emits block elements directly; the container is `.bubble__markdown`, a flex column with `gap: var(--space-4)` for Figma `132:4443`'s 16 px top-level block rhythm). Built on `react-markdown@10.1.0` with:
+Rendering parses `text` synchronously without store access or effect hooks. The module-private `CodeBlock` holds a local DOM ref for user-activated copying; `AssistantMarkdown` emits no wrapper element of its own (`react-markdown` v10 emits block elements directly; the container is `.bubble__markdown`, a flex column with a base `gap: var(--space-4)` of 16 px and the [heading boundary adjustments](#configuration-and-usage) below). Built on `react-markdown@10.1.0` with:
 
 - **No `rehypePlugins`.** No HTML parser exists in the dependency graph at all — interpreting HTML would require adding `rehype-raw` to `package.json`, a visible, reviewable act, not a config flip.
 - **Three stable `remarkPlugins`: `[remarkGfmSubset, remarkHostedLinks, remarkCodeSpanLinks]`.**
@@ -124,10 +124,10 @@ nested in quotes or list items, and `MarkdownReaderView` through its existing
 Inline code keeps `--font-mono` and inherits its heading's size, including 18 px
 inside H2; changing heading type must not replace that monospace treatment.
 
-This scale preserves heading margins, block gaps and non-heading typography.
-[#2107](https://github.com/pyrycode/pyrycode-desktop/issues/2107) owns heading margins;
-[#2100](https://github.com/pyrycode/pyrycode-desktop/issues/2100) owns reader-specific
-verification and overrides. Font packaging is outside this change. See
+This scale is independent of the [heading spacing](#configuration-and-usage)
+and preserves non-heading typography. Additional reader-specific verification
+belongs to [#2100](https://github.com/pyrycode/pyrycode-desktop/issues/2100).
+Font packaging is outside this change. See
 [computed typography verification](assistant-markdown-renderer-verification.md#heading-typography)
 for literal-value and token assertions across streaming and settlement.
 
@@ -138,17 +138,26 @@ onOpenMarkdownPath={onOpenMarkdownPath} onOpenHostedApp={onOpenHostedApp} />`
 while `inProgress` is true, and `<AssistantMarkdown text={item.text}
 onOpenMarkdownPath={onOpenMarkdownPath} onOpenHostedApp={onOpenHostedApp} />`
 on settlement. Both live inside `.bubble__markdown`, with direct block children,
-reset margins and a 16 px (`--space-4`) flex gap. Neither carries `bubble--assistant-text`;
+reset margins and a base 16 px (`--space-4`) flex gap. Neither carries `bubble--assistant-text`;
 markdown owns prose whitespace on both branches, and `.code-block__body` retains
 `pre-wrap` for code. The decorative cursor is a sibling after the markdown container,
 before `BubbleMeta`, and disappears on settlement. User messages do not use this renderer.
 
-The same gap reaches settled replies, streaming replies and the reader. Streaming
-fragments leave frozen and pending blocks as direct flex children. Flex gap adds
-space only between blocks; `.bubble__markdown > * { margin-block: 0 }` keeps the
-first and last blocks flush with the container. Nested list-item and blockquote
-rhythm stays 8 px (`--space-2`). Metadata and file/image attachments sit outside
-this container and retain their separate 12 px (`--space-3`) margins.
+The same spacing reaches settled replies, streaming replies and the reader.
+At top level, a non-heading followed by H1–H6 has a 20 px gap; a heading followed
+by a non-heading has 12 px. Adjacent headings and adjacent non-heading blocks
+retain 16 px. Direct-child adjacent-sibling rules adjust `margin-block-start`
+by `calc(var(--space-5) - var(--space-4))` (+4 px) before a heading and
+`calc(var(--space-3) - var(--space-4))` (−4 px) after one. Changing the container
+gap would also change unrelated boundaries; descendant heading margins would
+disturb nested lists and quotes.
+
+Streaming fragments leave frozen and pending blocks as direct flex children,
+so these rules also cross frozen/pending boundaries. The direct-child margin
+reset and sibling-only adjustments keep first/last blocks flush, including
+heading-only messages. Nested list-item and blockquote rhythm stays 8 px
+(`--space-2`), including nested headings. Metadata and file/image attachments sit
+outside this container and retain their separate 12 px (`--space-3`) margins.
 
 Prose type still comes from each caller's ancestor. Reusing `AssistantMarkdown`
 and `.bubble__markdown` does not supply the message bubble's inherited body size

@@ -168,10 +168,10 @@ test('the reader menu copies the note three ways and refreshes it (#1630)', asyn
       }
     })
     expect(rhythm.count).toBe(3)
-    expect(rhythm.gap).toBeCloseTo(16, 1)
+    expect(rhythm.gap).toBeCloseTo(12, 1)
     expect(rhythm.first).toBeCloseTo(0, 1)
     expect(rhythm.last).toBeCloseTo(0, 1)
-    await capturePairedApp(app, page, `/tmp/builder-2097/reader-${width}.png`)
+    await capturePairedApp(app, page, `/tmp/builder-2107/reader-${width}.png`)
   }
 
   // --- 3. Copy as markdown: the raw file text, with the client's confirmation. ---

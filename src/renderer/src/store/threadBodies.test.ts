@@ -46,6 +46,20 @@ function childReply(h: ReturnType<typeof fixture>, index: number, final = true) 
       payload: final ? { ...route, children: [], final: true, more: false } :
         { ...route, children: [{ ...child, parent: route.item_id }], final: false } } })
 }
+it('child failure admission preserves limit-specific successes and stays within the shared record bound', () => {
+  const h = fixture({ active: 4, queued: 28, entries: 3, bytes: 240, leases: 128 })
+  const cached = h.cache.demand({ ...childRequest, limit: 1 }); childReply(h, 0)
+  const failed = h.cache.demand({ ...childRequest, limit: 2 }), command = h.reads()[1]
+  h.cache.event({ type: 'threadQueryFailed', serverId: 'a', conversationId: 'c', requestId: command.requestId,
+    inReplyTo: 1, reason: 'daemon-error' })
+  expect(failed.getState().type).toBe('failed'); failed.release()
+  expect(h.cache.demand({ ...childRequest, limit: 1 }).getState().type).toBe('ready')
+  const changed = h.cache.demand({ ...childRequest, limit: 3 })
+  expect(changed.getState()).toMatchObject({ type: 'failed', reason: 'daemon-error' }); changed.release()
+  expect(h.cache.demand({ ...childRequest, limit: 4 }).getState()).toMatchObject({ type: 'missing', reason: 'limit' })
+  expect(h.reads()).toHaveLength(2)
+  cached.release(); h.cache.dispose()
+})
 it('body and child work share active, queue, record and lease bounds', () => {
   const h = fixture(), leases = Array.from({ length: 32 }, (_, i) => h.cache.demand({
     ...request, itemId: i + 1, kind: i % 2 ? 'children' : 'tool_call' }))

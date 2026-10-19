@@ -81,6 +81,10 @@ One independently useful paged-demand operation; transport/cache-only splits vio
 
 Additional compatibility reading: `e2e/fixtures/lunaHandoverProof.ts` → `completedHandoverReply`, `e2e/fixtures/queueTurnEvidence.ts` → `createQueueTurnEvidence`, and `e2e/real-claude-codex-channel.spec.ts` → `observe`: complete-item proof consumers now narrow explicitly to item changes/appends, leaving all assertions intact.
 
+2026-10-19 rework, verifier finding 1: Successful child caches remain keyed by normalized limit, but `start` also checks failed entries for the same host/conversation/epoch/parent/revision and store generation, ignoring limit. A blocked variant retains its own failed admission in the existing bounded record map; only its lease's explicit `retry()` permits a fresh first page with that variant's limit. Fresh cached successes still reopen, while stale revalidation and continuation cannot silently bypass another variant's failure. No separate failure ledger is added. `changed child limits cannot bypass failed continuation with %s content` proves received-frame/preload/runtime failure admission with retained and byte-evicted summaries, followed by explicit replacement retry; `child failure admission preserves limit-specific successes and stays within the shared record bound` covers successful reuse and bounded failed variants. No in-flight branch overlaps these repair files. This repairs one existing invariant, adds no exported type or consumer migration, and forecasts under 100 written lines including tests and this revision.
+
+Security re-review for this repair: **PASS** under `builder/security-review.md`. Trust remains at validated commands/replies; `start` prevents limit-dependent retry bypass with a bounded scan of existing generation-qualified records. Existing record/lease/byte limits, retirement, timers and content-free classified errors remain authoritative. No token, storage, Electron privilege, cryptographic primitive or network boundary changes; the existing threat model and deferred scope still apply.
+
 ## Verification
 Linux execution at implementation `cda1a1a5`, after merging main `5afde437`:
 

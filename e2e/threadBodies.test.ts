@@ -99,6 +99,43 @@ it('failed continuation retains incomplete summaries and retry starts a replacem
   expect(lease.getState()).toMatchObject({ type: 'ready', page: { children: [], complete: true } })
   h.close()
 })
+it.each(['retained', 'evicted'])('changed child limits cannot bypass failed continuation with %s content', async mode => {
+  const h = await bodyRuntime(), before = h.r.items.getState().snapshot('a', 'c')
+  try {
+    const lease = h.r.children.demand(childRequest), first = childReads(h)[0].id
+    h.emit(frame('thread_children', childPage(), first)); h.emit(frame('thread_children', childEnd(true), first))
+    expect(lease.getState()).toMatchObject({ type: 'ready', page: { children: [child(2)], more: true } })
+    lease.continue(childCursor(2))
+    h.emit(frame('error', { code: 'thread.query_failed', message: 'private' }, childReads(h)[1].id))
+    expect(lease.getState()).toMatchObject({ type: 'failed', reason: 'daemon-error', page: { complete: false } })
+    if (mode === 'evicted') {
+      const content = { output: 'x'.repeat(6 * 1024 * 1024) }
+      for (const itemId of [2, 3, 4]) {
+        const body = h.r.bodies.demand({ ...bodyRequest, itemId }), id = h.reads().at(-1)!.id
+        bodyParts(id, { ...bodyData, item_id: itemId, content }, itemId).forEach(h.emit)
+        h.emit(frame('thread_tool_body', { ...bodyDone, item_id: itemId }, id))
+        expect(body.getState().type).toBe('ready'); body.release()
+      }
+      expect(lease.getState()).toEqual({ type: 'failed', reason: 'daemon-error', stale: true })
+    }
+    lease.release()
+    const changed = h.r.children.demand({ ...childRequest, limit: 1 })
+    expect(changed.getState()).toMatchObject({ type: 'failed', reason: 'daemon-error' })
+    changed.release()
+    const reopened = h.r.children.demand({ ...childRequest, limit: 1 })
+    expect(reopened.getState().type).toBe('failed'); expect(childReads(h)).toHaveLength(2)
+    reopened.retry()
+    expect(childReads(h)).toHaveLength(3)
+    expect(childReads(h)[2].payload).toEqual({ conversation_id: 'c', epoch: 'e', item_id: 1, expected_rev: 8, limit: 1 })
+    h.emit(frame('thread_children', childPage([child(4)]), childReads(h)[2].id))
+    expect(reopened.getState()).toMatchObject({ type: 'loading', page: { children: [child(4)], complete: false } })
+    h.emit(frame('thread_children', childEnd(), childReads(h)[2].id))
+    expect(reopened.getState()).toMatchObject({ type: 'ready', stale: false, page: { children: [child(4)], complete: true } })
+    expect(h.r.children.demand({ ...childRequest, limit: 1 }).getState().type).toBe('ready')
+    expect(childReads(h)).toHaveLength(3)
+    expect(h.r.items.getState().snapshot('a', 'c')).toBe(before)
+  } finally { h.close() }
+})
 it('two hosts with colliding child identities stay isolated through connection and preload', async () => {
   const a = await connected('a', true), b = await connected('b', true)
   routePreloadQueries(host => host === 'a' ? a.connection : b.connection)

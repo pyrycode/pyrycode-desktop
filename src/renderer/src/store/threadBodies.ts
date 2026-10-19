@@ -23,8 +23,8 @@ export function createThreadBodies(deps: {
 }, limits = { active: 4, queued: 28, entries: 64, bytes: 16 * 1024 * 1024, leases: 128 }) {
   const entries = new Map<string, Entry>(), connections = new Map<string, { token: symbol; supported: boolean }>()
   let leaseCount = 0, disposed = false, retiring = 0
-  const key = (r: Request) => JSON.stringify([r.serverId, r.conversationId, r.epoch, r.itemId, r.revision, r.kind,
-    ...(r.kind === 'children' ? [Math.min(r.limit || 50, 256)] : [])])
+  const key = (r: Request, includeLimit = true) => JSON.stringify([r.serverId, r.conversationId, r.epoch, r.itemId, r.revision, r.kind,
+    ...(includeLimit && r.kind === 'children' ? [Math.min(r.limit || 50, 256)] : [])])
   const retained = (e: Entry) => e.state.content
   const page = (e: Entry) => e.state.page ? { page: { ...e.state.page, complete: false } } : {}
   const measure = (e: Entry) => {
@@ -75,8 +75,14 @@ export function createThreadBodies(deps: {
       catch { fail(e, 'send-failed') }
     }
   }
-  function start(e: Entry): void {
+  function start(e: Entry, explicitRetry = false): void {
     if (disposed || retiring > 0 || !e.leases.size) return
+    if (e.request.kind === 'children' && !explicitRetry) {
+      // Successful pages keep their limit-specific identity; failure admission belongs to the parent scope.
+      const failed = [...entries.values()].find(x => x.generation === e.generation &&
+        x.state.type === 'failed' && key(x.request, false) === key(e.request, false))
+      if (failed?.state.type === 'failed') { fail(e, failed.state.reason); return }
+    }
     const c = connections.get(e.request.serverId), content = retained(e)
     if (!c) { e.state = content ? { type: 'ready', content, stale: true, ...page(e) } : missing('offline'); measure(e); trim(); return }
     if (!c.supported) {
@@ -178,7 +184,7 @@ export function createThreadBodies(deps: {
           }
         },
         retry() { if (!disposed && retiring === 0 && lease.active && entry.state.type === 'failed') {
-          entry.cursor = undefined; entry.replacing = true; start(entry); notify(entry)
+          entry.cursor = undefined; entry.replacing = true; start(entry, true); notify(entry)
         } },
         continue(cursor: ThreadChildCursor) {
           if (disposed || retiring > 0 || !lease.active || request.kind !== 'children' || entry.state.type === 'failed') return

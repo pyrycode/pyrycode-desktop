@@ -17,16 +17,29 @@ export function createThreadCompact(deps: {
   invalidate: (host: string, chat: string, row: Row) => void
   changed: () => void
   failure: (event: Extract<StampedDaemonEvent, { type: 'threadQueryFailed' }>) => void
+  detailEvent: (event: StampedDaemonEvent) => boolean
+  admitDispatch: (command: Work) => boolean
   log: (event: { event: string; code: string }) => void
 }) {
   const state = createStore<{ snapshots: ReadonlyMap<string, Snapshot> }>(() => ({ snapshots: new Map() }))
-  const connections = new Map<string, boolean>(), lanes = new Map<string, { active?: Work; queue: Work[]; timer?: ReturnType<typeof setTimeout> }>()
+  const connections = new Map<string, { supported: boolean }>(), lanes = new Map<string, { active?: Work; queue: Work[]; timer?: ReturnType<typeof setTimeout> }>()
   const pendings = new Map<string, Pending>()
   const incompatible = new Set<string>()
   let selected: { host: string; chat: string } | undefined, disposed = false
   const snapshot = (host: string, chat: string) => state.getState().snapshots.get(key(host, chat))
-  function publish(host: string, chat: string, value: Snapshot): void {
-    state.setState(s => ({ snapshots: new Map(s.snapshots).set(key(host, chat), value) })); deps.changed()
+  function owner(host: string, chat: string) {
+    const selection = selected, connection = connections.get(host)
+    let expected = snapshot(host, chat)
+    const current = () => !disposed && selected === selection && selection?.host === host && selection.chat === chat &&
+      connections.get(host) === connection && snapshot(host, chat) === expected
+    return { current, publish(value: Snapshot): boolean {
+      if (!current()) return false
+      expected = value
+      state.setState(s => ({ snapshots: new Map(s.snapshots).set(key(host, chat), value) }))
+      if (!current()) return false
+      deps.changed()
+      return current()
+    } }
   }
   function pump(host: string): void {
     const lane = lanes.get(host)
@@ -34,9 +47,13 @@ export function createThreadCompact(deps: {
     const next = lane.queue.shift()
     if (!next) return
     lane.active = next
+    if (!deps.admitDispatch(next)) {
+      if (lanes.get(host) === lane && lane.active === next) { lane.active = undefined; pump(host) }
+      return
+    }
+    if (disposed || lanes.get(host) !== lane || lane.active !== next || !connections.has(host)) return
     lane.timer = setTimeout(() => {
       if (lane.active !== next) return
-      lane.active = undefined
       deps.failure({ type: 'threadQueryFailed', serverId: host, conversationId: next.query.payload.conversation_id,
         requestId: next.requestId, inReplyTo: 0, reason: 'expired' }); pump(host)
     }, 30000)
@@ -72,11 +89,13 @@ export function createThreadCompact(deps: {
       return
     }
   }
-  function query(host: string, chat: string, older = false, recovery = false): void {
+  function query(host: string, chat: string, older = false, recovery = false, retry = false): void {
     if (disposed || selected?.host !== host || selected.chat !== chat || !connections.has(host) || pendings.has(host)) return
     const s = snapshot(host, chat)
-    if (connections.get(host) !== true) {
-      publish(host, chat, { ...(s ?? { epoch: '', generation: Symbol(), rows: [], checkpoint: 0, consumed: 0, ranges: [] }), failed: 'unsupported' })
+    if (s?.failed && !retry) return
+    const owned = owner(host, chat)
+    if (!connections.get(host)?.supported) {
+      owned.publish({ ...(s ?? { epoch: '', generation: Symbol(), rows: [], checkpoint: 0, consumed: 0, ranges: [] }), failed: 'unsupported' })
       deps.log({ event: 'thread-compact', code: 'unsupported' }); return
     }
     if (older && (!s?.ranges.length || s.older === false)) return
@@ -87,10 +106,10 @@ export function createThreadCompact(deps: {
     const requestId = crypto.randomUUID()
     pendings.set(host, { requestId, query: q, generation: s?.generation, recovery })
     deps.log({ event: 'thread-compact', code: q.type })
-    if (s?.failed) publish(host, chat, { ...s, failed: undefined })
-    send({ type: 'queryThread', serverId: host, requestId, query: q })
+    if (s?.failed && !owned.publish({ ...s, failed: undefined })) return
+    if (owned.current() && pendings.get(host)?.requestId === requestId) send({ type: 'queryThread', serverId: host, requestId, query: q })
   }
-  function admit(host: string, chat: string, s: Snapshot, rows: readonly Row[], version: number): Snapshot {
+  function admit(host: string, chat: string, s: Snapshot, rows: readonly Row[], version: number, current: () => boolean): Snapshot | undefined {
     const held = new Map(s.rows.map(row => [row.id, row]))
     const versions = new Map(s.versions)
     for (const row of rows) {
@@ -101,6 +120,7 @@ export function createThreadCompact(deps: {
       versions.set(row.id, version)
       if (!before || before.rev !== row.rev || before.subtree_version !== row.subtree_version || row.subtree_version === undefined)
         deps.invalidate(host, chat, row)
+      if (!current()) return undefined
     }
     return { ...s, versions, rows: [...held.values()].sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.id - b.id) }
   }
@@ -108,7 +128,9 @@ export function createThreadCompact(deps: {
     const host = e.serverId
     if (disposed || host === null) return false
     if (e.type === 'connected') {
-      retire(host); connections.set(host, e.ack.server_id === host && ['thread', 'interactive', 'thread_expansion', 'thread_compact'].every(c => e.ack.capabilities.includes(c)))
+      retire(host)
+      if (disposed) return false
+      connections.set(host, { supported: e.ack.server_id === host && ['thread', 'interactive', 'thread_expansion', 'thread_compact'].every(c => e.ack.capabilities.includes(c)) })
       if (selected?.host === host) { lanes.set(host, { queue: [] }); query(host, selected.chat) }
       return false
     }
@@ -122,24 +144,31 @@ export function createThreadCompact(deps: {
       const p = e.update.payload, s = snapshot(host, e.conversationId)
       if (!s || s.epoch !== p.epoch || e.conversationId !== p.conversation_id || !connections.has(host) || selected?.host !== host || selected.chat !== e.conversationId) return true
       const gap = p.from_version > s.consumed
-      const next = admit(host, e.conversationId, s, p.item ? [p.item] : p.header ? [p.header] : [], p.version)
-      publish(host, e.conversationId, { ...next, consumed: Math.max(s.consumed, p.version),
-        ...(gap ? { repairThrough: Math.max(s.repairThrough ?? 0, p.version) } : {}) })
+      const owned = owner(host, e.conversationId)
+      const next = admit(host, e.conversationId, s, p.item ? [p.item] : p.header ? [p.header] : [], p.version, owned.current)
+      if (!next || !owned.publish({ ...next, consumed: Math.max(s.consumed, p.version),
+        ...(gap ? { repairThrough: Math.max(s.repairThrough ?? 0, p.version) } : {}) })) return true
       if (gap && !s.failed) query(host, e.conversationId, false, true)
       return true
     }
     if (e.type !== 'threadReply' && e.type !== 'threadQueryFailed') return false
+    // Failure admission and successful detail state must settle before the lane can dispatch siblings.
+    const detail = deps.detailEvent(e)
+    if (disposed) return detail
     settle(e)
     const p = pendings.get(host)
     const compactReply = e.type === 'threadReply' && 'projection' in e.reply.payload && e.reply.payload.projection === 'compact-v1'
-    if (!p || e.requestId !== p.requestId || e.conversationId !== p.query.payload.conversation_id) { pump(host); return compactReply }
+    if (!p || e.requestId !== p.requestId || e.conversationId !== p.query.payload.conversation_id) { pump(host); return compactReply || detail }
     const chat = e.conversationId, s = snapshot(host, chat)
+    const owned = owner(host, chat)
+    const currentOwner = () => owned.current() && pendings.get(host) === p
     if (e.type === 'threadQueryFailed') {
       pendings.delete(host)
       deps.log({ event: 'thread-compact', code: e.reason })
-      publish(host, chat, { ...(s ?? { epoch: '', generation: Symbol(), rows: [], checkpoint: 0, consumed: 0, ranges: [] }), failed: e.reason })
       // A single query/live cancellation can recover; a failed recovery needs explicit retry.
-      if (e.reason === 'daemon-error' && !p.recovery && s && s.consumed > (p.captured?.version ?? s.checkpoint)) query(host, chat, false, true)
+      const recover = e.reason === 'daemon-error' && !p.recovery && s && s.consumed > (p.captured?.version ?? s.checkpoint)
+      if (!owned.publish({ ...(s ?? { epoch: '', generation: Symbol(), rows: [], checkpoint: 0, consumed: 0, ranges: [] }), failed: recover ? undefined : e.reason })) return true
+      if (recover) query(host, chat, false, true)
       pump(host); return true
     }
     const reply = e.reply, v = reply.payload
@@ -147,7 +176,7 @@ export function createThreadCompact(deps: {
         s?.generation !== p.generation || selected?.host !== host || selected.chat !== chat) { pendings.delete(host); pump(host); return true }
     if (reply.type === 'thread_reset') {
       pendings.delete(host)
-      publish(host, chat, { epoch: v.epoch, generation: Symbol(), rows: [], checkpoint: 0, consumed: 0, ranges: [], ...(p.recovery ? { failed: 'recovery' } : {}) })
+      if (!owned.publish({ epoch: v.epoch, generation: Symbol(), rows: [], checkpoint: 0, consumed: 0, ranges: [], ...(p.recovery ? { failed: 'recovery' } : {}) })) return true
       if (!p.recovery) query(host, chat, false, true)
       pump(host); return true
     }
@@ -155,20 +184,24 @@ export function createThreadCompact(deps: {
       if (s && s.epoch !== v.epoch && (p.query.type === 'thread_page' || p.query.type === 'thread_catch_up' && p.query.payload.version > 0)) return true
       p.captured = { epoch: v.epoch, version: v.version }
       if (!s || s.epoch !== v.epoch) {
-        publish(host, chat, { epoch: v.epoch, generation: Symbol(), rows: [], checkpoint: 0, consumed: 0, ranges: [] })
+        if (!owned.publish({ epoch: v.epoch, generation: Symbol(), rows: [], checkpoint: 0, consumed: 0, ranges: [] }) || !currentOwner()) return true
         p.generation = snapshot(host, chat)?.generation
       }
     }
     const current = snapshot(host, chat)
     if (!current || p.captured.epoch !== v.epoch || p.captured.version !== v.version) return true
     if (!reply.payload.final) {
-      publish(host, chat, admit(host, chat, current, [...reply.payload.items, ...reply.payload.headers ?? []], v.version)); return true
+      const next = admit(host, chat, current, [...reply.payload.items, ...reply.payload.headers ?? []], v.version, currentOwner)
+      if (next) owned.publish(next)
+      return true
     }
     const marker = reply.payload
-    for (const row of current.rows) if (row.subtree_version === undefined && (row.kind === 'tool_call' || row.kind === 'agent'))
+    for (const row of current.rows) if (row.subtree_version === undefined && (row.kind === 'tool_call' || row.kind === 'agent')) {
       deps.invalidate(host, chat, row)
+      if (!currentOwner()) return true
+    }
     if (p.query.type === 'thread_page' && (!('upper_order' in marker) || marker.upper_order !== p.query.payload.before_order)) {
-      pendings.delete(host); publish(host, chat, { ...current, failed: 'metadata' }); pump(host); return true
+      pendings.delete(host); if (owned.publish({ ...current, failed: 'metadata' })) pump(host); return true
     }
     incompatible.delete(key(host, chat))
     const ranges = current.ranges.map(range => ({ ...range }))
@@ -180,12 +213,12 @@ export function createThreadCompact(deps: {
     }
     const page = p.query.type === 'thread_page'
     const repairThrough = page || current.repairThrough !== undefined && current.repairThrough > v.version ? current.repairThrough : undefined
-    publish(host, chat, { ...current, repairThrough, checkpoint: page ? current.checkpoint : Math.max(current.checkpoint, v.version),
+    if (!owned.publish({ ...current, repairThrough, checkpoint: page ? current.checkpoint : Math.max(current.checkpoint, v.version),
       consumed: page ? current.consumed : Math.max(current.consumed, v.version),
-      ranges, ...('older_exists' in marker ? { older: marker.older_exists } : {}) })
+      ranges, ...('older_exists' in marker ? { older: marker.older_exists } : {}) }) || !currentOwner()) return true
     pendings.delete(host)
     if (repairThrough !== undefined) {
-      if (p.recovery) publish(host, chat, { ...(snapshot(host, chat) ?? current), failed: 'recovery' })
+      if (p.recovery) { if (!owned.publish({ ...(snapshot(host, chat) ?? current), failed: 'recovery' })) return true }
       else query(host, chat, false, true)
     }
     pump(host); return true
@@ -210,15 +243,17 @@ export function createThreadCompact(deps: {
   }
   return { state, snapshot, send, event,
     open(host: string, chat: string) {
+      if (disposed) return
       selected = { host, chat }
       const s = snapshot(host, chat)
+      const owned = owner(host, chat)
       if (s && incompatible.has(key(host, chat))) {
-        for (const row of s.rows) deps.invalidate(host, chat, row)
-        publish(host, chat, { ...s, checkpoint: 0, consumed: 0, ranges: [], older: undefined, failed: undefined, repairThrough: undefined })
+        for (const row of s.rows) { deps.invalidate(host, chat, row); if (!owned.current()) return }
+        if (!owned.publish({ ...s, checkpoint: 0, consumed: 0, ranges: [], older: undefined, repairThrough: undefined })) return
       }
       if (!lanes.has(host)) lanes.set(host, { queue: [] }); query(host, chat)
     },
-    query(type: 'older' | 'retry', host: string) { if (selected?.host !== host) return false; query(host, selected.chat, type === 'older'); return true },
+    query(type: 'older' | 'retry', host: string) { if (selected?.host !== host) return false; query(host, selected.chat, type === 'older', false, type === 'retry'); return true },
     close() { if (selected) { const p = pendings.get(selected.host); if (p) send({ type: 'cancelThreadQuery', serverId: selected.host, requestId: p.requestId }); pendings.delete(selected.host) }; selected = undefined },
     retire,
     complete(host: string, chat: string) {

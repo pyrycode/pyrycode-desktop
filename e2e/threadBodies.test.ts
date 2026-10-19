@@ -90,6 +90,93 @@ async function compactRuntime() {
   return { ...h, r, read, requests, last, data, done, update, snapshot: () => r.compact.snapshot('a', 'c'),
     close() { r.dispose(); off(); h.connection.stop() } }
 }
+it('compact child failure blocks queued limit variants until their explicit retry, including continuations', async () => {
+  const h = await compactRuntime()
+  try {
+    h.data(); h.done()
+    const first = h.r.children.demand(childRequest)
+    const sibling = h.r.children.demand({ ...childRequest, limit: 1 })
+    expect(childReads(h)).toHaveLength(1)
+    const fail = () => h.emit(frame('error', { code: 'thread.query_failed', message: 'inert' }, childReads(h).at(-1)!.id))
+    fail(); expect(first.getState().type).toBe('failed')
+    expect(childReads(h)).toHaveLength(1)
+    expect(sibling.getState().type).toBe('failed')
+    h.update(9, root(1, 9)); await Promise.resolve()
+    expect(childReads(h)).toHaveLength(1)
+    sibling.retry(); expect(childReads(h)).toHaveLength(2)
+    const cursor = { ...childCursor(2), version: 9 }
+    h.emit(frame('thread_children', { ...childPage(), version: 9 }, childReads(h)[1].id))
+    h.emit(frame('thread_children', { ...childEnd(true), version: 9, cursor }, childReads(h)[1].id))
+    expect(sibling.getState()).toMatchObject({ type: 'ready', page: { more: true } })
+    sibling.continue(cursor); expect(childReads(h)).toHaveLength(3)
+    fail(); expect(sibling.getState().type).toBe('failed')
+    first.retry(); expect(childReads(h)).toHaveLength(4)
+    expect(childReads(h).at(-1)!.payload).not.toHaveProperty('cursor')
+  } finally { h.close() }
+})
+it.each(['delete', 'dispose', 'disconnect', 'reopen'] as const)('compact live invalidation fences reentrant %s', async action => {
+  const h = await compactRuntime()
+  try {
+    h.data(); h.done()
+    let armed = false, called = false
+    h.r.bodies.demand(bodyRequest, () => {
+      if (!armed || called) return
+      called = true
+      if (action === 'delete') h.r.event({ type: 'conversationDeleted', serverId: 'a', id: 'c' })
+      else if (action === 'dispose') h.r.dispose()
+      else if (action === 'disconnect') h.r.event({ type: 'disconnected', serverId: 'a', reason: 'test' })
+      else void h.r.open('a', 'c', { projection: 'compact-v1' }).done
+    })
+    armed = true
+    h.update(9, root(1, 9))
+    expect(called).toBe(true)
+    if (action === 'delete' || action === 'dispose') expect(h.snapshot()).toBeUndefined()
+    else expect(h.snapshot()).toMatchObject({ consumed: 8, rows: [{ subtree_version: 8 }] })
+    await Promise.resolve()
+    expect(h.snapshot()?.consumed).not.toBe(9)
+  } finally { h.close() }
+})
+it.each(['data', 'marker', 'incompatible-open'] as const)('compact %s invalidation cannot republish after reentrant deletion', async path => {
+  const h = await compactRuntime()
+  try {
+    // Missing freshness forces the success marker to invalidate retained detail again.
+    const { subtree_version, ...unknown } = root()
+    h.emit(frame('thread_items', { ...compactScope, items: [], headers: [unknown], final: false }, h.last()))
+    if (path === 'incompatible-open') h.done()
+    let armed = false, called = false
+    h.r.bodies.demand(bodyRequest, () => {
+      if (!armed || called) return
+      called = true; h.r.event({ type: 'conversationDeleted', serverId: 'a', id: 'c' })
+    })
+    armed = true
+    if (path === 'data') {
+      h.data()
+    } else if (path === 'marker') h.done()
+    else { h.r.compact.complete('a', 'c'); h.r.compact.open('a', 'c') }
+    expect(called).toBe(true)
+    expect(h.snapshot()).toBeUndefined()
+    await Promise.resolve(); expect(h.snapshot()).toBeUndefined()
+  } finally { h.close() }
+})
+it('compact Older and reconnect preserve failed recovery admission until explicit Retry', async () => {
+  const h = await compactRuntime()
+  try {
+    h.data(); h.done()
+    h.update(12, root(1, 12), 10)
+    h.emit(frame('error', { code: 'thread.query_failed', message: 'inert' }, h.last()))
+    expect(h.snapshot()?.failed).toBe('daemon-error')
+    const before = h.requests().length
+    h.r.query('older', 'a'); expect(h.requests()).toHaveLength(before)
+    h.configs[0].onEvent({ type: 'relay-link-down', code: 1006 })
+    h.configs[0].onEvent({ type: 'handshake-complete', helloAck: h.ack })
+    expect(h.requests()).toHaveLength(before)
+    h.r.query('retry', 'a'); expect(h.requests()).toHaveLength(before + 1)
+    expect(h.requests().at(-1)).toMatchObject({ type: 'thread_catch_up', payload: { version: 8, epoch: 'e' } })
+    h.emit(frame('thread_items', { ...compactScope, version: 12, items: [], final: true, from_version: 8 }, h.last()))
+    expect(h.snapshot()).toMatchObject({ checkpoint: 12, failed: undefined, repairThrough: undefined })
+    h.r.query('older', 'a'); expect(h.requests().at(-1)?.type).toBe('thread_page')
+  } finally { h.close() }
+})
 it('compact frames certify roots separately, sort mixed ties, page with epoch and consume hidden progress', async () => {
   const h = await compactRuntime(), id = h.last()
   expect(h.requests().at(-1)).toMatchObject({ type: 'thread_catch_up', payload: { projection: 'compact-v1', version: 0, epoch: '' } })

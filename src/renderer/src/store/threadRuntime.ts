@@ -64,6 +64,7 @@ export function createThreadRuntime(deps: {
     local?: { generation: symbol; cancel: () => void } } | undefined
   const compact = createThreadCompact({ send: deps.send, log: deps.log,
     failure: event => handle(event),
+    detailEvent: event => bodies.event(event), admitDispatch: command => bodies.admitDispatch(command),
     invalidate: (host, chat, row) => bodies.invalidate(host, chat, row), changed: () => bodies.reconcile() })
   const bodies = createThreadBodies({ send: compact.send, log: deps.log, scope(host, chat) {
     if (selected?.projection && selected.host === host && selected.chat === chat) {

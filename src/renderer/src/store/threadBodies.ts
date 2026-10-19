@@ -243,6 +243,13 @@ export function createThreadBodies(deps: {
     },
     retire,
     invalidate,
+    admitDispatch(command: Extract<RendererCommand, { type: 'queryThread' }>): boolean {
+      if (command.query.type !== 'thread_read_children' && command.query.type !== 'thread_read_tool_body') return true
+      const e = [...entries.values()].find(e => e.request.serverId === command.serverId && e.requestId === command.requestId)
+      if (disposed || retiring > 0 || !e || !e.leases.size || e.connection !== connections.get(e.request.serverId)?.token) return false
+      const scope = deps.scope(e.request.serverId, e.request.conversationId)
+      return scope?.selected === true && scope.epoch === e.request.epoch && scope.generation === e.generation && admit(e)
+    },
     reconcile() {
       for (const e of entries.values()) {
         const scope = deps.scope(e.request.serverId, e.request.conversationId)

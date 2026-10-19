@@ -49,6 +49,75 @@ test('Go to agent scrolls the block into view without expanding it or its childr
   await expect(row('solo-child')).toBeHidden()
 })
 
+for (const [width, height] of [[1280, 800], [800, 600]]) {
+test(`collapse keeps the focused agent header between real application chrome at ${width}px`, async ({ launchPairedApp }) => {
+  const { page, app, daemon } = await launchPairedApp()
+  const contentSize = await app.evaluate(({ BrowserWindow }, size) => {
+    const window = BrowserWindow.getAllWindows()[0]
+    window.setSize(size.width, size.height); window.show(); window.focus()
+    return window.getContentSize()
+  }, { width, height })
+  await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual(contentSize)
+  const thread = page.locator('.conversation__thread')
+  const owner = page.locator('.tool-row:not(.tool-run__row)').filter({
+    has: page.locator('.tool-row__summary', { hasText: /^anchor-agent$/ })
+  }).locator('.tool-row__chip')
+  const child = page.locator('[data-read-row]').filter({ hasText: 'Inert long child' })
+  const settle = () => page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  const geometry = () => owner.evaluate(el => {
+    const thread = document.querySelector('.conversation__thread')!
+    const rect = (element: Element) => { const box = element.getBoundingClientRect(); return { top: box.top, bottom: box.bottom } }
+    return { owner: rect(el.closest('.tool-row')!), thread: rect(thread),
+      chrome: rect(document.querySelector('.conversation__top-chrome')!),
+      input: rect(document.querySelector('.conversation__input-chrome')!) }
+  })
+  for (let n = 0; n < 20; n++) daemon.pushFrame(frame('message', {
+    conversation_id: SEEDED_ROW.id, message_id: `anchor-before-${n}`, role: 'user',
+    text: `Before ${n}: ` + 'inert paragraph '.repeat(30)
+  }))
+  daemon.pushFrame(frame('tool_use', payload('anchor-agent')))
+  daemon.pushFrame(frame('assistant_delta', {
+    conversation_id: SEEDED_ROW.id, turn_id: 'groups-turn', seq: 0, parent_tool_use_id: 'anchor-agent',
+    text: 'Inert long child\n\n' + 'Held paragraph.\n\n'.repeat(120)
+  }))
+  daemon.pushFrame(frame('message', { conversation_id: SEEDED_ROW.id, message_id: 'anchor-after', role: 'user', text: 'Trailing anchor barrier' }))
+  await expect(thread).toContainText('Trailing anchor barrier') // All preceding sources have been processed.
+  await expect(owner).toHaveAttribute('aria-expanded', 'false')
+  await settle()
+  await expect(child).toHaveCount(0)
+  for (let cycle = 0; cycle < 2; cycle++) {
+    await owner.click()
+    await expect(owner).toHaveAttribute('aria-expanded', 'true')
+    await expect(child).toHaveCount(1)
+    await owner.evaluate(el => (el as HTMLElement).focus({ preventScroll: true }))
+    await thread.hover(); await page.mouse.wheel(0, -300)
+    await expect.poll(() => thread.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeGreaterThan(50)
+    await child.evaluate(el => {
+      const thread = document.querySelector('.conversation__thread')!
+      thread.scrollTop += el.getBoundingClientRect().top - thread.getBoundingClientRect().top + 300
+    })
+    await settle()
+    const before = await geometry(), reading = (await child.boundingBox())!
+    expect(before.chrome.bottom).toBeGreaterThan(before.thread.top)
+    expect(before.owner.bottom).toBeLessThan(before.chrome.bottom)
+    expect(reading.y).toBeLessThan(before.chrome.bottom)
+    expect(reading.y + reading.height).toBeGreaterThan(before.chrome.bottom)
+    await expect(owner).toBeFocused()
+    await page.keyboard.press('Enter')
+    await expect(owner).toHaveAttribute('aria-expanded', 'false') // This collapse committed before absence/geometry.
+    await expect(child).toHaveCount(0)
+    await settle()
+    const after = await geometry()
+    await test.info().attach(`collapse-geometry-${cycle}`, { body: JSON.stringify({ before, after }), contentType: 'application/json' })
+    expect(after.owner.top).toBeGreaterThanOrEqual(Math.max(after.thread.top, after.chrome.bottom))
+    expect(after.owner.bottom).toBeLessThanOrEqual(Math.min(after.thread.bottom, after.input.top))
+    await expect(owner).toBeFocused()
+  }
+  await test.info().attach('collapsed-agent', { body: await capturePairedApp(app, page,
+    `/tmp/builder-2127/chrome-anchor-${width}.png`), contentType: 'image/png' })
+})
+}
+
 test.describe('scripted older tool window', () => {
   test.use({ scriptedHistory: true })
 test('interleaved subagents group, update while collapsed, and retain expansion through history', async ({ launchPairedApp }) => {

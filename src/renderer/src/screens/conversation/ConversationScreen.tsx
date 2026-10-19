@@ -878,14 +878,22 @@ function useThreadScrollPin(conversationId: string | null, presentation?: object
     const surviving = remembered?.row.parentElement === el ? remembered
       : remembered?.controllers.find(owner => owner.row.parentElement === el)
     const anchor = remembered && surviving ? { ...remembered, ...surviving } : null
-    if (anchor && remembered?.row !== surviving?.row) anchor.top = Math.max(remembered?.top ?? 0, 0)
     if (el !== null && !following.current && anchor !== null &&
         anchor.conversationId === conversationId &&
         (visibilityChanged || presentation !== anchor.presentation) &&
         anchor.row.parentElement === el) {
+      const threadRect = el.getBoundingClientRect()
+      const anchorRect = anchor.row.getBoundingClientRect()
+      if (remembered?.row !== anchor.row) {
+        // A removed reading row falls back to its complete header between the overlaid controls.
+        const visibleTop = Math.max(threadRect.top, header?.getBoundingClientRect().bottom ?? threadRect.top)
+        const visibleBottom = Math.min(threadRect.bottom, input?.getBoundingClientRect().top ?? threadRect.bottom)
+        anchor.top = Math.max(visibleTop - threadRect.top,
+          Math.min(remembered?.top ?? 0, visibleBottom - threadRect.top - anchorRect.height))
+      }
       // Preserve the surviving visible row at zero and during middle-of-thread gap insertion:
       // short threads include unused viewport space that is not part of the inserted content.
-      const offset = el.scrollTop + anchor.row.getBoundingClientRect().top - el.getBoundingClientRect().top - anchor.top
+      const offset = el.scrollTop + anchorRect.top - threadRect.top - anchor.top
       const padding = Number.parseFloat(getComputedStyle(el).paddingBottom)
       const contentBottom = Array.from(el.children).reduce(
         (bottom, row) => Math.max(bottom, row.getBoundingClientRect().bottom),

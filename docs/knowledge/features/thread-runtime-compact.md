@@ -1,7 +1,8 @@
 # Compact projection runtime
 
-Production sidebar opening and created-conversation activation call
-`runtime.open(host, chat, { projection: 'auto' })`. The runtime selects the
+Production sidebar opening and created-conversation activation pass
+`threadOpenOptions` from `threadDeliveryPolicy.ts` to `runtime.open`; the normal
+build supplies `{ projection: 'auto' }`. The runtime selects the
 session-only `runtime.compact` owner in
 [`threadCompact.ts`](../../../src/renderer/src/store/threadCompact.ts).
 The owning host's accepted handshake must identify that host and accept
@@ -13,6 +14,14 @@ contract. Unsupported explicit compact requests refuse without complete fallback
 [ADR 0016](../decisions/0016-session-only-compact-projection.md) records the separate
 authority boundary; production activation shipped in
 [#2128](https://github.com/pyrycode/pyrycode-desktop/issues/2128).
+
+Older complete captures can already advertise compact support, so their accepted
+capabilities alone cannot make them replayable under automatic selection. The
+explicit [complete-thread replay build](../../recorded-tests.md#replay-contract)
+aliases only the opening policy to omitted options at both call sites. This keeps
+the existing complete route through reconnect without changing negotiation or
+outgoing requests after dispatch. It tests complete-route compatibility; normal
+replay and compact-demand controls retain production automatic selection.
 
 Automatic recovery re-evaluates the current owning handshake before dispatching
 queries and publishes its selected projection/generation in `runtime.state`.

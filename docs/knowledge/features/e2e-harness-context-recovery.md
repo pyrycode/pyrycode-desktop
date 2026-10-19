@@ -178,6 +178,67 @@ Observer installation continues to confirm the exact listener identity through
 its existing guarded path: recovery neither duplicates listeners nor resets
 collected requests. Input, posts and database setup are never blindly replayed.
 
+Successful profile retirement has a separate completion contract; synchronous
+inspection cannot settle trailing application work. A later history failure
+reached independent-profile pairing with one resumed request and two replies
+outstanding (17 matched / 32 emitted / 15 remaining overall). This does not
+establish renewed inspector loss. In `clientScenario.ts`, explicit close/relaunch
+and successful callback completion await `RecordedExchange.whenConnectionComplete()`
+and then `relay.whenServerFramesForwarded(exchange.serverFrameCount())` before
+process exit. The unused `settleConnection()` alternative was removed: boundary
+tests must exercise the method the closing hook actually calls.
+
+The first wait snapshots the current connection and observes natural prefix
+completion within five seconds. It cannot consume a missing request, borrow a
+future reply or require a later profile. An unreleased checkpoint rejects when
+natural progress reaches it, without releasing it or poisoning the exchange;
+next-connection checkpoints are excluded. Missing-prefix timeout and mismatches
+are sticky; all outcomes dispose the progress listener and timer. Emission is
+not delivery: even synchronous fake-daemon sends must be followed by confirmation
+of successful relay client-leg WebSocket send callbacks. That second five-second
+wait uses the cumulative Noise responses plus emitted application frames, and
+rejects delivery errors or premature relay closure. It establishes forwarding,
+without receiver/application acknowledgement. Failure cleanup bypasses both waits;
+retirement errors still close the process and survive a secondary close failure.
+Handles are cleared and both lifecycle hooks are deleted in `finally`, so a later
+case cannot inherit the old exchange. Strict reconnect and `assertComplete()` remain.
+
+[`replayProfileRetirement.test.ts`](../../../e2e/fixtures/replayProfileRetirement.test.ts)
+exercises the actual replay hook, isolated-app helper and exchange with fake
+process/send boundaries. Historical original-path red at `614d4ff7` was
+1 executed/failed, 0 passed/skipped, 5 deselected: `exit-1,
+visible-history-assertions, exit-2, independent-connection`, with 2 matched /
+2 emitted / 2 remaining. At tested implementation `fbba3bdd`, repaired ordering
+is `exit-1, visible-history-assertions, resumed-list, outbound-reply,
+outbound-reply, exit-2, independent-connection`, then `exit-3`. Before the
+independent reconnect it has 3 matched / 4 emitted / 1 future request remaining.
+This demonstrates premature retirement under delayed natural work, not the
+unobserved historical scheduling trigger. The original red reports remain
+builder-recorded history; the final verifier directly inspected fresh green reports.
+
+Held relay regressions additionally require `prefix-complete, relay-wait,
+relay-forwarded|relay-failed, exit-1`: the process stays alive after matching and
+emission with three future requests outstanding. They check boundary count 2
+(one Noise response plus one emitted frame) and exact delivery-error preservation.
+`recordedLifecycle.test.ts` covers active-method prefix scope, bounded missing
+requests, checkpoints before/after natural progress, next-connection exclusion
+and sticky mismatches; actual-socket relay regressions retain forwarding and
+closure checks. Inspection, valid false/empty reads, native rebuild diagnostics
+and nonduplicating history observers remain covered.
+
+The [accepted Linux retirement evidence](../../recorded-tests.md#replay-contract)
+records five consecutive three-worker/retry-zero paired batches, **20
+executed/passed, 0 failed/skipped**, followed by guarded replay **29
+executed/passed, 0 failed, 1 existing system-prompt-reset fixme**. Both named
+history/thread cases passed without retry in the configured application gate
+(**515 executed/passed, 0 failed, 5 skipped**); all 97 focused regression cases
+passed with no failures/skips. That record retains exact case names, commands,
+capture hashes/provenance and zero remaining requests/forbidden launches.
+It supersedes the old open-#2129 hold, while preserving earlier failed evidence.
+The excluded `real claude picks up a saved channel system prompt at Reset session`
+remains unproved. These retained offline results establish no fresh provider/daemon
+or physical effects; macOS is outside this Linux ticket's verification scope.
+
 **Confirmed control resends.** Recovery needs evidence about the mutation's actual effect;
 an inconclusive read cannot authorize a resend. For renderer event delivery, watch the
 renderer long enough to confirm that the effect has not arrived.

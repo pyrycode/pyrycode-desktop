@@ -169,8 +169,12 @@ const replay = base.extend<ReplayFixtures>({
     recordingName = scenarioId(recordingName, info.title)
     if (!/^[a-z][a-z0-9-]*$/.test(recordingName)) throw new Error('Client recording name is required')
     const directory = process.env.PYRY_CLIENT_RECORDING_DIR ?? resolve('e2e/recordings')
-    const recording = parseRecording(readFileSync(join(directory, `${recordingName}.json`), 'utf8'))
+    const input = readFileSync(join(directory, `${recordingName}.json`))
+    const recording = parseRecording(input.toString('utf8'))
     if (recording.scenario.id !== recordingName) throw new Error('Client recording scenario mismatch')
+    await info.attach('replay-input', { contentType: 'application/json', body: Buffer.from(JSON.stringify({
+      scenario: recordingName, inputSha256: createHash('sha256').update(input).digest('hex'), captureSource: recording.source
+    })) })
     await use(recording)
   },
   exchange: async ({ recording }, use, info) => {
@@ -216,7 +220,10 @@ const replay = base.extend<ReplayFixtures>({
       await exchange.whenConnectionComplete()
       await relay.whenServerFramesForwarded(exchange.serverFrameCount())
     }
-    try { await use() } finally { delete clientAppLifecycle.opened; delete clientAppLifecycle.closing }
+    try { await use() } finally {
+      delete clientAppLifecycle.opened
+      delete clientAppLifecycle.closing
+    }
   }, { auto: true }],
   page: async ({ daemon }, use) => { void daemon; await withIsolatedElectronApp(({ page }) => use(page)) }
 })

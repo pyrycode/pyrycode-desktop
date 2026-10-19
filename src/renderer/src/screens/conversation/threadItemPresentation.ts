@@ -259,11 +259,13 @@ function nest(rows: ItemPresentation[], arrival: ReadonlyMap<number, number>): I
   return result
 }
 const retainedPresentations = new WeakMap<Held, ThreadItem | null>()
-function retainedPresentation(source: Held): ThreadItem | null {
-  if (!Object.isFrozen(source)) return presentation(source)
-  if (retainedPresentations.has(source)) return retainedPresentations.get(source) ?? null
-  const item = presentation(source)
-  retainedPresentations.set(source, item)
+const retainedHeaders = new WeakMap<Held, ThreadItem | null>()
+function retainedPresentation(source: Held, scope: 'body' | 'header' = 'body'): ThreadItem | null {
+  if (!Object.isFrozen(source)) return presentation(source, scope)
+  const cache = scope === 'body' ? retainedPresentations : retainedHeaders
+  if (cache.has(source)) return cache.get(source) ?? null
+  const item = presentation(source, scope)
+  cache.set(source, item)
   return item
 }
 function identity(s: Held): string | null {
@@ -280,7 +282,7 @@ export function threadItemIndex(snapshot: ThreadSnapshot): ItemPresentation[] {
 }
 /** Called only for a mounted source row, with body demand owned by its expansion state. */
 export function threadItemPresentation(source: Held, body: boolean): ThreadItem | null {
-  return body ? retainedPresentation(source) : presentation(source, 'header')
+  return retainedPresentation(source, body ? 'body' : 'header')
 }
 function projectThread(snapshot: ThreadSnapshot, indexOnly: boolean): ItemPresentation[] {
   const endings = new Map<string, string>(), last = new Map<string, ItemPresentation>()

@@ -948,12 +948,12 @@ test('defers 8333 held items and commits real composer input during unfinished e
     const agent = (id: number, parent?: number) => item(id, 'agent', { name: 'Agent', input: { description: `Work ${id}` },
       tool_use_id: `call-${id}`, task_id: `task-${id}`,
       task_link: { task_id: `task-${id}`, tool_call_id: `call-${id}` },
-      result: { is_error: false, result_summary: 'agent body' } }, { parent, status: 'finished' })
+      result: { is_error: false, result_summary: 'agent body' } }, { parent, status: 'finished', order: id + 4 })
     const children = Array.from({ length: 8330 }, (_, n) => item(n + 10, 'assistant_message', { text: `Inert held row ${n}` }, { parent: 2 }))
     await page.evaluate(items => (window as unknown as { threadFixture: Fixture }).threadFixture.readBatch(items, 9002, 'complete'),
       [agent(1), agent(2, 1), ...children,
-        item(9000, 'tool_call', { name: 'Read', input_summary: 'first member', result: { is_error: false, result_summary: 'member body' } }),
-        item(9001, 'tool_call', { name: 'Read', input_summary: 'second member' })])
+        item(9000, 'tool_call', { name: 'Read', input_summary: 'first member', result: { is_error: false, result_summary: 'member body' } }, { order: 3 }),
+        item(9001, 'tool_call', { name: 'Read', input_summary: 'second member' }, { order: 4 })])
     await expect(chip(1)).toHaveAttribute('aria-expanded', 'false')
     await expect(page.locator('.tool-run button')).toHaveText('Using tools: 2')
     await settle()
@@ -1028,6 +1028,7 @@ test('defers 8333 held items and commits real composer input during unfinished e
     await row(100).evaluate(el => el.scrollIntoView({ block: 'start' }))
     await settle()
     const top = (await row(100).boundingBox())!.y
+    expect((await row(9000).boundingBox())!.y).toBeLessThan(top)
     await folded.evaluate(el => (el as HTMLButtonElement).click())
     await expect(folded).toHaveAttribute('aria-expanded', 'false')
     await settle()

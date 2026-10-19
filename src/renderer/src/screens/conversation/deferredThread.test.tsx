@@ -60,6 +60,26 @@ describe('deferred thread presentation', () => {
     format.mockRestore()
   })
 
+  it('reuses frozen headers independently of bodies and refreshes mutable or revised sources', () => {
+    for (const kind of ['agent', 'tool_call']) {
+      const source = Object.freeze({ ...agent, kind })
+      const header = threadItemPresentation(source, false)
+      expect(header).toMatchObject({ kind: 'toolCall', result: { resultSummary: '' } })
+      expect(threadItemPresentation(source, false)).toBe(header)
+      const full = threadItemPresentation(source, true)
+      expect(full).not.toBe(header)
+      expect(full).toMatchObject({ result: { resultSummary: 'Finished' } })
+      expect(threadItemPresentation(source, false)).toBe(header)
+      const revised = Object.freeze({ ...source, rev: 2, content: { ...source.content, input: { description: 'Revised' } } })
+      expect(threadItemPresentation(revised, false)).not.toBe(header)
+      const mutable = { ...source, content: { ...source.content } }
+      const before = threadItemPresentation(mutable, false)
+      mutable.content.input = { description: 'Mutable update' }
+      expect(threadItemPresentation(mutable, false)).not.toBe(before)
+      expect(threadItemPresentation(mutable, false)).toMatchObject({ input: { description: 'Mutable update' } })
+    }
+  })
+
   it('keeps metadata placement and counts identical and formats usage only on visible demand', () => {
     const stats = vi.spyOn(usage, 'formatTurnStats')
     const attribution = { session: 's', turn: 't', agent: 'claude' }

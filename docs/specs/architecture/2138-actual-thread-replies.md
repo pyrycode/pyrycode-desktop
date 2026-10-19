@@ -42,3 +42,24 @@ None. Prefer one self-contained collector plus pure saved comparison over changi
 
 ## Revisions
 2026-10-19: Focused replay/live both exposed Playwright's TSX transformation rejecting React server rendering of the imported view. Rendered-body checks instead use the existing `markdownPlainText` parser, remove code/task chrome from cloned body nodes and normalize layout whitespace. Saved/native comparisons still require exact original text. Reports `replay.log`, `live.log` and `live-stderr.log` under `/tmp/builder-2138/` preserve these failed checks.
+
+## Validation evidence
+Linux x64, 2026-10-19, implementation `1c83393ee95977f16c14a0689c557d95dda47cf6`, after merging main `3fbfcfdb5944`. macOS is outside this ticket's verification scope.
+
+| Check | Executed | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| Pre-verify targeted `threadReplyEvidence.test.ts` | 21 | 21 | 0 | 0 |
+| Guarded exact `claude-thread` replay | 1 | 1 | 0 | 0 |
+| Exact real-Claude scenario | 1 | 1 | 0 | 0 |
+
+Pre-verify's five checks, `npm run typecheck:client-tests` and `npm run build` passed. Electron SQLite preparation finished after pre-verify's Node rebuild and before either browser run. Both selected Playwright runs used retries 0; no flaky results. Guarded replay matched 45 requests, emitted 378 frames, left 0 requests and recorded 0 forbidden launches. Capture bytes, provenance and outgoing prompts are unchanged.
+
+Live report started `2026-10-19T10:37:05.509Z`, duration 32,382ms, one worker. It records the exact scenario title, `passed` at retry 0, Desktop `1c83393ee95977f16c14a0689c557d95dda47cf6`, daemon `664305939d73e5a146457503081d8232fcca5407`, and actual authenticated capabilities `interactive`, `multi_agent`, `stop_background_task`, `thread`, `thread_expansion`, `thread_compact`. The isolated `/tmp/builder-2138/pyry` was built from clean daemon source with `vcs.modified=false`; SHA-256 `ba2831b24dd8f880c0a707fb694bab8b99cfe2535d76eaa6129dbf11e4d0b869`.
+
+Retained reports under `/tmp/builder-2138/`:
+- `live-corrected.log`: complete counted JSON and capability/revision attachment; SHA-256 `d001cee3f2875dea451e03aa5d363f9e9af7595e85c1ba63c457db18eed55a59`.
+- `live-corrected-stderr.log`: shared launcher's `1 executed; 1 passed; 0 failed; process exit 0`; SHA-256 `de15904c455ebe2a7e85a21a4c24c002ff62908bc0a2f0edf9409877f620f735`.
+- `replay-corrected.log`: complete counted JSON, strict exchange attachment and launch-guard result; SHA-256 `b161dd8e0ef791f89d2aa1f013cff22dc5a40e2c018ec04c112985b89f7e24dc`.
+- `unit.xml`, `build.log`, `electron-native.log`, `daemon-build.txt`, `daemon-sha256.txt`: focused unit counts, build and native preparation, source/checksum proof.
+
+The earlier `replay.log` and `live.log` remain failed reports, superseded only after fixing their test-only TSX comparison error. No acceptance assertion was skipped and #2129 required no change.

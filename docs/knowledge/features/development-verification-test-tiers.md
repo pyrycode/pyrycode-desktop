@@ -248,7 +248,7 @@ Scroll assertions wait two animation frames after positioning so the scroll even
 focusing an offscreen radio natively scrolls it into view and would confuse focus movement with
 content growth. See [scroll pin](conversation-shell-scroll-pin.md#inline-question-growth) for
 membership-driven release of detached questionnaire wrappers, which resolves the earlier
-observer-retention finding, and [bounded hook-work evidence](conversation-shell-scroll-pin.md#bounded-anchor-and-growth-verification)
+observer-retention finding, and [bounded hook-work evidence](conversation-shell-scroll-work-verification.md#bounded-anchor-and-growth-verification)
 for counts that exclude test-oracle geometry and read observation.
 
 The same verifier compared freshly fetched

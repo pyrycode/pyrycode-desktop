@@ -21,9 +21,13 @@ export function createThreadCompact(deps: {
   admitDispatch: (command: Work) => boolean
   log: (event: { event: string; code: string }) => void
 }) {
-  const state = createStore<{ snapshots: ReadonlyMap<string, Snapshot> }>(() => ({ snapshots: new Map() }))
+  const state = createStore<{ snapshots: ReadonlyMap<string, Snapshot>; pending: ReadonlyMap<string, string> }>(() => ({ snapshots: new Map(), pending: new Map() }))
   const connections = new Map<string, { supported: boolean }>(), lanes = new Map<string, { active?: Work; queue: Work[]; timer?: ReturnType<typeof setTimeout> }>()
   const pendings = new Map<string, Pending>()
+  function clearPending(host: string): void {
+    pendings.delete(host)
+    state.setState(s => { const pending = new Map(s.pending); pending.delete(host); return { pending } })
+  }
   const incompatible = new Set<string>()
   let selected: { host: string; chat: string } | undefined, disposed = false
   const snapshot = (host: string, chat: string) => state.getState().snapshots.get(key(host, chat))
@@ -105,6 +109,7 @@ export function createThreadCompact(deps: {
         version: incompatible.has(key(host, chat)) ? 0 : s?.checkpoint ?? 0 } }
     const requestId = crypto.randomUUID()
     pendings.set(host, { requestId, query: q, generation: s?.generation, recovery })
+    state.setState(s => ({ pending: new Map(s.pending).set(host, chat) }))
     deps.log({ event: 'thread-compact', code: q.type })
     if (s?.failed && !owned.publish({ ...s, failed: undefined })) return
     if (owned.current() && pendings.get(host)?.requestId === requestId) send({ type: 'queryThread', serverId: host, requestId, query: q })
@@ -163,7 +168,7 @@ export function createThreadCompact(deps: {
     const owned = owner(host, chat)
     const currentOwner = () => owned.current() && pendings.get(host) === p
     if (e.type === 'threadQueryFailed') {
-      pendings.delete(host)
+      clearPending(host)
       deps.log({ event: 'thread-compact', code: e.reason })
       // A single query/live cancellation can recover; a failed recovery needs explicit retry.
       const recover = e.reason === 'daemon-error' && !p.recovery && s && s.consumed > (p.captured?.version ?? s.checkpoint)
@@ -173,9 +178,9 @@ export function createThreadCompact(deps: {
     }
     const reply = e.reply, v = reply.payload
     if (!compactReply || reply.type === 'thread_tool_body' || reply.type === 'thread_children' ||
-        s?.generation !== p.generation || selected?.host !== host || selected.chat !== chat) { pendings.delete(host); pump(host); return true }
+        s?.generation !== p.generation || selected?.host !== host || selected.chat !== chat) { clearPending(host); pump(host); return true }
     if (reply.type === 'thread_reset') {
-      pendings.delete(host)
+      clearPending(host)
       if (!owned.publish({ epoch: v.epoch, generation: Symbol(), rows: [], checkpoint: 0, consumed: 0, ranges: [], ...(p.recovery ? { failed: 'recovery' } : {}) })) return true
       if (!p.recovery) query(host, chat, false, true)
       pump(host); return true
@@ -201,7 +206,7 @@ export function createThreadCompact(deps: {
       if (!currentOwner()) return true
     }
     if (p.query.type === 'thread_page' && (!('upper_order' in marker) || marker.upper_order !== p.query.payload.before_order)) {
-      pendings.delete(host); if (owned.publish({ ...current, failed: 'metadata' })) pump(host); return true
+      clearPending(host); if (owned.publish({ ...current, failed: 'metadata' })) pump(host); return true
     }
     incompatible.delete(key(host, chat))
     const ranges = current.ranges.map(range => ({ ...range }))
@@ -216,7 +221,7 @@ export function createThreadCompact(deps: {
     if (!owned.publish({ ...current, repairThrough, checkpoint: page ? current.checkpoint : Math.max(current.checkpoint, v.version),
       consumed: page ? current.consumed : Math.max(current.consumed, v.version),
       ranges, ...('older_exists' in marker ? { older: marker.older_exists } : {}) }) || !currentOwner()) return true
-    pendings.delete(host)
+    clearPending(host)
     if (repairThrough !== undefined) {
       if (p.recovery) { if (!owned.publish({ ...(snapshot(host, chat) ?? current), failed: 'recovery' })) return true }
       else query(host, chat, false, true)
@@ -225,7 +230,7 @@ export function createThreadCompact(deps: {
   }
   function retire(host: string, chat?: string, clear = false): void {
     const lane = lanes.get(host), active = lane?.active
-    if (chat === undefined || pendings.get(host)?.query.payload.conversation_id === chat) pendings.delete(host)
+    if (chat === undefined || pendings.get(host)?.query.payload.conversation_id === chat) clearPending(host)
     if (lane) lane.queue = lane.queue.filter(work => chat !== undefined && work.query.payload.conversation_id !== chat)
     if (chat === undefined || active?.query.payload.conversation_id === chat) {
       clearTimeout(lane?.timer)
@@ -254,7 +259,7 @@ export function createThreadCompact(deps: {
       if (!lanes.has(host)) lanes.set(host, { queue: [] }); query(host, chat)
     },
     query(type: 'older' | 'retry', host: string) { if (selected?.host !== host) return false; query(host, selected.chat, type === 'older', false, type === 'retry'); return true },
-    close() { if (selected) { const p = pendings.get(selected.host); if (p) send({ type: 'cancelThreadQuery', serverId: selected.host, requestId: p.requestId }); pendings.delete(selected.host) }; selected = undefined },
+    close() { if (selected) { const p = pendings.get(selected.host); if (p) send({ type: 'cancelThreadQuery', serverId: selected.host, requestId: p.requestId }); clearPending(selected.host) }; selected = undefined },
     retire,
     complete(host: string, chat: string) {
       const initialize = Boolean(snapshot(host, chat)) && !incompatible.has(key(host, chat))
@@ -262,6 +267,6 @@ export function createThreadCompact(deps: {
       return initialize
     },
     suspend() { selected = undefined; connections.clear(); for (const host of lanes.keys()) retire(host) },
-    dispose() { disposed = true; selected = undefined; for (const host of lanes.keys()) retire(host); connections.clear(); state.setState({ snapshots: new Map() }) }
+    dispose() { disposed = true; selected = undefined; for (const host of lanes.keys()) retire(host); connections.clear(); state.setState({ snapshots: new Map(), pending: new Map() }) }
   }
 }

@@ -1,6 +1,7 @@
 import { sendConversationCommand } from './conversationActionAvailability'
 import { createAttachmentImageSources } from './attachmentImageSource'
 import { threadRuntime } from '../../store/threadRuntime'
+import type { ThreadBodyState } from '../../store/threadBodies'
 import { selectThreadReadings } from '../../store/threadLiveState'
 import { threadLiveInputs } from './threadLiveInputs'
 import { threadComposerReports, type ThreadComposerReports } from './threadComposerReports'
@@ -218,8 +219,18 @@ export function ConversationScreen({
   const authoritative = threadRuntime.isThread(selectedHost, openConversationId)
   // A host whose daemon lacks `thread` is update-required (#1908) and draws no rows, saved ones included.
   const daemonOutdated = useSessionStore(s => selectedHost !== null && isDaemonUpdateRequired(s.statuses.get(selectedHost)))
-  const authoritativeSnapshot = useStore(threadRuntime.items, s => selectedHost === null || openConversationId === null ||
+  const completeSnapshot = useStore(threadRuntime.items, s => selectedHost === null || openConversationId === null ||
     daemonOutdated ? null : s.hosts.get(selectedHost)?.get(openConversationId)?.snapshot ?? null)
+  const compactSelected = useStore(threadRuntime.state, s => s.selection?.host === selectedHost && s.selection?.chat === openConversationId && s.selection?.projection === 'compact-v1')
+  const compactSnapshot = useStore(threadRuntime.compact.state, s => compactSelected
+    ? s.snapshots.get(JSON.stringify([selectedHost, openConversationId])) : undefined)
+  // This display value never enters the complete store, writer or read observer.
+  const authoritativeSnapshot = useMemo((): ThreadSnapshot | null => compactSelected
+    ? compactSnapshot && selectedHost !== null && openConversationId !== null ? {
+      hostId: selectedHost, conversationId: openConversationId, epoch: compactSnapshot.epoch,
+      items: compactSnapshot.rows.map(row => ({ ...row })), version: 0, checkpoint: 0, ranges: [], repair: null,
+      olderAvailable: compactSnapshot.older
+    } : null : completeSnapshot, [compactSelected, compactSnapshot, completeSnapshot, selectedHost, openConversationId])
   const threadLive = useMemo(() => threadRuntime.live(selectedHost ?? '', openConversationId ?? ''), [selectedHost, openConversationId])
   const liveState = useStore(threadLive, s => s)
   const localSend = useStore(threadRuntime.sends, s => selectedHost === null || openConversationId === null
@@ -232,7 +243,10 @@ export function ConversationScreen({
   const queryKey = JSON.stringify([selectedHost, openConversationId])
   const networkQueryState = useStore(threadRuntime.state, s => s.queries.get(queryKey))
   const localQueryState = useStore(threadRuntime.state, s => s.localQueries.get(queryKey))
-  const queryState = localQueryState && localQueryState.type !== 'idle' ? localQueryState : networkQueryState
+  const compactPending = useStore(threadRuntime.compact.state, s => selectedHost !== null && s.pending.get(selectedHost) === openConversationId)
+  const queryState = compactSelected ? compactSnapshot?.failed
+    ? { type: 'failed' as const } : compactPending ? { type: 'loading' as const } : undefined
+    : localQueryState && localQueryState.type !== 'idle' ? localQueryState : networkQueryState
   const complete = useStore(threadRuntime.state, s => s.complete.get(queryKey))
   const threadRestoring = useStore(threadRuntime.state, s => s.restoring.has(queryKey))
   const threadConnection = useSessionStore(s => selectedHost === null ? undefined : s.statuses.get(selectedHost))
@@ -379,10 +393,11 @@ export function ConversationScreen({
         <ThreadPromptSlot host={selectedHost} conversationId={openConversationId} />
       </div>}
       {authoritative && authoritativeSnapshot && <ThreadItemsTimeline snapshot={authoritativeSnapshot} pin={threadPin}
+        compact={compactSelected}
         standaloneStatus={false}
         backgroundTasksOpen={panelOpen} onBackgroundTasksOpenChange={setPanelOpen}
         onOlder={() => selectedHost !== null && threadRuntime.query('older', selectedHost)}
-        readInputs={threadSummary ? { row: threadSummary, readerOpen,
+        readInputs={!compactSelected && threadSummary ? { row: threadSummary, readerOpen,
           completeThrough: complete?.epoch === authoritativeSnapshot.epoch ? complete.version : 0 } : undefined}
         sendInputs={{ midTurnInput: liveInput.runConfig?.midTurnInput === true, diagnose: window.pyry.sendDiagnostic, local: selectedHost !== null && openConversationId !== null && localSend !== null
           ? { hostId: selectedHost, conversationId: openConversationId, ...localSend } : undefined,
@@ -395,7 +410,7 @@ export function ConversationScreen({
             agent: typeof item.agent === 'string' ? item.agent : undefined, taskId: reading.taskId, creatingItemId: item.id, progress: reading
           }))), connection: selectedHost !== null && threadConnection ? { hostId: selectedHost, status: threadConnection } : undefined,
           onStopTask: (serverId, conversationId, taskId) => {
-            const snapshot = threadRuntime.items.getState().snapshot(serverId, conversationId)
+            const snapshot = threadRuntime.presentation(serverId, conversationId)
             if (!snapshot || !threadRuntime.taskStops.getState().begin(snapshot, taskId)) return
             try { sendConversationCommand({ type: 'stopBackgroundTask', serverId, payload: { conversation_id: conversationId, task_id: taskId } }) }
             catch { threadRuntime.taskStops.getState().event({ type: 'backgroundTaskStopRejected', serverId, conversationId, taskId }) }
@@ -410,8 +425,8 @@ export function ConversationScreen({
           <ThreadPromptSlot host={selectedHost} conversationId={openConversationId} />
         </>} />}
       <TopOverlayControl onRepairHost={onRepairHost} threadLive={authoritative ? threadLive : undefined}
-        savedMessages={selectedHost !== null && offline && !daemonOutdated && authoritativeSnapshot?.items.some(item => item.shown === true) === true}
-        loadingSavedMessages={selectedHost !== null && threadRestoring}
+        savedMessages={!compactSelected && selectedHost !== null && offline && !daemonOutdated && authoritativeSnapshot?.items.some(item => item.shown === true) === true}
+        loadingSavedMessages={!compactSelected && selectedHost !== null && threadRestoring}
         markdownOpenFailed={reader.state.type === 'closed' && reader.state.notice} />
       </div>
       {/* #962/#967: the region between the thread and the status area is EMPTY, and that emptiness is the
@@ -1096,6 +1111,7 @@ function MessageBubble({ message }: { message: Message }): JSX.Element {
 }
 
 type ThreadItemsProps = {
+  compact?: boolean
   standaloneStatus?: boolean
   backgroundTasksOpen?: boolean
   onBackgroundTasksOpenChange?: (open: boolean) => void
@@ -1118,7 +1134,81 @@ export function ThreadItemsTimeline(props: ThreadItemsProps): JSX.Element {
   return <ThreadItemsView key={JSON.stringify([s.hostId, s.conversationId, s.epoch])} {...props} />
 }
 const THREAD_PRESENTATION_BATCH = 256
-function ThreadItemsView({ pin, snapshot, readInputs, sendInputs, taskInputs, trailing, onOlder, standaloneStatus = true, backgroundTasksOpen = false, onBackgroundTasksOpenChange, turnRunning = false, foldTools = false, onReply, onOpenMarkdownPath, onOpenHostedApp }: ThreadItemsProps): JSX.Element {
+type CompactSource = ThreadSnapshot['items'][number]
+function CompactRow({ source, snapshot, expanded, toggle, changed }: {
+  source: CompactSource; snapshot: ThreadSnapshot; expanded: ReadonlySet<number>
+  toggle: (id: number | string) => void; changed: () => void
+}): JSX.Element {
+  const item = threadItemPresentation(source, false)
+  const open = expanded.has(source.id)
+  const [launchOpen, setLaunchOpen] = useState(false)
+  const count = source.kind === 'agent' && typeof source.public_child_count === 'number' ? ` · ${source.public_child_count} direct children` : ''
+  if (item?.kind !== 'toolCall') return <p className="session-delimiter__title">Summary: {typeof source.headline === 'string' ? source.headline : 'Unavailable summary'}</p>
+  return <>
+    <ToolRow item={item} running={typeof source.active === 'boolean' ? source.active : undefined} expansion={{ expanded: open, onToggle: () => { setLaunchOpen(false); toggle(source.id) } }}
+      suppliedOutcome={{ label: (typeof source.status === 'string' ? source.status : 'Status unknown') + count,
+        failed: source.status === 'failed', denied: source.status === 'denied' }} />
+    {typeof source.error_summary === 'string' && <p role="status">{source.error_summary}</p>}
+    {open && <>
+      {source.kind === 'agent' && <button type="button" className="tool-row__chip tool-row__chip--toggle"
+        aria-expanded={launchOpen} onClick={() => setLaunchOpen(value => !value)}>Launch body</button>}
+      <CompactDetail key={source.kind === 'agent' ? 'children' : 'body'} source={source} snapshot={snapshot}
+        childrenOnly={source.kind === 'agent'} expanded={expanded} toggle={toggle} changed={changed} />
+      {source.kind === 'agent' && launchOpen && <CompactDetail source={source} snapshot={snapshot}
+        childrenOnly={false} expanded={expanded} toggle={toggle} changed={changed} />}
+    </>}
+  </>
+}
+function CompactDetail({ source, snapshot, childrenOnly, expanded, toggle, changed }: {
+  source: CompactSource; snapshot: ThreadSnapshot; childrenOnly: boolean; expanded: ReadonlySet<number>
+  toggle: (id: number | string) => void; changed: () => void
+}): JSX.Element {
+  const [state, setState] = useState<ThreadBodyState>({ type: 'missing', reason: 'unfetched', stale: true })
+  const lease = useRef<ReturnType<typeof threadRuntime.bodies.demand>>()
+  const [childrenExpanded, setChildrenExpanded] = useState<ReadonlySet<number>>(() => new Set())
+  const toggleChild = (id: number | string) => { if (typeof id === 'number') setChildrenExpanded(previous => {
+    const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next
+  }) }
+  const connection = useSessionStore(s => s.statuses.get(snapshot.hostId))
+  const generation = useStore(threadRuntime.compact.state, s => s.snapshots.get(JSON.stringify([snapshot.hostId, snapshot.conversationId]))?.generation)
+  const selection = useStore(threadRuntime.state, s => s.selection?.generation)
+  useEffect(() => {
+    let active = true
+    const request = { serverId: snapshot.hostId, conversationId: snapshot.conversationId, epoch: snapshot.epoch,
+      itemId: source.id, revision: source.rev }
+    const notify = (next: ThreadBodyState) => { if (active) setState(next) }
+    const owned = childrenOnly ? threadRuntime.children.demand(request, notify)
+      : threadRuntime.bodies.demand({ ...request, kind: source.kind === 'agent' ? 'agent' : 'tool_call' }, notify)
+    lease.current = owned
+    setState(owned.getState())
+    return () => { active = false; lease.current = undefined; owned.release() }
+    // The cache updates an active lease's revision and refreshes it. Reacquiring on rev would send twice.
+  }, [snapshot.hostId, snapshot.conversationId, snapshot.epoch, source.id, source.kind, childrenOnly, connection, generation, selection])
+  useThreadLayoutEffect(() => changed(), [state])
+  const offline = connection?.type !== 'connected'
+  const content = state.content
+  return <div className="tool-row__body">
+    {offline && <p role="status">Unavailable offline{content || state.page ? ' · retained content' : ''}</p>}
+    {state.type === 'loading' && <p role="status">Loading…</p>}
+    {state.stale && (content || state.page) && <p role="status">Retained content · stale</p>}
+    {state.type === 'failed' && <p role="status">Could not load details. <button type="button" disabled={offline}
+      onClick={() => lease.current?.retry()}>Retry</button></p>}
+    {state.type === 'missing' && !offline && <p role="status">Details unavailable. <button type="button"
+      onClick={() => lease.current?.retry()}>Retry</button></p>}
+    {childrenOnly ? <>
+      {state.page?.children.filter(child => child.shown).map(child => <div key={child.id} className="tool-group-row tool-group-row--depth-1">
+        <CompactRow source={{ ...child }} snapshot={snapshot} expanded={childrenExpanded} toggle={toggleChild} changed={changed} />
+      </div>)}
+      {state.page?.more === true && state.page.cursor !== undefined && state.type === 'ready' && <button type="button"
+        disabled={offline} onClick={() => { const cursor = state.page?.cursor; if (cursor) lease.current?.continue(cursor) }}>More children</button>}
+    </> : content && <>
+      {typeof content.input === 'string' && <pre className="tool-row__input-value">{content.input}</pre>}
+      {typeof content.output === 'string' && (content.output === '' ? <p>{TOOL_RESULT_EMPTY_COPY}</p>
+        : <pre className="tool-row__result">{content.output}</pre>)}
+    </>}
+  </div>
+}
+function ThreadItemsView({ compact = false, pin, snapshot, readInputs, sendInputs, taskInputs, trailing, onOlder, standaloneStatus = true, backgroundTasksOpen = false, onBackgroundTasksOpenChange, turnRunning = false, foldTools = false, onReply, onOpenMarkdownPath, onOpenHostedApp }: ThreadItemsProps): JSX.Element {
   const tasks = useMemo(() => threadTaskPresentations(snapshot, taskInputs), [snapshot, taskInputs])
   const activeTaskCount = tasks.filter(task => task.active).length
   const rows = useMemo(() => threadItemIndex(snapshot), [snapshot])
@@ -1152,7 +1242,7 @@ function ThreadItemsView({ pin, snapshot, readInputs, sendInputs, taskInputs, tr
   activePin.current = pin ?? localPin
   useThreadLayoutEffect(() => activePin.current.layoutChanged(), [expandedTools, expandedRuns, admitted, snapshot])
   const paneRef = localPin.paneRef
-  useReadObservation(readInputs && { ...readInputs, snapshot }, pin?.paneRef ?? paneRef, scrollPin.ref)
+  useReadObservation(!compact && readInputs ? { ...readInputs, snapshot } : undefined, pin?.paneRef ?? paneRef, scrollPin.ref)
   const items: ThreadItem[] = rows.map(row => row.item ?? { kind: 'userText', text: '' })
   const positions = new Map(rows.flatMap((row, index) => row.marker ? [] : [[row.source.id, index] as const]))
   const projection = rows.map((row, index) => ({ index, depth: row.depth,
@@ -1241,18 +1331,23 @@ function ThreadItemsView({ pin, snapshot, readInputs, sendInputs, taskInputs, tr
         const summary = typeof row.source.summary === 'string' ? row.source.summary.slice(0, 4096) : 'Unsupported item'
         const agent = row.source.agent === 'claude' || row.source.agent === 'codex' ? row.source.agent : undefined
         return [start && <div key={`run-${id}`} data-run-row={id} className={`tool-group-row tool-run${open(start) ? ' tool-group-row--joined-below' : ''}`}>
-          <ToolRunHeader run={start} expanded={open(start)} onToggle={() => setRuns(previous => {
+          <ToolRunHeader run={start} expanded={open(start)} onToggle={() => { if (compact && open(start)) setTools(previous => {
+            const next = new Set(previous)
+            for (const member of start.members) next.delete(rows[member].source.id)
+            return next
+          }); setRuns(previous => {
             const next = new Set(previous)
             if (start.members.some(member => previous.has(rows[member].source.id))) {
               for (const member of start.members) next.delete(rows[member].source.id)
             }
             else for (const member of start.members) next.add(rows[member].source.id)
             return next
-          })} />
+          }) }} />
         </div>, !hidden && admittedNow.has(id) && <div key={id} data-read-row={id} className={classes}
           data-thread-controllers={[...(run ? [`run:${rows[run.index].source.id}`] : []), ...row.ancestors.map(String)].join(',')}
           ref={node => { if (node) agentNodes.current.set(id, node); else agentNodes.current.delete(id) }}>
-          {item === null ? row.hasChildren
+          {compact && row.source.detail_omitted === true ? <CompactRow source={row.source} snapshot={snapshot}
+            expanded={expandedTools} toggle={toggleTool} changed={() => activePin.current.layoutChanged()} /> : item === null ? row.hasChildren
             ? <button type="button" className="tool-row__chip tool-row__chip--toggle" aria-expanded={expandedTools.has(id)}
                 onClick={() => toggleTool(id)}>{summary}</button>
             : <p className="session-delimiter__title">{summary}</p> : item.kind === 'toolCall'
@@ -2084,7 +2179,7 @@ export function ToolRow({
   const { result, denial } = item
   const elapsed = suppliedOutcome !== undefined ? running === true ? item.elapsedSeconds : undefined
     : running !== false && !group?.background && result === null && denial === undefined ? item.elapsedSeconds : undefined
-  const expandable = group !== undefined || result !== null || denial !== undefined || (running !== undefined && item.input !== undefined)
+  const expandable = expansion !== undefined || group !== undefined || result !== null || denial !== undefined || (running !== undefined && item.input !== undefined)
   const [localExpanded, setExpanded] = useState(defaultExpanded)
   const expanded = expansion?.expanded ?? localExpanded
   const rowClass = suppliedOutcome !== undefined

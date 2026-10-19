@@ -161,6 +161,19 @@ it('new explicitly demanded parent revision retires old leases and late replies'
   h.emit(frame('thread_children', { ...childEnd(), rev: 9 }, childReads(h)[1].id))
   expect(fresh.getState().type).toBe('ready'); h.close()
 })
+it.each(['other', 'c', 'disconnect'])('revision retirement callbacks cannot admit a new child read after %s', async target => {
+  const h = await bodyRuntime()
+  let leaving: ReturnType<typeof h.r.open> | undefined
+  h.r.children.demand(childRequest, state => {
+    if (state.type !== 'missing' || leaving) return
+    if (target === 'disconnect') h.configs[0].onEvent({ type: 'relay-link-down', code: 1006 })
+    else leaving = h.r.open('a', target)
+  })
+  const fresh = h.r.children.demand({ ...childRequest, revision: 9 })
+  await leaving?.done
+  expect(fresh.getState()).toMatchObject({ type: 'missing', reason: 'retired' })
+  expect(childReads(h)).toHaveLength(1); h.close()
+})
 it.each(['conversation_id', 'epoch', 'item_id', 'rev', 'version', 'order', 'id'])('main rejects missing cursor field %s before sending', async field => {
   const h = await connected('a', true), cursor = childCursor()
   delete (cursor as Record<string, unknown>)[field]

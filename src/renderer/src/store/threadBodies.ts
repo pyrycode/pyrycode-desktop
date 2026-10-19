@@ -18,7 +18,7 @@ const missing = (reason: string): ThreadBodyState => ({ type: 'missing', reason,
 /** Session-only bodies. This writer never receives a canonical store mutation capability. */
 export function createThreadBodies(deps: {
   send: (command: RendererCommand) => void
-  scope: (host: string, chat: string) => { epoch: string; generation: symbol | undefined; selected: boolean } | undefined
+  scope: (host: string, chat: string) => { epoch: string; generation: symbol | undefined; selected: boolean; selection?: symbol } | undefined
   log: (event: { event: string; code: string }) => void
 }, limits = { active: 4, queued: 28, entries: 64, bytes: 16 * 1024 * 1024, leases: 128 }) {
   const entries = new Map<string, Entry>(), connections = new Map<string, { token: symbol; supported: boolean }>()
@@ -123,6 +123,7 @@ export function createThreadBodies(deps: {
   return {
     demand(request: Request, listener?: (state: ThreadBodyState) => void) {
       const scope = deps.scope(request.serverId, request.conversationId)
+      const connection = connections.get(request.serverId)
       const valid = isRendererCommand({ type: 'queryThread', serverId: request.serverId, requestId: 'admission', query: queryFor(request) }) &&
         (request.kind === 'tool_call' || request.kind === 'agent' || request.kind === 'children') &&
         (request.limit === undefined || (Number.isSafeInteger(request.limit) && request.limit >= 0))
@@ -136,6 +137,12 @@ export function createThreadBodies(deps: {
       retire(request.serverId, request.conversationId, true, request)
       let e = entries.get(id)
       if (e && e.generation !== scope?.generation) { retire(request.serverId, request.conversationId, true); e = undefined }
+      const current = deps.scope(request.serverId, request.conversationId)
+      if (disposed || !current?.selected || current.epoch !== request.epoch || current.generation !== scope?.generation ||
+          current.selection !== scope?.selection || connections.get(request.serverId) !== connection) {
+        deps.log({ event: 'thread-body', code: 'retired' })
+        return { getState: () => missing('retired'), release() {}, retry() {}, continue(_cursor: ThreadChildCursor) {} }
+      }
       if (!e) {
         if (entries.size >= limits.entries) {
           const victim = [...entries].find(([, value]) => value.state.type !== 'failed' && !value.leases.size && !value.requestId && !value.queued)

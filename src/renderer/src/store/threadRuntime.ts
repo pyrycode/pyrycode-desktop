@@ -62,7 +62,8 @@ export function createThreadRuntime(deps: {
     local?: { generation: symbol; cancel: () => void } } | undefined
   const bodies = createThreadBodies({ send: deps.send, log: deps.log, scope(host, chat) {
     const slice = items.getState().hosts.get(host)?.get(chat)
-    return slice ? { epoch: slice.snapshot.epoch, generation: slice.generation, selected: selected?.host === host && selected.chat === chat } : undefined
+    return slice ? { epoch: slice.snapshot.epoch, generation: slice.generation, selection: selected?.generation,
+      selected: selected?.host === host && selected.chat === chat } : undefined
   } })
   function localState(host: string, chat: string, value: ThreadQueryState): void {
     state.setState(s => ({ localQueries: new Map(s.localQueries).set(key(host, chat), value) }))

@@ -8,6 +8,27 @@ The scenario inventory, protected tickets and live-only proof boundaries are in 
 
 Each `e2e/recordings/*.json` identifies its source Desktop commit, daemon source revision and binary checksum, Claude version, capture time and authenticated capabilities. Version 2 also records sequential authenticated connection lifetimes and explicit test-side causal checkpoints. Observed retryable transport closes carry their actual close code and message prefix; replay forwards every preceding frame before closing the local socket. Version 1 remains readable for older captures from PR #2036.
 
+Capture preserves raw close positions and each call's actual connection identity.
+The capture-only session adapter observes a client call before delegating to
+`sendMessage`; that observation does not prove a successful socket write. A
+session retained until reconnect can therefore have observed calls after its
+recorded link-down event. These calls remain in their original connection.
+
+Replay derives a finite close position by scanning only the contiguous client-only
+suffix on that same connection after the raw close. It exactly matches those
+requests before notifying the transport-close observer once with the original
+code and preceding server-frame count. The relay waits for successful socket
+writes of that prefix before closing. No daemon frame crosses the raw close;
+same-connection daemon data beyond it fails. A close without a tail keeps its
+existing position. No recording bytes or connection assignments change.
+
+An unreleased causal checkpoint still blocks tail matching. Missing calls fail
+within the existing five-second connection-completion bound; changed, duplicate,
+extra and future-connection requests remain fatal and sticky. Reconnect cannot
+skip the old connection's requests or borrow future replies, and final
+`assertComplete()` still checks the entire exchange. See the
+[captured-close controls and counted Linux acceptance](knowledge/features/development-verification.md#captured-close-client-tails).
+
 Replay uses the normal Desktop build by default, native thread mode, the existing encrypted fake daemon and a local forwarding relay. It never invokes the older event-to-thread publisher. Every outgoing envelope field and complete payload must match. Only fresh request IDs/timestamps and explicitly bound opaque identities vary. The same identity binds once across requests, replies and connections. Text, permission choices, routes, cursors and unknown extra fields remain part of the comparison.
 
 For older complete-thread recordings whose accepted capabilities already include
@@ -64,11 +85,14 @@ node scripts/run-offline-replay.mjs --profile complete-thread \
 
 Verify input SHA-256
 `24bbe5dff65241a77dda96cbd262c9185925d88f6168439a1679b576b984dac1`.
-The [counted Linux compatibility evidence](knowledge/features/development-verification.md#replay-build-policy-and-provenance)
-preserves both full retained failures: compatibility accepted the complete query
-and forwarded the prefix through close index 47, but left 29 requests outstanding.
-The subsequent close-ordering repair and combined retained acceptance belong to #2141;
-prefix forwarding cannot satisfy its required complete pass.
+The [combined Linux retained-input acceptance](knowledge/features/development-verification.md#captured-close-client-tails)
+records the named case present and passed on clean current source
+`3372c1f318aa4da6d46c4638fd0ce4dccb990998`: 1 executed/passed, 0 failed/skipped,
+retries zero, 38 matched requests / 201 emitted frames / 0 remaining, and zero
+forbidden launches. Complete-thread selection and finite tail scheduling are
+both required for that input. The earlier default-profile mismatch and
+compatibility-only close-ordering failures remain failed evidence; forwarding a
+prefix alone did not establish completion. This is offline replay proof only.
 
 After installing dependencies or rebuilding SQLite for Node unit tests, run
 `npm run rebuild:electron` before replay. Node and Electron require different

@@ -104,9 +104,10 @@ so remaining requests are unknown. Compatibility accepts the original complete
 29 remaining. The observed reconnect and unchanged close-forwarding invariant
 (39 successful server writes including Noise before close 4413) establish prefix
 socket forwarding through index 47, without renderer acknowledgement. Subsequent
-connection mismatch and the original visibility assertion fail. Both full retained
-scenarios remain failed; #2141 owns its combined 1 executed/passed, 0 failed/skipped,
-zero-remaining acceptance after its separate close-scheduler repair.
+connection mismatch and the original visibility assertion fail. Both historical
+full retained scenarios remain failed. The subsequent
+[combined retained-input acceptance](#captured-close-client-tails) resolves the
+hold using the compatibility profile together with the close-scheduler repair.
 
 Earlier attempts remain failed: each of two invalid combined data/final fixtures
 recorded 2 executed / 1 passed / 1 failed / 0 skipped; the missing-Electron launch
@@ -116,6 +117,98 @@ an unrelated native-writer dependency. It is excluded from the corrected focused
 evidence above, which used `--project parallel --no-deps` under the same guard.
 No fresh provider, live encryption or physical transport proof is claimed. macOS
 is outside this Linux ticket's verification scope.
+
+## Captured-close client tails
+
+A capture adapter observes a client call before the actual session sends it;
+observation is not evidence of a successful socket write. A session can remain
+available after link-down until reconnect, so raw chronology can legitimately
+place client calls after its close. Moving those calls to the next connection or
+rewriting the close would erase the captured identity and conceal a replay defect.
+
+`RecordedExchange` derives the close boundary from only the contiguous client-only
+suffix on the closing connection. Exact matching consumes that finite tail before
+the observer receives the original code once. The existing relay observer waits
+for successful writes of the preceding server-frame prefix. No daemon frame may
+cross the raw close; same-connection daemon data beyond it fails. No-tail closes
+retain their original position. Unreleased checkpoints, strict connection/device
+binding, sticky mismatch failures, the five-second connection-prefix deadline,
+successful-profile retirement and final `assertComplete()` remain authoritative.
+Test the actual encrypted relay close and reconnect, since a `reconnect()` unit
+alone cannot prove the observer or forwarding boundary. See the
+[full replay contract](../../recorded-tests.md#replay-contract).
+
+Historical-source replay can isolate a fixture repair without establishing
+current-source acceptance. A current build can fail before the recorded close
+because automatic projection selection changes its outgoing contract. Use the
+explicit complete-thread build profile for the combined proof while keeping
+strict envelopes, authenticated capabilities and capture bytes intact.
+
+### Counted Linux retained-input acceptance
+
+These are retained results accepted by the
+[PR #2152 verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2152#issuecomment-6276614031),
+not documentation-stage executions. Both profiles compiled clean revision
+`3372c1f318aa4da6d46c4638fd0ce4dccb990998`, with main
+`d21005516f38a2966d34f13074fe87db8d911695` merged and `sourceDirty: false`.
+Reviewed head `bd3a079265b8e2af905a78a1453f818918652751` changes only the plan.
+The [final evidence](../../specs/architecture/2141-captured-close-tail.md#final-linux-evidence-after-2149)
+retains exact commands, report/log hashes and artifacts under `/tmp/builder-2141/`;
+the replay logs identify each profile and its seven emitted bundle hashes.
+
+The retained `/tmp/builder-2137/capture-3/claude-question-answer.json` remains
+SHA-256 `24bbe5dff65241a77dda96cbd262c9185925d88f6168439a1679b576b984dac1`.
+Its capture source is Desktop `ef097bfc29324437d067d65360558b8e77be8f40`, daemon
+`664305939d73e5a146457503081d8232fcca5407`, Linux daemon binary SHA-256
+`ba2831b24dd8f880c0a707fb694bab8b99cfe2535d76eaa6129dbf11e4d0b869`,
+Claude `2.1.280`. Raw close 4413 remains before index 47; calls 47–49 still
+belong to connection 1 and connection 2 starts at 50. All four original closes
+are consumed without changing the recording or substituting the committed input.
+
+| Check | Executed / passed / failed / skipped |
+| --- | --- |
+| Original premature-close regression, retained failure | 9 / 8 / 1 / 0 |
+| Final capture/exchange/lifecycle controls | 48 / 48 / 0 / 0 |
+| Exact retained question, guarded complete-thread profile | 1 / 1 / 0 / 0 |
+| Complete guarded normal committed-recording suite | 29 / 29 / 0 / 1 |
+| Supplied dispatcher unit gate 4 | 9823 / 9823 / 0 / 3 |
+| Supplied dispatcher application gate 7 | 517 / 517 / 0 / 5 |
+
+`real claude changes model during a question and resumes with the original answer`
+is present and passed in `resumed-retained-question.json`: retries zero,
+38 matched requests / 201 emitted frames / 0 remaining, zero forbidden launches,
+original assertions and final completion passed. The command uses the retained
+directory with `node scripts/run-offline-replay.mjs --profile complete-thread`
+and the exact scenario grep, `--retries 0`. Normal output restoration succeeded.
+It is also present and passed in dispatcher application gate 7; that gate uses
+committed input and does not substitute for the separate retained-input proof.
+
+The subsequent `npm run e2e:recorded -- --retries 0` report,
+`resumed-committed-recordings.json`, has no flaky outcomes or forbidden launches.
+All 29 exchange attachments complete: 773 matched / 3,216 emitted / 0 remaining.
+The sole skipped fixme, also skipped in application gate 7, remains
+`real claude picks up a saved channel system prompt at Reset session`.
+Pre-verify's five checks passed (26 affected tests executed/passed, 0 failed/skipped),
+as did client-test typecheck and build; Electron native preparation followed the
+completed Node checks.
+
+The supplied unit gate explicitly records these named controls present and passed:
+
+- `replays a captured close only after its exact old-connection client-only suffix`
+- `requires the actual captured transport close after all preceding daemon frames`
+- `bounds a missing captured-close tail with the existing connection deadline`
+- `cannot drain across an unreleased checkpoint in the captured tail`
+- `never forwards same-connection daemon data beyond a captured close`
+- `delivers the prefix then observes the actual relay close and reconnect after tail matching`
+
+The focused controls also retain changed/duplicate/extra/future-connection request
+rejection, repeated draining and sticky failures. Historical
+`/tmp/builder-2137/replay.json` and `.log` remain failed: the named scenario
+executed once, 0 passed, 1 failed, 0 skipped, retries zero, 9 matched / 38 emitted /
+29 remaining and zero forbidden launches. Earlier current-source projection
+mismatches and compatibility-only failures remain failed in the linked plan.
+These Linux results establish offline correctness only, with no fresh provider or
+physical transport acceptance. macOS is outside this ticket's verification scope.
 
 ## Replay native storage prerequisite
 

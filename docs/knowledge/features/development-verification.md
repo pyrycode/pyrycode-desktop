@@ -29,6 +29,94 @@ On the client, trace the actual inbound parser rather than trusting an old symbo
 A shared model-row lookup can govern behaviour as well as display text.
 Read all callers before broadening what an empty identifier means.
 
+## Replay build policy and provenance
+
+An unchanged successful capture can fail strict replay after application selection
+policy changes. A complete-thread capture may already grant `thread_compact`, so
+automatic selection now sends a compact query it never recorded. Use the explicit
+[complete-thread build invocation](../../recorded-tests.md#replay-contract) to
+exercise the current source's existing complete route; keep default replay and
+production compact-demand controls on normal automatic selection. Changing
+capabilities or stripping projection would hide the contract difference.
+
+Build identity must come from compilation-time metadata and output hashes, not
+`git HEAD` observed later during replay. The runner refuses mismatched build
+profiles, so interrupted compatibility output cannot silently masquerade as normal.
+Keep executed revision/dirty status/profile and bundle hashes separate from raw
+input checksum and capture source. An absent temporary capture path is not proof
+that its bytes are unavailable: check immutable repository history and verify the
+required checksum before substituting input or reporting missing access.
+
+Synthetic thread replies need separate data and final frames, as the production
+parser requires. Connection/composer readiness also does not prove the opening
+query dispatched: wait for its positive content visibility barrier or poll the
+matched count before asserting it. The accepted review retains a nonblocking
+timing finding where the compatibility control checks that count too early.
+
+### Counted Linux compatibility validation
+
+These are retained results accepted by the
+[PR #2151 verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2151#issuecomment-6275916553),
+not documentation-stage runs. Builder profile runs compiled clean source
+`fc64084e9df76dfd11481b18571c7313ee7e28bc`; reviewed head
+`12a162e1281b1362e7549726a59ae213ab53b168` differs only in the plan. The
+[recovery evidence](../../specs/architecture/2149-complete-thread-replay.md#retained-input-recovery-and-final-linux-evidence--2026-10-19)
+retains commands, report hashes, all bundle hashes and historical failures under
+`/tmp/builder-2149/`. The builder browser runs in the table used retries 0 and
+reported zero forbidden launches.
+
+| Check | Executed / passed / failed / skipped |
+| --- | --- |
+| Profile, guard and strict-exchange units | 22 / 22 / 0 / 0 |
+| Normal compact-demand and profile controls | 6 / 6 / 0 / 0 |
+| Compatibility controls and committed-input shared question | 3 / 3 / 0 / 0 |
+| Complete guarded normal committed-recording suite | 29 / 29 / 0 / 1 |
+| Exact retained question, default profile | 1 / 0 / 1 / 0 |
+| Exact retained question, complete-thread profile | 1 / 0 / 1 / 0 |
+| Supplied dispatcher unit gate 4 | 9810 / 9810 / 0 / 3 |
+| Supplied dispatcher application gate 7 | 517 / 517 / 0 / 5 |
+
+The named control `complete-thread profile selects complete on opening, creation
+and reconnect; normal rejects strictly` was present and passed in application
+gate 7 and both builder profiles. Compatibility matched 3 complete queries, emitted
+8 frames and left zero requests across initial opening, creation and same-ID
+reconnect. Normal selection asserted `projection: 'compact-v1'` and sticky strict
+rejection. Changed projection, version and envelope-field controls also passed.
+Both successful and failed compatibility runs restored normal output.
+
+`real claude changes model during a question and resumes with the original answer`
+was present and passed in gate 7 and the builder's committed-input compatibility
+run (29 matched requests, 136 emitted frames, zero remaining). That committed input
+has SHA-256 `6de35feed0dcf02764da0765a4af03234314ff691a29cc975bf82c3e8d498d6b`,
+capture Desktop `5788a683ab580647008eaf2b292631607c407ab8`, daemon
+`58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`. The complete committed suite completed
+29 exchanges, 773 requests and 3,216 frames, zero remaining. Its one skip,
+`real claude picks up a saved channel system prompt at Reset session`, was also
+explicitly skipped in gate 7 and remains a fixme.
+
+The separate retained input's checksum is
+`24bbe5dff65241a77dda96cbd262c9185925d88f6168439a1679b576b984dac1`,
+capture Desktop `ef097bfc29324437d067d65360558b8e77be8f40`, daemon
+`664305939d73e5a146457503081d8232fcca5407`. Default preserves the strict step-4
+mismatch before close, followed by worker exit 7; no completion attachment exists,
+so remaining requests are unknown. Compatibility accepts the original complete
+`thread_catch_up` at index 22 and records 9 matched requests, 38 emitted frames,
+29 remaining. The observed reconnect and unchanged close-forwarding invariant
+(39 successful server writes including Noise before close 4413) establish prefix
+socket forwarding through index 47, without renderer acknowledgement. Subsequent
+connection mismatch and the original visibility assertion fail. Both full retained
+scenarios remain failed; #2141 owns its combined 1 executed/passed, 0 failed/skipped,
+zero-remaining acceptance after its separate close-scheduler repair.
+
+Earlier attempts remain failed: each of two invalid combined data/final fixtures
+recorded 2 executed / 1 passed / 1 failed / 0 skipped; the missing-Electron launch
+executed zero tests. An overly broad control invocation recorded 1 executed /
+0 passed / 1 failed / 6 skipped and a nonzero forbidden-launch count when it selected
+an unrelated native-writer dependency. It is excluded from the corrected focused
+evidence above, which used `--project parallel --no-deps` under the same guard.
+No fresh provider, live encryption or physical transport proof is claimed. macOS
+is outside this Linux ticket's verification scope.
+
 ## Replay native storage prerequisite
 
 Node and Electron require different `better-sqlite3` native addon ABIs. Rebuild

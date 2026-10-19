@@ -56,7 +56,7 @@ describe('queued-turn evidence', () => {
   it('uses negotiated authoritative queue and turn facts without raw event delivery', () => {
     const proof = createQueueTurnEvidence(options)
     proof.observe({ type: 'connected', ack: { capabilities: ['interactive', 'thread'],
-      protocol_version: 1, server_id: 'host', conn_id: 'connection' } })
+      protocol_version: '1', server_id: 'host', conn_id: 'connection' } })
     const added = (item: Pick<ThreadItem, 'id' | 'rev' | 'kind' | 'content'> & Partial<ThreadItem>, version: number) =>
       proof.observe({ type: 'threadUpdate', conversationId: 'origin', correlation: { id: version, ts: '' },
         update: { type: 'thread_item_added', payload: { conversation_id: 'origin', epoch: 'epoch', version,

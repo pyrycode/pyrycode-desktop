@@ -152,6 +152,9 @@ test('real claude changes model during a question and resumes with the original 
     await sendButton.click()
     await expect.poll(() => page.evaluate(() => (window as unknown as EvidenceWindow).questionModelEvidence.announced.length),
       { timeout: TURN_TIMEOUT_MS }).toBeGreaterThan(announcementCount)
+    // The native live-state read can reassert the previous model before the new system/init arrives.
+    await expect.poll(() => page.evaluate(() => (window as unknown as EvidenceWindow).questionModelEvidence.announced.at(-1) ?? ''),
+      { timeout: TURN_TIMEOUT_MS }).toMatch(/^claude-opus/)
     const resolved = await page.evaluate(() => (window as unknown as EvidenceWindow).questionModelEvidence.announced.at(-1))
     expect(typeof resolved === 'string' && resolved.length > 0 && resolved !== previous).toBe(true)
     expect(resolved?.startsWith('claude-opus')).toBe(true)

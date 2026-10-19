@@ -37,3 +37,6 @@ Write failing Vitest controls beside the local evidence helper, covering ignored
 
 ## Open Questions
 None. Live capture and replay results will be recorded after execution.
+
+## Revisions
+2026-10-19: bind the route from `conversationCreated` before sending the trigger, so either ordering of the native tool and question reading identifies the same turn. Answer commands carry host plus batch, not a conversation field; associate their batch with the original daemon-supplied conversation. The observer retains projected fields only. A red control (27 passed, 1 failed) demonstrated that updating an old terminal item after the witness could falsely pass; terminal identity is now counted on first observation only (28 passed, 0 failed). Logs: `/tmp/builder-2137/controls-red.log`, `/tmp/builder-2137/controls-green.log`.

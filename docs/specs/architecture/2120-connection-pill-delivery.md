@@ -66,3 +66,33 @@ The complete configured application gate belongs to the dispatcher and remains p
 
 ## Open Questions
 None.
+
+## Validation evidence
+Linux x64, candidate `7272d281a2b5e60bea36133437b7b58c0d5ad28a`, containing main
+`107558eb26b52f4b98089cbcba4716c3043a9fbe`. No shipping code changed.
+
+- Controlled final regression against the extracted original send: 21 executed,
+  1 passed, 20 failed, 0 skipped (`/tmp/builder-2120/fault-baseline-final.log`).
+  Repaired callback-executing regressions: 21 executed/passed, 0 failed/skipped;
+  the post-merge pre-verify gate reran all 21 successfully. Counted unit evidence:
+  `build/dispatcher-tests/unit-40xst2u1/dispatcher.xml`; console report:
+  `/tmp/builder-2120/pre-verify.log` (all five checks passed).
+- `npx playwright test e2e/connection-pills.spec.ts --grep "connection pills clear and float over hidden rows" --repeat-each=10 --retries=0 --reporter=json`:
+  10 executed/passed, 0 failed/skipped/flaky, all retry indices 0. Configured/actual
+  workers: 3/3 (`PW_WORKERS` unset). JSON: `/tmp/builder-2120/hidden-ten.json`;
+  matching `.stderr` empty.
+- `npx playwright test e2e/connection-pills.spec.ts --retries=0 --reporter=json`:
+  5 executed/passed, 0 failed/skipped/flaky, all retry indices 0, including the
+  hidden-row case. Configured/actual workers: 3/1 (one sequential spec).
+  JSON: `/tmp/builder-2120/connection-pills.json`; matching `.stderr` empty.
+- All 15 browser `launch-fate` attachments: running at outcome, exit 0,
+  null signal, no teardown failures. Both reports have no report-level errors.
+- Separate TypeScript check includes both new helper files and preload declarations.
+  Existing empty/hidden/saved, selection/recovery, Send, replacement/clearing,
+  1280/800 geometry, wrapping and pointer assertions are unchanged.
+- `npm run build` passed after the final main merge and pre-verify gate:
+  `/tmp/builder-2120/build-final.log`.
+
+The dispatcher-owned complete configured application gate remains pending; it must
+include the hidden-row case passing without retry. Focused evidence does not claim
+that later result. macOS is outside this Linux ticket's verification scope.

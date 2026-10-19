@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { DiagnosticLog } from '../diagnosticLog'
 import type { Envelope } from '../../shared/wire/types'
+import { parseJsonObject } from './codec'
 import type { ThreadItem, ThreadUpdate, ThreadRepairReason, ThreadQuery, ThreadReply, ThreadQueryFailure, ThreadSummary, ThreadChildCursor } from '../../shared/wire/thread'
 
 export type ThreadDelivery =
@@ -240,7 +241,7 @@ export function createThreadUpdateReceiver(deliver: (event: ThreadDelivery) => v
       if (pending.size) log?.event({ event: 'thread-assembly-reset' })
       for (const key of pending.keys()) release(key)
     },
-    receive(envelope: Envelope): void {
+    receive(envelope: Envelope, encoded?: Uint8Array): void {
       const p = envelope.payload
       const history = envelope.type === 'thread_items' || envelope.type === 'thread_reset' || envelope.type === 'thread_tool_body' || envelope.type === 'thread_children'
       const request = history ? envelope.in_reply_to : undefined
@@ -250,10 +251,16 @@ export function createThreadUpdateReceiver(deliver: (event: ThreadDelivery) => v
       if (envelope.type === 'thread_children' && request !== undefined) {
         const q = queries.get(request)
         if (!q) return
+        let raw: object = envelope
+        if (encoded) {
+          try { raw = parseJsonObject(encoded) } catch { fail(request, 'malformed'); return }
+        }
+        const normalized = Buffer.byteLength(JSON.stringify(raw))
         // Reserve the protocol's maximum-width stamps even when absent on the received envelope.
-        q.bytes = (q.bytes ?? 0) + Buffer.byteLength(JSON.stringify({ ...envelope, id: 1e19, in_reply_to: 1e19,
+        const stamped = Buffer.byteLength(JSON.stringify({ ...raw, id: 1e19, in_reply_to: 1e19,
           event_id: 1e19, history_entry_id: 1e19, ts: '9999-12-31T23:59:59.999999999+23:59',
           session_state_cleared: false, payload_encrypted: false }))
+        q.bytes = (q.bytes ?? 0) + (encoded?.byteLength ?? normalized) + Math.max(0, stamped - normalized)
         if (q.bytes > 65519 || own(p, 'continuation')) { fail(request, q.bytes > 65519 ? 'limit' : 'malformed'); return }
       }
       const conversationId = p.conversation_id

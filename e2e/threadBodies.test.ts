@@ -110,7 +110,9 @@ it('two hosts with colliding child identities stay isolated through connection a
     h.emit(frame('thread_items', batch, id)); h.emit(frame('thread_items', windowDone, id))
   }
   const target = r.children.demand({ ...childRequest, serverId: 'b' }), id = childReads(b)[0].id
-  a.ask({ type: 'thread_read_children', payload: { conversation_id: 'c', epoch: 'e', item_id: 1, expected_rev: 8 } }, 'foreign')
+  const owner = electron.send.mock.calls.map(call => call[1]).find(c => c.type === 'queryThread' && c.query.type === 'thread_read_children')
+  // Equal local request IDs must still be isolated by the authenticated owning host.
+  a.ask({ type: 'thread_read_children', payload: { conversation_id: 'c', epoch: 'e', item_id: 1, expected_rev: 8 } }, owner.requestId)
   a.emit(frame('thread_children', childPage([child(99)]), childReads(a)[0].id))
   a.emit(frame('thread_children', childEnd(), childReads(a)[0].id))
   expect(a.replies().at(-1)).toMatchObject({ type: 'threadReply', reply: { type: 'thread_children' } })
@@ -132,6 +134,7 @@ it('mixed body/child saturation leaves complete queries progressing without pref
   expect(query).toBeDefined()
   h.emit(frame('thread_items', { ...windowDone, upper_order: 5 }, query.id))
   expect(h.replies().at(-1)).toMatchObject({ type: 'threadReply', requestId: expect.any(String) })
+  expect(h.r.state.getState().queries.get(JSON.stringify(['a', 'c']))).toEqual({ type: 'idle' })
   expect(h.reads().length + childReads(h).length).toBe(4); h.close()
 })
 it('child cached success is stale offline and reconnect waits for explicit demand', async () => {
@@ -268,6 +271,15 @@ it.each(['version', 'tuple', 'second-data', 'aggregate-bytes'])('child reply bou
     if (mode === 'second-data') h.emit(frame('thread_children', childPage([child(4)]), next))
   }
   expect(lease.getState().type).toBe('failed'); h.close()
+})
+it('child aggregate budget counts the original received JSON bytes before normalization', async () => {
+  const h = await bodyRuntime(), lease = h.r.children.demand(childRequest), id = childReads(h)[0].id
+  const padded = (bytes: Uint8Array) => Buffer.concat([Buffer.from(' '.repeat(40000 - bytes.length)), bytes])
+  h.emit(padded(frame('thread_children', childPage(), id)))
+  expect(lease.getState().page?.children).toHaveLength(1)
+  h.emit(padded(frame('thread_children', childEnd(), id)))
+  expect(lease.getState()).toMatchObject({ type: 'failed', page: { children: [child(2)], complete: false } })
+  h.close()
 })
 it.each([undefined, 0, 999])('child limit normalizes %s and capability gates preserve complete reads', async limit => {
   const h = await bodyRuntime(), lease = h.r.children.demand({ ...childRequest, limit })

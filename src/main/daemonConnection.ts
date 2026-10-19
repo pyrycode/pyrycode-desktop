@@ -1379,7 +1379,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             return
           }
           case 'thread-frame':
-            if (authenticated && !stopped) threadReceiver.receive(inbound.envelope)
+            if (authenticated && !stopped) threadReceiver.receive(inbound.envelope, event.plaintext)
             return
           case 'message':
             emitDaemonEvent(sink, { type: 'messageReceived', message: inbound.message, daemonTs: inbound.ts })

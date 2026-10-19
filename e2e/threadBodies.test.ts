@@ -387,6 +387,18 @@ it('projection switches initialize at zero even with independently held complete
   expect(h.snapshot()).toMatchObject({ checkpoint: 0, ranges: [] })
   h.close()
 })
+it('an existing child lease continues with the refreshed parent revision', async () => {
+  const h = await compactRuntime(); h.data(); h.done()
+  const lease = h.r.children.demand(childRequest), old = h.last()
+  h.update(9, { ...root(1, 9), rev: 9 }); await Promise.resolve()
+  h.emit(frame('thread_children', { ...childEnd(), version: 8 }, old))
+  const fresh = h.last(), cursor = { ...childCursor(2), version: 9, rev: 9 }
+  h.emit(frame('thread_children', { ...childPage(), version: 9, rev: 9 }, fresh))
+  h.emit(frame('thread_children', { ...childEnd(true), version: 9, rev: 9, cursor }, fresh))
+  lease.continue(cursor)
+  expect(h.requests().at(-1)?.payload).toMatchObject({ expected_rev: 9, cursor })
+  expect(lease.getState().type).toBe('loading'); h.close()
+})
 it('marker-only empty success is cached, and unknown optional facts remain absent', async () => {
   const h = await bodyRuntime(), lease = h.r.children.demand(childRequest)
   h.emit(frame('thread_children', childEnd(), childReads(h)[0].id))

@@ -231,7 +231,7 @@ export function createThreadBodies(deps: {
         continue(cursor: ThreadChildCursor) {
           if (disposed || retiring > 0 || !lease.active || request.kind !== 'children' || entry.state.type === 'failed') return
           if (typeof cursor !== 'object' || cursor === null || Array.isArray(cursor) || !isRendererCommand({ type: 'queryThread', serverId: request.serverId, requestId: 'continuation',
-            query: queryFor(request, cursor) })) { fail(entry, 'metadata'); return }
+            query: queryFor(entry.request, cursor) })) { fail(entry, 'metadata'); return }
           const same = (a: ThreadChildCursor | undefined) => a && Object.keys(a).every(k =>
             k in cursor && Reflect.get(a, k) === Reflect.get(cursor, k)) && Object.keys(cursor).length === 7
           if (entry.state.page?.completedCursors?.some(same)) return

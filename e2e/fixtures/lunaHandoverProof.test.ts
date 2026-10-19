@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { StampedDaemonEvent } from '../../src/shared/ipc/events'
-import type { ThreadItem } from '../../src/shared/wire/thread'
+import type { ThreadItem, ThreadUpdate } from '../../src/shared/wire/thread'
 import { completedHandoverReply } from './lunaHandoverProof'
 
 const owner = { serverId: 'host', conversationId: 'chat', sessionId: 'session', agent: 'codex' as const }
@@ -14,17 +14,48 @@ const end = (content: Record<string, unknown> = {}, extra: Partial<ThreadItem> =
 const update = (held: ThreadItem, epoch = 'epoch'): StampedDaemonEvent => ({
   type: 'threadUpdate', ...owner, update: { type: 'thread_item_added', payload: {
     conversation_id: owner.conversationId, epoch, version: held.rev, item: held
-  } }, correlation: { id: held.rev, type: 'thread_item_added', ts: '' }
+  } }, correlation: { id: held.rev, ts: '' }
 })
 const snapshot = (items: ThreadItem[], epoch = 'epoch'): StampedDaemonEvent => ({
   type: 'threadReply', ...owner, requestId: 'query', reply: { type: 'thread_items', payload: {
     conversation_id: owner.conversationId, epoch, version: 20, items, final: false
-  } }, correlation: { id: 20, type: 'thread_items', ts: '' }
+  } }, correlation: { id: 20, ts: '' }
 })
 const delta = { type: 'assistantDelta', ...owner, turnId: 'turn', text: 'code-fresh', seq: 0,
   envelopeSessionId: owner.sessionId } as StampedDaemonEvent
 const legacyEnd = (fields: Record<string, unknown> = {}) => ({ type: 'turnEnd', ...owner,
   turnId: 'turn', stopReason: 'end_turn', envelopeSessionId: owner.sessionId, ...fields }) as StampedDaemonEvent
+
+it.each([1, 99])('excludes tool-body data and final replies for item %i from fresh handover evidence', itemId => {
+  const replies: StampedDaemonEvent[] = [false, true].map(final => ({
+    type: 'threadReply', ...owner, requestId: 'detail', correlation: { id: 10, ts: '' },
+    reply: { type: 'thread_tool_body', payload: { conversation_id: 'chat', epoch: 'epoch', version: 10,
+      item_id: itemId, rev: 10, kind: 'tool_call', ...(final ? { final: true } : {
+        final: false, content: { text: 'code-fresh', stop_reason: 'end_turn' }
+      }) } }
+  }))
+  const patch = (update: ThreadUpdate): StampedDaemonEvent => ({ type: 'threadUpdate', ...owner, update,
+    correlation: { id: update.payload.version, ts: '' } })
+  const events = [update(answer({ content: { text: '' } }))]
+  for (const reply of replies) {
+    events.push(reply)
+    expect(completedHandoverReply(events, 0, owner)).toBeUndefined()
+    // An old assistant item cannot become fresh merely by reading its detail.
+    expect(completedHandoverReply([...events, update(end())], 1, owner)).toBeUndefined()
+    expect(completedHandoverReply([...events, update(end())], 0, owner)).toBeUndefined()
+  }
+  events.push(patch({ type: 'thread_item_changed', payload: { conversation_id: 'chat', epoch: 'epoch',
+    version: 3, item_id: 1, base_rev: 1, rev: 3, changes: { content: { text: 'code-' } } } }))
+  expect(completedHandoverReply(events, 0, owner)).toBeUndefined()
+  events.push(...replies, patch({ type: 'thread_text_append', payload: { conversation_id: 'chat', epoch: 'epoch',
+    version: 4, item_id: 1, base_rev: 3, rev: 4, text: 'fresh' } }), update(end()))
+  const complete = completedHandoverReply(events, 0, owner)
+  expect(complete?.text).toBe('code-fresh')
+  for (const reply of replies) {
+    events.push(reply)
+    expect(completedHandoverReply(events, 0, owner)).toEqual(complete)
+  }
+})
 
 describe.each(['legacy', 'thread'] as const)('%s handover completion', route => {
   const evidence = (fields: Record<string, unknown> = {}) => route === 'legacy'
@@ -66,10 +97,10 @@ describe.each(['legacy', 'thread'] as const)('%s handover completion', route => 
 })
 
 it('folds only correlated newer revisions without duplicate text', () => {
-  const append: StampedDaemonEvent = { type: 'threadUpdate', ...owner, update: {
+  const append: Extract<StampedDaemonEvent, { type: 'threadUpdate' }> = { type: 'threadUpdate', ...owner, update: {
     type: 'thread_text_append', payload: { conversation_id: 'chat', epoch: 'epoch', version: 3,
       item_id: 1, base_rev: 1, rev: 3, text: '-tail' }
-  }, correlation: { id: 3, type: 'thread_text_append', ts: '' } }
+  }, correlation: { id: 3, ts: '' } }
   const events = [update(answer()), append, append, snapshot([answer()]), update(end({}, { rev: 4 }))]
   expect(completedHandoverReply(events, 0, owner)?.text).toBe('code-fresh-tail')
   const change: StampedDaemonEvent = { ...append, update: { type: 'thread_item_changed', payload: {
@@ -97,7 +128,7 @@ it('cannot combine different epochs, sessions, agents or child-agent replies', (
 it('same-epoch reset discards held items before identifiers are reused', () => {
   const reset: StampedDaemonEvent = { type: 'threadReply', ...owner, requestId: 'reset', reply: {
     type: 'thread_reset', payload: { conversation_id: 'chat', epoch: 'epoch', version: 0 }
-  }, correlation: { id: 9, type: 'thread_reset', ts: '' } }
+  }, correlation: { id: 9, ts: '' } }
   expect(completedHandoverReply([update(answer()), reset, update(end())], 0, owner)).toBeUndefined()
   expect(completedHandoverReply([update(answer()), reset, update(answer({ content: { text: 'new' } })),
     update(end())], 0, owner)?.text).toBe('new')

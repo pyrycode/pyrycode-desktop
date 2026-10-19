@@ -74,8 +74,11 @@ it('requires each compact grant, and cancellation cannot close a replacement sel
     handle.cancel()
   }
   const first = runtime.open('host', 'first'), second = runtime.open('host', 'second')
+  const ownsSecond = runtime.submissionOwner('host', 'second')
   first.cancel()
+  expect(ownsSecond()).toBe(true)
   expect(runtime.state.getState().selection?.chat).toBe('second')
   second.cancel()
+  expect(ownsSecond()).toBe(false)
   runtime.dispose()
 })

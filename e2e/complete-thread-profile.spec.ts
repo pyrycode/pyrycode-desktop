@@ -40,18 +40,21 @@ function contract(): Recording {
 test('complete-thread profile selects complete on opening, creation and reconnect; normal rejects strictly', async ({ launchPairedApp }, info) => {
   const recording = contract(), exchange = new RecordedExchange(recording)
   let mismatch: Error | undefined
+  let firstQuery: Envelope | undefined
   const { page, forwarder } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities: recording.capabilities },
     buildInitialFrames: () => exchange.start(), buildReconnectFrames: () => exchange.reconnect(),
     buildReplyFrames: bytes => {
       const request = decodeEnvelope(bytes)
       if (request.type === 'create_conversation') return exchange.checkpoint('creation')
       if (request.type !== 'thread_catch_up') return []
+      firstQuery ??= request
       try { return exchange.reply(bytes) }
       catch (error) { mismatch = error as Error; return [] }
     }
   })
   if (process.env.PYRY_REPLAY_BUILD_PROFILE !== 'complete-thread') {
     await expect.poll(() => mismatch?.message).toBe('Recorded exchange request mismatch at step 1')
+    expect(firstQuery?.payload).toEqual({ conversation_id: expect.any(String), epoch: '', version: 0, projection: 'compact-v1' })
     expect(() => exchange.assertComplete()).toThrow('Recorded exchange request mismatch at step 1')
     expect(exchange.stats()).toEqual({ matchedRequests: 0, emittedFrames: 1, remainingRequests: 3 })
   } else {

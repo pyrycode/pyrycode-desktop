@@ -37,8 +37,8 @@ it.each([1, 99])('excludes tool-body data and final replies for item %i from que
   update({ type: 'thread_item_changed', payload: { ...routing, version: 3,
     item_id: 1, base_rev: 1, rev: 3, changes: { content: { text: 'FIRST_' } } } })
   replies.forEach(proof.observe)
-  update({ type: 'thread_text_append', payload: { ...routing, version: 4,
-    item_id: 1, base_rev: 3, rev: 4, text: 'DONE' } })
+  update({ type: 'thread_text_append', payload: { ...routing, version: 3,
+    item_id: 1, base_rev: 3, rev: 3, text: 'DONE' } })
   expect(proof.snapshot([0]).turns[0]).toMatchObject({ markers: [0], completions: 0 })
   expect(proof.snapshot([0]).complete).toBe(false)
   update({ type: 'thread_item_added', payload: { ...routing, version: 5,

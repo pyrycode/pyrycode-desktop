@@ -48,3 +48,5 @@ None.
 
 ## Revisions
 2026-10-19: The unchanged client-test compiler scope follows scenario imports and does not include fixture unit files. A separate scratch TypeScript project exposed stale correlation fields and unchecked queue constructors in the existing suites. Make these constructors conform to the real event types, retaining every revision/ownership and suffix/duplicate assertion; run the separate unit-input typecheck as additional validation without changing repository compiler coverage.
+
+2026-10-19: Interleaving detail replies between a queue field change and its legitimate same-revision suffix reproduced lost marker evidence in both held/missing-ID cases. The existing discriminant guard was below the clearing of `appendCompanion`. Return on `thread_tool_body` before touching that scalar bookkeeping; keep the existing explicit scalar guards and suffix/duplicate rules. The new queue regression now interleaves data/final replies inside that pair. This is the same evidence-admission invariant, with one additional test-only early-return branch and no production change.

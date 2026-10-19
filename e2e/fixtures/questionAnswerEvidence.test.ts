@@ -124,6 +124,15 @@ describe('original question answer evidence', () => {
       expect(s.proof.complete()).toBe(true)
     }
   })
+  it.each([false, true])('preserves paired live append freshness across snapshots (same item: %s)', sameItem => {
+    const s = setup(); s.reply('Before.'); s.arm(); s.submit(); s.dismiss()
+    s.emit('thread_item_changed', { item_id: 2, base_rev: 1, rev: 2, changes: { status: 'done' } })
+    s.snapshot(sameItem ? [{ ...snapshotAssistant, rev: 2, content: { text: 'Before.' + confirmation } }] : [])
+    s.emit('thread_text_append', { item_id: 2, base_rev: 2, rev: 2, text: confirmation })
+    s.end()
+    expect(s.proof.snapshot().witnessed).toBe(!sameItem)
+    expect(s.proof.complete()).toBe(!sameItem)
+  })
   it('rejects snapshot-only text and text on another route, turn or nested item', () => {
     for (const fault of ['snapshot', 'host', 'chat', 'turn', 'nested']) {
       const s = setup(); s.arm(); s.submit(); s.dismiss()

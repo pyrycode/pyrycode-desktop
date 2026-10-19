@@ -51,12 +51,12 @@ export function createQuestionAnswerEvidence(subscribe = false) {
       const p = event.reply.payload
       if (epoch && epoch !== p.epoch) { invalid = true; failure = 'epoch'; return }
       epoch = p.epoch
-      companion = undefined
       for (const item of p.items) {
         if (item.parent !== undefined || typeof item.turn !== 'string' ||
             item.kind !== 'assistant_message' && item.kind !== 'turn_end') continue
         const old = items.get(item.id)
         if (old && old.rev > item.rev) continue
+        if (companion?.id === item.id) companion = undefined
         remember(item)
         // Snapshots exclude already-seen content and identities, even after arming; never prove freshness.
         if (item.kind === 'turn_end') ended.add(item.id)

@@ -1,8 +1,6 @@
 import { scenarioNonce, scenarioDaemonRevision, scenarioDesktopRevision } from './fixtures/clientScenario'
 import type { Page } from '@playwright/test'
-import { createElement } from 'react'
-import { renderToStaticMarkup } from 'react-dom/server'
-import { AssistantMarkdown } from '../src/renderer/src/screens/conversation/AssistantMarkdown'
+import { markdownPlainText } from '../src/renderer/src/screens/conversation/MarkdownReader'
 import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/clientScenario'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 import { confirmCreateChat } from './fixtures/confirmCreateChat'
@@ -29,10 +27,11 @@ async function actualReply(page: Page): Promise<RecordedReply> {
 async function renderedReplies(page: Page, replies: RecordedReply[], timeout = 45_000) {
   // Compare assistant body text only; markdown formatting and row chrome are not reply content.
   for (const reply of replies) await expect.poll(() => page.locator('[data-thread-role="assistant"] .bubble__markdown').evaluateAll(
-    (rows, markup) => {
-      const expected = new DOMParser().parseFromString(markup, 'text/html').body.textContent
-      return rows.some(row => row.textContent === expected)
-    }, renderToStaticMarkup(createElement(AssistantMarkdown, { text: reply.text }))
+    (rows, expected) => rows.some(row => {
+      const body = row.cloneNode(true) as HTMLElement
+      body.querySelectorAll('.code-block__header, .code-block__copy, .task-mark').forEach(node => node.remove())
+      return body.textContent?.replace(/\s/g, '') === expected.replace(/\s/g, '')
+    }), markdownPlainText(reply.text)
   ), { timeout }).toBe(true)
 }
 

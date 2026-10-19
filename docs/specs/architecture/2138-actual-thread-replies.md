@@ -39,3 +39,6 @@ Run the exact named live scenario through the shared live launcher on Linux with
 
 ## Open Questions
 None. Prefer one self-contained collector plus pure saved comparison over changing the shared phase observer.
+
+## Revisions
+2026-10-19: Focused replay/live both exposed Playwright's TSX transformation rejecting React server rendering of the imported view. Rendered-body checks instead use the existing `markdownPlainText` parser, remove code/task chrome from cloned body nodes and normalize layout whitespace. Saved/native comparisons still require exact original text. Reports `replay.log`, `live.log` and `live-stderr.log` under `/tmp/builder-2138/` preserve these failed checks.

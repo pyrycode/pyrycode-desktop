@@ -201,7 +201,7 @@ const replay = base.extend<ReplayFixtures>({
         server_static_pubkey: Buffer.from(daemon.staticPublicKey).toString('base64') }) })
     } finally { state = undefined; await daemon.close() }
   },
-  _clientReplay: [async ({ daemon, exchange, recording }, use) => {
+  _clientReplay: [async ({ daemon, exchange, recording, relay }, use) => {
     void daemon
     let first = true
     clientAppLifecycle.opened = async (app, page) => {
@@ -211,7 +211,12 @@ const replay = base.extend<ReplayFixtures>({
       if (first) { exchange.setDeviceId(identity.deviceId); first = false }
       else exchange.bindCurrentDevice(identity.deviceId)
     }
-    try { await use() } finally { delete clientAppLifecycle.opened }
+    clientAppLifecycle.closing = async (_app, completed) => {
+      if (!completed) return
+      await exchange.whenConnectionComplete()
+      await relay.whenServerFramesForwarded(exchange.serverFrameCount())
+    }
+    try { await use() } finally { delete clientAppLifecycle.opened; delete clientAppLifecycle.closing }
   }, { auto: true }],
   page: async ({ daemon }, use) => { void daemon; await withIsolatedElectronApp(({ page }) => use(page)) }
 })

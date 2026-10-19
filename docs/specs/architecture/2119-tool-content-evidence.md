@@ -45,3 +45,6 @@ No new failure mode. Tool detail is ignored by explicit scalar event guards; exi
 
 ## Open Questions
 None.
+
+## Revisions
+2026-10-19: The unchanged client-test compiler scope follows scenario imports and does not include fixture unit files. A separate scratch TypeScript project exposed stale correlation fields and unchecked queue constructors in the existing suites. Make these constructors conform to the real event types, retaining every revision/ownership and suffix/duplicate assertion; run the separate unit-input typecheck as additional validation without changing repository compiler coverage.

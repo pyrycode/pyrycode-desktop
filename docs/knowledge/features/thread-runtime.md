@@ -26,8 +26,9 @@ fallback when authoritative inputs are absent.
 Conversation commands capture the selected or retained host. Main resolves that
 explicit host through the paired registry. A last claimant of an equal conversation
 ID cannot redirect the request. Device identity is a separate authenticated fact.
-On-demand bodies additionally require the current owning handshake to accept all
-three capabilities; unsupported expansion leaves complete reading available.
+On-demand bodies and child pages additionally require the current owning
+handshake to accept all three capabilities; unsupported expansion leaves complete
+reading available.
 
 ## Restore, recovery and cleanup
 
@@ -155,14 +156,18 @@ cannot become an empty success. Unknown content stays inert JSON. Failure requir
 an active lease's explicit `retry()`; another demand, navigation or reconnect
 does not retry a retained failure automatically.
 
-The session cache has finite limits:
+### Shared body and child cache
+
+Bodies and [child pages](#on-demand-child-pages) use one `createThreadBodies`
+owner, record map, queue and lease budget. Complete-view queries progress
+independently when expansion reads are saturated. The shared finite limits are:
 
 | Resource | Limit |
 | --- | ---: |
 | Active reads | 4 |
 | Queued reads | 28 (32 outstanding total) |
 | Entry records | 64 |
-| Retained body content, measured as UTF-8 JSON | 16 MiB |
+| Retained bodies, partial child summaries and cursor metadata, measured as UTF-8 JSON | 16 MiB |
 | Demand leases, including listener subscriptions | 128 |
 | Active-read deadline | 30 seconds |
 
@@ -174,7 +179,8 @@ an automatically fetchable miss. Record admission evicts only an unleased,
 nonfailed entry without active/queued work. Failed records remain bounded at the
 same 64-entry cap; if no eligible victim exists, a new identity is rejected with
 `missing/limit`. A separate failure ledger is unnecessary. Scope clearing removes
-these records; successful explicit retry replaces their failure state.
+these records; explicit retry authorizes replacement work. Child failure admission
+also spans page-limit variants, as described below.
 
 Reopening unchanged retained success in the same connection reuses the cache.
 Navigation retires leases and unfinished work but may retain completed content.
@@ -195,11 +201,79 @@ conversation deletion and successful unpair clear the corresponding entries;
 disposal clears all entries, timers and subscriptions. Navigation/disconnect
 retain failure admission until explicit retry or lifecycle clearing.
 
-Bodies remain session memory only. Normal opening and presentation continue to
-use complete views, including the existing readable saved-complete route. Body
-results write no canonical item, coverage, completion certificate or read receipt.
-This operation adds no detail persistence, full-history read route, row-control
-wiring, child enumeration or compact selection.
+Bodies and child pages remain session memory only. Normal opening and presentation
+continue to use complete views, including the existing readable saved-complete
+route. Expansion replies are consumed before complete-query batch admission and
+write no canonical item, coverage, completion certificate or read receipt. Neither
+operation prefetches bodies, nested rows or another page. Row-control wiring is
+deferred to #2081; compact selection and live ancestor invalidation remain outside
+this operation (#2103 owns ancestor invalidation). No detail persistence is added.
+
+## On-demand child pages
+
+`createThreadRuntime().children.demand(request, listener?)` accepts `serverId`,
+`conversationId`, `epoch`, parent `itemId`, expected `revision` and optional `limit`;
+it supplies `kind: 'children'` internally. It uses the selected owning host and
+the same accepted-capability, connection, scope and generation fences as bodies.
+The limit defaults to 50 (including zero) and clamps to 256. Equal demands with
+equal normalized limits share one read with independent leases; distinct limits
+keep separate successful caches. An unchanged success reopens in the same
+connection without refetch, even when another limit variant has failed.
+
+The lease has `getState()`, `release()`, `retry()` and `continue(cursor)`. Its
+`missing`, `loading`, `failed` and `ready` states retain the compatible body-state
+shape; child content is in optional `page`, with inert empty `content` on success.
+`page.children` accumulates received direct-child summaries, alongside capture
+`version`, enumeration `complete`, and marker-supplied `more`/`cursor`. Partial
+data is observable as loading and stale. Only the matching separate success
+marker makes the page ready; marker-only empty success is valid. Only authoritative
+`more: false` makes `page.complete` true for that enumeration at its capture. A
+short page proves neither exhaustion nor complete-thread coverage.
+
+Another page requires `continue(page.cursor)` echoing all seven fields:
+`conversation_id`, `epoch`, `item_id`, `rev`, `version`, `order`, `id`. Cursor
+`version` is consumed-history version: another change can invalidate it while
+the parent's revision stays unchanged. Zero version/order are valid. Summaries
+advance in strict ascending `(order, id)` order, including zero-order ties; IDs
+must remain unique across retained pages, since increasing tuples alone would
+allow the same ID to reappear at a greater order. Duplicate continuation shares
+queued/active work, and an exact already-consumed cursor reuses success after its
+marker. Consumed cursors and an active continuation cursor count toward retained
+bytes; they are cleared when a replacement enumeration receives its first reply.
+
+Optional summary facts preserve absence separately from known zero, false or
+empty text. `kind` and `status` remain open strings. Unknown child counts,
+existence or subtree versions supply no freshness or completeness authority;
+summaries include neither bodies nor descendant inventory. The
+[main validation contract](daemon-connection-correlation-requests.md#bounded-thread-child-reads)
+owns their field, count and routing checks.
+
+A failed, refused or invalid continuation retains available summaries as stale
+and incomplete. Explicit `retry()` starts a replacement **first page without a
+cursor**. Old summaries can remain while waiting, but the first replacement reply
+replaces them, and only replacement pages can complete the new enumeration.
+Repeated demand, changed limits, reconnect and byte/record eviction cannot bypass
+failure. Failed records and their parent-scoped admission object survive content
+eviction within the shared 64-record bound; no separate failure ledger is used.
+
+Limit-specific entries in the same host/conversation/epoch/parent/revision and
+store generation share the current failure identity. Retry acknowledges that
+identity for the entry's replacement enumeration, allowing each explicitly
+demanded continuation through authoritative `more: false`. A later actual failure
+replaces the identity and invalidates the earlier acknowledgment; admission
+refusal copies its reason without creating a new failure. Both `start` before
+queuing and `pump` immediately before dispatch check admission. Checking only when
+queuing would let a saturated continuation bypass a newer sibling failure when
+an active slot opens. Ordinary first-page demand and retirement discard retry
+acknowledgment; cached success remains independently reusable.
+
+Child leases follow the shared release, offline, reconnect and cleanup rules
+above. Explicitly demanding a changed parent revision retires the old revision's
+leases synchronously. After retirement callbacks, admission rechecks selected
+ownership, selection token, epoch, store generation and connection: a callback
+can navigate, reopen equal IDs or disconnect before demand resumes. Late replies
+cannot populate replacement identities. Disconnect leaves only stale retained
+pages or explicit missing/evicted state; reconnect sends no child read until demand.
 
 ## Navigation boundaries
 
@@ -306,6 +380,53 @@ branch. The publisher requires the authoritative epoch and shown watermark;
 cleanup, acknowledgement and reconnect retry retain their existing ownership fences.
 
 ## Validation boundaries
+
+### On-demand child validation
+
+The [accepted verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2116#issuecomment-6258925278)
+for #2102, stage `723e52c7`, records Linux validation on 2026-10-19 at
+`1864014571f037af499516cdfa3c9c67f5e1856c`. The documentation handoff's dispatcher
+gate-4 report counts **9,537 unit tests executed/passed, 0 failed, 3 skipped**;
+the accepted verdict separately reports **9,615 executed/passed, 0 failed,
+3 skipped**, including all **124 received-frame/preload/runtime cases** and
+**25 adjacent cache cases** present and passed. The supplied aggregate totals
+differ and are retained separately rather than combined.
+
+The dispatcher report explicitly lists passing `child pages traverse production
+frames and preload, preserve zero ties and continue only on demand`, `marker-only
+empty success is cached, and unknown optional facts remain absent`, `failed
+continuation retains incomplete summaries and retry starts a replacement first
+page`, and `mixed body/child saturation leaves complete queries progressing
+without prefetch`. It also lists the passing byte/record-eviction, normalized-limit,
+two-host, changed-revision, offline/reconnect, last-release, all-lease retirement
+and deadline cases. Its named retry regressions include `replacement child retry
+acknowledges one failure across pages and requires retry after another`, `a later
+in-flight sibling failure invalidates a replacement enumeration acknowledgment`
+and `queued child continuation rechecks a later sibling failure before dispatch`.
+The latter positively observes queued work and both failures before excluding a
+new request, then proves explicit first-page recovery, inert late replies,
+duplicate continuation and completion using replacement summaries alone.
+Canonical state and receipts remain unchanged. See the
+[plan's regression inventory](../../specs/architecture/2102-direct-child-pages.md#state-transitions-and-identity-reuse).
+
+Dispatcher gate 7 and the accepted verdict record the configured Linux Playwright
+run: **505 executed/passed, 0 failed, 5 skipped**. The named captured scenario
+`daemon-built thread streams, places an agent, reconnects, resets and reopens
+saved items` was present and passed. The verdict identifies the skips as three
+macOS-only cases, the existing system-prompt-reset fixme and the unreachable-host
+unpair case awaiting #2089; none supplies acceptance evidence. Builder's final
+affected run records **149 executed/passed, 0 failed, 0 skipped** and its guarded
+focused thread replay **1 executed/passed, 0 failed, 0 skipped**, with zero
+forbidden launches. The original assertions and strict outgoing matching remain.
+
+The thread recording is historical: captured 2026-10-16 at Desktop `00ec821f`
+and daemon `58f46aa5`. Frame tests exercise production connection, command/event
+validation, mocked Electron IPC, preload and runtime; replay exercises the actual
+application with captured messages. These recorded runs establish synthetic
+client handling, with no fresh provider, physical-effect, cryptography or native
+transport acceptance claim. macOS is outside this Linux ticket's verification
+scope. See [recorded tests](../../recorded-tests.md) and the
+[replay inventory and exclusions](../../client-replay-migration.md).
 
 ### On-demand body validation
 

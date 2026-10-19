@@ -160,6 +160,42 @@ Writing the required verdict-answer file under the publishing directory also
 failed in approval review without execution. A copy is retained at
 `/tmp/builder-2120/rework/rework-answers-2120-37a858d17e3e.md` for recovery.
 
+2026-10-19 — The bounded retry resumed the preserved fixes in `abae1d27` and
+completed the previously blocked publication and Linux checks. The prior worker
+had stopped; no previous test process remained. No further implementation change
+was needed. A fresh fetch found no overlapping feature branch, and the final
+`git merge origin/main` confirmed main `107558eb` was already included. QMD search
+stalled again; repository documentation search/read supplied the documented fallback.
+The implementation, regression and plan remain below the 800-line written-work ceiling.
+
+Fresh evidence at `abae1d274a28656e61719f743e47ac6004b08d63`, Linux x64:
+
+- `npm install --no-audit --no-fund` completed. The post-merge
+  `python3 /work/Projects/pyrycode-desktop-agents/bin/pre-verify-check --test-file e2e/fixtures/connectionPillStatus.test.ts`
+  passed all five checks, including current issue labels and 35 executed/passed
+  regressions, zero failed/skipped. Log: `/tmp/builder-2120/recovery/pre-verify.log`;
+  counted XML: `build/dispatcher-tests/unit-7gfnlfv3/dispatcher.xml`.
+- The helper-specific TypeScript check and `npm run build` passed. Logs:
+  `/tmp/builder-2120/recovery/helper-typecheck.log` and `build.log` in that directory.
+  `npm run rebuild:electron` then completed before browser execution.
+- `npx playwright test e2e/connection-pills.spec.ts --grep "connection pills clear and float over hidden rows" --repeat-each=10 --retries=0 --reporter=json`:
+  10 executed/passed, zero failed/skipped/flaky, every retry index 0;
+  configured/actual workers 3/3, `PW_WORKERS` unset.
+  Report: `/tmp/builder-2120/recovery/hidden-ten.json`.
+- `npx playwright test e2e/connection-pills.spec.ts --retries=0 --reporter=json`:
+  5 executed/passed, zero failed/skipped/flaky, every retry index 0;
+  configured/actual workers 3/1 (one sequential spec). The named hidden-row case
+  is present and passed. Report: `/tmp/builder-2120/recovery/connection-pills.json`.
+- Both browser reports have empty matching `.stderr`, no report-level errors,
+  and all 15 `launch-fate` attachments show running at outcome, exit 0, null signal
+  and no teardown failures. Existing scenario assertions are unchanged.
+
+These completed checks resolve the preceding interrupted-run hold. Both numbered
+verifier answers are written in the required publishing handoff file, naming
+`abae1d27`. The dispatcher owns the complete configured application gate for this
+candidate, including the hidden-row case passing without retry; that gate remains
+pending. Documentation remains pending below. macOS is outside this Linux ticket.
+
 ## Documentation handoff
 - Pending documentation stage: `docs/knowledge/features/e2e-harness-context-recovery.md`,
   “Confirmed control resends”: document the local helper's fresh exact renderer

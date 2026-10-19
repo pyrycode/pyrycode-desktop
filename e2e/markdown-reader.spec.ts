@@ -40,9 +40,9 @@ const noteText = (): string => [
   '```\npyry release --both\npyry status\n```'
 ].join('\n\n')
 
-function readReply(requestId: number, ask: ReadWorkspaceFilePayload): Uint8Array[] {
-  reads += 1
-  const bytes = Buffer.from(noteText(), 'utf8')
+function readReply(requestId: number, ask: ReadWorkspaceFilePayload, text?: string): Uint8Array[] {
+  if (text === undefined) reads += 1
+  const bytes = Buffer.from(text ?? noteText(), 'utf8')
   const payload: AttachmentChunkPayload = {
     attachment_id: '5a6b7c8d-9e0f-4a1b-8c9d-5e6f7a8b9c0d',
     index: 0,
@@ -90,6 +90,103 @@ const buildReplyFrames = (inbound: Uint8Array): Uint8Array[] => {
       return [seedConversationsFrame()]
   }
 }
+
+test('reader headings share the scale, spacing and first-block clearance (#2100)', async ({ launchPairedApp }) => {
+  const levels = [1, 2, 3, 4, 5, 6]
+  const note = [
+    '# First heading',
+    'Before headings.',
+    ...levels.flatMap(level => [`${'#'.repeat(level)} Heading ${level}`, `After heading ${level}.`]),
+    ...levels.map(level => `${'#'.repeat(level)} Adjacent ${level}`)
+  ].join('\n\n')
+  let servedText = note
+  const { page, app } = await launchPairedApp({ buildReplyFrames: inbound => {
+    const frame = decodeEnvelope(inbound)
+    return frame.type === 'read_workspace_file'
+      ? readReply(frame.id, frame.payload as ReadWorkspaceFilePayload, servedText)
+      : buildReplyFrames(inbound)
+  } })
+  await page.getByPlaceholder('Message…').fill('show the heading note')
+  await page.getByRole('button', { name: 'Send' }).click()
+  const link = page.locator('[data-thread-role="assistant"]').getByRole('button', { name: 'the plan' })
+  const reader = page.locator('.markdown-reader')
+  const markdown = reader.locator('.bubble__markdown')
+  const firstClearance = () => reader.evaluate(element => {
+    const body = element.querySelector('.markdown-reader__body')!
+    const first = element.querySelector('.bubble__markdown > :first-child')!
+    const chrome = element.querySelector('.markdown-reader__chrome')!
+    return { scrollTop: body.scrollTop,
+      gap: first.getBoundingClientRect().top - chrome.getBoundingClientRect().bottom }
+  })
+  for (const width of [1280, 800]) {
+    await app.evaluate(({ BrowserWindow }, value) => BrowserWindow.getAllWindows()[0].setSize(value, 800), width)
+    await expect.poll(() => page.evaluate(() => innerWidth)).toBe(width)
+    servedText = note
+    await link.click()
+    await expect(markdown.locator(':scope > h1').first()).toHaveText('First heading')
+    await page.evaluate(() => document.fonts.ready)
+    const ink = await reader.evaluate(element => {
+      const probe = document.createElement('span')
+      probe.style.color = 'var(--color-on-secondary-container)'
+      element.append(probe)
+      const color = getComputedStyle(probe).color
+      probe.remove()
+      return color
+    })
+    for (const level of levels) {
+      const heading = markdown.locator(`:scope > h${level}`).first()
+      const [size, line, weight, tracking] = [
+        ['20px', '28px', '500', '0px'], ['18px', '26px', '500', '0px'],
+        ['16px', '24px', '500', '0.15px'], ...levels.slice(3).map(() => ['14px', '20px', '700', '0.25px'])
+      ][level - 1]
+      await expect(heading).toHaveCSS('font-family', /^Roboto,/)
+      await expect(heading).toHaveCSS('font-size', size)
+      await expect(heading).toHaveCSS('line-height', line)
+      await expect(heading).toHaveCSS('font-weight', weight)
+      const actualTracking = await heading.evaluate(element => getComputedStyle(element).letterSpacing)
+      // Blink serializes zero tracking as `normal`, as in the shared heading checks.
+      expect(actualTracking === 'normal' ? '0px' : actualTracking).toBe(tracking)
+      await expect(heading).toHaveCSS('color', ink)
+    }
+    const geometry = await markdown.evaluate(element => {
+      const blocks = [...element.children]
+      const headings = blocks.filter(child => /^Heading [1-6]$/.test(child.textContent ?? ''))
+      const adjacent = blocks.filter(child => /^Adjacent [1-6]$/.test(child.textContent ?? ''))
+      return {
+        gaps: headings.map(child => {
+          const rect = child.getBoundingClientRect()
+          return [rect.top - child.previousElementSibling!.getBoundingClientRect().bottom,
+            child.nextElementSibling!.getBoundingClientRect().top - rect.bottom]
+        }),
+        adjacent: adjacent.slice(1).map((child, index) =>
+          child.getBoundingClientRect().top - adjacent[index].getBoundingClientRect().bottom),
+        firstInset: blocks[0].getBoundingClientRect().top - element.getBoundingClientRect().top,
+        lastInset: element.getBoundingClientRect().bottom - blocks.at(-1)!.getBoundingClientRect().bottom
+      }
+    })
+    expect(geometry.gaps).toHaveLength(6)
+    for (const [before, after] of geometry.gaps) {
+      expect(before).toBeCloseTo(20, 1)
+      expect(after).toBeCloseTo(12, 1)
+    }
+    expect(geometry.adjacent).toHaveLength(5)
+    for (const gap of geometry.adjacent) expect(gap).toBeCloseTo(16, 1)
+    expect(geometry.firstInset).toBeCloseTo(0, 1)
+    expect(geometry.lastInset).toBeCloseTo(0, 1)
+    const headingClearance = await firstClearance()
+    expect(headingClearance.scrollTop).toBe(0)
+    expect(headingClearance.gap).toBeGreaterThanOrEqual(0)
+    await capturePairedApp(app, page, `/tmp/builder-2100/reader-headings-${width}.png`)
+    await reader.getByRole('button', { name: 'Back', exact: true }).click()
+    servedText = 'First paragraph.'
+    await link.click()
+    await expect(markdown.locator(':scope > p')).toHaveText('First paragraph.')
+    const paragraphClearance = await firstClearance()
+    expect(paragraphClearance.scrollTop).toBe(0)
+    expect(headingClearance.gap).toBeCloseTo(paragraphClearance.gap, 1)
+    await reader.getByRole('button', { name: 'Back', exact: true }).click()
+  }
+})
 
 test('a markdown link in a reply opens the note in the reader, refetched on every open, and back returns (#1627)', async ({
   launchPairedApp

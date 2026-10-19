@@ -20,9 +20,8 @@ streaming coverage. Blink's `normal` tracking is normalized to `0px` before comp
 The existing inline-code regression checks H2 code against
 `--text-markdown-h2-size` and literal `18px`, while retaining its monospace,
 background, wrapping and fenced-code exclusion assertions. Static renderer units
-cannot establish computed CSS. Reader inheritance is confirmed by its shared
-container and the [PR](https://github.com/pyrycode/pyrycode-desktop/pull/2113);
-reader-specific browser verification remains with #2100.
+cannot establish computed CSS. [Reader browser verification](#reader-headings)
+also confirms the inherited scale through the reader's shared container.
 
 The [accepted Linux verifier verdict for #2106](https://github.com/pyrycode/pyrycode-desktop/pull/2113#issuecomment-6256259013)
 at `800043c1` records all 14 whitespace regressions present and passed, including
@@ -68,8 +67,8 @@ at `127ce946` records the PR's post-merge focused whitespace/reader run:
 cases and the six-level typography case were present and passed, along with
 “the reader menu copies the note three ways and refreshes it (#1630)”. That
 reader-menu check now expects 12 px from H1 to paragraph at both widths,
-inherited through the shared `.bubble__markdown` container. Additional
-reader-specific coverage is owned by #2100; the merged #2106 typography stays
+inherited through the shared `.bubble__markdown` container. The [reader-specific
+coverage](#reader-headings) measures all six levels; the merged #2106 typography stays
 unchanged by the spacing rules.
 
 The same verdict records separate scratch Electron checks: 2 executed/passed,
@@ -87,6 +86,50 @@ The verifier compared fresh synthetic streaming/settled captures at the reviewed
 head with Figma `883:13431`, retaining main's typography. Captures are
 `/tmp/verifier-2115/current/{streaming,settled}-{1280,800}.png`, with content
 sizes 1280×773 and 800×773. No provider/live run is required for this CSS behavior.
+
+## Reader headings
+
+[`e2e/markdown-reader.spec.ts`](../../../e2e/markdown-reader.spec.ts)'s “reader
+headings share the scale, spacing and first-block clearance (#2100)” measures
+the loaded `MarkdownReaderView` at 1280 and 800 px window widths through the
+reply-link open and verified synthetic file delivery. It checks the literal
+H1–H6 scale, Roboto-first family and On Secondary Container ink, all six 20/12 px
+prose boundaries, five 16 px adjacent-heading gaps and flush outside edges.
+Separate first-heading and refetched first-paragraph notes must have equal
+clearance from fixed chrome at scroll zero, with nonnegative heading clearance.
+The [reader overview](conversation-shell-markdown-reader.md#heading-verification)
+links the static six-tag assertion and mounted proof. No production styles or
+duplicate reader heading rules were added: the existing shared rules already
+met this contract.
+
+The reader assertion normalizes Blink's `normal` letter spacing to `0px`, as
+the shared heading check does; literal serialization would reject correct zero
+tracking. A temporary page-only 21 px H1 was rejected by the expected 20 px
+assertion before the clean run, proving an already-passing presentation test
+can detect drift without changing production CSS. Retained negative-control
+evidence is `/tmp/builder-2100/detector-results/markdown-reader-reader-hea-c5ae2-first-block-clearance-2100--parallel/error-context.md`;
+the perturbation is absent from the committed test.
+
+The [accepted Linux verifier verdict for #2100](https://github.com/pyrycode/pyrycode-desktop/pull/2144#issuecomment-6269937746)
+at `383521f0` confirms the clean focused reader run: 2 executed, 2 passed,
+0 failed and 0 skipped, including the named heading scenario and the existing
+“a markdown link in a reply opens the note in the reader, refetched on every
+open, and back returns (#1627)” scenario. Both were present and passed without
+retries in the configured application run: 514 executed, 512 passed, 2 failed
+and 5 skipped. The two failures remain recorded as accepted flakes under
+[#2125](https://github.com/pyrycode/pyrycode-desktop/issues/2125) and
+[#2140](https://github.com/pyrycode/pyrycode-desktop/issues/2140); the dispatcher's
+same-tree rerun executed/passed 3 selected tests, with 0 failed and 0 skipped.
+
+The verifier inspected synthetic loaded-reader captures at 1280×773 and 800×773
+against Figma `552:2404`, `892:13442` and `883:13431`. Retained references are
+`/tmp/builder-2100/reader-headings-{1280,800}.png`. The builder identifies the app
+build as `d44a0009`; only test-side zero-tracking normalization changed through
+reviewed head `383521f0`, and the dispatcher's current-head run refreshed both
+captures. These are recorded Linux results and visual review, not fresh
+documentation runs. Font checks establish the Roboto-first stack, not font
+packaging. No real provider/daemon run was required or performed; macOS is
+outside this Linux ticket's verification scope.
 
 ## Rendering and spacing
 

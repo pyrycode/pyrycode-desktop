@@ -76,3 +76,79 @@ None. If the exact list never becomes durable, reassess scope before changing pr
 One behavior with regression, four observable criteria; estimated 350–450 written
 lines, zero production files, one exported helper, one consumer and fewer than
 ten result branches. Within all numeric ceilings; no independent split seam.
+
+## Revisions
+2026-10-19: Test naming only: the host-rejection case is named
+`does not repeat wrong-host` in the parameterized regression. No contract change.
+
+## Validation evidence
+Linux x64, implementation revision `aa4938b653cf0b2f9b6f98b238699c2287a17191`,
+containing main `0848c1fbe194420212229d4bd2fabbf7f3af0296`. Node 25.8.0,
+Electron 33.4.11. This final evidence addition changes documentation only.
+
+The controlled original one-shot observation failed as intended: one selected
+test executed/failed, with the other ten cases not selected
+(`/tmp/builder-2129/original-observation.log`). Real protected thread content
+already satisfied `savedRepliesMatch`; the actual list was `stored/list`, exact
+row present, name null. The original `typeof title` assertion rejects that result.
+The repaired test remains pending both before named-list receipt and while its
+scheduled write is held, then returns the actual protected name. Its payload-free
+trace records unnamed-list receipt, protected unnamed reads, named-list receipt,
+write submission, another protected unnamed read, successful write acknowledgement,
+protected named read, then the retirement sentinel. Actual profile retirement and
+relaunch remain covered by the unchanged application scenario assertions.
+This demonstrates an observation mechanism, not the unobserved historical trigger.
+
+Final focused regression: **11 executed, 11 passed, 0 failed/skipped**.
+`pre-verify-check` passed all five checks after the final main merge; build and
+client-test typecheck passed. Node-native preparation finished before Electron
+preparation; no native rebuild ran during replay. Commands:
+
+```sh
+npm install --no-audit --no-fund
+python3 "$AGENTS_REPO_PATH/bin/pre-verify-check" --test-file e2e/fixtures/savedListTitle.test.ts
+npm run build
+npm run typecheck:client-tests
+npm run rebuild:electron
+node scripts/run-offline-replay.mjs --grep "a real daemon lazily fills a served gap|daemon-built thread streams" --fully-parallel --workers=3 --repeat-each=2 --retries=0 --reporter=list,json
+npm run e2e:recorded -- --reporter=list,json --output=/tmp/builder-2129/recorded-full-results
+```
+
+Each paired invocation additionally uses `--output=/tmp/builder-2129/paired-N-results`
+and `PLAYWRIGHT_JSON_OUTPUT_NAME=/tmp/builder-2129/paired-N.json`; stdout/stderr is
+retained in `paired-N.log`. Five consecutive batches, both named cases twice:
+
+| Batch | Configured workers | Actual slots / peak concurrent tests | Worker process IDs | Executed/passed/failed/skipped |
+| --- | --- | --- | --- | --- |
+| 1 | 3 | 0,1,2 / 3 | 0,1,2 | 4/4/0/0 |
+| 2 | 3 | 0,1,2 / 3 | 0,1,2 | 4/4/0/0 |
+| 3 | 3 | 0,1,2 / 3 | 0,1,2,3 | 4/4/0/0 |
+| 4 | 3 | 0,1,2 / 3 | 0,1,2 | 4/4/0/0 |
+| 5 | 3 | 0,1,2 / 3 | 0,1,2 | 4/4/0/0 |
+
+Total **20 executed/passed, 0 failed/skipped**, every result retry zero. Batch 3
+recycled slot 0 after its earlier case completed; three slots actually executed
+concurrently, measured from result start times/durations. This was not a retry.
+Every thread exchange matched **45 requests / 378 emitted frames / 0 remaining**;
+every history exchange **32 / 63 / 0**. Each guard reported zero forbidden launches.
+
+The subsequent complete guarded recorded suite used its unchanged configured and
+actual one-worker execution: **29 executed/passed, 0 failed, 1 existing skipped
+system-prompt-reset fixme**, retries zero. All **29 exchanges** had zero remaining
+requests; forbidden launches zero. Reports: `/tmp/builder-2129/recorded-full.json`
+and `.log`, with artifacts in `recorded-full-results/`. Preparation/check logs are
+`pre-verify.log`, `build.log`, `client-typecheck.log`, `electron-preparation.log`
+and `regression.log` under the same scratch root. Structured unit evidence is in
+`build/dispatcher-tests/unit-k80cx7ph` in this worktree.
+
+Unchanged capture SHA-256 values: thread
+`53a3db11cfab2d5041b511d7be4d030ab5b2b8449b7fdb3ea1d7e5e3db552ae3`, history
+`de0b1166b6e05e0792228c07be25c20498b117914e673558222eac12cd4e6d2c`.
+Both retain source Desktop `00ec821f9380b00cf2dfc0dd4817ee15584106a5` and daemon
+`58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf` provenance. No capture bytes, request
+contracts, frame ordering, connection boundaries or completion checks changed.
+
+Pending later-stage work: dispatcher-owned application gate must run both named
+cases without retry; verifier reviews its counted evidence and reports unrelated
+failures separately. These are offline Linux results, with no new live-provider
+or physical-effect claim. macOS is outside this ticket's verification scope.

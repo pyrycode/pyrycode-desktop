@@ -8,7 +8,67 @@ The scenario inventory, protected tickets and live-only proof boundaries are in 
 
 Each `e2e/recordings/*.json` identifies its source Desktop commit, daemon source revision and binary checksum, Claude version, capture time and authenticated capabilities. Version 2 also records sequential authenticated connection lifetimes and explicit test-side causal checkpoints. Observed retryable transport closes carry their actual close code and message prefix; replay forwards every preceding frame before closing the local socket. Version 1 remains readable for older captures from PR #2036.
 
-Replay uses the normal Desktop build, native thread mode, the existing encrypted fake daemon and a local forwarding relay. It never invokes the older event-to-thread publisher. Every outgoing envelope field and complete payload must match. Only fresh request IDs/timestamps and explicitly bound opaque identities vary. The same identity binds once across requests, replies and connections. Text, permission choices, routes, cursors and unknown extra fields remain part of the comparison.
+Replay uses the normal Desktop build by default, native thread mode, the existing encrypted fake daemon and a local forwarding relay. It never invokes the older event-to-thread publisher. Every outgoing envelope field and complete payload must match. Only fresh request IDs/timestamps and explicitly bound opaque identities vary. The same identity binds once across requests, replies and connections. Text, permission choices, routes, cursors and unknown extra fields remain part of the comparison.
+
+For older complete-thread recordings whose accepted capabilities already include
+`thread_expansion,thread_compact`, explicitly select the test-only build profile:
+
+```sh
+node scripts/run-offline-replay.mjs --profile complete-thread --retries 0
+```
+
+This builds the current Desktop source with
+`e2e/recordings/complete-thread.config.ts` and runs the original shared assertions
+under the executable guard. Its build alias supplies omitted opening options at
+both ordinary opening and created-conversation activation, selecting the existing
+complete authoritative route throughout the run, including accepted reconnects.
+Default replay, with no `--profile`, uses the existing normal output and verifies
+automatic projection selection: a compact-capable accepted handshake produces
+`projection: 'compact-v1'`. Compatibility verifies the current source's complete
+route. Neither profile establishes fresh provider behavior or physical transport
+proof. Production compact-demand coverage continues to use the normal build.
+
+The compatibility configuration contains no capture adapter. Selection happens
+before application dispatch; normal builds have no environment, IPC or renderer
+state switch for it. There is no mismatch fallback, per-request adaptation or
+projection stripping. Full envelopes, identities, accepted capabilities, input
+bytes, original assertions, causal barriers and exchange-completion checks remain
+unchanged; wrong-profile and changed-payload controls still reject strictly.
+
+Compatibility temporarily builds into the ordinary `out/` directory, then rebuilds
+normal output in `finally` after success, replay failure or compatibility-build
+failure. Restoration failure fails the command. Run builds and replay sequentially
+with no competing consumers of that output. The runner refuses a build whose
+recorded profile differs from the requested one, including compatibility output
+left by an interrupted process; `npm run build` restores normal output explicitly.
+Unknown profile selections fail before launch. The default invocation does not
+rebuild the application.
+
+`replayExecutedBuild` reports compilation-time `desktopRevision`, `sourceDirty`
+and `profile` from `out/main/build-provenance.json`, plus `bundles`, the SHA-256
+map of emitted JavaScript, HTML, CSS and JSON outputs. These identify the executed
+build rather than the checkout at replay time. Separately, each `replay-input`
+attachment records `scenario`, raw-byte `inputSha256` and `captureSource` (the
+original Desktop/daemon revisions, daemon binary checksum, Claude version and
+capture time). Exchange counts retain capture provenance; a current build never
+rewrites the capture's source identity.
+
+For the retained question input, preserve the original selection and add only the
+explicit profile argument:
+
+```sh
+PYRY_CLIENT_RECORDING_DIR=/tmp/builder-2137/capture-3 \
+node scripts/run-offline-replay.mjs --profile complete-thread \
+  --grep "real claude changes model during a question and resumes with the original answer" --retries 0
+```
+
+Verify input SHA-256
+`24bbe5dff65241a77dda96cbd262c9185925d88f6168439a1679b576b984dac1`.
+The [counted Linux compatibility evidence](knowledge/features/development-verification.md#replay-build-policy-and-provenance)
+preserves both full retained failures: compatibility accepted the complete query
+and forwarded the prefix through close index 47, but left 29 requests outstanding.
+The subsequent close-ordering repair and combined retained acceptance belong to #2141;
+prefix forwarding cannot satisfy its required complete pass.
 
 After installing dependencies or rebuilding SQLite for Node unit tests, run
 `npm run rebuild:electron` before replay. Node and Electron require different

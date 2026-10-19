@@ -175,6 +175,28 @@ saved/live restoration fixes merged in PR #2058.
 
 ## Validation evidence
 
+Replay evidence identifies the executed build separately from capture provenance.
+Default replay uses normal output and checks automatic projection policy, including
+compact selection when accepted capabilities permit it. Explicit
+`node scripts/run-offline-replay.mjs --profile complete-thread --retries 0` builds
+the current source's complete route for the whole run, including creation and
+reconnect, then restores normal output after success or failure. Both profiles
+retain the executable guard, original shared assertions, full-envelope matching,
+captured capabilities, causal barriers and completion checks. Neither supplies
+fresh provider behavior or physical transport proof. The
+[replay contract](recorded-tests.md#replay-contract) gives the exact retained-input
+selection, restoration failure behavior and separate revision/dirty/profile,
+bundle-hash, input-checksum and capture-source fields.
+
+The [Linux compatibility evidence](knowledge/features/development-verification.md#replay-build-policy-and-provenance)
+keeps the successful committed-input question replay separate from the retained
+input: both full retained runs failed. Compatibility accepted the original complete
+query, matched 9 requests and forwarded 38 frames through close index 47, with
+29 requests remaining; this is prefix evidence only. #2141 still owns combined retained
+acceptance of 1 executed/passed, 0 failed/skipped and zero remaining requests.
+The system-prompt-reset fixme and earlier failed attempts remain failures or
+exclusions, never successful replay evidence.
+
 The [completed-profile retirement contract and Linux evidence](recorded-tests.md#replay-contract)
 record the final connection-completion then relay-forwarding boundary, five fresh
 three-worker paired batches (20 executed/passed, 0 failed/skipped), subsequent

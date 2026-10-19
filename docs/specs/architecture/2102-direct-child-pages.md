@@ -78,3 +78,16 @@ One independently useful paged-demand operation; transport/cache-only splits vio
 2026-10-19: Superseding a demanded revision retires the old leases synchronously. A retirement listener can navigate, reopen equal IDs or disconnect before the original admission resumes. Recheck selection ownership, store generation, epoch and connection after retirement callbacks; runtime supplies its existing selection token. `revision retirement callbacks cannot admit a new child read after %s` proves all three departures settle retired without a replacement child request.
 
 2026-10-19: Strictly increasing tuples alone allow one child ID to reappear at a greater order. Reject repeated IDs within a page in main and across retained pages in the cache; fresh replacement enumerations may reuse IDs. Received-frame duplicate-identity cases prove both boundaries.
+
+Additional compatibility reading: `e2e/fixtures/lunaHandoverProof.ts` → `completedHandoverReply`, `e2e/fixtures/queueTurnEvidence.ts` → `createQueueTurnEvidence`, and `e2e/real-claude-codex-channel.spec.ts` → `observe`: complete-item proof consumers now narrow explicitly to item changes/appends, leaving all assertions intact.
+
+## Verification
+Linux execution at implementation `cda1a1a5`, after merging main `5afde437`:
+
+- Pre-verify: all five checks passed, including the 119 received-frame/preload/runtime cases.
+- Affected Vitest: 311 executed, 311 passed, zero failed/skipped across seven files.
+- Build, application/client-test typechecks, docs guard and sequential Node/Electron native preparation passed.
+- Complete configured guarded replay: 29 executed/passed, zero failed, one existing system-prompt-reset fixme (historical upstream [Core #2436](https://github.com/pyrycode/pyrycode/issues/2436), now closed). Zero forbidden launches; original assertions and strict outgoing matching retained. The named daemon-built-thread scenario passed.
+- Fresh logs: `/tmp/builder-2102-preverify-final.log`, `/tmp/builder-2102-build-final.log`, `/tmp/builder-2102-affected-final.log`, `/tmp/builder-2102-recorded-final.log`.
+- These are synthetic bridge and historical captured-client results, with no new provider, cryptography or native-transport acceptance claim. macOS is outside this Linux ticket's verification scope.
+- Final written work remains below 800 lines including plan revisions; two new exported DTOs and eight production files. The earlier verification-floor overage forecast was unnecessary in the final implementation.

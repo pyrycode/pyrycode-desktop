@@ -4,7 +4,7 @@ import { translateQuestionEvent } from '../../store/questionBridge'
 import { translateModelAnnounced } from '../../store/announcedModelBridge'
 import { toRunConfigSnapshot } from './runConfigSnapshot'
 import type { LocalSendPending } from '../../store/threadTimeline'
-import { workingIndicatorStateWithLocalSend, type ThreadStatus } from './ConversationScreen'
+import { workingIndicatorStateWithLocalSend, type ThreadStatus } from './workingIndicatorState'
 import type { DaemonEvent } from '@shared/ipc/events'
 
 type Reading<T extends DaemonEvent['type']> = Extract<DaemonEvent, { type: T }>

@@ -50,7 +50,13 @@ function populated(includeError = false) {
 }
 
 it.each(readings)('keeps %s available and clears only that family', (family, event) => {
-  const store = populated(family === 'session_error'), before = store.getState().readings
+  const store = populated(family === 'session_error')
+  if (family === 'session_settings') {
+    store.getState().dispatch({ type: 'daemon', event: { type: 'resetting', conversationId: 'chat', active: false, phase: '', handoff: '', serverId: 'host', envelopeSessionId: 'session' } as DaemonEvent })
+    const supplied = { ...event, serverId: 'host', envelopeSessionId: 'session' }
+    store.getState().dispatch({ type: 'daemon', event: supplied })
+  }
+  const before = store.getState().readings
   expect([...before.get(family)!.values()].some(held => held.type === event.type)).toBe(true)
   store.getState().dispatch({ type: 'request', serverId: 'host', conversationId: 'chat', requestId: 5 })
   store.getState().dispatch({ type: 'daemon', event: { type: 'sessionStateCleared', family,

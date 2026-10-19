@@ -73,8 +73,8 @@ route and optional `recoveryServerId`; recovery reuses `pairServer`, without a n
 
 | Route | Sidebar | Main content |
 | --- | --- | --- |
-| `list` | Mounted | Empty pane |
-| `thread` | Mounted | `ConversationScreen`, keyed by `paneKey` |
+| `list` | Mounted | `HostedPane` when selected; otherwise empty |
+| `thread` | Mounted | `HostedPane` when selected; otherwise `ConversationScreen`, keyed by `paneKey` |
 | `pairServer` | Preserved when present at origin; inert | Invoking view retained beneath `PairingScreen` in modal presentation |
 | `settings` / `archive` | Replaced | The corresponding full-screen view |
 
@@ -90,6 +90,94 @@ It subscribes to saved servers, the session status map and the recovery host's l
 only the derived target label and rejection flag. The modal rejection notice appears only for that target's
 `pairing-rejected` code, using the fixed copy documented in
 [Session store](session-store.md#one-slot-per-server-since-1133).
+
+### Hosted app selection and trusted chrome
+
+The [host sidebar's Apps rows](channel-list.md#host-apps) and explicitly activated
+[assistant app links](assistant-markdown-renderer.md#hosted-app-links-from-replies)
+select through `window.pyry.hostedPane({ type: 'select', serverId, appId })`.
+Both entry points name the host/app independently of the invoking conversation.
+`window.pyry.onHostedPane(listener)` returns an unsubscribe function and delivers
+`HostedPaneState` snapshots/events. It subscribes before requesting the initial
+snapshot and ignores that reply once an event has arrived. Use this stream to
+mirror state, rather than letting a late command reply overwrite newer selection.
+Commands return `{ ok: true, state }` or `{ ok: false, error: 'refused' }`.
+
+For reply links, `PairedShell.openHostedApp` checks current saved host records.
+A saved target sends select immediately, without changing the active conversation's
+host. An unknown host opens the existing manual Pair modal and captures its origin
+route. It imports no keys, auto-pairs nothing and retains no deferred app target;
+even successful pairing requires another explicit app activation. Cancel returns
+to the invoking view with its conversation and draft intact. The callback stays
+stable across reply deltas. Diagnostics use only static `hosted-link` codes
+`unpaired` or `refused`, never URLs, labels, reply text or exception details.
+
+`PairedShell` mirrors the stream in `hostedPaneStore` and passes a `hostedPane`
+boolean to the pure `PairedShellView`. Opening from closed dispatches `back` to
+enter the existing list shell; it adds no route. `HostedPane` occupies
+`paired-shell__pane` in place of the conversation or empty pane, retaining the
+400px sidebar and existing card/styles. The trusted header sits outside the
+native surface and renders host/app labels as escaped React text. The host label
+comes from `hostLabelStore.loadFor(serverId)` and the app title from authoritative
+discovery, each bounded to 128 characters. Initial fallbacks are `Server` and
+`App`; confirmed labels survive discovery or connection loss.
+
+| Pane state | Trusted status | Controls |
+| --- | --- | --- |
+| `loading` | Loading app… | Close app |
+| `ready` | Connected | Close app |
+| `disconnected` | Disconnected | Reopen app, Close app |
+| `unsupported` | Hosted apps are unsupported | Reopen app, Close app |
+| `unavailable` | App unavailable | Reopen app, Close app |
+| `closed` | No hosted pane | None |
+
+Pending discovery/document loading stays loading; only native viewer readiness
+shows Connected. Recovery controls retain feedback while reopening cannot succeed.
+See [native pane recovery and placement](daemon-connection-hosted-resource-views.md#pane-recovery-and-placement)
+for completed rediscovery, release replacement and dialog visibility.
+
+`registerHostedPane` in main owns one selection, discovery subscription and native
+handle per privileged parent attached by `openWindow`. It captures
+`registry.connectionFor(serverId).hostedApps`, independently of the active
+conversation or most recently paired host. Equal app IDs on different hosts are
+distinct selections. `HostedPaneState` carries `generation` and, while open,
+`serverId`, `appId`, `hostLabel` and `appLabel`; no native handle, hosted bytes,
+session authority or secrets cross this IPC seam.
+
+`layout`, `reopen` and `close` carry the current generation. Select, reopen when
+discovery permits recovery, and running-release replacement advance it, so obsolete geometry or
+controls cannot affect a successor. Main removes native subscriptions before
+closing content; stale lifecycle callbacks check their captured view. Host-label
+completion uses a separate selection-identity fence: a release-generation change
+must not discard a still-current label read. Exact registered client/main-frame
+membership, strict command shapes and bounded geometry are checked in main;
+malformed, stale or untrusted requests return `refused` without changing the pane.
+Link routing adds no IPC or external-link permission. Main independently validates
+the attached privileged main frame, strict select shape and named paired-host
+membership; hosted content receives no client navigation capability. Select replaces
+subscriptions synchronously and advances the generation. A delayed select result
+or discovery completion from A cannot overwrite a newer selection B; the shell
+observes pane events rather than applying command-result snapshots.
+
+App navigation leaves the active channel/chat identity and its host intact, creates no conversation,
+and preserves `composerDraftStore` entries keyed by host/conversation. The pane stream controls app
+highlighting: only its exact host/app is selected, and all channel/chat highlights are suppressed
+while it is open. Selecting the original channel/chat again closes the current hosted generation,
+uses the existing conversation activation path and restores its selection and draft. Do not copy app
+identity into the active-conversation store or apply a late select-command result over streamed state;
+switching hosts/apps must leave a pending open unable to redirect its successor. Non-running or
+unconfirmed apps use the existing loading/unavailable/recovery states without starting an app.
+
+Incidental active-conversation changes cannot redirect the hosted connection.
+Explicit channel/chat opening, confirmed chat creation, Settings, Archive and
+Back close the current generation. The trusted Close app button does the same;
+pairing dialogs preserve the selection while hiding native content. Shell unmount
+unsubscribes and closes the current selection, and parent reload/close disposes
+discovery and native content. The [focused pane verification](daemon-connection-hosted-resource-views.md#trusted-pane-verification)
+covers the production preload/IPC path and these ownership boundaries.
+The [link scenarios](development-verification.md#hosted-app-link-verification)
+also cover streaming/settled activation, manual pairing, delayed replies and return
+through the sidebar to the original host/conversation-keyed draft.
 
 ### The pair-new-host plus and origin-aware cancel (#1303)
 
@@ -290,11 +378,12 @@ tearing it down — safe and desirable, since `ChannelList` is bound to the live
 list's scroll position now survives opening a conversation, which it didn't before (the list used to
 unmount entirely on `thread`).
 
-**Why the pane must render `null`, not a mounted-but-blank `ConversationScreen`, on `list`.** Four e2e
+**Why the unselected pane must render `null`, not a mounted-but-blank `ConversationScreen`, on `list`.** Four e2e
 assertions use `expect(page.locator('.conversation')).toHaveCount(0)` as their "left the thread" proof
 (`conversation-archive-lifecycle.spec.ts:112,174` and the real-daemon twin); a mounted-blank pane would
 time out all four. Per the operator, the empty state is genuinely empty — no placeholder, illustration,
-or call to action — the wrapper `<div class="paired-shell__pane">` survives only as the layout slot.
+or call to action — without a hosted selection, the wrapper
+`<div class="paired-shell__pane">` survives only as the layout slot.
 
 ### The conversation-switch remount bug and the `paneKey` fix
 
@@ -307,7 +396,7 @@ screen-local state written on the assumption that a remount always separates two
 five in-file comments say so in as many words (the run-config sheet, Channel Info, the workspace picker,
 the background-task panel, the scroll pin) — carried into the new conversation. The sharpest case: the
 composer's draft text would follow the operator into the conversation they switched to and be **sent
-there**. `activateConversation`'s store-side clear (timeline, session id) does not cover this — it
+there**. `activateConversation`'s store-side clear (session and configuration) does not cover this — it
 clears store state, not a component's own `useState`/`useRef`.
 
 Code review caught this in round 1 (MUST FIX, not identified by the spec or the PR body); the fix,
@@ -340,13 +429,11 @@ text-draft retention. Including the host in `paneKey` also resets controls when 
 same conversation ID. Retained coordinates in `savedTimelineTarget` come from the clicked row or
 `useConversationCreatedNav`'s creating-host stamp, never from a later list refresh.
 
-Retaining the creating host also enables the screen's timeline ownership check. `markViewed`
-alone can create an empty slice with no host, which leaves a new chat showing “Loading saved
-messages…” indefinitely when no history read is pending. After activation, the creation callback
-therefore calls `initializeCreatedTimeline(serverId, conversationId)` to establish an empty
-host-owned live timeline immediately. It replaces any same-ID content from another host without
-starting a saved-history read or claiming restoration provenance. See
-[timeline admission](conversation-timeline-holder.md#local-timeline-admission).
+Creation and sidebar opening retain the host for `threadRuntime.open` and pane identity.
+\#2028 removed `initializeCreatedTimeline` and activation's `markViewed`; neither empty legacy
+slices nor local view stamps establish production content or loading authority. The new-chat
+configuration controller still waits for its creating host's first admitted list update when needed;
+see [created-chat initialization](conversation-shell.md#created-chat-initialization).
 
 `e2e/conversation-switch-remount.spec.ts` now proves remounts through Channel Info closing on
 create/sidebar switches, independently of restored text. A surviving draft no longer proves a
@@ -392,6 +479,10 @@ Explicit removal is in Settings.
 ```text
 AppView (conversation)
   PairedShell
+    hosted select(named host/app) -> main parent owner -> state stream -> HostedPane
+      -> trusted identity/status + measured native surface
+    explicit chat/channel / Settings / Archive / Back -> close hosted generation -> selected route
+    client dialog -> hide native content -> restore only current selection
     per-host statuses -> status presentation + rejection notice for an already-open recovery modal
     sidebar Repair host / composer Re-pair -> openRecovery(saved server ID)
     sidebar conversation -> leaveRecovery -> activateConversation -> keyed thread

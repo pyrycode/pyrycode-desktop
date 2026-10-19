@@ -20,11 +20,18 @@ and handed straight to `ConversationStatusDot`. It renders as `Row`'s **first ch
 `.channel-list__row-open` button, in both `renderBody` map sites (`:558`, `:589`) — so both trees, every
 workspace group, get exactly one unconditional dot, idle included.
 
-With both daemon fields, `isConversationUnread(timeline, lastRead, row)` compares
+The control also subscribes to explicit host/conversation/epoch selection in
+`conversationReadRouteStore`. On that thread route it passes `true` as the fourth argument and compares
+received `last_shown_version > read_up_to`; missing either field is unavailable, without a
+history/count fallback. Zero/equality work without a timeline. Optional summary fields do
+not select the route. See [thread-route unread and attention](channel-list.md#thread-route-unread-and-attention).
+
+For non-thread routes with both daemon fields, `isConversationUnread(timeline, lastRead, row)` compares
 `latest_entry_id > read_up_to` even without a held timeline. Passing the actual host-stamped row
 keeps equal IDs on different hosts independent; an ID-only lookup could silently select the other
 host's read state. A received read advance clears that row's green dot before any refresh reply,
-while local opening/timeline stamps are suppressed. Incomplete rows keep the local-count fallback.
+while local opening/timeline stamps are suppressed. Incomplete non-thread rows keep the local-count
+fallback. Any selected thread with the same ID suppresses local stamps even with missing metadata.
 Permission/trust prompts and pending questions still take precedence, followed by working, new
 messages and idle. Archived rows remain outside the active sidebar; muting affects badge and
 notifications, not this dot. No geometry, colour or animation changes accompany received read state.

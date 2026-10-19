@@ -39,6 +39,7 @@ export type ActiveConnection = Omit<DaemonConnection, 'start' | 'stop' | 'reconn
 
 /** Injected dependencies. All three are seams the tests override; none is effectful here. */
 export interface ConnectionRegistryDeps {
+  onReconciled?: () => void
   /**
    * READ-ONLY BY CONSTRUCTION: a `Pick` without `clear` or `clearServer`, so the registry cannot
    * erase a pairing however it is called. `save` is present only because `PairedServerStore` requires
@@ -74,6 +75,8 @@ export interface ConnectionRegistry {
    * `reconnect()` does today.
    */
   reconcile(): void
+  /** Wait for already-queued storage reconciliation without refreshing any discovery. */
+  settled(): Promise<void>
   /** Re-dial exactly one held server; unknown ids and the not-paired stand-in are no-ops. */
   reconnect(serverId: string): void
   /** The stable stand-in the root binds once; see `ActiveConnection`. */
@@ -243,6 +246,8 @@ export function createConnectionRegistry(deps: ConnectionRegistryDeps): Connecti
    * these members makes the `Omit` true of the value, not just of its type.
    */
   const viewOf = (resolve: () => DaemonConnection): ActiveConnection => ({
+    get hostedResources() { return resolve().hostedResources },
+    get hostedApps() { return resolve().hostedApps },
     requestHostSystemPrompt: (requestId) => resolve().requestHostSystemPrompt(requestId),
     setHostSystemPrompt: (text, requestId) => resolve().setHostSystemPrompt(text, requestId),
     send: (payload) => resolve().send(payload),
@@ -255,7 +260,7 @@ export function createConnectionRegistry(deps: ConnectionRegistryDeps): Connecti
       resolve().toggleMcpServer(conversationId, serverName, enabled),
     stopBackgroundTask: (conversationId, taskId) => resolve().stopBackgroundTask(conversationId, taskId),
     queryThread: (query, requestId) => resolve().queryThread(query, requestId),
-    requestHistory: (payload) => resolve().requestHistory(payload),
+    cancelThreadQuery: requestId => resolve().cancelThreadQuery?.(requestId),
     requestSystemPrompt: (conversationId) => resolve().requestSystemPrompt(conversationId),
     requestConversations: () => resolve().requestConversations(),
     requestRecentWorkspaces: () => resolve().requestRecentWorkspaces(),
@@ -276,6 +281,7 @@ export function createConnectionRegistry(deps: ConnectionRegistryDeps): Connecti
     setSystemPrompt: (payload) => resolve().setSystemPrompt(payload),
     markConversationRead: payload => resolve().markConversationRead?.(payload),
     setConversationMuted: (payload, attemptId) => resolve().setConversationMuted(payload, attemptId),
+    setConversationPinned: payload => resolve().setConversationPinned(payload),
     setSessionSettings: (payload, changeId) => resolve().setSessionSettings(payload, changeId),
     answerModal: (payload) => resolve().answerModal(payload),
     cancelModal: (payload) => resolve().cancelModal(payload),
@@ -344,6 +350,7 @@ export function createConnectionRegistry(deps: ConnectionRegistryDeps): Connecti
     }
 
     entries = next
+    deps.onReconciled?.()
     deps.diagnosticLog?.event({ event: 'registry-reconciled', count: entries.length })
   }
 
@@ -390,6 +397,7 @@ export function createConnectionRegistry(deps: ConnectionRegistryDeps): Connecti
     reconcile(): void {
       void enqueue()
     },
+    async settled(): Promise<void> { await queue },
     reconnect(serverId: string): void {
       // Exact scan like connectionFor: the id is never an object key, and null cannot match.
       const held = entries.find((entry) => entry.serverId === serverId)

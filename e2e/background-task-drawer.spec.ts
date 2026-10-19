@@ -10,6 +10,9 @@ import type {
   WireTurnState
 } from '../src/shared/wire/types'
 
+// Scripted history is published as thread catch-up/pages by the shared fake daemon.
+test.use({ scriptedHistory: true })
+
 // #1634: the background-task panel is a NON-modal drawer beside the thread. Renderer unit tests are static
 // renders and cannot click or press keys, so this spec is the only proof of the toggle, of the composer
 // staying usable while the drawer is open, of the Escape arbitration, and of the open state outliving a

@@ -117,24 +117,23 @@ function viewLayers(models: ModelListEntry | null, over: ComposerModelLayers): s
 
 describe('composerModelMenuModel', () => {
   // AC1's whole match rule, as data: exact equality on `value`, and — since #1095 — the FAMILY derived
-  // from the row it hit rather than that row's display name. The MATCH itself is untouched: `currentId`
-  // is still the raw `value`, and the lookup still runs on the raw string.
+  // from the row it hit rather than that row's display name. Lookup uses the raw value; the
+  // panel identifies that row by its position.
   it('labels the trigger with the matched row family and marks that row (AC1, AC2)', () => {
     expect(composerModelMenuModel(LIST, stored('beta[1m]'))).toStrictEqual({
       label: 'Beta',
-      currentId: 'beta[1m]',
-      options: ROWS.map((r, i) => ({ id: r.value, label: ROW_FAMILIES[i] }))
+      currentId: '1',
+      options: ROWS.map((r, i) => ({ id: String(i), label: ROW_FAMILIES[i] }))
     })
   })
 
   // The entries are EXACTLY the published rows, one per entry, in the daemon's order — asserted as a
   // derivation over the seeded array, so a fourth row inherits the guard and no model name is typed here.
-  // Since #1095 the label is the family of the row's OWN `value`; `id` is untouched and still the raw
-  // `value`, which is what keeps the write byte-identical.
-  it('offers exactly the published rows, in order, id = value and label = its family (AC2, AC3)', () => {
+  // Labels use each row's own value family; IDs identify its position without changing its raw value.
+  it('offers exactly the published rows in order with position IDs and family labels (AC2, AC3)', () => {
     const menu = composerModelMenuModel(LIST, stored('alpha'))
     expect(menu?.options.map((o) => o.label)).toStrictEqual([...ROW_FAMILIES])
-    expect(menu?.options.map((o) => o.id)).toStrictEqual(ROWS.map((r) => r.value))
+    expect(menu?.options.map((o) => o.id)).toStrictEqual(ROWS.map((_r, i) => String(i)))
     expect(menu?.options).toHaveLength(ROWS.length)
   })
 
@@ -213,7 +212,7 @@ describe('composerModelMenuModel', () => {
     }
     const menu = composerModelMenuModel(list, stored('alpha'))
     expect(menu?.options.map((o) => o.label)).toStrictEqual(['Alpha', 'Alpha'])
-    expect(menu?.currentId).toBe('alpha')
+    expect(menu?.currentId).toBe('0')
   })
 
   // #1095 AC3's own collision case, and it is NOT the one above: two rows with DIFFERENT values that
@@ -230,8 +229,8 @@ describe('composerModelMenuModel', () => {
     }
     const menu = composerModelMenuModel(list, stored('alpha'))
     expect(menu?.options).toStrictEqual([
-      { id: 'alpha', label: 'Alpha' },
-      { id: 'alpha[1m]', label: 'Alpha' }
+      { id: '0', label: 'Alpha' },
+      { id: '1', label: 'Alpha' }
     ])
   })
 
@@ -242,8 +241,8 @@ describe('composerModelMenuModel', () => {
   it('labels the trigger with the announced model when nothing was chosen (AC1)', () => {
     expect(composerModelMenuModel(LIST, layers({ announced: 'gamma' }))).toStrictEqual({
       label: 'Gamma',
-      currentId: 'gamma',
-      options: ROWS.map((r, i) => ({ id: r.value, label: ROW_FAMILIES[i] }))
+      currentId: '2',
+      options: ROWS.map((r, i) => ({ id: String(i), label: ROW_FAMILIES[i] }))
     })
   })
 
@@ -254,7 +253,7 @@ describe('composerModelMenuModel', () => {
   it('derives the family of an announced model that matches no published row (AC1)', () => {
     const menu = composerModelMenuModel(LIST, layers({ announced: 'alpha-resolved' }))
     expect(menu?.label).toBe('Alpha')
-    expect(menu?.currentId).toBe('alpha')
+    expect(menu?.currentId).toBe('0')
   })
 
   // AC2 AND AC5 IN ONE ASSERTION, and they are the pair a single-string implementation cannot satisfy:
@@ -263,7 +262,7 @@ describe('composerModelMenuModel', () => {
   it('shows the announcement over a disagreeing stored choice, still marking the stored one (AC2, AC5)', () => {
     const menu = composerModelMenuModel(LIST, layers({ announced: 'gamma', stored: 'alpha' }))
     expect(menu?.label).toBe('Gamma')
-    expect(menu?.currentId).toBe('alpha')
+    expect(menu?.currentId).toBe('0')
   })
 
   // AC3 — a pick outranks both, and the REVERT is the same rule read backwards: dropping the pending
@@ -273,7 +272,7 @@ describe('composerModelMenuModel', () => {
   it('lets a pick outrank the announcement and returns to it when the pick is dropped (AC3)', () => {
     const picked = layers({ picked: 'beta[1m]', announced: 'gamma', stored: 'alpha' })
     expect(composerModelMenuModel(LIST, picked)?.label).toBe('Beta')
-    expect(composerModelMenuModel(LIST, picked)?.currentId).toBe('beta[1m]')
+    expect(composerModelMenuModel(LIST, picked)?.currentId).toBe('1')
     expect(composerModelMenuModel(LIST, { ...picked, picked: '' })?.label).toBe('Gamma')
   })
 
@@ -384,7 +383,7 @@ describe('composerModelMenuModel — the family rule (#1095)', () => {
     }
     const menu = composerModelMenuModel(list, stored('5[1m]'))
     expect(menu?.label).toBe('Numbered tier')
-    expect(menu?.options).toStrictEqual([{ id: '5[1m]', label: 'Numbered tier' }])
+    expect(menu?.options).toStrictEqual([{ id: '0', label: 'Numbered tier' }])
   })
 
   // A ROW NEVER READS ITS `resolved_model`, which is the half AC3 states as a prohibition rather than a
@@ -404,13 +403,11 @@ describe('composerModelMenuModel — the family rule (#1095)', () => {
     ])
   })
 
-  // The MARKING and the WRITE are untouched by all of the above, asserted together because they are the
-  // two things a display change must not reach. `currentId` is the raw published `value`, not a family,
-  // and it still comes from the SESSION's model rather than from the announcement (#1053 AC5).
-  it('leaves the marking and every option id raw, never a derived family (AC5)', () => {
+  // Display labels do not govern selection: IDs identify row positions, matched from session settings.
+  it('keeps row identity independent of label families (AC5)', () => {
     const menu = composerModelMenuModel(LIST, layers({ announced: 'gamma', stored: 'beta[1m]' }))
-    expect(menu?.currentId).toBe('beta[1m]')
-    expect(menu?.options.map((o) => o.id)).toStrictEqual(ROWS.map((r) => r.value))
+    expect(menu?.currentId).toBe('1')
+    expect(menu?.options.map((o) => o.id)).toStrictEqual(ROWS.map((_r, i) => String(i)))
   })
 })
 
@@ -540,7 +537,7 @@ describe('ComposerModelMenuView', () => {
 // rows first, then one Codex row per family. The Codex rows are invented too; each `display_name` differs
 // from anything a family rule could derive from its `value` or `resolved_model`, so a client-built name
 // cannot pass as the daemon's.
-describe('#1651 — the menu offers only the conversation agent\'s rows', () => {
+describe('merged menu with agent-scoped selection', () => {
   const CODEX_ROWS: readonly WireModelOption[] = [
     row({ value: 'delta', display_name: 'Vendor Delta face', resolved_model: 'vendor-6-delta', agent: 'codex', family: 'delta' }),
     row({ value: 'epsilon', display_name: 'Vendor Epsilon face', resolved_model: 'vendor-6-epsilon', agent: 'codex', family: 'epsilon' })
@@ -551,24 +548,26 @@ describe('#1651 — the menu offers only the conversation agent\'s rows', () => 
   ]
   const MERGED: ModelListEntry = { models: [...CLAUDE_ROWS, ...CODEX_ROWS], droppedModels: 0 }
 
-  it('lists only Claude rows, in the daemon\'s order and with today\'s labels, on a Claude conversation', () => {
+  it('lists both agents in daemon order with each row label on a Claude conversation', () => {
     const claude = composerModelMenuModel(MERGED, stored('beta[1m]'), 'claude')
     const untagged = composerModelMenuModel({ models: CLAUDE_ROWS, droppedModels: 0 }, stored('beta[1m]'))
-    expect(claude).toEqual(untagged)
-    expect(claude?.options.map((o) => o.id)).toEqual(['alpha', 'beta[1m]', 'gamma'])
-    expect(claude?.options.map((o) => o.label)).toEqual([...ROW_FAMILIES])
+    expect(claude?.label).toBe(untagged?.label)
+    expect(claude?.currentId).toBe(untagged?.currentId)
+    expect(claude?.options.map((o) => o.id)).toEqual(['0', '1', '2', '3', '4'])
+    expect(claude?.options.map((o) => o.label)).toEqual([...ROW_FAMILIES, 'Vendor Delta face', 'Vendor Epsilon face'])
     expect(claude?.label).toBe('Beta')
   })
 
-  it('lists only Codex rows with each display_name verbatim on a Codex conversation', () => {
+  it('lists both agents with Codex display_name verbatim on a Codex conversation', () => {
     const menu = composerModelMenuModel(MERGED, stored('delta'), 'codex')
     expect(menu?.options).toEqual([
-      { id: 'delta', label: 'Vendor Delta face' },
-      { id: 'epsilon', label: 'Vendor Epsilon face' }
+      ...ROWS.map((_r, i) => ({ id: String(i), label: ROW_FAMILIES[i] })),
+      { id: '3', label: 'Vendor Delta face' },
+      { id: '4', label: 'Vendor Epsilon face' }
     ])
     // The trigger over a hit is the row's display_name, never a family of its resolved_model.
     expect(menu?.label).toBe('Vendor Delta face')
-    expect(menu?.currentId).toBe('delta')
+    expect(menu?.currentId).toBe('3')
   })
 
   it('never matches a Claude row from a Codex conversation, or a Codex row from a Claude one', () => {
@@ -579,7 +578,7 @@ describe('#1651 — the menu offers only the conversation agent\'s rows', () => 
   it('shows a Codex miss verbatim rather than deriving a family from it', () => {
     const menu = composerModelMenuModel(MERGED, layers({ announced: 'vendor-6-delta', stored: 'delta' }), 'codex')
     expect(menu?.label).toBe('vendor-6-delta')
-    expect(menu?.currentId).toBe('delta')
+    expect(menu?.currentId).toBe('3')
   })
 
   it('reads Model, marks nothing and still offers the Codex rows with no model set', () => {
@@ -588,8 +587,9 @@ describe('#1651 — the menu offers only the conversation agent\'s rows', () => 
       label: COMPOSER_MODEL_MENU_LABEL,
       currentId: null,
       options: [
-        { id: 'delta', label: 'Vendor Delta face' },
-        { id: 'epsilon', label: 'Vendor Epsilon face' }
+        ...ROWS.map((_r, i) => ({ id: String(i), label: ROW_FAMILIES[i] })),
+        { id: '3', label: 'Vendor Delta face' },
+        { id: '4', label: 'Vendor Epsilon face' }
       ]
     })
     const markup = renderToStaticMarkup(
@@ -606,8 +606,9 @@ describe('#1651 — the menu offers only the conversation agent\'s rows', () => 
     expect(composerModelMenuModel(MERGED, stored(null), 'codex')).toBeNull()
   })
 
-  it('offers nothing on a Codex conversation whose list carries only untagged rows', () => {
-    expect(composerModelMenuModel(LIST, stored('alpha'), 'codex')?.options).toEqual([])
+  it('offers untagged Claude rows on a Codex conversation', () => {
+    expect(composerModelMenuModel(LIST, stored('alpha'), 'codex')?.options).toEqual(
+      ROWS.map((_r, i) => ({ id: String(i), label: ROW_FAMILIES[i] })))
   })
 
   it('labels a row by its own agent', () => {

@@ -1,3 +1,4 @@
+import type { MessageLifecycleDiagnostic } from '@shared/ipc/diagnostics'
 import type { ThreadSnapshot } from '../../store/threadItemStore'
 import type { MessageAttachment, ThreadItem } from '../../store/threadTimeline'
 import { formatTurnStats } from './turnStats'
@@ -11,6 +12,8 @@ export interface ThreadSendInputs {
     localSendPending: LocalSendPending | null }
   connection?: { hostId: string; status: ConnectionStatus }
   onAction?: (hostId: string, command: Extract<RendererCommand, { type: 'dequeueMessage' | 'sendQueuedNow' }>) => void
+  midTurnInput?: boolean
+  diagnose?: (record: MessageLifecycleDiagnostic) => void
   log?: (event: { event: string; code: string }) => void
 }
 export function threadQueueHandle(snapshot: ThreadSnapshot, source: Held, inputs?: ThreadSendInputs): number | null {
@@ -23,11 +26,15 @@ export function threadQueueHandle(snapshot: ThreadSnapshot, source: Held, inputs
 export function actOnThreadQueue(snapshot: ThreadSnapshot, source: Held, inputs: ThreadSendInputs | undefined,
   action: 'drop' | 'send-now'): void {
   const handle = threadQueueHandle(snapshot, source, inputs)
-  if (handle === null) return
+  if (handle === null || action === 'send-now' && inputs?.midTurnInput === false) return
   const payload = { conversation_id: snapshot.conversationId, queued_msg_id: handle }
   const command = action === 'drop' ? dequeueMessageCommand(payload) : sendQueuedNowCommand(payload)
   if (command.type !== 'dequeueMessage' && command.type !== 'sendQueuedNow') return
-  try { inputs?.onAction?.(snapshot.hostId, command) }
+  try {
+    inputs?.onAction?.(snapshot.hostId, command)
+    const messageId = usableThreadField(source, 'content.message_id')
+    if (action === 'drop' && typeof messageId === 'string') inputs?.diagnose?.({ event: 'message-cancel-requested', messageId, conversationId: snapshot.conversationId })
+  }
   catch { try { inputs?.log?.({ event: 'thread-queue-action', code: 'bridge-failed' }) } catch { /* Observe only. */ } }
 }
 
@@ -65,11 +72,28 @@ function metrics(c: Record<string, unknown>) {
     cacheReadTokens: numeric(c.cache_read_tokens), cacheCreationTokens: numeric(c.cache_creation_tokens),
     durationMs: numeric(c.duration_ms) }
 }
-function presentation(s: Held): ThreadItem | null {
+function sessionDividerReason(c: Record<string, unknown>): 'clear' | 'idle_evict' | 'workspace_change' | undefined {
+  if (c.reason === 'clear' || c.reason === 'idle_evict' || c.reason === 'workspace_change') return c.reason
+  // Native thread content retains the daemon's raw cause rather than a legacy
+  // session_transition reason. Recognize only the documented reset causes.
+  if (c.reason !== undefined) return undefined
+  switch (c.cause) {
+    case 'operator_reset': case 'claude_clear': case 'agent_switch': return 'clear'
+    case 'capacity_eviction': case 'idle_sleep': return 'idle_evict'
+    case 'workspace_change': return 'workspace_change'
+    default: return undefined
+  }
+}
+const presentationStatuses = new Set(['running', 'done', 'failed', 'denied', 'interrupted', 'queued', 'written', 'delivered', 'lost', 'dropped',
+  'finished', 'stopped', 'stopping', 'ended_with_session', 'gone'])
+function presentation(s: Held, scope: 'body' | 'header' | 'index' = 'body'): ThreadItem | null {
+  // A summary adapts only to a visual header, never to a message or an actionable identity.
+  if (s.detail_omitted === true) return (s.kind === 'agent' || s.kind === 'tool_call') && typeof s.headline === 'string'
+    ? { kind: 'toolCall', turnId: '', toolUseId: '', name: s.headline, inputSummary: '', result: null } : null
   const c = record(s.content)
-  if (!c || typeof s.status !== 'string' || !['running', 'done', 'failed', 'denied', 'interrupted', 'queued', 'delivered', 'lost', 'dropped',
-    'finished', 'stopped', 'stopping', 'ended_with_session', 'gone'].includes(s.status)) return null
+  if (!c || typeof s.status !== 'string' || !presentationStatuses.has(s.status)) return null
   const turnId = text(s.turn) ?? ''
+  if (scope !== 'body' && s.kind !== 'tool_call' && s.kind !== 'agent') return null
   switch (s.kind) {
     case 'user_message':
     case 'assistant_message': {
@@ -88,22 +112,24 @@ function presentation(s: Held): ThreadItem | null {
       if (c.result != null && (!r || typeof r.result_summary !== 'string' || typeof r.is_error !== 'boolean')) return null
       if (c.denial != null && (!d || typeof d.tool_name !== 'string' || typeof d.decision_reason_type !== 'string' ||
           typeof d.decision_reason !== 'string' || typeof d.message !== 'string')) return null
-      const input = record(c.input)
+      const input = scope === 'index' ? null : record(c.input)
       return { kind: 'toolCall', turnId, toolUseId: text(c.tool_use_id) ?? '', name: c.name,
-        inputSummary: text(c.input_summary) ?? '',
+        inputSummary: scope === 'index' ? '' : text(c.input_summary) ?? '',
         input: input ? Object.fromEntries(Object.entries(input).filter((entry): entry is [string, string] => typeof entry[1] === 'string')) : undefined,
         elapsedSeconds: numeric(c.elapsed_seconds),
         result: r && typeof r.result_summary === 'string' && typeof r.is_error === 'boolean'
-          ? { isError: r.is_error, resultSummary: r.result_summary, resultDetail: text(r.result_detail) } : null,
+          ? { isError: r.is_error, resultSummary: scope === 'body' ? r.result_summary : '', resultDetail: scope === 'index' ? undefined : text(r.result_detail) } : null,
         denial: d && typeof d.tool_name === 'string' && typeof d.decision_reason_type === 'string' &&
           typeof d.decision_reason === 'string' && typeof d.message === 'string'
-          ? { toolName: d.tool_name, decisionReasonType: d.decision_reason_type, decisionReason: d.decision_reason,
-            message: d.message, truncatedFields: strings(d.truncated_fields), droppedFields: strings(d.dropped_fields) } : undefined }
+          ? { toolName: d.tool_name, decisionReasonType: d.decision_reason_type, decisionReason: scope === 'body' ? d.decision_reason : '',
+            message: scope === 'body' ? d.message : '', truncatedFields: scope === 'body' ? strings(d.truncated_fields) : null,
+            droppedFields: scope === 'body' ? strings(d.dropped_fields) : null } : undefined }
     }
-    case 'session_divider':
-      return c.reason === 'clear' || c.reason === 'idle_evict' || c.reason === 'workspace_change'
-        ? { kind: 'sessionBoundary', reason: c.reason, workspaceCwd: text(c.workspace_cwd) ?? null,
-          occurredAt: text(c.occurred_at) ?? '' } : null
+    case 'session_divider': {
+      const reason = sessionDividerReason(c)
+      return reason ? { kind: 'sessionBoundary', reason, workspaceCwd: text(c.workspace_cwd) ?? null,
+        occurredAt: text(c.occurred_at) ?? '' } : null
+    }
     case 'compaction':
       return typeof c.trigger === 'string' ? { kind: 'compactionBoundary', failed: c.trigger === 'failed',
         manual: c.trigger === 'manual', preTokens: numeric(c.pre_tokens), postTokens: numeric(c.post_tokens) } : null
@@ -235,27 +261,66 @@ function nest(rows: ItemPresentation[], arrival: ReadonlyMap<number, number>): I
   for (const row of result) if (!row.marker) row.count = counts.get(row.source.id)?.size ?? 0
   return result
 }
+const retainedPresentations = new WeakMap<Held, ThreadItem | null>()
+const retainedHeaders = new WeakMap<Held, ThreadItem | null>()
+function retainedPresentation(source: Held, scope: 'body' | 'header' = 'body'): ThreadItem | null {
+  if (!Object.isFrozen(source)) return presentation(source, scope)
+  const cache = scope === 'body' ? retainedPresentations : retainedHeaders
+  if (cache.has(source)) return cache.get(source) ?? null
+  const item = presentation(source, scope)
+  cache.set(source, item)
+  return item
+}
 function identity(s: Held): string | null {
   return typeof s.session === 'string' && s.session !== '' && typeof s.turn === 'string' && s.turn !== ''
     ? JSON.stringify([s.session, s.agent, s.turn, s.parent ?? null]) : null
 }
 /** Adapt display facts only; every join uses the recorded attribution, including hidden endings. */
 export function threadItemPresentations(snapshot: ThreadSnapshot): ItemPresentation[] {
+  return projectThread(snapshot, false)
+}
+/** Lightweight placement and fold facts. No descendant message or body adaptation. */
+export function threadItemIndex(snapshot: ThreadSnapshot): ItemPresentation[] {
+  return projectThread(snapshot, true)
+}
+/** Called only for a mounted source row, with body demand owned by its expansion state. */
+export function threadItemPresentation(source: Held, body: boolean): ThreadItem | null {
+  return retainedPresentation(source, body ? 'body' : 'header')
+}
+function projectThread(snapshot: ThreadSnapshot, indexOnly: boolean): ItemPresentation[] {
   const endings = new Map<string, string>(), last = new Map<string, ItemPresentation>()
-  const rows: ItemPresentation[] = snapshot.items.filter(s => s.shown === true).map(source => ({ source, item: presentation(source),
+  const endingSources = new Map<string, Record<string, unknown>[]>()
+  const rows: ItemPresentation[] = snapshot.items.filter(s => s.shown === true).map(source => ({ source,
+    item: indexOnly ? presentation(source, 'index') : retainedPresentation(source),
     ancestors: [], depth: 0, count: 0, hasChildren: false }))
   for (const source of snapshot.items) {
     const key = identity(source), c = record(source.content)
     if (key !== null && source.kind === 'turn_end' && c) {
+      if (indexOnly) {
+        const sources = endingSources.get(key) ?? []
+        sources.push(c); endingSources.set(key, sources); continue
+      }
       const stats = formatTurnStats(metrics(c))
       if (stats !== null) endings.set(key, stats)
     }
   }
   for (const row of rows) {
     const key = identity(row.source)
-    if (key !== null && row.item?.kind === 'assistantText') last.set(key, row)
+    if (key !== null && (indexOnly ? row.source.kind === 'assistant_message' && typeof row.source.status === 'string' &&
+      presentationStatuses.has(row.source.status) && typeof record(row.source.content)?.text === 'string'
+      : row.item?.kind === 'assistantText')) last.set(key, row)
   }
-  for (const [key, row] of last) row.stats = endings.get(key)
+  for (const [key, row] of last) {
+    if (indexOnly) Object.defineProperty(row, 'stats', { enumerable: false, get: () => {
+      const sources = endingSources.get(key) ?? []
+      for (let at = sources.length - 1; at >= 0; at--) {
+        const stats = formatTurnStats(metrics(sources[at]))
+        if (stats !== null) return stats
+      }
+      return undefined
+    } })
+    else row.stats = endings.get(key)
+  }
   const arrival = new Map((snapshot.arrivalOrder ?? snapshot.items.map(item => item.id)).map((id, index) => [id, index]))
   return nest(rows, arrival)
 }

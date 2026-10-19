@@ -361,7 +361,7 @@ test('a Chats row is the desktop 24px row: no time, body-small label, 6px corner
   // TWO workspace rows since #1485: both conversations are chats, so the Channels tree draws the same
   // workspace as an empty mirror above the divider. The count is still an exact number rather than a
   // `.first()` — one group per tree is the claim, and three would mean the two chats had split.
-  await expect(page.locator('.channel-list__section')).toHaveCount(2)
+  await expect(page.locator('.channel-list__section')).toHaveCount(3)
 
   const firstRow = await boxOf(row.nth(0), 'first sidebar row')
   const secondRow = await boxOf(row.nth(1), 'second sidebar row')
@@ -495,9 +495,11 @@ test('a Channels row holds the Edit channel pen inside the same 24px row', async
 
   const row = page.locator('.channel-list__row')
   const rename = page.locator('.channel-list__rename')
+  const pin = row.getByRole('button', { name: 'Pin channel', exact: true })
 
   await expect(row).toHaveCount(1)
   await expect(rename).toHaveCount(1)
+  await expect(pin).toHaveCount(1)
   // The disjointness the affordance's own contract rests on, restated as this block's precondition. Since
   // #1441 the CHEVRON is what is disjoint by section, the pen no longer being so — and the second line is
   // the other half of that: the Chats tree's token does not reach a Channels row, which is what keeps
@@ -514,6 +516,10 @@ test('a Channels row holds the Edit channel pen inside the same 24px row', async
 
   const renameBox = await boxOf(rename, 'Edit channel pen')
   expect(renameBox.height).toBeLessThanOrEqual(ROW_HEIGHT_PX + GEOMETRY_TOLERANCE_PX)
+  const pinBox = await boxOf(pin, 'Pin channel control')
+  expectAbout(pinBox.height, renameBox.height)
+  expectAbout(pinBox.width, renameBox.width)
+  expect(pinBox.x + pinBox.width).toBeLessThanOrEqual(renameBox.x)
 
   // #1171's AC2 on the Channels tree: the drawn 12×12 pen, its right edge 8px in from the row's right
   // edge, its box centred on the row, in `--color-primary`. One `Row` serves both trees, so this and the
@@ -551,13 +557,17 @@ test('a Channels row holds the Edit channel pen inside the same 24px row', async
   // reached the thread by clicking it), which is what makes this the place to assert it.
   await page.mouse.move(0, 0)
   expect(await computed(rename, 'opacity')).toBe(HIDDEN_OPACITY)
+  expect(await computed(pin, 'opacity')).toBe(SHOWN_OPACITY)
 
   // ...and KEYBOARD FOCUS ALONE reveals it, so Tab still reaches a control the pointer never touched.
   // Reached by focusing the open button and pressing Tab, NOT by `locator.focus()`: `:focus-visible` is
   // Chromium's keyboard-modality heuristic, and a programmatic focus after a pointer interaction does not
   // match it — the assertion would then be testing the heuristic rather than the rule. The Tab keypress
-  // itself sets that modality, and the control is the next focusable element in the row.
+  // itself sets that modality. Pin precedes Edit in the row's keyboard order.
   await page.locator('.channel-list__row-open').focus()
+  await page.keyboard.press('Tab')
+  await expect(pin).toBeFocused()
+  expect(await computed(rename, 'opacity')).toBe(HIDDEN_OPACITY)
   await page.keyboard.press('Tab')
   await expect(rename).toBeFocused()
   expect(await computed(rename, 'opacity')).toBe(SHOWN_OPACITY)

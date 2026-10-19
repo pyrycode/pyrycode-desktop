@@ -1,4 +1,11 @@
+import { threadRuntime } from '../../store/threadRuntime'
+import { threadLiveInputs } from '../conversation/threadLiveInputs'
+import { sendConversationCommand } from '../conversation/conversationActionAvailability'
 import { useStore } from 'zustand'
+import { createStore } from 'zustand/vanilla'
+import type { HostedAppsDisplayState } from '@shared/ipc/hostedAppsDisplay'
+import type { HostedPaneState } from '@shared/ipc/hostedPane'
+import { hostedPaneStore } from '../../HostedPane'
 import { appUpdateStore } from '../../store/appUpdateStore'
 import { AppUpdateRow } from './AppUpdateRow'
 import './channels.css'
@@ -39,23 +46,9 @@ import { ServerInfoData, loadServerInfo } from '../../store/serverInfoLoader'
 // consumed EXACTLY as shipped: none takes a `conversationId` except the four selector FACTORIES, which is
 // what keeps the untrusted daemon-asserted id a `Map` key and nothing else (conversationStatus.ts:26-33,
 // conversationUnread.ts:28-34, modalPrompts.ts:21-25).
-import {
-  useConversationActivityStore,
-  selectActivityFor
-} from '../../store/conversationActivityStore'
-import {
-  useConversationTimelineStore,
-  selectTimelineFor
-} from '../../store/conversationTimelineStore'
-import {
-  useConversationLastReadStore,
-  selectLastReadFor
-} from '../../store/conversationLastReadStore'
 // From `modalStore`, not from `modalPrompts`: the selector is defined on the pure reducer module and
 // RE-EXPORTED at modalStore.ts:45 precisely so consumers take the read surface from one site
 // (PermissionModal.tsx:192-194 is the shipped precedent).
-import { useModalStore, selectHasOutstandingFor } from '../../store/modalStore'
-import { useQuestionBatchStore, selectBatchFor } from '../../store/questionBatchStore'
 // #1098's whole read: which chat the pane is showing. The store has held it since #278 and the sidebar
 // simply did not read it — no new store, no IPC, no wire type.
 import { useActiveConversationStore } from '../../store/activeConversationStore'
@@ -107,6 +100,7 @@ import { ConversationStatusDot } from './ConversationStatusDot'
 import {
   titleFor,
   partitionActive,
+  partitionSidebar,
   groupByWorkspace,
   groupByServer,
   UNKNOWN_WORKSPACE_KEY
@@ -207,6 +201,9 @@ export function ChannelList({
   // per-row read would re-render two rows. Accepted — a switch already rebuilds the chat pane, and this
   // is the prop path #1097 freed by deleting `now`.
   const openConversationId = useActiveConversationStore((s) => s.activeConversation?.id ?? null)
+  const openServerId = useActiveConversationStore(({ activeConversation }) =>
+    activeConversation && 'serverId' in activeConversation && typeof activeConversation.serverId === 'string'
+      ? activeConversation.serverId : null)
   // #1070 — WHICH machines the sidebar draws a subtree for, read HERE rather than inside the host row.
   // This is `openConversationId`'s ruling above, applied to a second piece of store state and for the
   // same reason: zustand v5 serves `getInitialState()` under `renderToStaticMarkup`, so a component
@@ -224,7 +221,21 @@ export function ChannelList({
   // it used to wake one row. Accepted — a pairing change IS a whole-sidebar change, and the per-server
   // label reads stay inside their leaves. Status changes also update mutation availability.
   const servers = useServerInfoStore(selectServers)
+  const [appsStore] = useState(() => createStore(() => new Map<string, HostedAppsDisplayState>()))
+  const apps = useStore(appsStore)
+  const pane = useStore(hostedPaneStore, state => state.state)
+  useEffect(() => {
+    let active = true
+    appsStore.setState(new Map(), true)
+    const off = servers.map(server => window.pyry.onHostedApps(server.serverId, state => {
+      if (active) appsStore.setState(previous => new Map(previous).set(server.serverId, state), true)
+    }))
+    return () => { active = false; off.forEach(stop => stop()) }
+  }, [servers, appsStore])
   const statuses = useSessionStore((state) => state.statuses)
+  const heldHostLabels = useHostLabelStore(state => state.byServer)
+  const hostLabels = new Map(servers.map(server => [server.serverId,
+    hostRowLabel(selectHostLabelFor(server.serverId)({ byServer: heldHostLabels }))]))
   const connected = (serverId: string | null | undefined): boolean =>
     typeof serverId === 'string' && statuses.get(serverId)?.type === 'connected'
   // Transient, per-interaction dialog state — component-local useState, not the store (the lowest scope
@@ -355,7 +366,13 @@ export function ChannelList({
         conversations={conversations}
         statuses={statuses}
         serverIds={servers.map((server) => server.serverId)}
+        hostLabels={hostLabels}
+        apps={apps}
+        pane={pane}
+        onOpenApp={(serverId, appId) => { void window.pyry.hostedPane({ type: 'select', serverId, appId }) }}
+        onRefreshApps={serverId => { void window.pyry.refreshHostedApps(serverId) }}
         openConversationId={openConversationId}
+        openServerId={openServerId}
         onOpen={onOpen}
         onOpenSettings={onOpenSettings}
         onOpenArchive={onOpenArchive}
@@ -401,6 +418,11 @@ export function ChannelList({
         // always start empty and `idle` without a reset here.
         onAddWorkspace={(serverId) => setAddWorkspaceServerId(serverId)}
         onSaveAsChannel={(row) => { if (canMutateHost(row.serverId)) setSaveRow(row) }}
+        onSetPinned={(row, pinned) => {
+          if (!canMutateHost(row.serverId) || typeof row.serverId !== 'string') return
+          window.pyry.sendCommand({ type: 'setConversationPinned', serverId: row.serverId,
+            payload: { conversation_id: row.id, pinned } })
+        }}
         onRename={(row) => {
           if (!canMutateHost(row.serverId)) return
           // Open the Rename dialog, seeding the field with the row's CURRENT displayed title (AC1) — the
@@ -432,7 +454,7 @@ export function ChannelList({
           onCancel={() => setRenameRow(null)}
           onSave={() => {
             if (!canMutateHost(renameRow.serverId)) return
-            requestRenameConversation(window.pyry.sendCommand, renameRow, renameName)
+            requestRenameConversation(command => sendConversationCommand(command, renameRow.serverId), renameRow, renameName)
             setRenameRow(null)
           }}
           // #1440 — the archive arm. The SAME interaction-time re-check the save above carries, and
@@ -445,7 +467,7 @@ export function ChannelList({
           // imports nothing from the conversation screen and the two directories stay cycle-free.
           onArchive={() => {
             if (!canMutateHost(renameRow.serverId)) return
-            requestArchiveConversation(window.pyry.sendCommand, renameRow.id)
+            requestArchiveConversation(command => sendConversationCommand(command, renameRow.serverId), renameRow.id)
             setRenameRow(null)
           }}
         />
@@ -497,7 +519,7 @@ export function ChannelList({
             // unconditionally. The helper is reused verbatim — it owns the `renameConversation` literal
             // and the trim, so this ticket adds no wire type, no envelope and no IPC arm.
             if (editChannelName.trim() !== titleFor(editChannelRow.name)) {
-              requestRenameConversation(window.pyry.sendCommand, editChannelRow, editChannelName)
+              requestRenameConversation(command => sendConversationCommand(command, editChannelRow.serverId), editChannelRow, editChannelName)
             }
             // Dismissal is unconditional: BOTH arms close. An unchanged name is a no-op, not a refusal.
             setEditChannelRow(null)
@@ -523,7 +545,7 @@ export function ChannelList({
           // own archive and #1439's workspace fan-out, so this adds no command literal and no wire type.
           onArchive={() => {
             if (!canMutateHost(editChannelRow.serverId)) return
-            requestArchiveConversation(window.pyry.sendCommand, editChannelRow.id)
+            requestArchiveConversation(command => sendConversationCommand(command, editChannelRow.serverId), editChannelRow.id)
             setEditChannelRow(null)
           }}
         />
@@ -570,7 +592,7 @@ export function ChannelList({
               // helper keeps the ones on this host, in this exact folder, that are not archived yet.
               requestArchiveWorkspace(
                 (conversationId) =>
-                  requestArchiveConversation(window.pyry.sendCommand, conversationId),
+                  requestArchiveConversation(command => sendConversationCommand(command, serverId), conversationId),
                 conversations ?? [],
                 editWorkspaceTarget.cwd,
                 serverId
@@ -714,11 +736,17 @@ export function ChannelList({
  * host row to draw, and that row is where #1185/#1189 put the plus that starts a chat in a new workspace.
  */
 export function ChannelListView({
+  hostLabels,
+  apps,
+  pane,
+  onOpenApp,
+  onRefreshApps,
   appUpdate,
   conversations,
   statuses,
   serverIds,
   openConversationId,
+  openServerId,
   onOpen,
   onOpenSettings,
   onOpenArchive,
@@ -731,8 +759,14 @@ export function ChannelListView({
   onAddWorkspace,
   onSaveAsChannel,
   onRename,
-  onEditChannel
+  onEditChannel,
+  onSetPinned
 }: {
+  hostLabels?: ReadonlyMap<string, string>
+  apps?: ReadonlyMap<string, HostedAppsDisplayState>
+  pane?: HostedPaneState
+  onOpenApp?: (serverId: string, appId: string) => void
+  onRefreshApps?: (serverId: string) => void
   appUpdate?: ReactNode
   // Widened to `ServerConversationSummary` in all but name: the rows arrive carrying their server stamp
   // (#1086), and `groupByServer`'s structural constraint is what reads it — this prop stays typed as the
@@ -753,6 +787,7 @@ export function ChannelListView({
   // caller silently render an unmarked sidebar. The unit tier's own helper defaults it to `null`, which
   // is exactly what the store hydrates to under `renderToStaticMarkup`.
   openConversationId: string | null
+  openServerId: string | null
   onOpen: (row: ConversationSummary) => void
   onOpenSettings: () => void
   onOpenArchive: () => void
@@ -794,6 +829,7 @@ export function ChannelListView({
   // this one to the Channels `renderServerTrees` call and that one to the Chats call, which is the
   // single level that tells the two trees apart. Neither sends a command — each dialog's OK does.
   onEditChannel: (row: SidebarRow) => void
+  onSetPinned: (row: SidebarRow, pinned: boolean) => void
 }): JSX.Element {
   return (
     <section className="channel-list" aria-label="Conversations">
@@ -833,6 +869,7 @@ export function ChannelListView({
           statuses,
           serverIds,
           openConversationId,
+          openServerId,
           onOpen,
           onCreateChat,
           onCreateChannel,
@@ -842,7 +879,8 @@ export function ChannelListView({
           onRepairHost,
           onSaveAsChannel,
           onRename,
-          onEditChannel
+          onEditChannel,
+          onSetPinned, apps, pane, onOpenApp, onRefreshApps, hostLabels
         )}
       </div>
       {appUpdate}
@@ -2068,7 +2106,7 @@ function HostSection({
   onCreate,
   defaultExpanded = true
 }: {
-  label: 'Channels' | 'Chats'
+  label: 'Channels' | 'Chats' | 'Apps'
   rows: readonly JSX.Element[]
   onCreate?: () => void
   defaultExpanded?: boolean
@@ -2124,6 +2162,7 @@ function renderBody(
   statuses: SessionState['statuses'],
   serverIds: readonly string[],
   openConversationId: string | null,
+  openServerId: string | null,
   onOpen: (row: ConversationSummary) => void,
   onCreateChat: (cwd: string, serverId: string | undefined) => void,
   onCreateChannel: (cwd: string, serverId: string | undefined) => void,
@@ -2133,9 +2172,15 @@ function renderBody(
   onRepairHost: ((serverId: string) => void) | undefined,
   onSaveAsChannel: (row: SidebarRow) => void,
   onRename: (row: SidebarRow) => void,
-  onEditChannel: (row: SidebarRow) => void
+  onEditChannel: (row: SidebarRow) => void,
+  onSetPinned: (row: SidebarRow, pinned: boolean) => void,
+  apps?: ReadonlyMap<string, HostedAppsDisplayState>,
+  pane?: HostedPaneState,
+  onOpenApp?: (serverId: string, appId: string) => void,
+  onRefreshApps?: (serverId: string) => void,
+  hostLabels?: ReadonlyMap<string, string>
 ): JSX.Element | null {
-  const { channels, discussions } = partitionActive(conversations ?? [])
+  const { pinned, channels, discussions } = partitionSidebar(conversations ?? [], serverIds)
   if (serverIds.length === 0 && channels.length === 0 && discussions.length === 0) return null
   const hostedChannels = groupByServer(serverIds, channels)
   const hostedChats = groupByServer(serverIds, discussions)
@@ -2144,8 +2189,10 @@ function renderBody(
     <Row
       key={row.id}
       row={row}
-      isOpen={row.id === openConversationId}
+      isOpen={(!pane || pane.type === 'closed') && row.serverId === openServerId && row.id === openConversationId}
       onOpen={() => onOpen(row)}
+      pin={{ pinned: false, disabled: typeof row.serverId !== 'string' || statuses.get(row.serverId)?.type !== 'connected',
+        onActivate: () => onSetPinned(row, true) }}
       pen={typeof row.serverId === 'string' && statuses.get(row.serverId)?.type === 'connected'
         ? { ...CHANNELS_ROW_PEN, onEdit: () => onEditChannel(row) }
         : undefined}
@@ -2155,7 +2202,7 @@ function renderBody(
     <Row
       key={row.id}
       row={row}
-      isOpen={row.id === openConversationId}
+      isOpen={(!pane || pane.type === 'closed') && row.serverId === openServerId && row.id === openConversationId}
       onOpen={() => onOpen(row)}
       onSaveAsChannel={typeof row.serverId === 'string' && statuses.get(row.serverId)?.type === 'connected'
         ? () => onSaveAsChannel(row)
@@ -2167,6 +2214,23 @@ function renderBody(
   )
   return (
     <>
+      {pinned.length > 0 && (
+        <div className="channel-list__pinned">
+          <div className="channel-list__pinned-heading">Pinned</div>
+          {pinned.map(row => {
+            const serverId = row.serverId ?? ''
+            const status = statuses.get(serverId)?.type
+            return <Row key={JSON.stringify([serverId, row.id])} row={row}
+              pinnedHost={hostLabels?.get(serverId) ?? hostRowLabel({ status: 'not-stored' })}
+              hostDown={status === 'disconnected' || status === 'error'}
+              isOpen={(!pane || pane.type === 'closed') && serverId === openServerId && row.id === openConversationId}
+              onOpen={() => onOpen(row)}
+              pin={{ pinned: true, disabled: status !== 'connected', onActivate: () => onSetPinned(row, false) }}
+              pen={status === 'connected' ? { ...CHANNELS_ROW_PEN, onEdit: () => onEditChannel(row) } : undefined} />
+          })}
+          <div className="channel-list__pinned-rule" />
+        </div>
+      )}
       {hostedChannels.servers.map((host) => {
         const connected = statuses.get(host.serverId)?.type === 'connected'
         return (
@@ -2188,6 +2252,7 @@ function renderBody(
               rows={(chatsByHost.get(host.serverId) ?? []).map(chatRow)}
               onCreate={connected ? () => onCreateChat('', host.serverId) : undefined}
             />
+            <HostSection label="Apps" rows={appRows(host.serverId, apps?.get(host.serverId), pane, onOpenApp, onRefreshApps)} />
           </CollapsibleHostGroup>
         )
       })}
@@ -2201,77 +2266,35 @@ function renderBody(
   )
 }
 
-/**
- * One row's status dot (#801 / #874, Figma 103:2968) — the first consumer of both #800's leaf and #799's
- * resolver, and the answer to the question `conversationUnread.ts:81` left open: WHERE the two-store
- * unread composition lives. Here, per row, keyed by THE ROW'S OWN conversation id.
- *
- * Read the four narrow per-id slices, reduce them to one status, render the dot. That is the whole body.
- * A store-bound `*Control` sits beside a store-free
- * leaf — and it lives HERE rather than in `ConversationStatusDot.tsx` because that file declares itself
- * store-free in its own header.
- *
- * WHY PER-ROW AND NOT LIFTED. Hooks cannot be called from `renderBody`'s `.map()` callbacks (:558, :589),
- * so a per-row component is the only place these subscriptions can go — and it is also where they belong:
- * `conversationActivityStore`'s write path keeps every other conversation's held entry referentially
- * identical (conversationActivityStore.ts:124-127) and all three selectors hand back the HELD reference or
- * `null`, so a write for conversation A wakes A's dot and nothing else. Sitting here rather than in `Row`,
- * a status flip re-renders one <span> and not the row's title or icon buttons. The blink is
- * compositor-owned, so a working dot costs zero React renders.
- *
- * Five things this must not become, none of them a type error:
- *
- *   - THE FOUR SUBSCRIPTIONS MERGED INTO ONE SELECTOR returning
- *     `{ inputRequired, activity, timeline, lastRead }`. Three of the shipped selectors return a held
- *     reference or `null`, which is what keeps `useSyncExternalStore` stable; a selector building an
- *     object returns a fresh one every call and loops. The ban holds for `selectHasOutstandingFor` too but
- *     for a DIFFERENT reason, and the argument above must not be restated as though it covered it: that
- *     selector returns a plain `boolean`, which is perfectly value-stable on its own — it is the MERGED
- *     OBJECT that would be freshly allocated regardless of what its fields are, so the boolean's stability
- *     buys nothing there.
- *   - THE TWO PURE CALLS MOVED INSIDE A SELECTOR. Same reason, plus it would drag both runtime-free
- *     modules into the stores' read path — the graph property both their headers are built around.
- *   - A `useMemo`, A COMBINED SNAPSHOT OR A COMBINED STORE. `conversationUnread.ts:78-84` rules that
- *     reading two stores back to back in a single-threaded renderer is not a torn read, and rules out a
- *     merged snapshot by name. Two function calls per row per render is not a cost to design around. The
- *     `useMemo`-stable selector idiom at ConversationScreen.tsx:147 does not transfer either: there the id
- *     CHANGES over the component's life, whereas `Row` is keyed by `c.id` so a row instance's id is fixed
- *     for its whole life — and a fresh selector closure costs one allocation and one `Object.is`
- *     comparison, never a re-subscription (`api.subscribe` is what React watches) and never a re-render.
- *   - THE `conversationId` ANYWHERE BUT THE FOUR SELECTOR FACTORIES. It is daemon-asserted, so it stays a
- *     `Map` key: never a class-name interpolation, never an attribute value, never a `title`, never an
- *     object key, never a log line. Both upstream headers state this as a condition of their signatures.
- *   - A `console.*` ON ANY PATH. Both source stores and both pure modules are log-free by construction,
- *     and there is no read miss to report — `null` is a defined reading, not an error.
- *
- * The cost of these separate per-row reads:
- * `ChannelListView` drifts further from its "pure view" docstring, since its subtree now reads four more
- * singletons. Safe under `renderToStaticMarkup` in Node — the activity and timeline stores hydrate to
- * empty maps, the modal store hydrates to `initialModalState` with an empty `outstanding`
- * (modalPrompts.ts:226), and the last-read store's `localStorage` port short-circuits on
- * `typeof window === 'undefined'` (conversationLastReadStore.ts:246-257) — so every unseeded row
- * server-renders as `idle`.
- */
-function ConversationStatusDotControl({ row }: { row: ConversationSummary }): JSX.Element {
-  const conversationId = row.id
-  const promptPending = useModalStore(selectHasOutstandingFor(conversationId))
-  // #1700: a pending question batch waits on the operator exactly as a prompt does. The selector returns
-  // a plain boolean, value-stable under `Object.is`, never the held batch or a fresh object.
-  const questionPending = useQuestionBatchStore(
-    (s) => selectBatchFor(conversationId)(s) !== undefined
-  )
-  const activity = useConversationActivityStore(selectActivityFor(conversationId))
-  const timeline = useConversationTimelineStore(selectTimelineFor(conversationId))
-  const lastRead = useConversationLastReadStore(selectLastReadFor(conversationId))
-  return (
-    <ConversationStatusDot
-      status={resolveConversationStatus(
-        promptPending || questionPending,
-        activity,
-        isConversationUnread(timeline, lastRead, row)
-      )}
-    />
-  )
+function appRows(serverId: string, state: HostedAppsDisplayState | undefined, pane: HostedPaneState | undefined,
+  select: ((serverId: string, appId: string) => void) | undefined, refresh: ((serverId: string) => void) | undefined): JSX.Element[] {
+  if (state?.type === 'ready' && state.items.length > 0) return state.items.map(item => (
+    <div className="channel-list__row" key={item.appId}>
+      <span aria-hidden="true" className={`conversation-status-dot conversation-status-dot--${{
+        starting: 'working', running: 'new-messages', stopped: 'idle', failed: 'input-required'
+      }[item.state]}`} />
+      <button type="button" className="channel-list__row-open"
+        aria-current={pane && pane.type !== 'closed' && pane.serverId === serverId && pane.appId === item.appId ? 'true' : undefined}
+        onClick={() => select?.(serverId, item.appId)}>
+        <span className="channel-list__title">{item.title}</span>
+        <span className="channel-list__app-state">{item.state}</span>
+      </button>
+    </div>
+  ))
+  const copy = { loading: 'Loading apps…', ready: 'No apps', failed: 'Could not load apps',
+    unavailable: 'Apps disconnected', unsupported: 'Apps unsupported' }
+  return [<div key="status" className="channel-list__app-status" role="status">{copy[state?.type ?? 'loading']}
+    {state?.type === 'failed' && <button type="button" className="channel-list__app-retry" onClick={() => refresh?.(serverId)}>Retry</button>}
+  </div>]
+}
+
+/** Status uses only this host's admitted live state and received read watermarks. */
+function ConversationStatusDotControl({ row }: { row: ConversationSummary & { serverId?: string | null } }): JSX.Element {
+  const live = useStore(threadRuntime.live(row.serverId ?? '', row.id), s => s)
+  const input = threadLiveInputs(live)
+  return <ConversationStatusDot status={resolveConversationStatus(
+    input.hasOutstanding, input.activity, isConversationUnread(row)
+  )} />
 }
 
 // One row, identical in both sections. React key is `row.id` (a stable per-conversation identity — a
@@ -2330,7 +2353,10 @@ function Row({
   isOpen,
   onOpen,
   onSaveAsChannel,
-  pen
+  pen,
+  pin,
+  pinnedHost,
+  hostDown
 }: {
   row: ConversationSummary
   isOpen: boolean
@@ -2339,9 +2365,13 @@ function Row({
   // #1441 — the bare `onRename` became a `RowPenControl`: BOTH trees draw a pen now, and they differ in
   // the word and in the class tokens, so the handler alone no longer says which pen this is.
   pen?: RowPenControl
+  pin?: { pinned: boolean; disabled: boolean; onActivate: () => void }
+  pinnedHost?: string
+  hostDown?: boolean
 }): JSX.Element {
   return (
-    <div className="channel-list__row">
+    <div className="channel-list__row" data-pinned={pinnedHost !== undefined ? 'true' : undefined}
+      data-host-down={hostDown ? 'true' : undefined}>
       {/* #801 — the status dot, LEADING the row and a SIBLING of the open button, not a child of it. The
           dot ships a named `role="img"` for all three statuses, so nesting it would fold "Idle" — and,
           as the daemon works, "Assistant working" — into the button's accessible name, mutating what
@@ -2361,7 +2391,8 @@ function Row({
         aria-current={isOpen ? 'true' : undefined}
         onClick={onOpen}
       >
-        <span className="channel-list__title">{titleFor(row.name)}</span>
+        <span className="channel-list__title">{titleFor(row.name)}{pinnedHost !== undefined &&
+          <span className="channel-list__pinned-host">{' · '}{pinnedHost}</span>}</span>
       </button>
       {onSaveAsChannel && (
         // Icon-only button — `aria-label` supplies the accessible name (the .channel-list__save pattern),
@@ -2399,6 +2430,17 @@ function Row({
           <span className="channel-list__control-name" aria-hidden="true">
             {SAVE_AS_CHANNEL_CONTROL_LABEL}
           </span>
+        </button>
+      )}
+      {pin && (
+        <button type="button" className="channel-list__pin" disabled={pin.disabled}
+          aria-label={pin.pinned ? 'Unpin channel' : 'Pin channel'} onClick={pin.onActivate} {...controlNamePlacement}>
+          <svg viewBox="0 0 20 20" width="12" height="12" fill="currentColor" aria-hidden="true">
+            <path d={pin.pinned
+              ? 'M1.42361 0.246527C1.09722 -0.0798615 0.569444 -0.0798615 0.246527 0.246527C-0.0763894 0.572916 -0.0798616 1.10069 0.243055 1.42708L18.5764 19.7604C18.9028 20.0868 19.4306 20.0868 19.7535 19.7604C20.0764 19.434 20.0799 18.9063 19.7535 18.5833L14.5069 13.3333H15.5556C15.9028 13.3333 16.2326 13.1701 16.441 12.8924C16.6493 12.6146 16.7188 12.2535 16.6215 11.9167L16.4931 11.4514C16.0625 9.94792 15.0694 8.72569 13.7778 7.98958L13.4201 3.33333H14.4444C15.059 3.33333 15.5556 2.83681 15.5556 2.22222C15.5556 1.60764 15.059 1.11111 14.4444 1.11111H5.55556C5.29861 1.11111 5.06597 1.19792 4.87847 1.34028L6.60069 3.06597L6.43403 5.25694L1.42361 0.246527ZM9.79861 13.3333L5.19792 8.73611C4.40972 9.44792 3.81597 10.3819 3.50694 11.4549L3.375 11.9201C3.27778 12.2569 3.34722 12.6146 3.55556 12.8958C3.76389 13.1771 4.09722 13.3333 4.44444 13.3333H9.79861ZM8.88889 18.8889C8.88889 19.5035 9.38542 20 10 20C10.6146 20 11.1111 19.5035 11.1111 18.8889V15H8.88889V18.8889Z'
+              : 'M4.44444 2.22222C4.44444 1.60764 4.94097 1.11111 5.55556 1.11111H14.4444C15.059 1.11111 15.5556 1.60764 15.5556 2.22222C15.5556 2.83681 15.059 3.33333 14.4444 3.33333H13.4201L13.7778 7.98958C15.066 8.72569 16.0625 9.94792 16.4931 11.4514L16.625 11.9167C16.7222 12.2535 16.6528 12.6111 16.4444 12.8924C16.2361 13.1736 15.9028 13.3333 15.5556 13.3333H4.44444C4.09722 13.3333 3.76736 13.1701 3.55903 12.8924C3.35069 12.6146 3.28125 12.2535 3.37847 11.9167L3.50694 11.4514C3.9375 9.94792 4.93056 8.72569 6.22222 7.98958L6.57986 3.33333H5.55556C4.94097 3.33333 4.44444 2.83681 4.44444 2.22222ZM8.88889 15H11.1111V18.8889C11.1111 19.5035 10.6146 20 10 20C9.38542 20 8.88889 19.5035 8.88889 18.8889V15Z'} />
+          </svg>
+          <span className="channel-list__control-name" aria-hidden="true">{pin.pinned ? 'Unpin channel' : 'Pin channel'}</span>
         </button>
       )}
       {pen && (

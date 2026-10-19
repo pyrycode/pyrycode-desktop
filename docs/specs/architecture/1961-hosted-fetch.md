@@ -1,0 +1,94 @@
+# Hosted Fetch adapter
+
+## Files read
+
+- `src/main/hostedAppView.ts` → `createHostedAppViews`: readiness-bound authority, disposable sessions, retirement and debugger bootstrap.
+- `src/main/hostedAppLockdown.js` → document-start lockdown: unsupported browser transports stay disabled.
+- `src/main/transport/hostedResources.ts` → `request`, `finish`, `reset`: complete assembly, bounded admission, cancellation and uncertain mutations.
+- `src/main/transport/hostedResourceCodec.ts` → `encodeHostedResource`: canonical path/header/body validation before dispatch.
+- `e2e/hosted-app-view.spec.ts` → `scenario`, `open`, `evaluate`: production-view fake transport coverage.
+- `electron.vite.config.ts` → preload build: dedicated isolated entry required.
+- `CLAUDE.md`, `docs/knowledge/INDEX.md`, `docs/knowledge/features/development-verification.md`: test and scope rules.
+- `docs/knowledge/features/daemon-connection-hosted-resource-views.md`, `docs/knowledge/decisions/0012-hosted-app-native-isolation.md`: authority must come from discovery; debugger setup fails closed.
+- Hosted contract revision `964c5c4b`, asset/API, transfer and Electron bridge sections: exact HTTP, cap and lifecycle obligations.
+
+## Context
+
+Hosted scripts currently have only read-only browser resource loading. Expose bounded Fetch through the captured native binding without providing identity selection or client authority. This extension merits a later update to ADR 0012 by the documentation stage. No layout or chrome changes. Remote numeric feature branches have no overlapping changes to the planned existing files.
+
+## Design
+
+Use a dedicated sandboxed preload entry (`src/preload/hosted.ts`) exposing only request and abort through contextBridge. Extend document-start lockdown with Fetch installation; no inline hosted scripts or privileged client preload. Main's new `src/main/hostedFetch.ts` owns the narrow channel, validates exact WebContents/main frame/origin on every operation, and grants a private document token to the preload. Page correlation numbers are local cancellation keys only, never wire IDs. Reject repeated keys, additional identity fields and oversized/invalid input. Existing contextual resource validation remains the final wire admission gate.
+
+The page adapter resolves relative/same-origin URLs, removes fragments without reparsing queries, allows asset GET and the seven API verbs, and validates permitted headers. Serialize strings with a capped UTF-8 destination, binary by checked length, Blob by checked size, and FormData by bounded multipart parts with an explicit matching boundary/content type. Check overhead before reading Blob bytes. Reject streams and GET/HEAD bodies. Request objects with bodies are unsupported streaming input; bodyless Request objects retain their semantics. Enforce cap before IPC, independently again in main.
+
+Only complete validated native results cross back: status, permitted headers and opaque bytes. Construct Response with null for HEAD/204/205/304; return API redirect status without following or Location. Keep GET-only resource loading and all existing CSP/cookie/network lockdown. No fetch credentials reach transport.
+
+## State + concurrency model
+
+Each document has a native random token, increasing page sequence and at most sixteen native pending controllers. Every main-frame document replacement aborts its controllers, rotates the token and clears correlations. Retirement removes IPC/navigation listeners and cancels all work. Native request completion checks both document identity and pending-entry identity after await. Preload replies are correlated by private token and sequence. Adapter pending work owns AbortSignal/pagehide listeners and removes them on single settlement. No retries or replay; authority loss destroys the view and new reads require a fresh readiness-bound open.
+
+## State transitions and identity reuse
+
+| Event | Coverage in `e2e/hosted-app-view.spec.ts` |
+| --- | --- |
+| POST confirmed, close/reopen | Fetch preferences test: retained fake state, HTTP 204 and fresh GET |
+| Mutation committed with reply withheld; reconnect | Fetch uncertainty test: one dispatch, fresh discovery, reconciliation GET |
+| Pre-abort, in-flight abort, late completion | Fetch cancellation test: AbortError once and processed read barrier |
+| Document replacement, reused page key | Fetch cancellation/hostile tests: cancellation, stale token rejected and new request unaffected |
+| Cross-view/cross-frame/forged IPC | Fetch hostile test: rejected sender/token/shape and unchanged dispatch count after barrier |
+| Release/host/reset/unpair/parent close | Existing authority and retirement tests now exercise production Fetch |
+
+## Error handling
+
+Local unsupported URL/method/header/body/size rejects with TypeError; signal cancellation uses AbortError. Main failures expose only static network failure or aborted outcomes, never daemon error detail. Existing native error classifications and static lifecycle logs remain authoritative. Lost/cancelled writes are uncertain and require application reconciliation.
+
+## Testing strategy
+
+Write focused Electron assertions first and observe the missing adapter failure. Extend the existing scenario locally for retained preferences and held mutation replies. Check exact encoded query/header/body bytes, all supported body classes and bounds, non-2xx/redirect/null bodies, cancellation and hostile calls with positive completion barriers. Run the focused viewer spec, final pre-verify and build. Fake retained state proves the client contract; real SQL durability and relay acceptance belong to #1929. No new dependency or live-Claude spec.
+
+## Open Questions
+
+None. Estimated written work: 780 lines including plan/tests; one deliverable, no new exported types, two existing consumers, four observable acceptance criteria and at most ten reject categories. A cleaner shape is to reuse native assembly/admission entirely; this design does so instead of duplicating transport state.
+
+## Security review
+
+**Verdict:** PASS
+
+- [Trust boundaries] Request semantics are untrusted at `installHostedFetch`; validate shape, limits, exact sender/main-frame/origin and private document token before delegating. Native supplies every transport identity.
+- [Tokens/secrets] Document token uses Node randomBytes; confined to isolated preload/main, rotated on navigation. No credentials, registry or keys cross the bridge.
+- [Storage/files] No new filesystem or persistence; existing disposable uncached session is retained. Fake state is test-local.
+- [Electron attack surface] Dedicated sandboxed/context-isolated preload exposes only request/abort. GET-only loader, navigation/CSP/permission/cookie restrictions remain; debugger setup/detachment stays fail closed.
+- [Cryptography] No cryptographic protocol changes; existing Noise implementation and safeStorage remain in main. Random document tokens are routing fences, not transport credentials.
+- [Network/I/O] Cap multipart overhead and bytes before allocation/IPC; main rechecks body and resource codec bounds. No browser networking fallback; reuse transport deadlines, assembly limits and cancellation.
+- [Errors/logs] Static failures only; never log content, headers, bodies, full URLs/queries or daemon diagnostic text.
+- [Concurrency] Pending controllers have document/view owners; rotate before replacement, cancel on retirement, check identity after await, reject duplicate correlations. No mutation replay.
+- [Concurrency, rework 2026-10-15] PASS — `finish` retires the binding first; document cancellation uses scope-and-signal selection under `withoutPromotion` before individual aborts. Both pagehide surfaces send one document abort, fence new requests and settle locally. The dated revision below records the resolved MUST FIX and saturated-queue proof.
+- [Threat alignment] Malicious relay/daemon responses remain subject to existing contextual codec/digest/deadline checks. Compromised hosted pages cannot select hosts/releases or access client secrets. Disk token protection is unchanged safeStorage. Real service SQL durability is OUT OF SCOPE, #1929.
+
+**Reviewer:** builder (self-review per `builder/security-review.md`)
+**Date:** 2026-10-15
+
+## Revisions
+
+2026-10-15: Rotate the document fence on the isolated preload's authenticated main-frame bind, rather than on attempted navigation. Electron announces blocked form/frame navigations without replacing the document; rotating then stranded its existing adapter. The hostile-page regression requires a successful read after blocked navigation. Main retains the old fence until a new document actually binds, then aborts its controllers; reply checks still fence all awaits. Fetch responses expose only the four permitted headers, whereas browser resource responses continue carrying native CSP/nosniff. Electron omits the preload path from `getLastWebPreferences`; production write/bridge behavior verifies the dedicated preload instead.
+
+Added `src/main/hostedFetch.test.ts` to cover exact sender/frame/document checks, independent native input validation, reused correlations and stale completions after rebinding/retirement. Asset GET accepts permitted headers but the asset wire contract has no header field; API headers are preserved. Final scope remains below 800 written lines.
+
+2026-10-15, verifier finding 1: Terminal `finish` retires the captured binding before aborting individual Fetch/loader controllers. Document rebinding and pagehide first invalidate the document token and clear correlations, then call binding `cancelRequests(signals)` to remove that document's operations atomically while shared queue promotion is suppressed. Only then abort its controllers; unrelated work resumes after the cancellation barrier. The native-only method selects requests by both binding scope and captured signal, without retiring the binding or cancelling successor resource loads. Both preload and document-start pagehide paths call the same idempotent document abort; neither sends a per-request abort loop. Hidden documents reject further bridge requests, including serialization still awaiting Blob bytes. Individual AbortSignal cancellation remains per request.
+
+Rework security review: **PASS**. [Concurrency] The former sequential abort loop could promote a queued mutation and was MUST FIX. The design above removes all affected work before promotion and fences stale completions before cancellation. Saturated-queue regressions in `e2e/hosted-app-view.spec.ts` cover close, view replacement, parent close, document rebinding and each pagehide surface with eight held reads and a queued POST; a rejected native request proves enqueue processing, and successor reads prove cancellation/late-reply processing before absence assertions. Unit tests cover atomic scoped cancellation, unaffected queue resumption and correlation reuse. Other security categories retain the original review's controls; no new credentials, storage, wire or network surface. No overlapping in-flight feature branch touches the repair's files.
+
+Implementation coverage also includes actual document navigation through `about:blank` and an awaiting Blob serialization completing after pagehide. `Fetch bulk cancellation never promotes a queued mutation on <cause>` covers all seven transitions; the focused viewer run executes 19 tests, including those seven. Final ticket diff is approximately 650 added lines, no new exported type and three updated production consumers; sizing remains within the original limits.
+
+2026-10-15, verifier finding 1 at `674a7af5`: Fetch ownership now begins before `serialize` reads any body. Register the document's active settlement and AbortSignal listener first; one settlement removes both, whether serialization, native dispatch or response assembly is pending. Signal abort and pagehide reject with AbortError independently of a held Blob/multipart read. Individual cancellation sends an abort only after a native correlation exists; pagehide retains the atomic document abort. The serializer's eventual completion checks settlement before header validation or IPC, and late completion/rejection cannot settle twice. Blob reads have no cancellation API, so their bounded results are discarded when they eventually arrive. No new transport or retry state is introduced.
+
+Serialization ownership security review: **PASS**. [Concurrency] The unowned body-read await was MUST FIX; the owned settlement above fences both read success and failure and releases cancellation listeners immediately. [Network/I/O] Existing pre-read byte/multipart bounds and native revalidation remain. [Trust boundaries/Electron] No new bridge capability, identity, navigation or IPC surface. [Tokens/cryptography/storage] No credential, cryptographic or persistence changes. [Errors/logs] Static failures remain, with no body/URL logging. [Threat alignment] Hostile or stalled serialization cannot prevent cancellation settlement or dispatch after cancellation. All other original security controls remain applicable.
+
+Production Electron regressions `Fetch cancels held <Blob|FormData> serialization on <signal|pagehide>` wait for a positive body-read barrier, require AbortError while that read is still held, then release it and await read completion. A native read/rejection barrier precedes zero-mutation and single-settlement assertions. The saturated pagehide tests also await serialization cancellation before releasing their body. Repair estimate: under 140 written lines across this plan, the adapter and focused spec; the complete ticket remains below 800 lines, with no new export or consumer and the same four observable criteria. No overlapping in-flight numeric feature branch touches the repair's production/spec files.
+
+## Documentation handoff
+
+- Pending documentation stage: `docs/knowledge/features/daemon-connection-hosted-resource-views.md`, Native viewer and cancellation sections — describe the dedicated preload/Fetch capability, HTTP/body/header bounds, document fencing, atomic cancellation and uncertain mutation reconciliation.
+- Pending documentation stage: `docs/knowledge/decisions/0012-hosted-app-native-isolation.md` — record the narrow isolated bridge and document-start Fetch installation while preserving readiness-bound authority and fail-closed isolation.
+- Pending documentation stage: hosted resource views verification section — retain the fake-service evidence boundary; real SQL/relay acceptance remains #1929.

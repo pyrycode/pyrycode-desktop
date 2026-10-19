@@ -95,9 +95,18 @@ test('scroll lookup and same-row growth stay bounded on short and long threads',
     } }, { onLaunched: async app => instrument(await app.firstWindow()) })
     await page.locator('.composer__input').fill('seed')
     await page.getByRole('button', { name: 'Send', exact: true }).click({ timeout: 60_000 })
-    await expect(page.locator('.bubble[data-thread-role="assistant"]').last()).toContainText(`History row ${size - 1}`, { timeout: 15_000 })
+    await expect(page.locator('[data-thread-role="assistant"]').last()).toContainText(`History row ${size - 1}`, { timeout: 15_000 })
+    const growingStarted = Date.now()
     daemon.pushFrame(delta('growing', 0, 'Growing row\n'))
-    await expect(page.locator('.bubble[data-thread-role="assistant"]').last()).toContainText('Growing row')
+    // A pushed row can arrive after the default assertion window on the long thread. Establish
+    // committed input before measuring hook work, with the same allowance as the initial feed.
+    const assistants = page.locator('[data-thread-role="assistant"]')
+    await expect(assistants.last()).toContainText('Growing row', { timeout: 15_000 })
+    await expect(assistants).toHaveCount(size + 1)
+    await test.info().attach(`growing-readiness-${size}`, { body: JSON.stringify({
+      elapsedMs: Date.now() - growingStarted, count: await assistants.count(),
+      tail: await assistants.last().textContent()
+    }), contentType: 'application/json' })
     await settle(page)
     await page.locator('.conversation__thread').evaluate(el => { el.scrollTop = el.scrollHeight * 0.65 })
     await settle(page)
@@ -152,8 +161,18 @@ test('gaps, long hidden runs and target changes preserve a valid anchor and clea
     if (decodeEnvelope(inbound).type === 'list_conversations') return [seedConversationsFrame()]
     return []
   } }, { onLaunched: async app => instrument(await app.firstWindow()) })
+  const feedStarted = Date.now()
   for (let i = 0; i < 100; i++) { daemon.pushFrame(delta(`row-${i}`, 0, `History row ${i}`)); daemon.pushFrame(end(`row-${i}`)) }
-  await expect(page.locator('.bubble[data-thread-role="assistant"]').last()).toContainText('History row 99')
+  const assistants = page.locator('[data-thread-role="assistant"]')
+  // Sending is not receipt. Observe every committed row before mutating geometry;
+  // keep the bounded-work counters disabled throughout this initial feed.
+  await expect(assistants.locator('.bubble__markdown')).toHaveText(
+    Array.from({ length: 100 }, (_, i) => `History row ${i}`), { timeout: 15_000 })
+  await expect(assistants.locator('.bubble__cursor')).toHaveCount(0)
+  const rendered = await assistants.locator('.bubble__markdown').allTextContents()
+  await test.info().attach('feed-readiness', { body: JSON.stringify({
+    elapsedMs: Date.now() - feedStarted, count: rendered.length, tail: rendered.at(-1)
+  }), contentType: 'application/json' })
   await settle(page)
   // DOM-only adversarial geometry: flex gaps have positive height, hidden rectangles
   // reset to viewport zero. Neither may become the remembered row.
@@ -182,7 +201,7 @@ test('gaps, long hidden runs and target changes preserve a valid anchor and clea
   expect(await page.evaluate(() => window.scrollWork.lastRow?.hasAttribute('data-test-anchor'))).toBe(true)
   // Force a hook render without changing membership; it must retain the valid row.
   daemon.pushFrame(delta('growth', 0, 'Growth after hidden rows'))
-  await expect(page.locator('.bubble[data-thread-role="assistant"]').last()).toContainText('Growth after hidden rows')
+  await expect(page.locator('[data-thread-role="assistant"]').last()).toContainText('Growth after hidden rows')
   await settle(page)
   expect(await page.locator('[data-test-anchor]').evaluate(el => ({ text: el.textContent, top: window.scrollWork.rect(el).top }))).toEqual(retained)
   await page.locator('.conversation__thread').evaluate(el => {

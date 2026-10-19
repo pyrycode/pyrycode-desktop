@@ -1,9 +1,10 @@
 # Live e2e runbook — the manual operator gate for the Phase-1 round-trip
 
 This runbook covers operator prerequisites, the Phase-1 production-relay round-trip
-([#13](https://github.com/pyrycode/pyrycode-desktop/issues/13)) and the current automated
-real-daemon gate. The operator supplies credentials and infrastructure; agents record
-supplied evidence. The local real-* tier and production-relay check exercise different paths.
+([#13](https://github.com/pyrycode/pyrycode-desktop/issues/13)) and explicit
+real-daemon acceptance. Desktop's automatic live gate is retired; required fresh live
+scenarios remain operator-owned before merge. The operator supplies credentials and infrastructure;
+agents record supplied evidence. The local real-* tier and production-relay check exercise different paths.
 
 - [Prerequisites](#prerequisites-daemon--relay-side), including the dedicated Codex sign-in.
 - [Build, pair and send](#1-build--launch-the-app-ac1-first-half): the milestone operator recipe.
@@ -24,7 +25,7 @@ The operator supplies the daemon, the relay endpoint, and the credentials at run
 
 ### Dedicated Codex sign-in for the local real-* tier
 
-Codex coverage is default-off in `RealDaemonOptions`; only the Luna spec opts in with
+Codex coverage is default-off in `RealDaemonOptions`; the Luna creation and handover specs opt in with
 `codexCapture: true`. Other specs keep their existing gates, environment and arguments,
 without Codex probing or provisioning. The operator supplies Codex >=0.156.1 on PATH and
 a persistent dedicated sign-in outside both the runner's `~/.codex` and production `~/.pyry`:
@@ -82,7 +83,7 @@ Each step names the feature it leans on. See the [pairing input screen](pairing-
 
 The load-bearing "connection reached `connected`" signal is in the composer, **not** in app logs. The send button is gated on the live connection status ([#31](https://github.com/pyrycode/pyrycode-desktop/issues/31)); it flips the moment `status` reaches `connected` ([composer send § 4](composer-send-internals.md#4-connection-status-gate--composeravailability-31)):
 
-- **Before the handshake completes:** the send button is **disabled**. This is the *expected* pre-handshake state — benign, not a failure. (Through [#968](https://github.com/pyrycode/pyrycode-desktop/issues/968) this state also rendered an inline `Connecting…` caption, a `role="status"` live region; that caption is retired, so the disabled button is the only local observable — the [connection banner](conversation-shell-chrome.md#connection-banner-279) at the top of the thread carries the announcement instead.)
+- **Before the handshake completes:** the send button is **disabled**. This is the *expected* pre-handshake state — benign, not a failure. (Through [#968](https://github.com/pyrycode/pyrycode-desktop/issues/968) this state also rendered an inline `Connecting…` caption, a `role="status"` live region; that caption is retired, so the disabled button is the only local observable — the [Top overlay connection pill](conversation-shell-chrome.md#connection-banner-279) carries the announcement instead.)
 - **On `connected`:** the send button **enables**.
 
 Watch the **UI** (the composer enabling) and the **pyrybox daemon logs**, not the desktop app. The desktop transport is **log-free by construction** ([#62](https://github.com/pyrycode/pyrycode-desktop/issues/62)) — no `console.*` around the handshake, so a stray log can never leak the token, keys, or transcript. There deliberately are no verbose desktop transport logs to read.
@@ -114,7 +115,100 @@ Record the round-trip result as a **comment on [#13](https://github.com/pyrycode
 
 ## Current real-claude gate state
 
-**Latest recorded run: #1949, 2026-10-14 — 27 executed, 27 passed, 0 failed,
+### Claude-to-Luna handover acceptance (#1662)
+
+**Pending under `held:live-handover` as of October 16.** The operator must establish a fresh
+fact in Claude, switch that same conversation to GPT-6 Luna at Low through the real footer
+and confirmation, then obtain a completed answer requiring the pre-switch fact without
+restating it. Before merge, require a fresh current-main run with executed/passed/failed/skipped
+counts and the named test present and passed. Keep same-attempt daemon revision, owning host
+and unchanged conversation ID, published model row, correlated outgoing/incoming terminals and
+answer, saved/applied Low settings and the published Luna footer name. No successful answer
+or footer evidence for this exact scenario is available to record yet.
+
+The dispatcher report for historical Linux run `2026-10-14T14-51-41-455Z` records
+28 executed, 27 passed, 1 failed, 1 skipped on feature `f276e0219bf1` merged with main
+`93bf8128f759`. **`real Claude conversation hands over to GPT-6 Luna at Low effort and
+Luna answers with the pre-switch fact` failed**, on daemon `0.40.1`, in 14.4s; the same-tree
+rerun supplied no pass. The named `real GPT-6 Luna channel replies with Low effort from
+creation` executed and passed in that run, proving creation rather than handover. The
+system-prompt Reset case was skipped without a recorded reason. Earlier full/focused
+handover failures remain failures; the historical base collected zero tests and establishes
+neither a comparison nor handover acceptance.
+
+The [latest verifier review](https://github.com/pyrycode/pyrycode-desktop/pull/1846#issuecomment-6219617302)
+passed Linux implementation `49ed9418` with main `be2afa3f`: the configured application gate
+executed/passed 488 tests, 0 failed, 4 existing skips, 0 retries or flaky results. The recorded
+new-Luna-channel case was present and passed; the handover case was not run in that gate.
+The repaired live handover spec collected 1 case, **0 executed**. Neither those results nor
+the successful captures below provide a named handover pass. The retired automatic gate
+will not supply the missing operator acceptance; retain the hold until the exact fresh
+scenario and its counted, same-attempt evidence succeed.
+
+### Production-thread capture evidence
+
+As of October 16, the current production-thread assertions have actual live
+capture evidence. Desktop `8bd3abb9` executed all 28 active real scenarios and the
+permission scenario from PR #2036: 29 passed, zero failed, one existing reset-prompt
+fixme. The [migration inventory](../../client-replay-migration.md) names every file,
+physical proof and exclusion. All 1,028 original expect expressions and all 1,036
+from the integrated baseline remain, apart from type syntax and an equivalent
+read-only inspection wrapper. No matcher or expected value was weakened.
+
+Captures use clean daemon source `58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`,
+including merged core PR #3505 (cold/idle view demand) and PR #3509 (Send now
+written state). The isolated macOS executable SHA-256 is
+`5f5b3b9ce42eda74024637f4929dd720d36c1226ce6e370eb62fbe9e6b22f7c0`;
+Claude Code reports `2.1.280`. The installed daemon was not replaced. The actual
+app connection, independently of the fixture's probe, accepts `interactive` and
+`thread`. Committed recordings retain their own successful source identities.
+
+Equivalent-scope timing excludes builds and counts the same 29 active scenarios,
+with one worker and zero retries in every row. Replay does not claim live-only
+filesystem, provider, encryption interoperability or OS proof.
+
+| Execution | Passed | Failed | Existing fixme | Seconds |
+| --- | ---: | ---: | ---: | ---: |
+| Fresh live capture, including original permission | 29 | 0 | 1 | 266.666 |
+| Committed capture replay under executable guard | 29 | 0 | 1 | 78.966 |
+| Fresh capture replay under executable guard | 29 | 0 | 1 | 136.900 |
+
+Both guarded macOS runs reported zero forbidden process-launch attempts. The
+fresh replay and comparison resumed after fixing the shared read-only inspector
+failure; they did not recapture or substitute failed fixtures. Strict comparison
+flags 18 changed traces, covering read marks, query coverage, numeric cursors and
+observed reconnect boundaries. Manual review found identical ordered mutation
+types, choices and payloads after identity binding. The verifier keeps those
+changes as drift and exits unsuccessfully when they occur; there is no claim of a
+drift-free provider transcript or silent baseline regeneration.
+
+The complete integrated unit suite passed 9,205 tests in 399 files, skipped six
+existing platform/opt-in cases and failed zero, in 47.63 seconds with four workers. The
+complete normal application suite at `fdee12cc` passed 466 cases, failed zero,
+skipped two existing cases and had no flaky passes in 288.543 seconds,
+with four workers and retries disabled. The skips are the existing independent
+input-cover case and reset-prompt fixme. After the final explicit loopback-bind
+change, all 46 forwarding/responder/setup tests also passed. Linux source `32aadb0b` passed three
+independent fresh live history cases (3 passed, zero failed/skipped, 149.873
+seconds) and all 29 guarded replays (29 passed, zero failed, one existing fixme,
+133.816 seconds), with no retries or forbidden executable launches. The Linux
+daemon binary SHA-256 is
+`83dddbd5d18eb08136c3d5a7d52fa68dc591021a73cfb695a40e499066bc9141`.
+Live history covers all 205 closed-app posts, saved-checkpoint catch-up and
+fresh-profile paging. An earlier bounded inspector-read failure remains a failed
+report; the successful independent run keeps the original five-second bound.
+
+The packaged macOS history proof passed with the production encryption backend,
+not the fixture backend. The complete Go check, including race-enabled native
+and tagged E2E suites, and its documentation guard passed for the daemon
+prerequisite. Normal Desktop output contains no recorder markers, and the
+29 committed recordings are byte-identical to successful actual capture files.
+The known-credential scan found no configured Claude or Codex credential material
+in the recordings or production JavaScript.
+
+### Earlier October 14 effort acceptance
+
+**Earlier recorded run: #1949, 2026-10-14 — 27 executed, 27 passed, 0 failed,
 1 skipped; the repaired effort-default test passed on its first attempt.** The
 supplied dispatcher per-test report records `2026-10-14T11-31-33-267Z`, testing
 `feature/1949` at `a1e0ae54b399` integrated with `origin/main` at `cbf60aa2a012`.
@@ -263,14 +357,45 @@ and after completion are required, never Default. It attaches `daemon-revision` 
 The [current gate record](#current-real-claude-gate-state) contains the named live pass and
 its daemon and combined-delivery identities.
 
-On the provisioned gate machine, after the scoped fixture/picker checks and build, use:
+[`e2e/real-claude-luna-handover.spec.ts`](../../../e2e/real-claude-luna-handover.spec.ts)
+adds **`real Claude conversation hands over to GPT-6 Luna at Low effort and Luna answers
+with the pre-switch fact`**. It establishes a fresh random code word in a completed Claude
+turn, acknowledges saved/applied Low, picks the daemon's published Luna row in the footer
+and confirms. A fresh owning-host list must establish Codex under the original conversation
+ID, followed by incoming settings. The next question omits the code word; a completed Luna
+reply must contain it. Final readback requires the picked raw model and saved/applied Low,
+and the footer must read the published Luna name. The exact single switch command includes
+the owning `serverId`, model and supported Low effort; no conversation may be created.
+
+The pure [`completedHandoverReply`](../../../e2e/fixtures/lunaHandoverProof.ts) proof handles
+legacy deltas and thread full items, revision patches and text appends. Completion belongs
+to the settings-authoritative host/conversation/session/agent and the same epoch/turn as
+fresh post-send assistant activity. History alone cannot establish a reply; mismatched base
+revisions, repeated revisions, nested items and reset lifetimes cannot supply or duplicate
+its text. Successful Codex terminals may carry empty optional `outcome`/`terminal_reason`;
+the proof still requires `end_turn`, nonempty correlated text and no error/category.
+An observer that accepts only literal `success`/`completed` would reject those valid replies.
+
+The spec synchronously records events in the page and unsubscribes in `finally`. Preserve
+`daemon-revision`, `published-model-row` and `handover-answer` attachments from the passing
+attempt. The answer attachment includes the test-owned token, both correlated replies and
+terminals, conversation identity, settings and Luna footer. `handover-attempt` also retains
+revision, commands/events, settings and footer samples on failure; its presence alone
+establishes no pass. Record the actual correct answer only after successful operator execution.
+See [current handover status](#claude-to-luna-handover-acceptance-1662).
+
+On the provisioned operator machine, after the scoped fixture/picker checks and build,
+run the scenario required by the ticket:
 
 ```bash
 npx playwright test --config playwright.real-claude.config.ts e2e/real-claude-codex-channel.spec.ts --reporter=json
+npx playwright test --config playwright.real-claude.config.ts e2e/real-claude-luna-handover.spec.ts --reporter=json
 ```
 
-The combined PR also needs the dispatcher's full real-* gate. On macOS, request approved
-execution outside the sandbox before any Electron launch. Inspect the named result and
+Run on the ticket's operating system; macOS is outside #1662's Linux verification scope.
+For macOS tickets, request approved execution outside the sandbox before any Electron launch.
+The normal dispatcher gate runs fake transport and captured clients; required fresh live
+acceptance uses an explicit operator run. Inspect the named result and
 attachments, not exit status alone; a configured home does not establish a usable sign-in.
 
 | Opted-in prerequisite or error | Meaning |
@@ -291,9 +416,9 @@ scenario cannot satisfy live acceptance even when every other spec passes.
 See [automation and operator gates](live-e2e-runbook-automation.md) for dispatcher
 configuration, failure routing, `npm run e2e:real:gate` and the production-relay
 `live-drive.mjs` recipe. The real-* tier uses a local test relay; production-relay
-verification remains an operator check. The latest report has 28 declared tests and
-27 runnable when Codex is provisioned, excluding the known system-prompt case. A count
-floor alone cannot establish that the named Luna scenario passed.
+verification remains an operator check. Counts depend on the source and selected suite;
+use each report's named results. A count floor, collection, an all-skip exit or a recorded
+new-channel pass cannot establish fresh Claude-to-Luna handover.
 
 ## Cross-references
 

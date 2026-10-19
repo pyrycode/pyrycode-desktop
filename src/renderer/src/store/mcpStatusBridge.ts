@@ -29,7 +29,7 @@ export function subscribeMcpStatus(
 // Mounted for the app's lifetime so a report lands while the Channel info sheet is closed.
 export function McpStatusData(): null {
   useEffect(() => subscribeMcpStatus(
-    window.pyry.onDaemonEvent,
+    onCurrentSessionEvent,
     mcpStatusStore.getState().setMcpStatus,
     mcpStatusStore.getState().markMcpStatusUnavailable,
     mcpStatusStore.getState().markMcpReconnectRefused,
@@ -37,3 +37,4 @@ export function McpStatusData(): null {
   ), [])
   return null
 }
+import { onCurrentSessionEvent } from './threadRuntime'

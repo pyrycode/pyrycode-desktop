@@ -1,8 +1,13 @@
-import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
+import { test, expect, SEEDED_ROW as SEED } from './fixtures/launchPairedApp'
 import { encodeEnvelope, decodeEnvelope } from '../src/main/transport/codec'
 import type { Envelope, EnvelopeType } from '../src/shared/wire/types'
 import { DAEMON_EVENT_CHANNEL } from '../src/shared/ipc/events'
+import { CONNECTION_BANNER_COPY } from '../src/renderer/src/screens/conversation/composerSend'
 
+// Scripted history is published as thread catch-up/pages by the shared fake daemon.
+test.use({ scriptedHistory: true })
+
+const SEEDED_ROW = { ...SEED, current_session_id: 'addressable-session' }
 const other = { ...SEEDED_ROW, id: 'refusal-other', name: 'Other refusal discussion' }
 const original = 'claude-opus-4-1[1m]', fallback = 'claude-sonnet-4-5'
 const frame = (type: EnvelopeType, payload: unknown, in_reply_to?: number) => encodeEnvelope({
@@ -17,7 +22,7 @@ function fake(captured: Envelope[]) {
     const env = decodeEnvelope(bytes)
     captured.push(env)
     switch (env.type) {
-      case 'list_conversations': return [seedConversationsFrame()]
+      case 'list_conversations': return [frame('conversations', { conversations: [SEEDED_ROW] })]
       case 'request_session_settings': return [frame('session_settings', {
         session_id: 'addressable-session', model: 'haiku', effort: 'low', permission_mode: 'default',
         yolo: false, used_tokens: 100, window_tokens: 200000
@@ -183,7 +188,8 @@ test('local/no fallback, conversations, superseding swaps, manual picks and late
 
 test('connection errors and stopped-turn recovery take priority over the offer, while usage stays in the overlay', async ({ launchPairedApp }) => {
   const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: fake([]) })
-  const action = page.getByRole('button', { name: 'Switch back', exact: true }), usage = page.locator('.conversation__top-overlay .top-overlay-pill--error')
+  const action = page.getByRole('button', { name: 'Switch back', exact: true })
+  const usage = page.locator('.conversation__top-overlay .top-overlay-pill--error').filter({ hasText: 'Usage limit reached' })
   daemon.pushFrame(frame('rate_limited', { conversation_id: SEEDED_ROW.id, status: 'rejected', limit_type: 'five_hour', resets_at: 4102444800, truncated_fields: null }))
   await expect(usage).toBeVisible()
   daemon.pushFrame(frame('model_refusal_fallback', refusal()))
@@ -202,8 +208,9 @@ test('connection errors and stopped-turn recovery take priority over the offer, 
         type: 'failed', serverId: 'fake-daemon', error: { code: 'transport', message: '', retryable }
       })
     }, { channel: DAEMON_EVENT_CHANNEL, retryable })
-    if (retryable) await expect(page.locator('.composer-status__error')).toBeVisible()
-    else await expect(page.getByRole('button', { name: 'Connection error - Reconnect', exact: true })).toBeVisible()
+    await expect(page.locator('.conversation__top-overlay [role="status"]')).toContainText(CONNECTION_BANNER_COPY)
+    await expect(page.getByRole('button', { name: 'Connection error - Reconnect', exact: true })).toHaveCount(retryable ? 0 : 1)
+    await expect(page.locator('.composer-status__error')).toHaveCount(0)
     await expect(action).toHaveCount(0)
     await expect(usage).toBeVisible()
     await expect(page.locator('.model-refusal')).toHaveCount(1)

@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test'
+process.env.PYRY_CLIENT_MODE = 'replay'
 import { availableParallelism } from 'node:os'
 
 // E2E harness config. Playwright only scans `e2e/` — never `src/` — which is one
@@ -8,6 +9,8 @@ import { availableParallelism } from 'node:os'
 // and no `npx playwright install` step.
 
 const REAL_TIER = /(^|\/)real-[^/]*\.spec\.ts$/
+const CAPTURE_TIER = /(^|\/)capture-[^/]*\.spec\.ts$/
+const NATIVE_WRITER = /(^|\/)history-writer-native\.spec\.ts$/
 
 // The specs that write or read the operating system clipboard, which every Electron process on the
 // machine shares. Two of them overlapping would read each other's text. A new spec that copies or pastes
@@ -18,6 +21,7 @@ const CLIPBOARD_SPECS = [
   'composer-paste-image',
   'markdown-reader-menu',
   'message-copy',
+  'message-reply',
   'message-side-actions',
   'offline-conversation-actions',
   'thread-items'
@@ -47,10 +51,10 @@ export default defineConfig({
   // invariant — `.spec.ts` is Playwright's, `.test.ts` is vitest's — whose other half is the
   // `include` glob in vitest.config.ts.
   testMatch: /(^|\/)[^/]*\.spec\.ts$/,
-  // Every `real-*` spec (starting with real-claude, #252) needs a real pyry daemon + real claude +
-  // credentials the agent pipeline lacks; they run only under playwright.real-claude.config.ts
-  // (`npm run e2e:real-claude`). A filename testIgnore is structural — it can't be forgotten the way a
-  // per-test grep tag can.
+  // The real-* entry points run explicitly against the live stack. Their shared bodies
+  // also run here through recorded-clients.spec.ts against captured daemon exchanges.
+  // Ignoring the live entry points prevents duplicate collection and keeps credentials
+  // and child processes out of the normal test path.
   //
   // ANCHORED TO THE FILENAME, and that is load-bearing (#928). Playwright matches a RegExp testIgnore /
   // testMatch against the ABSOLUTE file path, so the older unanchored `/real-.*\.spec\.ts$/` matched every
@@ -60,7 +64,9 @@ export default defineConfig({
   // this default config would have ignored every one of them and exited 0 on a suite that never ran.
   // `(^|\/)` pins the match to a path boundary and `[^/]*` keeps it inside one segment, so the partition
   // now depends on the FILENAME alone — which is what both configs always claimed.
-  testIgnore: REAL_TIER,
+  testIgnore: [REAL_TIER, CAPTURE_TIER],
+  // Each Linux worker owns its X display; global setup validates the policy before launches.
+  globalSetup: './e2e/fixtures/runDisplay.ts',
   // Files spread across workers; the tests inside one file still run in order in one worker. Every
   // launch already owns its own resources: a fresh `mkdtemp` user-data dir, fake relay forwarders and
   // daemons on ephemeral loopback ports (`port: 0`), and its own Electron process. The one thing every
@@ -71,11 +77,16 @@ export default defineConfig({
   // the fully serial run.
   fullyParallel: false,
   workers: workerCount(),
-  // The clipboard project is listed first so its single worker starts at once rather than running its
-  // specs one after another at the end, after the parallel ones have finished.
+  // After the native deadline proof, clipboard starts alongside parallel so its serial
+  // cases do not accumulate at the end of the run.
   projects: [
-    { name: 'clipboard', testMatch: CLIPBOARD_SPECS, workers: 1 },
-    { name: 'parallel', testIgnore: [REAL_TIER, ...CLIPBOARD_SPECS] }
+    // This deadline proof must finish before competing Electron launches. A single-worker
+    // project alone would still overlap the other projects. Dependencies isolate only this
+    // scenario; clipboard and parallel retain their existing concurrency after it completes.
+    { name: 'native-writer', testMatch: NATIVE_WRITER, workers: 1 },
+    { name: 'clipboard', testMatch: CLIPBOARD_SPECS, workers: 1, dependencies: ['native-writer'] },
+    { name: 'parallel', testIgnore: [REAL_TIER, CAPTURE_TIER, NATIVE_WRITER, ...CLIPBOARD_SPECS],
+      dependencies: ['native-writer'] }
   ],
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,

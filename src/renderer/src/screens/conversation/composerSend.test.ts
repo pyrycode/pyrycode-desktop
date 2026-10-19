@@ -1,3 +1,4 @@
+import { createThreadSendStore } from '../../store/threadSendStore'
 import { describe, it, expect, vi } from 'vitest'
 import {
   submitMessage,
@@ -9,8 +10,6 @@ import {
   COMPOSER_RECONNECT_BUTTON_COPY,
   shouldShowBanner,
   CONNECTION_BANNER_COPY,
-  COMPOSER_ERROR_CHIP_COPY,
-  COMPOSER_ERROR_CHIP_PREFIX_COPY,
   COMPOSER_REPAIR_BUTTON_COPY
 } from './composerSend'
 import { sendMessageCommand, type RendererCommand } from '@shared/ipc/commands'
@@ -21,474 +20,80 @@ import type { HelloAckPayload } from '@shared/wire/types'
 // are injected, so it is exercised here with plain spies and a deterministic id stub — no store,
 // no Electron bridge, no DOM.
 
+const pending = () => ({ serverId: 'host', threadSend: { store: createThreadSendStore(), deviceId: 'device' } })
 describe('submitMessage', () => {
-  it('returns false and performs no effect for whitespace-only or empty input', () => {
-    for (const blank of ['', '   ', '\n\t ']) {
-      const sendCommand = vi.fn()
-      const dispatch = vi.fn()
-      const dispatchFor = vi.fn()
-      const newMessageId = vi.fn(() => 'unused')
-      expect(
-        submitMessage(blank, 'conv-1', { sendCommand, dispatch, dispatchFor, newMessageId })
-      ).toBe(false)
-      expect(sendCommand).not.toHaveBeenCalled()
-      expect(dispatch).not.toHaveBeenCalled()
-      // #756: the keyed write sits beside the flat one, so it is gated by the same early return.
-      expect(dispatchFor).not.toHaveBeenCalled()
-      expect(newMessageId).not.toHaveBeenCalled()
+  it('refuses empty input or no conversation before claiming attachments or minting identity', () => {
+    const sendCommand = vi.fn(), newMessageId = vi.fn(), takeAttachments = vi.fn()
+    for (const [text, chat] of [[' ', 'chat'], ['text', null]] as const) {
+      expect(submitMessage(text, chat, { ...pending(), sendCommand, newMessageId, takeAttachments })).toBe(false)
     }
-  })
-
-  // #448: sending without an active conversation is a no-op, NOT a send to a placeholder id. The
-  // daemon rejects an unknown conversation_id with an error frame, so a null active conversation
-  // must gate the send exactly like not-connected does: no wire command, no optimistic echo, input
-  // preserved (return false).
-  it('returns false and performs no effect when the active conversation id is null (#448)', () => {
-    const sendCommand = vi.fn()
-    const dispatch = vi.fn()
-    const dispatchFor = vi.fn()
-    const newMessageId = vi.fn(() => 'unused')
-    expect(
-      submitMessage('hello', null, { sendCommand, dispatch, dispatchFor, newMessageId })
-    ).toBe(false)
-    expect(sendCommand).not.toHaveBeenCalled()
-    expect(dispatch).not.toHaveBeenCalled()
-    // #756: with no conversation to attribute the echo to, there is nothing to route it into either.
-    expect(dispatchFor).not.toHaveBeenCalled()
-    expect(newMessageId).not.toHaveBeenCalled()
-  })
-
-  it('sends exactly one sendMessage command targeting the ACTIVE conversation id (#448)', () => {
-    const sendCommand = vi.fn()
-    const dispatch = vi.fn()
-    const dispatchFor = vi.fn()
-    const newMessageId = vi.fn(() => 'mint-1')
-
-    const result = submitMessage('hello', '130648a8-real-id', {
-      sendCommand,
-      dispatch,
-      dispatchFor,
-      newMessageId
-    })
-
-    expect(result).toBe(true)
-    expect(newMessageId).toHaveBeenCalledTimes(1)
-    expect(sendCommand).toHaveBeenCalledTimes(1)
-    // The wire payload mints and carries a message_id (SendMessagePayload). Since #1213 the echo below
-    // carries the SAME id — one mint, two uses — so this is no longer the contrast it once was; what the
-    // echo still does not carry is a conversation_id or a role.
-    expect(sendCommand).toHaveBeenCalledWith(
-      sendMessageCommand({
-        conversation_id: '130648a8-real-id',
-        message_id: 'mint-1',
-        text: 'hello'
-      })
-    )
-  })
-
-  it('dispatches exactly one userText timeline echo carrying the trimmed text (#179 AC3)', () => {
-    const dispatch = vi.fn()
-
-    submitMessage('  hey there  ', 'conv-1', {
-      sendCommand: vi.fn(),
-      dispatch,
-      dispatchFor: vi.fn(),
-      newMessageId: () => 'echo-1'
-    })
-
-    // The echo routes into timelineStore as a userText ThreadEvent carrying the trimmed text and — since
-    // #1213 — the id minted for the wire frame, so a drop of the queued row this message may become can
-    // find it again. No conversation_id and no role: those two the model still does not carry.
-    expect(dispatch).toHaveBeenCalledTimes(1)
-    expect(dispatch).toHaveBeenCalledWith({ type: 'userText', text: 'hey there', messageId: 'echo-1' })
-  })
-
-  // #756: the echo is the timeline's second row-adding writer, so it routes into the conversation it
-  // was SENT TO — the id already handed to submitMessage, never a re-read of anything.
-  it('#756: routes the echo into the keyed holder under the conversation it was sent to', () => {
-    const dispatch = vi.fn()
-    const dispatchFor = vi.fn()
-
-    submitMessage('  hey there  ', 'conv-b', {
-      sendCommand: vi.fn(),
-      dispatch,
-      dispatchFor,
-      newMessageId: () => 'echo-2'
-    })
-
-    expect(dispatchFor).toHaveBeenCalledTimes(1)
-    expect(dispatchFor).toHaveBeenCalledWith('conv-b', {
-      type: 'userText',
-      text: 'hey there',
-      messageId: 'echo-2'
-    })
-    // Built ONCE and handed to both write paths: the same reference, not two equal literals. Safe
-    // because reduceTimeline is pure (conversationTimelineStore.ts:268-270), and asserting identity
-    // is what keeps a future "build it again for the keyed store" edit from passing silently.
-    expect(dispatchFor.mock.calls[0][1]).toBe(dispatch.mock.calls[0][0])
-  })
-
-  // #1013: the echo is stamped at the moment of send, from an injected clock. The container wires
-  // `now: Date.now`; a spec injects a constant and asserts the exact value, so nothing here reads the
-  // machine's wall clock (AC3).
-  it('#1013: stamps the echo with the injected clock, the same value on both write paths', () => {
-    const dispatch = vi.fn()
-    const dispatchFor = vi.fn()
-    const now = vi.fn(() => 1_700_000_000_000)
-
-    submitMessage('hey there', 'conv-1', {
-      sendCommand: vi.fn(),
-      dispatch,
-      dispatchFor,
-      newMessageId: () => 'echo-3',
-      now
-    })
-
-    expect(dispatch).toHaveBeenCalledWith({
-      type: 'userText',
-      text: 'hey there',
-      createdAt: 1_700_000_000_000,
-      messageId: 'echo-3'
-    })
-    expect(dispatchFor).toHaveBeenCalledWith('conv-1', {
-      type: 'userText',
-      text: 'hey there',
-      createdAt: 1_700_000_000_000,
-      messageId: 'echo-3'
-    })
-    // One echo object, so one read of the clock — the two stores cannot record different instants for
-    // the same message. This is the built-ONCE property, asserted at the clock rather than at identity.
-    expect(now).toHaveBeenCalledTimes(1)
-  })
-
-  it('#1013: leaves the echo unstamped when no clock is injected (the standing-fixture guarantee)', () => {
-    const dispatch = vi.fn()
-
-    submitMessage('hey there', 'conv-1', {
-      sendCommand: vi.fn(),
-      dispatch,
-      dispatchFor: vi.fn(),
-      newMessageId: () => 'echo-4'
-    })
-
-    const [echo] = dispatch.mock.calls[0] as [{ createdAt?: number }]
-    expect(echo.createdAt).toBe(undefined)
-  })
-
-  it('#1013: does not read the clock when the submit is refused', () => {
-    const now = vi.fn(() => 1_700_000_000_000)
-    const deps = {
-      sendCommand: vi.fn(),
-      dispatch: vi.fn(),
-      dispatchFor: vi.fn(),
-      newMessageId: () => 'unused',
-      now
-    }
-    expect(submitMessage('   ', 'conv-1', deps)).toBe(false)
-    expect(submitMessage('hi', null, deps)).toBe(false)
-    expect(now).not.toHaveBeenCalled()
-  })
-
-  // ================================================================================================
-  // #1039 — the attachments the send records. `takeAttachments` is read once, past both `false`
-  // returns, exactly where the clock above is: that placement IS the fourth criterion, because the
-  // hook's take is also its CLEAR. A submit that sends nothing never calls it, so nothing is cleared.
-  // ================================================================================================
-
-  const REPORT: MessageAttachment = { attachmentId: 'upload-1', filename: 'report.pdf' }
-  const SHOT: MessageAttachment = { attachmentId: 'upload-2', filename: 'clipboard-2026.png' }
-
-  /** A take whose rollback is a spy, so a test can assert whether the send put the set back (#1055). */
-  const takeOf = (
-    attachments: readonly MessageAttachment[]
-  ): { attachments: readonly MessageAttachment[]; rollback: ReturnType<typeof vi.fn> } => ({
-    attachments,
-    rollback: vi.fn()
-  })
-
-  it('#1039: records the taken attachments on the echo, the same list on both write paths', () => {
-    const dispatch = vi.fn()
-    const dispatchFor = vi.fn()
-    const pending = [REPORT, SHOT]
-    const takeAttachments = vi.fn(() => takeOf(pending))
-
-    submitMessage('here you go', 'conv-1', {
-      sendCommand: vi.fn(),
-      dispatch,
-      dispatchFor,
-      newMessageId: () => 'a1',
-      takeAttachments
-    })
-
-    // Taken ONCE, so the flat store and the keyed holder cannot record two different sets for one
-    // message — the built-once property asserted at the take, the way #1013 asserts it at the clock.
-    expect(takeAttachments).toHaveBeenCalledTimes(1)
-    const [echo] = dispatch.mock.calls[0] as [Extract<ThreadEvent, { type: 'userText' }>]
-    expect(echo.attachments).toBe(pending)
-    expect(dispatchFor.mock.calls[0][1]).toBe(echo)
-  })
-
-  // AC2: nothing pending ⇒ the field is ABSENT, not an empty list. The composer is where that
-  // normalisation happens, so the store never sees `[]` and "absent means none" stays the only reading.
-  it('#1039: leaves the field absent when the take answers an empty list (AC2)', () => {
-    const dispatch = vi.fn()
-
-    submitMessage('just text', 'conv-1', {
-      sendCommand: vi.fn(),
-      dispatch,
-      dispatchFor: vi.fn(),
-      newMessageId: () => 'a2',
-      takeAttachments: () => takeOf([])
-    })
-
-    const [echo] = dispatch.mock.calls[0] as [Extract<ThreadEvent, { type: 'userText' }>]
-    expect(echo.attachments).toBe(undefined)
-  })
-
-  // The shape the thirteen shipped deps literals in this file keep: an unwired take is an unstamped
-  // echo, `now`'s rule exactly, and no field appears where none did before.
-  it('#1039: leaves the field absent when no take is wired at all', () => {
-    const dispatch = vi.fn()
-
-    submitMessage('just text', 'conv-1', {
-      sendCommand: vi.fn(),
-      dispatch,
-      dispatchFor: vi.fn(),
-      newMessageId: () => 'a3'
-    })
-
-    const [echo] = dispatch.mock.calls[0] as [Extract<ThreadEvent, { type: 'userText' }>]
-    expect(echo.attachments).toBe(undefined)
-    expect(dispatch).toHaveBeenCalledWith({ type: 'userText', text: 'just text', messageId: 'a3' })
-  })
-
-  // ⭐ AC4's second half, and the whole reason the take sits below both `false` returns: the hook's take
-  // is destructive, so a submit that sends nothing must not perform it — the operator's attached file
-  // has to survive a blank Enter and a send with no active conversation.
-  it('#1039: does not take when the submit is refused, so the pending set survives (AC4)', () => {
-    const takeAttachments = vi.fn(() => takeOf([REPORT]))
-    const deps = {
-      sendCommand: vi.fn(),
-      dispatch: vi.fn(),
-      dispatchFor: vi.fn(),
-      newMessageId: () => 'unused',
-      takeAttachments
-    }
-    expect(submitMessage('   ', 'conv-1', deps)).toBe(false)
-    expect(submitMessage('hi', null, deps)).toBe(false)
+    expect(sendCommand).not.toHaveBeenCalled(); expect(newMessageId).not.toHaveBeenCalled()
     expect(takeAttachments).not.toHaveBeenCalled()
   })
-
-  // ================================================================================================
-  // #1055 — the outbound half. The ids ride the frame, so the take now happens ABOVE the guarded send
-  // (the payload literal needs them), and the send's outcome is what decides whether it stands.
-  // ================================================================================================
-
-  /** The payload as it reaches the WIRE: what buildSendMessage hands to JSON.stringify. */
-  const sentPayload = (sendCommand: ReturnType<typeof vi.fn>): Record<string, unknown> => {
-    const [command] = sendCommand.mock.calls[0] as [RendererCommand]
-    if (command.type !== 'sendMessage') throw new Error(`unexpected command ${command.type}`)
-    return JSON.parse(JSON.stringify(command.payload)) as Record<string, unknown>
-  }
-
-  it('#1055: names the taken attachment ids on the frame, in the pending set order (AC1)', () => {
-    const sendCommand = vi.fn()
-
-    submitMessage('here you go', 'conv-1', {
-      sendCommand,
-      dispatch: vi.fn(),
-      dispatchFor: vi.fn(),
-      newMessageId: () => 'w1',
-      takeAttachments: () => takeOf([REPORT, SHOT])
+  it('sends trimmed text and supplied attachment ids to the captured host after retaining the local row', () => {
+    const own = pending(), rollback = vi.fn()
+    const attachments = [{ attachmentId: 'file', filename: 'local.pdf' }]
+    const sendCommand = vi.fn(command => {
+      expect(own.threadSend.store.getState().select('host', 'chat').pending[0].item)
+        .toMatchObject({ text: 'text', createdAt: 42, attachments })
     })
+    expect(submitMessage(' text ', 'chat', { ...own, sendCommand, newMessageId: () => 'm', now: () => 42,
+      takeAttachments: () => ({ attachments, rollback }) })).toBe(true)
+    expect(sendCommand).toHaveBeenCalledWith(sendMessageCommand({ conversation_id: 'chat', message_id: 'm', text: 'text', attachment_ids: ['file'] }, 'host'))
+    expect(rollback).not.toHaveBeenCalled()
+  })
 
-    // Ids only — the filename is the window's own display supply and has no field on this frame.
-    expect(sentPayload(sendCommand)).toEqual({
-      conversation_id: 'conv-1',
-      message_id: 'w1',
-      text: 'here you go',
-      attachment_ids: ['upload-1', 'upload-2']
+  it.each(['/clear', '/reset', '  /clear  ', '\n/reset\t', '/clear args', '/reset\nargs',
+    '/clear\u00a0args', '/reset\u2003args', '/clear\u2028args', '/reset\u3000args',
+    '/clear\u0085args', '/reset\u202fargs'])
+  ('sends ack-only reset %j without retaining any local feedback or row', text => {
+    const own = pending(), rollback = vi.fn()
+    const attachments = [{ attachmentId: 'file', filename: 'local.pdf' }]
+    const state = () => own.threadSend.store.getState().select('host', 'chat')
+    const sendCommand = vi.fn(() => state())
+    expect(submitMessage(text, 'chat', { ...own, sendCommand, newMessageId: () => 'reset',
+      takeAttachments: () => ({ attachments, rollback }) })).toBe(true)
+    expect(sendCommand).toHaveBeenCalledWith(sendMessageCommand({ conversation_id: 'chat',
+      message_id: 'reset', text: text.trim(), attachment_ids: ['file'] }, 'host'))
+    expect(sendCommand.mock.results[0].value).toMatchObject({ pending: [], localSendPending: null })
+    own.threadSend.store.getState().feedback('host', 'chat', {
+      type: 'messageDelivery', messageId: 'reset', status: 'written'
+    })
+    expect(state().pending).toEqual([])
+    expect(state().localSendPending).toBeNull()
+    expect(rollback).not.toHaveBeenCalled()
+  })
+
+  it.each(['ordinary text', '/clear-cache', '/resetfoo', '/Clear', '/RESET', '/compact',
+    'text /clear', '/clear\u200bargs', '/reset/args'])
+  ('retains normal settlement for %j', text => {
+    const own = pending()
+    expect(submitMessage(text, 'chat', { ...own, sendCommand: vi.fn(), newMessageId: () => 'm' })).toBe(true)
+    expect(own.threadSend.store.getState().select('host', 'chat')).toMatchObject({
+      pending: [{ messageId: 'm', item: { text } }], localSendPending: { messageId: 'm', queued: false }
     })
   })
 
-  // AC1's second half, asserted on the SERIALIZED form rather than on the object: `undefined` is
-  // assigned unconditionally (the `createdAt` idiom) and JSON.stringify is what drops the key, so the
-  // in-memory payload legitimately carries `attachment_ids: undefined` while the wire carries no key.
-  it('#1055: carries NO attachment_ids key at all when nothing was taken (AC1)', () => {
-    for (const take of [() => takeOf([]), undefined]) {
-      const sendCommand = vi.fn()
-      submitMessage('just text', 'conv-1', {
-        sendCommand,
-        dispatch: vi.fn(),
-        dispatchFor: vi.fn(),
-        newMessageId: () => 'w2',
-        takeAttachments: take
-      })
-      const payload = sentPayload(sendCommand)
-      expect('attachment_ids' in payload).toBe(false)
-      expect(payload).toEqual({ conversation_id: 'conv-1', message_id: 'w2', text: 'just text' })
-    }
+  it.each(['/clear', '/reset'])('keeps %s draft recoverable and rolls attachments back on bridge failure', text => {
+    const own = pending(), rollback = vi.fn()
+    expect(submitMessage(text, 'chat', { ...own, newMessageId: () => 'm',
+      sendCommand: () => { throw Error('bridge') },
+      takeAttachments: () => ({ attachments: [{ attachmentId: 'file', filename: 'local.pdf' }], rollback })
+    })).toBe(false)
+    expect(rollback).toHaveBeenCalledOnce()
+    expect(own.threadSend.store.getState().select('host', 'chat')).toMatchObject({ pending: [], localSendPending: null })
   })
 
-  it('#1055: the frame and the echo name exactly the same attachments (AC2)', () => {
-    const sendCommand = vi.fn()
-    const dispatch = vi.fn()
-
-    submitMessage('with files', 'conv-1', {
-      sendCommand,
-      dispatch,
-      dispatchFor: vi.fn(),
-      newMessageId: () => 'w3',
-      takeAttachments: () => takeOf([REPORT, SHOT])
-    })
-
-    const [echo] = dispatch.mock.calls[0] as [Extract<ThreadEvent, { type: 'userText' }>]
-    expect(sentPayload(sendCommand).attachment_ids).toEqual(
-      (echo.attachments ?? []).map((attachment) => attachment.attachmentId)
-    )
-  })
-
-  // A bridge failure retains the draft and pending files for retry while preserving the failed echo's
-  // text and attachment presentation. Not sent makes clear that the echo does not claim delivery.
-  it('a throwing send rolls attachments back and marks the echo failed', () => {
-    const dispatch = vi.fn()
-    const dispatchFor = vi.fn()
-    const take = takeOf([REPORT])
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
-
-    const result = submitMessage('with a file', 'conv-1', {
-      sendCommand: () => {
-        throw new Error('bridge down')
-      },
-      dispatch,
-      dispatchFor,
-      newMessageId: () => 'a4',
-      takeAttachments: () => take
-    })
-
-    expect(result).toBe(false)
-    expect(take.rollback).toHaveBeenCalledTimes(1)
-    const [echo] = dispatch.mock.calls[0] as [Extract<ThreadEvent, { type: 'userText' }>]
-    expect(echo.attachments).toEqual([REPORT])
-    // Both writes share the one object, so neither can disagree with the frame either.
-    expect(dispatchFor.mock.calls[0][1]).toBe(echo)
-    errorSpy.mockRestore()
-  })
-
-  it('#1055: a send that does NOT throw keeps the take — no rollback (AC3)', () => {
-    const take = takeOf([REPORT])
-
-    submitMessage('with a file', 'conv-1', {
-      sendCommand: vi.fn(),
-      dispatch: vi.fn(),
-      dispatchFor: vi.fn(),
-      newMessageId: () => 'a5',
-      takeAttachments: () => take
-    })
-
-    expect(take.rollback).not.toHaveBeenCalled()
-  })
-
-  it('trims leading/trailing whitespace before both the send payload and the timeline echo', () => {
-    const sendCommand = vi.fn()
-    const dispatch = vi.fn()
-
-    submitMessage('\n  spaced  \t', 'conv-1', {
-      sendCommand,
-      dispatch,
-      dispatchFor: vi.fn(),
-      newMessageId: () => 't1'
-    })
-
-    const command = sendCommand.mock.calls[0][0] as RendererCommand
-    const sentText = command.type === 'sendMessage' ? command.payload.text : undefined
-    const event = dispatch.mock.calls[0][0] as ThreadEvent
-    const echoText = event.type === 'userText' ? event.text : undefined
-    expect(sentText).toBe('spaced')
-    expect(echoText).toBe('spaced')
-  })
-
-  it('shows bridge failure and returns false to preserve the draft', () => {
-    const sendCommand = vi.fn(() => {
-      throw new Error('bridge down')
-    })
-    const dispatch = vi.fn()
-    const dispatchFor = vi.fn()
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
-
-    let result: boolean | undefined
-    expect(() => {
-      result = submitMessage('hello', 'conv-1', {
-        sendCommand,
-        dispatch,
-        dispatchFor,
-        newMessageId: () => 'g1'
-      })
-    }).not.toThrow()
-
-    expect(result).toBe(false)
-    // The optimistic echo is appended regardless of send outcome.
-    expect(dispatch).toHaveBeenCalledTimes(2)
-    // #756: the guarded-send contract covers sendCommand only, so the keyed write is reached too.
-    expect(dispatchFor).toHaveBeenCalledTimes(2)
-    expect(dispatchFor).toHaveBeenCalledWith('conv-1', {
-      type: 'userText',
-      text: 'hello',
-      messageId: 'g1'
-    })
-    // The swallowed error stays content-free — no conversation id and no message text (ADR 0007).
-    expect(dispatch).toHaveBeenLastCalledWith({ type: 'messageDelivery', messageId: 'g1', status: 'not-sent' })
-    errorSpy.mockRestore()
-  })
-
-  // #1213: the echo now RETAINS the id minted for the wire frame, so a drop of the queued row this
-  // message may become can find the echo again. One mint, two uses — the structural half of the ticket.
-  it('#1213: records on the echo the SAME message_id that rides the wire frame', () => {
-    const sendCommand = vi.fn()
-    const dispatch = vi.fn()
-    const dispatchFor = vi.fn()
-    const newMessageId = vi.fn(() => 'mint-once')
-
-    submitMessage('  queue me  ', 'conv-1', { sendCommand, dispatch, dispatchFor, newMessageId })
-
-    // Minted ONCE. A second call would be two ids for one message, and the correlation would be a
-    // coincidence rather than a guarantee.
-    expect(newMessageId).toHaveBeenCalledTimes(1)
-    expect(sendCommand).toHaveBeenCalledWith(
-      sendMessageCommand({ conversation_id: 'conv-1', message_id: 'mint-once', text: 'queue me' })
-    )
-    // The identity assertion, not an equality one: the frame and the echo cannot disagree because there
-    // is only one value.
-    const [echo] = dispatch.mock.calls[0] as [Extract<ThreadEvent, { type: 'userText' }>]
-    expect(echo.messageId).toBe('mint-once')
-    expect(dispatchFor.mock.calls[0][1]).toBe(echo)
-  })
-
-  it('#1213: still records the id on an echo whose SEND failed — the message may still be queued', () => {
-    // The frame threw, so nothing was handed to the daemon and the echo carries no attachments (#1055).
-    // The id is on the opposite footing: it costs nothing, and an id-less echo could never be dropped if
-    // a retry did enqueue it. The echo posts regardless of send outcome, and so does its id.
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
-    const dispatch = vi.fn()
-
-    submitMessage('hello', 'conv-1', {
-      sendCommand: vi.fn(() => {
-        throw new Error('bridge down')
-      }),
-      dispatch,
-      dispatchFor: vi.fn(),
-      newMessageId: () => 'mint-on-failure'
-    })
-
-    const [echo] = dispatch.mock.calls[0] as [Extract<ThreadEvent, { type: 'userText' }>]
-    expect(echo.messageId).toBe('mint-on-failure')
-    errorSpy.mockRestore()
+  it('repeated resets leave existing pending work unchanged', () => {
+    const own = pending(), sendCommand = vi.fn()
+    const send = (text: string) => submitMessage(text, 'chat', { ...own, sendCommand, newMessageId: () => text })
+    send('ordinary')
+    const before = own.threadSend.store.getState().select('host', 'chat')
+    for (const command of ['/clear', '/reset', '/clear', '/reset']) expect(send(command)).toBe(true)
+    expect(own.threadSend.store.getState().select('host', 'chat')).toEqual(before)
   })
 })
 
-// shouldSubmitOnKeyDown is the keystroke-intent predicate (#512), tested with plain values: there is
-// no DOM harness here (vitest `environment: 'node'`), and `Composer` is module-local so it cannot be
-// rendered at all — the decision is lifted out of the handler exactly so it can be exercised this way.
 describe('shouldSubmitOnKeyDown', () => {
   it('plain Enter with no composition in progress submits (AC2)', () => {
     expect(shouldSubmitOnKeyDown({ key: 'Enter', shiftKey: false, isComposing: false })).toBe(true)
@@ -677,44 +282,6 @@ describe('shouldShowBanner', () => {
   })
 })
 
-// #797: the error chip's two client-owned strings — the chip copy is one of the three this module owns
-// about the one ConnectionStatus fact (#968 retired the three composerAvailability captions), and the
-// prefix rides with it. Their three-part contract is CONNECTION_BANNER_COPY's, and the pieces that can
-// break silently are pinned here: the apostrophe-free rule (renderToStaticMarkup escapes `'` → `&#x27;`,
-// so an apostrophe makes every toContain on these constants fail without a copy change being suspected),
-// the lexical distinctness from the banner and the re-pair button, and the prefix's trailing space,
-// which is what separates the two runs when a screen reader concatenates them.
-describe('the composer error chip copy (#797)', () => {
-  it('is apostrophe-free, so a server-rendered toContain matches it verbatim', () => {
-    expect(COMPOSER_ERROR_CHIP_COPY).not.toContain("'")
-    expect(COMPOSER_ERROR_CHIP_PREFIX_COPY).not.toContain("'")
-  })
-
-  // Pinned against the actual banner constant — not a hardcoded copy of it — so a future tweak to either
-  // cannot silently collide. The set held the three composer captions too until #968 retired them; the
-  // button that shares this chip's slot is compared in its own describe below.
-  it('is lexically distinct from the banner copy', () => {
-    const others = [CONNECTION_BANNER_COPY]
-    expect(others).not.toContain(COMPOSER_ERROR_CHIP_COPY)
-    for (const other of others) {
-      expect(other).not.toContain(COMPOSER_ERROR_CHIP_COPY)
-      expect(COMPOSER_ERROR_CHIP_COPY).not.toContain(other)
-    }
-  })
-
-  // The trailing space is load-bearing, not incidental formatting: it is the whole separator in the
-  // announced "Error: Host connection down!". An editor's trim would silently degrade that.
-  it('keeps the prefix separated from the copy by its trailing space', () => {
-    expect(COMPOSER_ERROR_CHIP_PREFIX_COPY).toMatch(/ $/)
-    expect(COMPOSER_ERROR_CHIP_PREFIX_COPY.trim()).not.toBe('')
-  })
-})
-
-// #963: the actionable-error button's label — the FIFTH string this module owns about the one
-// ConnectionStatus fact, and the first that is also an ACCESSIBLE NAME (the button has no aria-label, so
-// the visible text is the whole name). The chip describe above pins the same three-part contract for its
-// two strings; this one adds the button's own reason for the apostrophe rule and the distinctness set
-// grows to include the chip copy the button REPLACES in its slot.
 describe('the actionable-error button copy (#963)', () => {
   it('is apostrophe-free, so a server-rendered toContain matches it verbatim', () => {
     expect(COMPOSER_REPAIR_BUTTON_COPY).not.toContain("'")
@@ -724,8 +291,8 @@ describe('the actionable-error button copy (#963)', () => {
   // either cannot silently collide with this label. The set held the three composer captions until #968
   // retired them. The chip copy stays in it even though the two never render together: they occupy the
   // SAME slot, so a reader who sees one and then the other must not read them as the same string.
-  it('is lexically distinct from the chip copy and the banner copy', () => {
-    const others = [COMPOSER_ERROR_CHIP_COPY, CONNECTION_BANNER_COPY]
+  it('is lexically distinct from the connection explanation', () => {
+    const others = [CONNECTION_BANNER_COPY]
     for (const other of others) {
       expect(other).not.toContain(COMPOSER_REPAIR_BUTTON_COPY)
       expect(COMPOSER_REPAIR_BUTTON_COPY).not.toContain(other)
@@ -747,10 +314,10 @@ describe('composer lifecycle diagnostics', () => {
   it('records queued before dispatch, including bridge failure, and refuses no-op submissions', () => {
     const id = '12345678-1234-4123-8123-123456789abc'
     const calls: string[] = []
-    const deps = { diagnose: (record: { event: string; messageId: string }) => {
+    const deps = { ...pending(), diagnose: (record: { event: string; messageId: string }) => {
       expect(record.messageId).toBe(id); calls.push(record.event)
     }, sendCommand: () => { calls.push('dispatch'); throw new Error('SECRET') },
-    dispatch: vi.fn(), dispatchFor: vi.fn(), newMessageId: () => id }
+    newMessageId: () => id }
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     expect(submitMessage(' ', 'chat', deps)).toBe(false)
     expect(submitMessage('text', null, deps)).toBe(false)
@@ -762,8 +329,8 @@ describe('composer lifecycle diagnostics', () => {
   })
   it('diagnostic failure cannot prevent sending', () => {
     const sendCommand = vi.fn()
-    expect(submitMessage('text', 'chat', { sendCommand, diagnose: () => { throw new Error() },
-      dispatch: vi.fn(), dispatchFor: vi.fn(), newMessageId: () => '12345678-1234-4123-8123-123456789abc' })).toBe(true)
+    expect(submitMessage('text', 'chat', { ...pending(), sendCommand, diagnose: () => { throw new Error() },
+      newMessageId: () => '12345678-1234-4123-8123-123456789abc' })).toBe(true)
     expect(sendCommand).toHaveBeenCalledTimes(1)
   })
 })

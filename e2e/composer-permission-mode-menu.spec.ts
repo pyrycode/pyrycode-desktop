@@ -13,14 +13,15 @@ test('permission footer follows confirmation through held writes, reads and sess
   let held = false
   let mode = 'bypassPermissions'
   let session = SESSION
-  const reading = (id: number, permission_mode = mode, session_id = session) => frame('session_settings', {
+  const reading = (id: number, permission_mode = mode, session_id = session) => encodeEnvelope({
+    id: 1, type: 'session_settings', ts: '2026-09-20T00:00:00Z', in_reply_to: id, session_id, payload: {
     session_id, model: 'seed-model', effort: '', yolo: false, permission_mode,
     used_tokens: 50_000, window_tokens: 200_000
-  }, id)
+  } })
   const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
     const request = decodeEnvelope(bytes)
     captured.push(request)
-    if (request.type === 'list_conversations') return [seedConversationsFrame()]
+    if (request.type === 'list_conversations') return [seedConversationsFrame({ ...SEEDED_ROW, current_session_id: session })]
     if (request.type === 'request_session_settings' && !held) return [reading(request.id)]
     return []
   } })
@@ -150,24 +151,25 @@ test('permission footer follows confirmation through held writes, reads and sess
   session = 'replacement'
   daemon.pushFrame(frame('session_transition', { conversation_id: SEEDED_ROW.id, previous_session_id: SESSION,
     new_session_id: session, reason: 'clear', occurred_at: '2026-09-20T00:00:00Z', workspace_cwd: null }))
-  await expect.poll(() => received('sessionTransition')).toBe(1)
+  await expect(page.locator('.session-delimiter')).toHaveCount(1)
   expect(requests().length).toBe(beforeReset)
   const beforeSuppressed = await received('runConfigReceived')
   daemon.pushFrame(reading(await refresh(), 'default'))
   await expect.poll(() => received('runConfigReceived')).toBe(beforeSuppressed + 1)
-  await expect(label).toHaveCount(0)
+  // The replacement session owns this fresh reading. The old reset no longer suppresses it.
+  await expect(label).toHaveText('Manual approval')
   const beforeComplete = requests().length
   daemon.pushFrame(frame('resetting', { conversation_id: SEEDED_ROW.id, active: false, phase: '', handoff: '' }))
   const resetRead = await nextRead(beforeComplete)
   daemon.pushFrame(reading(resetRead, 'default', SESSION))
   await expect.poll(() => received('runConfigReceived')).toBe(beforeSuppressed + 2)
-  await expect(label).toHaveCount(0)
+  await expect(label).toHaveText('Manual approval')
   daemon.pushFrame(reading(await refresh(), 'bypassPermissions'))
   await expect(label).toHaveText('Bypass approvals')
 
   // A held reply for the departed chat cannot populate the newly opened chat.
   const departingRead = await refresh()
-  const other = { ...SEEDED_ROW, id: 'other-chat', name: 'Other chat' }
+  const other = { ...SEEDED_ROW, id: 'other-chat', name: 'Other chat', current_session_id: 'other-session' }
   daemon.pushFrame(frame('conversations', { conversations: [SEEDED_ROW, other] }))
   await page.getByRole('button', { name: other.name, exact: true }).click()
   const otherRead = await nextRead(requests().findIndex(e => e.id === departingRead) + 1)

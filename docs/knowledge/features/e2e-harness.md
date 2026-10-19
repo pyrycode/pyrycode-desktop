@@ -87,6 +87,36 @@ restart while retaining the daemon and its conversations.
 - **Playwright:** `testDir: './e2e'` and `testMatch: '**/*.spec.ts'` in `playwright.config.ts`.
 - **Vitest:** `include: ['src/**/*.{test,spec}.{ts,tsx}', 'e2e/**/*.test.ts']` in `vitest.config.ts`. Within `e2e/`, the suffix separates pure fixture unit tests from browser specs. `fakeDaemonSetup.test.ts`, for example, runs a local HTTP server without launching Electron.
 
+### Scalar turn evidence
+
+[`completedHandoverReply`](../../../e2e/fixtures/lunaHandoverProof.ts),
+[`createQueueTurnEvidence`](../../../e2e/fixtures/queueTurnEvidence.ts) and
+[`createCodexChannelProof`](../../../e2e/fixtures/codexChannelProof.ts) fold full
+thread items and explicitly narrow patches to `thread_item_changed` or
+`thread_text_append` before reading scalar revision/text fields.
+`thread_tool_body` data and final replies cannot supply assistant text, fresh
+handover activity, queue markers/IDs or turn completion, even when their content
+resembles the expected answer or a successful terminal. The fixture regressions
+cover same-epoch replies for both held and missing item IDs, incomplete evidence
+staying incomplete, and completed evidence surviving later detail reads.
+
+In the queue reducer, ignore tool detail **before** clearing `appendCompanion`.
+A field change can be followed by its text suffix at the same item revision and
+thread version. A detail reply between them can leave the current snapshot
+unchanged while destroying the pending match and causing the legitimate suffix
+to be rejected. Interleave data/final replies inside that pair, then require the
+marker and a real completion. Retain the existing same-revision duplicate-suffix
+rejection; broadly accepting equal revisions would weaken the evidence.
+
+The Codex channel scenario's `observe` passes the shared collector's `record` to
+its exposed callback and retains subscription/stop ownership. Its unit tests use
+that same reducer. The collector retains settings/models/acknowledgements/created
+projections and host/chat/epoch-qualified item facts used by `deltas` and `ends`.
+Keep the revision, ownership and completion assertions alongside the exclusions;
+ignoring every event would otherwise satisfy an unchanged-snapshot check.
+See [counted Linux validation and replay limits](development-verification-what-each-test-tier-proves.md#scalar-client-evidence-validation)
+and the [fixture typechecking boundary](e2e-harness-limitations.md#edge-cases-and-limitations).
+
 ### Desktop isolation (default-tier launches)
 
 See [Desktop isolation (default-tier launches)](e2e-harness-desktop-isolation.md#desktop-isolation-default-tier-launches) for window presentation, renderer throttling and real-pointer observations.
@@ -97,6 +127,31 @@ The linked guidance covers the independent input-enabled cover, initialization
 cleanup, counted acceptance and the separate unresolved Welcome stall.
 Existing row regressions also re-deliver hover and observe actual `:hover` with
 exact computed treatment; those local observations retain styling sensitivity.
+
+### Scripted and native thread fixtures
+
+`launchPairedApp` defaults to `threadMode: 'scripted'`. Its test-only publisher in
+`e2e/fixtures/scriptedThread.ts` translates event scripts into daemon-authored
+items, appends, revisions, session readings and certified query replies. It never
+runs the retired renderer reducer. Each fake host owns independent conversation
+epochs, versions, queue handles and session state. Own-send identity comes from
+the authenticated fake connection; foreign message-ID collisions stay foreign.
+
+`threadMode: 'native'` preserves exact wire scripts, including unanswered queries
+and deliberate old-daemon handshakes. Native thread, activation and frame tests use
+it. Scripted compatibility aliases for `request_history` are test inputs only;
+the assembled app sends `thread_catch_up` and `thread_page`. Tests of outbound
+protocol must observe the actual request rather than count the alias invocation.
+
+History responses are split into bounded item batches and end with a separate
+completion marker. The default empty-thread wait must complete before a spec
+pushes live content. Otherwise initial recovery can erase the intended live test
+state. The pure fixture unit tests check ownership, revisions, history certificates
+and idempotent terminal reports. Tests that exclusively assert retired receipt or
+roster reconstruction remain explicitly skipped for the
+[cleanup ticket](https://github.com/pyrycode/pyrycode-desktop/issues/2020).
+The [activation plan](../../specs/architecture/1908-thread-activation.md#manual-completion-shared-fake-migration-and-client-regressions)
+lists every skipped case and final counted evidence.
 
 ### Two-server launches
 
@@ -198,22 +253,14 @@ delta is the positive barrier before checking that the Compacting label is gone.
 A subsequent boundary also proves delivery of the preceding repeated false frame
 before the test checks the final divider count.
 
-Unconditional `reconnectResendFrames` prove delivery after a handshake, but cannot
-prove replay negotiation. For that, use `buildReconnectFrames(hello)`, which reads
-the authenticated reconnect hello and takes precedence over unconditional resends.
-[`reconnect-event-replay.spec.ts`](../../../e2e/reconnect-event-replay.spec.ts)
-seeds a visible prefix with `event_id: 41`, drops the client leg and releases the
-missed tail only when the hello carries exactly `last_event_id: 41`. It checks the
-received cursor and absent `last_seen_ts`, retained rows, once-only ordering,
-subsequent live events and no additional `request_history`. Omitting or changing
-the cursor must prevent tail delivery and fail the proof. Capture only replay
-metadata from the hello, never its token or identity. See
-[cursor lifetime and resync](daemon-connection-lifecycle.md#replay-cursor-lifetime).
-
-Return `[]` for a nonmatching cursor. A thrown `buildReconnectFrames` callback
-currently leaves the reconnect's fresh Noise handshake unfreed before it reaches
-`Split()`; the fake's ordinary `close()` does not own that local handshake. This
-test-only failure-path limitation remains outside the replay proof.
+Unconditional `reconnectResendFrames` prove delivery after a handshake. The
+production connection no longer negotiates event replay: initial and reconnect
+hellos omit `last_event_id` and `last_seen_ts`, and legacy `resync` is inert
+(#2025). The former `reconnect-event-replay.spec.ts` content proof retired with
+renderer producers in #2030. Use the existing `thread-activation.spec.ts` cases
+for authoritative reconnect/checkpoint recovery and zero legacy requests. Keep
+positive processing/render barriers before absence assertions. See
+[retirement evidence](thread-runtime.md#main-request-and-recovery-retirement-validation).
 
 ### Stopped-turn evidence
 

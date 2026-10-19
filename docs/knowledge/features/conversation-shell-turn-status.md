@@ -9,14 +9,43 @@ Part of [Conversation shell](conversation-shell.md).
 
 ## Session-scoped live presentation
 
-The inactive `threadLiveInputs` projection supplies existing views from
-[summary-bound live state](session-id-store.md#summary-authority-in-the-inactive-thread-adapter).
+The production `threadLiveInputs` projection supplies existing views from
+[summary-bound live state](session-id-store.md#summary-authority-in-the-thread-runtime).
 Live readings remain independent of durable daemon items: turn/stall/retry/compaction,
 thinking/tool/task progress, resetting/rate limits, model/context, session facts/settings,
 MCP/slash/model inventories, suggestions, errors and outstanding permission/question
 prompts remain available even without content rows. Existing translators produce
 the run-config, announced-model and prompt shapes; settings payload `sessionId`
 remains reported data and cannot replace the summary binding.
+
+Reports use the selected `threadRuntime.presentation(host, chat)`: complete items on
+the complete route, admitted roots/headers on the compact route. Refusal and hook-stop
+records require full-item content; foreground-tool status may use a header. Reports
+do not consult older retained complete history while compact is selected.
+Questions, approvals, actionable errors, delivery feedback and current-session
+controls keep their admitted scoped authority with a parent closed; no hidden-body
+read is needed. Header lifecycle/error facts may supply display status, but headers
+and rendered detail replies create no task or action handle. See
+[compact authority and read boundaries](thread-runtime-compact.md#root-facts-and-independent-evidence).
+
+On the compact route, `liveTaskIdentities` additionally admits current-session
+`backgroundTaskProgress` with an actual task ID, the selected host/conversation/epoch,
+a matching envelope session and the owning summary's explicit agent. Missing agent,
+session or task identity grants no membership. These live tasks can appear in the
+count/drawer and offer guarded Stop with their parent closed; tool-call linkage
+remains unknown (`toolCallId: null`). Full task-linked items retain their recorded
+lifecycle and take precedence over matching live identities, including terminal
+outcomes. Complete-route membership remains based on actual full-item links.
+
+Stop rechecks current selection, selected presentation, admitted live identity and
+the connected owning host's `stop_background_task` capability. Only Claude tasks
+qualify. Pending claims use the scoped task identity, reject duplicate Stop and
+survive unrelated compact revisions; the mounted presentation settles them with
+the same live/full inputs. Reused IDs on another host, conversation, epoch, session
+or agent cannot supply controls. Progress alone must not be forced through the
+full-item tool-link requirement: compact headers intentionally have no such content.
+See [task membership and controls](conversation-shell-background-tasks.md#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583)
+and [counted mounted evidence](thread-runtime-compact.md#production-activation-and-visible-demand).
 
 `workingIndicatorStateWithLocalSend` preserves the existing resetting → retrying →
 compacting → stalled → thinking/working ranking and the caller's local-send input.
@@ -43,9 +72,10 @@ every family coexists can bless a stale retry indicator after an error or a stal
 thinking estimate in the next phase. The supplied-input specs in
 `threadLiveState.test.ts` and `threadLiveInputs.test.tsx` cover A→B replacement,
 delayed A readings, family clears, reused host/prompt IDs and atomic status/attention/error
-transitions. Static renders exercise the existing view inputs; production composition,
-integrated interaction and combined live proof remain with
-[#1908](https://github.com/pyrycode/pyrycode-desktop/issues/1908).
+transitions. Static renders exercise existing view inputs. Mounted production
+coverage also checks errors, session replacement and settings refresh through the
+[thread runtime](thread-runtime.md#validation-boundaries). Credentialed live proof
+remains separately pending.
 
 ## Model refusal records
 

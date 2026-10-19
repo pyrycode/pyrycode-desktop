@@ -13,10 +13,12 @@ import {
 } from '../../src/main/transport/fakeRelayForwarder'
 import type { FakeDaemon, FakeDaemonOptions } from '../../src/main/transport/fakeDaemon'
 import { startFakeDaemonForTest, type FakeDaemonSetupAttempt } from './fakeDaemonSetup'
-import { encodeEnvelope } from '../../src/main/transport/codec'
+import { createScriptedThread } from './scriptedThread'
+import { decodeEnvelope, encodeEnvelope } from '../../src/main/transport/codec'
 import { LOOPBACK_RELAY_ENV_FLAG } from '../../src/main/relayPolicy'
 import { TEST_SECRET_BACKEND_ENV_FLAG } from '../../src/main/secretBackend'
 import {
+  appWindow,
   attachLaunchFate,
   createLaunchFateLog,
   launchIsolatedApp,
@@ -27,7 +29,8 @@ import { withWelcomeDiagnostics } from './welcomeDiagnostics'
 import type {
   ConversationSummary,
   ConversationsPayload,
-  QrPayload
+  QrPayload,
+  Envelope
 } from '../../src/shared/wire/types'
 
 // The shared fake-daemon pairing harness (#433). It stands up the in-process fake relay forwarder
@@ -135,10 +138,21 @@ export function seedConversationsFrame(row: ConversationSummary = SEEDED_ROW): U
   })
 }
 
+/** A complete, empty first window answering a `thread_catch_up`, for specs with no thread content. */
+export function emptyThreadWindow(request: Envelope): Uint8Array {
+  const payload = request.payload as { conversation_id?: unknown }
+  return encodeEnvelope({ id: 1, type: 'thread_items', ts: '2026-07-07T12:00:00.000Z', in_reply_to: request.id,
+    payload: { conversation_id: payload.conversation_id, epoch: 'fixture-epoch', version: 1, items: [], final: true,
+      lower_order: 0, upper_order: 1, continuation: 0, older_exists: false } })
+}
+
 /** Reply-scripting options passed straight through to `startFakeDaemon`. `url` is fixture-supplied
  *  (from the forwarder); everything else (`buildReply`, `buildReplyFrames`, `helloAck`, plus future
  *  daemon knobs) passes through, so a spec scripts daemon replies without editing the fixture. */
-export type LaunchPairedAppOptions = Omit<FakeDaemonOptions, 'url'>
+export type LaunchPairedAppOptions = Omit<FakeDaemonOptions, 'url'> & {
+  /** Native fixtures own every thread reply, including deliberately unanswered requests. */
+  threadMode?: 'scripted' | 'native'
+}
 
 /** Launch-lifecycle control, orthogonal to the daemon-reply `options` (#466). One flag couples two
  *  inseparable behaviours: a reused *paired* dir MUST skip the pairing drive (the paste→Pair→Confirm
@@ -146,6 +160,8 @@ export type LaunchPairedAppOptions = Omit<FakeDaemonOptions, 'url'>
  *  one option, not two. Used only by the relaunch-persistence spec; absent = the default fresh-dir,
  *  full-drive behaviour every other consumer relies on. */
 export type LaunchControl = {
+  /** Native protection probes must use the actual OS backend, never reversible test encryption. */
+  productionSecrets?: boolean
   /** Install command observation after window readiness, before pairing or conversation activation. */
   onLaunched?: (app: ElectronApplication) => Promise<void>
   /** Return at Welcome so mounted pairing tests can control authentication delivery. */
@@ -217,6 +233,8 @@ export type PairedApp = {
 }
 
 type PairedAppFixtures = {
+  /** Old presentation scripts may supply history entries; wire requests/replies remain thread queries. */
+  scriptedHistory: boolean
   launchPairedApp: (options?: LaunchPairedAppOptions, control?: LaunchControl) => Promise<PairedApp>
 }
 
@@ -269,7 +287,8 @@ function pairingPayloadFor(server: PairedServerHandle, token: string): string {
 // → forwarder 1 → user-data-dir. That falls straight out of the push order, because BOTH fake servers
 // are started before `launchIsolatedApp` — see `startFakeServer`'s call sites.
 export const test = base.extend<PairedAppFixtures>({
-  launchPairedApp: async ({}, use, testInfo) => {
+  scriptedHistory: [false, { option: true }],
+  launchPairedApp: async ({ scriptedHistory }, use, testInfo) => {
     testInfo.setTimeout(LAUNCH_TEST_TIMEOUT_MS)
     const fate = createLaunchFateLog()
     const teardown: Array<{ step: TeardownStep; run: () => Promise<void> }> = []
@@ -277,6 +296,7 @@ export const test = base.extend<PairedAppFixtures>({
 
     await use(async (options = {}, control = {}) => {
       const setupOrdinal = ++setupIndex
+      const threadBridges: ReturnType<typeof createScriptedThread>[] = []
       // Isolated `--user-data-dir`. Default: `mkdtemp` a fresh throwaway for a guaranteed-unpaired start
       // (the launch-time pairing-status query resolves `not-paired`, so the router shows the pairing
       // screen) and to keep every persisted secret out of the developer's real userData. A `rm` teardown
@@ -310,17 +330,38 @@ export const test = base.extend<PairedAppFixtures>({
         const forwarder = await startFakeRelayForwarder()
         teardown.push({ step: steps.forwarder, run: () => forwarder.close() })
         const attempts: FakeDaemonSetupAttempt[] = []
+        // Explicit thread fixtures retain their exact wire scripts. Existing event scripts use a
+        // daemon-side publisher, never the retired renderer path. Native also permits old-host tests.
+        const { threadMode, ...daemonOptions } = serverOptions
+        const native = threadMode === 'native'
+        const bridge = native ? undefined : createScriptedThread({ history: scriptedHistory })
+        if (bridge) threadBridges.push(bridge)
+        const replies = (bytes: Uint8Array): Uint8Array[] => daemonOptions.buildReplyFrames
+          ? daemonOptions.buildReplyFrames(bytes) : daemonOptions.buildReply ? [daemonOptions.buildReply(bytes)]
+            : decodeEnvelope(bytes).type === 'list_conversations'
+              ? [seedConversationsFrame(serverId === SECOND_SERVER_ID ? SECOND_SEEDED_ROW : SEEDED_ROW)] : []
         try {
-          const daemon = await startFakeDaemonForTest({
+          const rawDaemon = await startFakeDaemonForTest({
+            ...daemonOptions,
             url: forwarder.url,
-            buildReply: () => seedConversationsFrame(
-              serverId === SECOND_SERVER_ID ? SECOND_SEEDED_ROW : SEEDED_ROW
-            ),
-            ...serverOptions
+            buildReplyFrames: bytes => {
+              const frames = replies(bytes)
+              const history = bridge?.historyRequest(bytes)
+              // The optional alias is a SCRIPT INPUT only. The authenticated client sent a real thread
+              // request; scripts observing outbound protocol should inspect the first call, not this alias.
+              if (history && !frames.some(frame => decodeEnvelope(frame).type.startsWith('thread_')))
+                frames.push(...replies(history))
+              return bridge ? bridge.reply(bytes, frames) : frames
+            },
+            ...(bridge ? { buildReconnectFrames: hello => (daemonOptions.buildReconnectFrames?.(hello)
+              ?? daemonOptions.reconnectResendFrames ?? []).flatMap(bridge.publish) } : {})
           }, {
             snapshot: () => forwarder.setupDiagnostics(),
             record: attempt => { attempts.push(attempt) }
           })
+          const daemon = bridge ? { ...rawDaemon, pushFrame: (bytes: Uint8Array) => {
+            for (const frame of bridge.publish(bytes)) rawDaemon.pushFrame(frame)
+          } } : rawDaemon
           teardown.push({ step: steps.daemon, run: () => daemon.close() })
           return { serverId, daemon, forwarder }
         } finally {
@@ -359,14 +400,16 @@ export const test = base.extend<PairedAppFixtures>({
       delete env.ELECTRON_RENDERER_URL
       if (control.rendererUrl !== undefined) env.ELECTRON_RENDERER_URL = control.rendererUrl
       env[LOOPBACK_RELAY_ENV_FLAG] = '1'
-      env[TEST_SECRET_BACKEND_ENV_FLAG] = '1'
+      if (control.productionSecrets) delete env[TEST_SECRET_BACKEND_ENV_FLAG]
+      else env[TEST_SECRET_BACKEND_ENV_FLAG] = '1'
       // #1067: through the shared launch, not `electron.launch` directly — it adds the desktop isolation
       // (renderer-throttling switches + the third isPackaged-gated dev flag, which keeps the window
       // hidden) that this fixture's 48 spec files all need and none should re-derive. Everything above
       // stays here: the scenario's env and its per-run user-data dir are this fixture's business.
       let launchIndex = 0
       const app = await launchIsolatedApp({
-        args: ['.', `--user-data-dir=${userDataDir}`],
+        args: [...(control.productionSecrets ? ['-r', join(process.cwd(), 'e2e/fixtures/productionSecrets.cjs')] : []),
+          '.', `--user-data-dir=${userDataDir}`],
         env,
         fate: {
           ...fate,
@@ -382,7 +425,17 @@ export const test = base.extend<PairedAppFixtures>({
       // failure, so the drain below records it under this thunk's label exactly like any other step.
       teardown.push({ step: 'app', run: () => fate.closeWatched(app) })
 
-      const page = await app.firstWindow()
+      // The window once its app document has loaded, so the hook and the drive below never start on a
+      // document that is still starting up (see `appWindow`). The hook therefore always runs after the
+      // app's bundle has run and React has mounted its first screen, where it used to run at the commit,
+      // usually before. Its contract is unchanged: it completes before pairing and before any
+      // conversation opens.
+      const page = await appWindow(app)
+      if (threadBridges.length) {
+        const identity = await page.evaluate(() => window.pyry.deviceIdentity())
+        if (!identity.ok) throw new Error('Fake daemon fixture could not read the public device identity')
+        for (const bridge of threadBridges) bridge.setDeviceId(identity.deviceId)
+      }
       // History-handler replacement must follow startup registration, which precedes createWindow.
       // The hook still completes before pairing or opening the restored conversation.
       await control.onLaunched?.(app)
@@ -431,7 +484,7 @@ export const test = base.extend<PairedAppFixtures>({
       // #1091: this locator is UNFILTERED and runs in Playwright strict mode, which is why the second
       // pairing below happens strictly after it — a second row existing at this moment would break the
       // click outright. (#1070's AC5 protects the same locator.)
-      await page.locator('.channel-list__row-open').click()
+      await page.locator('.channel-list__row-open:not(:has(.channel-list__app-state))').click()
 
       // Send enables ONLY on the `connected` daemon event — after the real Noise_IK handshake
       // terminates at the fake. This is the fixture's completion signal; it resolves here. Because the
@@ -440,6 +493,10 @@ export const test = base.extend<PairedAppFixtures>({
       await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled({
         timeout: HANDSHAKE_TIMEOUT_MS
       })
+
+      // A scripted fixture must establish its epoch before a test publishes live items.
+      if (options.threadMode !== 'native' && !scriptedHistory)
+        await expect(page.locator('.conversation__thread')).toBeVisible({ timeout: HANDSHAKE_TIMEOUT_MS })
 
       // --- #1091: the SECOND pairing, inside this same launch. `src/main/index.ts` wires
       // `onPaired: () => registry.reconcile()`, and reconcile re-reads the store and dials the
@@ -456,7 +513,7 @@ export const test = base.extend<PairedAppFixtures>({
 
         // The addressed connection request must earn this row from the second transport.
         // No unsolicited seed push: a missing request now fails the fixture's connected gate.
-        await expect(page.locator('.channel-list__row-open')).toHaveCount(2, {
+        await expect(page.locator('.channel-list__row-open:not(:has(.channel-list__app-state))')).toHaveCount(2, {
           timeout: HANDSHAKE_TIMEOUT_MS
         })
       }

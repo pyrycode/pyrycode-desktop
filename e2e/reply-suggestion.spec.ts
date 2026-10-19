@@ -1,6 +1,11 @@
 import { test, expect, SEEDED_ROW, SECOND_SEEDED_ROW } from './fixtures/launchPairedApp'
+const sessionRow = (row: typeof SEEDED_ROW, session = 's') => ({ ...row, current_session_id: session })
+
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { Envelope, EnvelopeType } from '../src/shared/wire/types'
+
+// Scripted history is published as thread catch-up/pages by the shared fake daemon.
+test.use({ scriptedHistory: true })
 
 const other = { ...SEEDED_ROW, id: 'other-suggestion', name: 'Other suggestion chat' }
 const frame = (type: EnvelopeType, payload: unknown, in_reply_to?: number) => encodeEnvelope({ id: 91, type, ts: '2026-10-06T00:00:00Z', payload, in_reply_to })
@@ -13,7 +18,7 @@ function replies(captured: Envelope[], conversations = [SEEDED_ROW]) {
   return (bytes: Uint8Array): Uint8Array[] => {
     const env = decodeEnvelope(bytes)
     captured.push(env)
-    if (env.type === 'list_conversations') return [frame('conversations', { conversations })]
+    if (env.type === 'list_conversations') return [frame('conversations', { conversations: conversations.map(row => sessionRow(row, row.current_session_id ?? 's')) })]
     if (env.type === 'request_history') return [frame('history_page', { entries: [], cursor: '', at_start: true }, env.id)]
     return []
   }
@@ -25,7 +30,7 @@ const placeholderColor = (input: import('@playwright/test').Locator) =>
 test('a quieter suggestion hides while typing, returns when empty, and Tab sends it', async ({ launchPairedApp }) => {
   const captured: Envelope[] = []
   const { page, daemon } = await launchPairedApp({ buildReplyFrames: replies(captured) })
-  daemon.pushFrame(frame('conversations', { conversations: [SEEDED_ROW, other] }))
+  daemon.pushFrame(frame('conversations', { conversations: [sessionRow(SEEDED_ROW), sessionRow(other)] }))
   const input = page.locator('textarea.composer__input')
   const sent = () => captured.filter(e => e.type === 'send_message')
   const text = 'Continue with <escaped> & editable text 😀'
@@ -75,7 +80,7 @@ test('a quieter suggestion hides while typing, returns when empty, and Tab sends
 
 test('new revisions, activity and transitions clear only their suggestion and preserve drafts', async ({ launchPairedApp }) => {
   const { page, daemon } = await launchPairedApp({ buildReplyFrames: replies([]) })
-  daemon.pushFrame(frame('conversations', { conversations: [SEEDED_ROW, other] }))
+  daemon.pushFrame(frame('conversations', { conversations: [sessionRow(SEEDED_ROW), sessionRow(other)] }))
   const input = page.locator('textarea.composer__input')
   const open = async (name: string) => page.locator('.channel-list__row-open').filter({ hasText: name }).click()
   daemon.pushFrame(suggestion(10))
@@ -112,7 +117,7 @@ test('host handshake drops off-screen state and watermarks before low revision r
     buildReplyFrames: replies([], conversations), reconnectResendFrames: [suggestion(1, 'Reconciled')]
   }, { secondServer: { buildReplyFrames: replies([], [SECOND_SEEDED_ROW]) } })
   conversations.push(other)
-  daemon.pushFrame(frame('conversations', { conversations: [SEEDED_ROW, other] }))
+  daemon.pushFrame(frame('conversations', { conversations: [sessionRow(SEEDED_ROW), sessionRow(other)] }))
   const input = page.locator('textarea.composer__input')
   const open = async (name: string) => page.locator('.channel-list__row-open').filter({ hasText: name }).click()
   daemon.pushFrame(suggestion(40, 'Before reconnect'))
@@ -139,12 +144,13 @@ test('reconciled old-session null does not pin an off-screen chat after a missed
     reconnectResendFrames: [suggestion(11, null, other.id, 'old'), suggestion(1, 'Reconnect complete')]
   })
   conversations.push(other)
-  daemon.pushFrame(frame('conversations', { conversations }))
+  daemon.pushFrame(frame('conversations', { conversations: conversations.map(row => sessionRow(row, row.id === other.id ? 'old' : 's')) }))
   const input = page.locator('textarea.composer__input')
   const open = async (name: string) => page.locator('.channel-list__row-open').filter({ hasText: name }).click()
   daemon.pushFrame(suggestion(10, 'Old session', other.id, 'old'))
   await open(other.name); await expect(input).toHaveAttribute('placeholder', 'Old session')
   await open(SEEDED_ROW.name)
+  conversations[1] = sessionRow(other, 'current')
   // Another client rotated the hidden chat while disconnected; only its old clear reconciles.
   forwarder.dropClientLeg()
   await expect(input).toHaveAttribute('placeholder', 'Reconnect complete', { timeout: 15000 })

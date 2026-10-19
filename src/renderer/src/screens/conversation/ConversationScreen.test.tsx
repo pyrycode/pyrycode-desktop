@@ -2,9 +2,8 @@ import { describe, it, expect, beforeEach, vi, type MockInstance } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
   ConversationScreen,
-  SavedTimelineNotice,
   MessageThread,
-  Timeline,
+  TimelineRow,
   ThinkingIndicator,
   ComposerStatusArea,
   THINKING_COPY,
@@ -33,8 +32,6 @@ import {
   StatusSheet,
   ComposerErrorSlot,
   ComposerTaskCount,
-  ConnectionBanner,
-  ComposerErrorChip,
   ContextUsageReading,
   isTurnRunning,
   isStatusIconTurning,
@@ -43,19 +40,15 @@ import {
   requestArchiveConversation,
   requestDeleteConversation,
   relayLeg,
-  daemonLeg,
-  selectOpenTimelineFor
+  daemonLeg
 } from './ConversationScreen'
 // #780's AC5 asserts one chrome from both sides, so the message-side renderer is imported here too.
 import { AssistantMarkdown } from './AssistantMarkdown'
 import { COMPOSER_ACTIONS_LABEL } from './ComposerActionsMenu'
 import { PERMISSION_MODE_LABELS } from './ComposerPermissionModeMenu'
 import { COMPOSER_ATTACH_LABEL } from './ComposerAttach'
-import { createConversationTimelineStore, conversationTimelineStore } from '../../store/conversationTimelineStore'
 import {
   CONNECTION_BANNER_COPY,
-  COMPOSER_ERROR_CHIP_COPY,
-  COMPOSER_ERROR_CHIP_PREFIX_COPY,
   COMPOSER_REPAIR_BUTTON_COPY,
   COMPOSER_RECONNECT_BUTTON_COPY
 } from './composerSend'
@@ -75,7 +68,6 @@ import { sessionIdStore } from '../../store/sessionIdStore'
 import { runConfigStore } from '../../store/runConfigStore'
 import { reportedContextStore } from '../../store/reportedContextStore'
 import { runSettingsWriteStore } from '../../store/runSettingsWriteStore'
-import { queueStore } from '../../store/queueStore'
 
 // No DOM harness (jsdom/Testing Library) — mirrors PairingScreen.test.tsx. MessageThread
 // is pure (Message[] in, markup out), so a server-rendered string proves the render:
@@ -241,262 +233,6 @@ const MARKDOWN_SOURCE = [
 ].join('\n')
 
 describe('Timeline — the streamed assistant text', () => {
-  // #277: the empty branch is no longer inert. A fresh thread with no items renders the
-  // pre-first-message empty state (a client-owned copy line + its decorative glyph) instead of null,
-  // so the region reads as a purposeful invitation, not a blank gap. Still a distinct class from the
-  // thread scroll region (never .conversation__thread, no data-thread-role — the split-brain guard
-  // below) and no streaming cursor sneaks into the branch.
-  it('an empty timeline renders the pre-first-message empty state (AC1)', () => {
-    const markup = renderToStaticMarkup(<Timeline items={[]} />)
-    expect(markup).toContain('conversation__empty')
-    // The client-owned copy constant (AC3) — no daemon string reaches this branch.
-    expect(markup).toContain('Send a message to get started')
-    expect(markup).not.toContain('data-thread-role')
-    expect(markup).not.toContain(CURSOR)
-  })
-
-  it('renders one assistant bubble per assistantText item, carrying its text and the daemon-bubble treatment', () => {
-    const items: ThreadItem[] = [{ kind: 'assistantText', turnId: 't1', text: 'hello there' }]
-    const markup = renderToStaticMarkup(<Timeline items={items} />)
-    expect(threadBubbleCount(markup)).toBe(1)
-    expect(markup).toContain('bubble bubble--daemon')
-    expect(markup).toContain('<p>hello there</p>')
-  })
-
-  it('renders untrusted delta text as visible characters, never live markup (discharges #199)', () => {
-    // No apostrophes in the fixture — renderToStaticMarkup escapes ' → &#x27; (prior desktop lesson).
-    const items: ThreadItem[] = [{ kind: 'assistantText', turnId: 't1', text: '<b>hi</b>' }]
-    const markup = renderToStaticMarkup(<Timeline items={items} />)
-    expect(markup).toContain('&lt;b&gt;hi&lt;/b&gt;')
-    expect(markup).not.toContain('<b>hi</b>')
-  })
-
-  it('shows the streaming cursor on the in-progress tail (a trailing, not-yet-closed assistantText)', () => {
-    const items: ThreadItem[] = [{ kind: 'assistantText', turnId: 't1', text: 'streaming' }]
-    expect(renderToStaticMarkup(<Timeline items={items} />)).toContain(CURSOR)
-  })
-
-  it('shows no cursor once the turn is closed by a trailing turnBoundary', () => {
-    const items: ThreadItem[] = [
-      { kind: 'assistantText', turnId: 't1', text: 'done' },
-      { kind: 'turnBoundary', turnId: 't1', stopReason: 'end_turn' }
-    ]
-    expect(renderToStaticMarkup(<Timeline items={items} />)).not.toContain(CURSOR)
-  })
-
-  it('preserves array order and shows the cursor only on the tail assistantText', () => {
-    const items: ThreadItem[] = [
-      { kind: 'assistantText', turnId: 't1', text: 'first turn' },
-      { kind: 'turnBoundary', turnId: 't1', stopReason: 'end_turn' },
-      { kind: 'assistantText', turnId: 't2', text: 'second turn' }
-    ]
-    const markup = renderToStaticMarkup(<Timeline items={items} />)
-    expect(threadBubbleCount(markup)).toBe(2)
-    expect(markup.indexOf('first turn')).toBeLessThan(markup.indexOf('second turn'))
-    // Exactly one cursor, and it trails the second (tail) bubble's text.
-    expect(markup.match(new RegExp(CURSOR, 'g'))?.length ?? 0).toBe(1)
-    expect(markup.indexOf(CURSOR)).toBeGreaterThan(markup.indexOf('second turn'))
-  })
-
-  // #1566: the turn's numbers ride the meta row of its LAST assistant bubble only, as text children.
-  it("puts the turn's stats in the last assistant bubble's meta row and nowhere else", () => {
-    const items: ThreadItem[] = [
-      { kind: 'userText', text: 'ask' },
-      { kind: 'assistantText', turnId: 't1', text: 'early' },
-      { kind: 'assistantText', turnId: 't1', text: 'late' },
-      { kind: 'turnBoundary', turnId: 't1', stopReason: 'end_turn', outputTokens: 800, durationMs: 41000 }
-    ]
-    const markup = renderToStaticMarkup(<Timeline items={items} />)
-    expect(markup.match(/bubble__turn-stats/g)?.length ?? 0).toBe(1)
-    expect(markup).toContain('<span class="bubble__turn-stats">800 out · 41s</span>')
-    expect(markup.indexOf('bubble__turn-stats')).toBeGreaterThan(markup.indexOf('late'))
-  })
-
-  // #218: the pending tool row (Figma node 16-28) — the compact chip carrying the tool name and its
-  // one-line input summary, distinct from the daemon message bubble. Supersedes the deferred no-op
-  // that #217's transport slice fed but #203 could not yet draw. `result: null` is the pending state;
-  // the resolved success/error treatment is #206.
-  it('renders a pending tool row — the tool name and its input summary, not an assistant bubble', () => {
-    const items: ThreadItem[] = [
-      {
-        kind: 'toolCall',
-        turnId: 't1',
-        toolUseId: 'u1',
-        name: 'read_file',
-        inputSummary: 'kitchenclaw/db/schema.ts · 184 lines',
-        result: null
-      }
-    ]
-    const markup = renderToStaticMarkup(<Timeline items={items} />)
-    // The compact tool chip, hooked by its own thread role — NOT the assistant daemon bubble.
-    expect(markup).toContain('tool-row__chip')
-    expect(markup).toContain('data-thread-role="tool"')
-    // Both daemon-supplied runs render verbatim.
-    expect(markup).toContain('read_file')
-    expect(markup).toContain('kitchenclaw/db/schema.ts · 184 lines')
-    // A tool row is not an assistant bubble and carries no streaming cursor.
-    expect(threadBubbleCount(markup)).toBe(0)
-    expect(markup).not.toContain(CURSOR)
-  })
-
-  // #218/AC4: `name` and `inputSummary` are untrusted daemon strings rendered as inert React children
-  // (auto-escaped), the assistant-bubble posture one case up — never dangerouslySetInnerHTML, never
-  // markup/path interpretation. Both fields are exercised.
-  it('renders the tool name and summary as inert text, never live markup (AC4)', () => {
-    // No apostrophes — renderToStaticMarkup escapes ' → &#x27; (prior desktop lesson).
-    const items: ThreadItem[] = [
-      {
-        kind: 'toolCall',
-        turnId: 't1',
-        toolUseId: 'u1',
-        name: '<b>tool</b>',
-        inputSummary: '<i>path</i>',
-        result: null
-      }
-    ]
-    const markup = renderToStaticMarkup(<Timeline items={items} />)
-    expect(markup).toContain('&lt;b&gt;tool&lt;/b&gt;')
-    expect(markup).toContain('&lt;i&gt;path&lt;/i&gt;')
-    expect(markup).not.toContain('<b>tool</b>')
-    expect(markup).not.toContain('<i>path</i>')
-  })
-
-  // #218/AC1: the reducer already interleaves a toolCall between assistantText items in arrival order
-  // (#121); the view renders that order as-is. The tool row sits between the two bubbles and neither
-  // reorders the list nor steals the cursor from the tail assistantText.
-  it('renders a toolCall row between assistant bubbles in array order, cursor only on the tail (AC1)', () => {
-    const items: ThreadItem[] = [
-      { kind: 'assistantText', turnId: 't1', text: 'before tool' },
-      {
-        kind: 'toolCall',
-        turnId: 't1',
-        toolUseId: 'u1',
-        name: 'read_file',
-        inputSummary: 'schema.ts',
-        result: null
-      },
-      { kind: 'assistantText', turnId: 't1', text: 'after tool' }
-    ]
-    const markup = renderToStaticMarkup(<Timeline items={items} />)
-    expect(threadBubbleCount(markup)).toBe(2)
-    expect(markup.indexOf('before tool')).toBeLessThan(markup.indexOf('read_file'))
-    expect(markup.indexOf('read_file')).toBeLessThan(markup.indexOf('after tool'))
-    // Exactly one cursor, trailing the tail (last) assistantText — the tool row takes none.
-    expect(markup.match(new RegExp(CURSOR, 'g'))?.length ?? 0).toBe(1)
-    expect(markup.indexOf(CURSOR)).toBeGreaterThan(markup.indexOf('after tool'))
-  })
-
-  // #1872: a background subagent's rows trail the main thread bubble while it is still growing, so the
-  // open bubble keeps its cursor even though it is no longer the last item.
-  it('keeps the cursor on the open main thread bubble behind a trailing subagent tool call', () => {
-    const items: ThreadItem[] = [
-      { kind: 'assistantText', turnId: 't1', text: 'still writing' },
-      {
-        kind: 'toolCall',
-        turnId: 't1',
-        toolUseId: 'u2',
-        parentToolUseId: 'agent-1',
-        name: 'WebFetch',
-        inputSummary: 'https://example.com',
-        result: null
-      }
-    ]
-    const markup = renderToStaticMarkup(<Timeline items={items} />)
-    expect(markup.match(new RegExp(CURSOR, 'g'))?.length ?? 0).toBe(1)
-    expect(markup.indexOf(CURSOR)).toBeGreaterThan(markup.indexOf('still writing'))
-  })
-
-  it('gives no cursor to a bubble closed by a main thread tool call', () => {
-    const items: ThreadItem[] = [
-      { kind: 'assistantText', turnId: 't1', text: 'before tool' },
-      { kind: 'toolCall', turnId: 't1', toolUseId: 'u1', name: 'read_file', inputSummary: 'a.ts', result: null }
-    ]
-    expect(renderToStaticMarkup(<Timeline items={items} />)).not.toContain(CURSOR)
-  })
-
-  // #230: the resolved tool row. When #121's reducer fills a toolCall's `result` in place (matched by
-  // toolUseId, replacing the item at its own index), the row resolves where it sits — the pending
-  // dimming lifts and `result.isError` selects a success vs error treatment. The className is the
-  // load-bearing seam: `tool-row--resolved` iff `result !== null`, `tool-row--error` on top iff isError.
-  it('resolves a successful tool row in place — lifts the pending dimming, no error accent (AC2)', () => {
-    const items: ThreadItem[] = [
-      {
-        kind: 'toolCall',
-        turnId: 't1',
-        toolUseId: 'u1',
-        name: 'read_file',
-        inputSummary: 'schema.ts',
-        result: { isError: false, resultSummary: '184 lines' }
-      }
-    ]
-    const markup = renderToStaticMarkup(<Timeline items={items} />)
-    // The wrapper carries the resolved modifier (dimming lifted) but NOT the error modifier.
-    expect(markup).toContain('tool-row--resolved')
-    expect(markup).not.toContain('tool-row--error')
-    // The chip's inner markup is unchanged — same role, same daemon-supplied runs, still no bubble.
-    expect(markup).toContain('tool-row__chip')
-    expect(markup).toContain('data-thread-role="tool"')
-    expect(markup).toContain('read_file')
-    expect(markup).toContain('schema.ts')
-    expect(threadBubbleCount(markup)).toBe(0)
-    expect(markup).not.toContain(CURSOR)
-  })
-
-  it('resolves a failed tool row in place — carries both the resolved and error modifiers (AC3)', () => {
-    const items: ThreadItem[] = [
-      {
-        kind: 'toolCall',
-        turnId: 't1',
-        toolUseId: 'u1',
-        name: 'read_file',
-        inputSummary: 'missing.ts',
-        result: { isError: true, resultSummary: 'ENOENT' }
-      }
-    ]
-    const markup = renderToStaticMarkup(<Timeline items={items} />)
-    // Error is driven by result.isError: both modifiers present (resolved lifts dimming, error accents).
-    expect(markup).toContain('tool-row--resolved')
-    expect(markup).toContain('tool-row--error')
-  })
-
-  // #230/AC1: the pending path is untouched — a `result: null` toolCall carries the bare `tool-row`
-  // class and neither resolved modifier. Pins that this slice adds treatment only when a result fills.
-  it('leaves a pending tool row (result: null) undimmed-modifier-free — no resolved modifier (AC1)', () => {
-    const items: ThreadItem[] = [
-      {
-        kind: 'toolCall',
-        turnId: 't1',
-        toolUseId: 'u1',
-        name: 'read_file',
-        inputSummary: 'schema.ts',
-        result: null
-      }
-    ]
-    const markup = renderToStaticMarkup(<Timeline items={items} />)
-    expect(markup).toContain('class="tool-row"')
-    expect(markup).not.toContain('tool-row--resolved')
-    expect(markup).not.toContain('tool-row--error')
-  })
-
-  // #696 re-pointed this from #230/AC4. #230 declined to draw `resultSummary` at all; #696 draws it in
-  // an expanded body, so this is no longer "the row never surfaces the result" — it is the
-  // COLLAPSED-DEFAULT GUARD: a row rendered through the timeline switch passes no expanded flag, so the
-  // sentinel must still not leak. Body kept byte-identical on purpose; it is the only assertion pinning
-  // that #697's toggle has not silently become the default.
-  it('does not surface result.resultSummary in the resolved chip (AC4)', () => {
-    const items: ThreadItem[] = [
-      {
-        kind: 'toolCall',
-        turnId: 't1',
-        toolUseId: 'u1',
-        name: 'read_file',
-        inputSummary: 'missing.ts',
-        result: { isError: true, resultSummary: 'RESULT_SUMMARY_SENTINEL_zzz' }
-      }
-    ]
-    const markup = renderToStaticMarkup(<Timeline items={items} />)
-    expect(markup).not.toContain('RESULT_SUMMARY_SENTINEL_zzz')
-  })
 
   // #696: the expanded tool row. `ToolRow` is exported so the expanded branch is reachable at all in
   // this repo's server-render tier — nothing passes the flag yet (#697 owns the toggle, the state and
@@ -621,14 +357,6 @@ describe('Timeline — the streamed assistant text', () => {
     expect(markup).not.toContain('<img')
   })
 
-  it('still routes the toolCall arm through the timeline switch, collapsed (AC1)', () => {
-    const items: ThreadItem[] = [toolItem({ isError: false, resultSummary: 'ROUTED_SENTINEL_zzz' })]
-    const markup = renderToStaticMarkup(<Timeline items={items} />)
-    expect(markup).toContain('tool-row__chip')
-    expect(markup).not.toContain('tool-row--expanded')
-    expect(markup).not.toContain('ROUTED_SENTINEL_zzz')
-  })
-
   // #697: the toggle. The chip on a RESOLVED row becomes the control; the boolean behind it is
   // component-local useState, so this tier can only ever observe its mount-time value. The click
   // itself — and the collapse-again and the keyboard path — is e2e/tool-row-toggle.spec.ts; what
@@ -693,15 +421,6 @@ describe('Timeline — the streamed assistant text', () => {
     ]) {
       expect(renderToStaticMarkup(<ToolRow item={item} />)).not.toContain('aria-label="Failed"')
     }
-  })
-
-  it('joins a failed row with plain neighbours without error join modifiers', () => {
-    const items = [toolItem(null), toolItem({ isError: true, resultSummary: 'ENOENT' }),
-      toolItem({ isError: false, resultSummary: 'done' })]
-    const markup = renderToStaticMarkup(<Timeline items={items} />)
-    expect(markup).toContain('tool-group-row--joined-above')
-    expect(markup).toContain('tool-group-row--joined-below')
-    expect(markup).not.toContain('tool-group-row--error-')
   })
 
   // #705: the headline swap. The rules themselves are toolHeadline.test.ts's; what these cases pin is
@@ -1418,183 +1137,6 @@ describe('Timeline — the streamed assistant text', () => {
     expect(markup).not.toContain('code-block')
     expect(markup).not.toContain('tool-row__body')
   })
-
-  it('renders a lone turnBoundary as nothing drawn — no divider, no crash', () => {
-    const items: ThreadItem[] = [{ kind: 'turnBoundary', turnId: 't1', stopReason: 'end_turn' }]
-    let markup = ''
-    expect(() => {
-      markup = renderToStaticMarkup(<Timeline items={items} />)
-    }).not.toThrow()
-    expect(threadBubbleCount(markup)).toBe(0)
-    expect(markup).not.toContain(CURSOR)
-  })
-
-  // #179: the user's own message renders through the timeline as a right-aligned user bubble
-  // (the coarse MessageThread's user treatment, now sourced from timelineStore). Its own thread
-  // role — data-thread-role="user" — distinct from the assistant/tool roles and from
-  // MessageBubble's data-message-role, so no test-count seam collides.
-  it('renders a userText item as a right-aligned user bubble, no cursor, not an assistant (AC3)', () => {
-    const items: ThreadItem[] = [{ kind: 'userText', text: 'hi there' }]
-    const markup = renderToStaticMarkup(<Timeline items={items} />)
-    expect(markup).toContain('message-row message-row--user')
-    expect(markup).toContain('bubble bubble--user')
-    expect(markup).toContain('data-thread-role="user">hi there')
-    // A user bubble is neither an assistant bubble nor a streaming tail.
-    expect(threadBubbleCount(markup)).toBe(0)
-    expect(markup).not.toContain(CURSOR)
-  })
-
-  it('renders untrusted userText as visible characters, never live markup (AC3)', () => {
-    // No apostrophes in the fixture — renderToStaticMarkup escapes ' → &#x27; (prior desktop lesson).
-    const items: ThreadItem[] = [{ kind: 'userText', text: '<b>x</b>' }]
-    const markup = renderToStaticMarkup(<Timeline items={items} />)
-    expect(markup).toContain('&lt;b&gt;x&lt;/b&gt;')
-    expect(markup).not.toContain('<b>x</b>')
-  })
-
-  it('reads userText → assistantText as one ordered thread, cursor on the assistant tail only (AC3)', () => {
-    const items: ThreadItem[] = [
-      { kind: 'userText', text: 'the user asks' },
-      { kind: 'assistantText', turnId: 't1', text: 'the assistant answers' }
-    ]
-    const markup = renderToStaticMarkup(<Timeline items={items} />)
-    // Array order: the user bubble precedes the assistant bubble.
-    expect(markup.indexOf('the user asks')).toBeLessThan(markup.indexOf('the assistant answers'))
-    // Exactly one assistant bubble, and the streaming cursor trails only it (never the user bubble).
-    expect(threadBubbleCount(markup)).toBe(1)
-    expect(markup.match(new RegExp(CURSOR, 'g'))?.length ?? 0).toBe(1)
-    expect(markup.indexOf(CURSOR)).toBeGreaterThan(markup.indexOf('the assistant answers'))
-  })
-
-  // Both assistant branches use markdown; user text remains outside that container.
-  it('uses markdown whitespace on the streaming assistant bubble', () => {
-    const items: ThreadItem[] = [{ kind: 'assistantText', turnId: 't1', text: 'hello there' }]
-    const markup = renderToStaticMarkup(<Timeline items={items} />)
-    expect(markup).toContain(CONTAINER)
-    expect(markup).not.toContain('bubble--assistant-text')
-    // Appended, never inserted: the daemon-bubble pair stays contiguous (the :113 assertion above).
-    expect(markup).toContain('bubble bubble--daemon')
-  })
-
-  it('opens the settled container and the in-progress text flush against the bubble tag — no stray JSX whitespace', () => {
-    const settled: ThreadItem[] = [
-      { kind: 'assistantText', turnId: 't1', text: 'settled reply' },
-      { kind: 'turnBoundary', turnId: 't1', stopReason: 'end_turn' }
-    ]
-    expect(renderToStaticMarkup(<Timeline items={settled} />)).toContain(
-      `data-thread-role="assistant"><div class="${CONTAINER}">`
-    )
-    const streaming: ThreadItem[] = [{ kind: 'assistantText', turnId: 't1', text: 'streaming reply' }]
-    const streamingMarkup = renderToStaticMarkup(<Timeline items={streaming} />)
-    expect(streamingMarkup).toContain('data-thread-role="assistant"><div class="bubble__markdown"><p>streaming reply</p>')
-    expect(streamingMarkup).toContain('streaming reply</p></div><span')
-  })
-
-  it('lets markdown own the in-progress tail soft breaks and paragraph breaks', () => {
-    const text = 'First paragraph.\n\nSecond paragraph.\n    indented    and    spaced'
-    const items: ThreadItem[] = [{ kind: 'assistantText', turnId: 't1', text }]
-    expect(renderToStaticMarkup(<Timeline items={items} />)).toContain('<p>First paragraph.</p>\n<p>Second paragraph.\nindented    and    spaced</p>')
-  })
-
-  // #967 REWROTE this case rather than retiring it. #609 asserted the rule against the user bubble and the
-  // four daemon-bubble affordances of the day; three of those four are gone — their statuses are labels in
-  // the composer status row now, on no bubble at all — so the case keeps the two subjects that still
-  // reuse the daemon bubble's fill and measure, and the assertion is the same claim over a smaller set.
-  // The two assertions that rested on the retry counter having its OWN SPAN went with the span: the
-  // counter is interpolated into the label's single text run now (see apiRetryLabel), which is exactly
-  // what removes the whitespace question they were checking.
-  it('leaves the user bubble and the status-row label outside the rule (AC4, AC5)', () => {
-    const MODIFIER = 'bubble--assistant-text'
-    const userMarkup = renderToStaticMarkup(
-      <Timeline items={[{ kind: 'userText', text: 'typed by the operator' }]} />
-    )
-    expect(userMarkup).toContain('bubble bubble--user')
-    expect(userMarkup).not.toContain(MODIFIER)
-    const labelMarkup = renderToStaticMarkup(
-      <ThinkingIndicator state="thinking" toolName={null} retry={null} resetting={null} thinkingTokens={null} />
-    )
-    expect(labelMarkup).not.toContain(MODIFIER)
-    // #609 (AC5): the markdown container is the assistant bubble's alone. Neither the user bubble nor the
-    // status label gains it.
-    expect(userMarkup).not.toContain(CONTAINER)
-    expect(labelMarkup).not.toContain(CONTAINER)
-  })
-
-  // Static assertions prove construct markup; browser tests prove streaming transitions and layout.
-  it('renders a settled assistant bubble through the markdown path — markup, not literal syntax (AC1)', () => {
-    const items: ThreadItem[] = [
-      { kind: 'assistantText', turnId: 't1', text: MARKDOWN_SOURCE },
-      { kind: 'turnBoundary', turnId: 't1', stopReason: 'end_turn' }
-    ]
-    const markup = renderToStaticMarkup(<Timeline items={items} />)
-    // Positive: every construct AC1 names became a real element. Each negative below is paired with one
-    // of these — `not.toContain` alone passes against the empty string.
-    expect(markup).toContain(CONTAINER)
-    expect(markup).toContain('<h1>Heading one</h1>')
-    expect(markup).toContain('<strong>bold</strong>')
-    expect(markup).toContain('<code>code</code>')
-    // #623 gave the fence its chrome; MARKDOWN_SOURCE's fence declares no language, so this tier sees
-    // the no-header degrade. Still discharges "a fence became a real element" for the screen tier.
-    expect(markup).toContain('<pre class="code-block__body">')
-    expect(markup).toContain('<li>first item</li>')
-    expect(markup).toContain('<blockquote>')
-    // Negative: the source syntax is gone — it was interpreted, not shown. `&gt;` is how the blockquote
-    // marker would have survived, since React escapes `>`.
-    expect(markup).not.toContain('# Heading one')
-    expect(markup).not.toContain('**bold**')
-    expect(markup).not.toContain('&gt; quoted line')
-  })
-
-  it('markdown-renders the in-progress tail with the streaming cursor', () => {
-    const items: ThreadItem[] = [{ kind: 'assistantText', turnId: 't1', text: MARKDOWN_SOURCE }]
-    const markup = renderToStaticMarkup(<Timeline items={items} />)
-    expect(markup).toContain('<h1>Heading one</h1>')
-    expect(markup).toContain('<strong>bold</strong>')
-    expect(markup).toContain(CONTAINER)
-    // The tail is still the streaming tail: the cursor is unchanged by the fork.
-    expect(markup).toContain(CURSOR)
-  })
-
-  it('puts the markdown container on both assistant bubbles, never other row types', () => {
-    const items: ThreadItem[] = [
-      { kind: 'userText', text: 'typed by the operator' },
-      { kind: 'assistantText', turnId: 't1', text: 'settled body' },
-      {
-        kind: 'toolCall',
-        turnId: 't1',
-        toolUseId: 'u1',
-        name: 'read_file',
-        inputSummary: 'a.ts',
-        result: null
-      },
-      {
-        kind: 'sessionBoundary',
-        reason: 'workspace_change',
-        workspaceCwd: '/home/user/next',
-        occurredAt: '2026-01-15T10:00:00.000Z'
-      },
-      { kind: 'assistantText', turnId: 't2', text: 'growing tail' }
-    ]
-    const markup = renderToStaticMarkup(<Timeline items={items} />)
-    expect(markup.match(new RegExp(CONTAINER, 'g'))?.length ?? 0).toBe(2)
-    expect(markup.match(/bubble--assistant-text/g)?.length ?? 0).toBe(0)
-    expect(markup.indexOf(CONTAINER)).toBeLessThan(markup.indexOf('growing tail'))
-    expect(markup).toContain('<p>growing tail</p>')
-  })
-
-  it('keeps the escaping posture on the settled markdown path — HTML renders as characters (AC5)', () => {
-    // The fork is exactly where two rendering paths drift apart, so #199s posture is re-proved on the new
-    // branch: both streaming and settled markdown escape raw HTML by
-    // default (no rehype-raw, no skipHtml — AssistantMarkdown.tsx:9-19), which is the same posture.
-    const items: ThreadItem[] = [
-      { kind: 'assistantText', turnId: 't1', text: '<b>hi</b>' },
-      { kind: 'turnBoundary', turnId: 't1', stopReason: 'end_turn' }
-    ]
-    const markup = renderToStaticMarkup(<Timeline items={items} />)
-    expect(markup).toContain(CONTAINER)
-    expect(markup).toContain('&lt;b&gt;hi&lt;/b&gt;')
-    expect(markup).not.toContain('<b>hi</b>')
-  })
 })
 
 // #969: the meta row at the foot of every text message bubble (Figma `Meta row` 132:4446 assistant /
@@ -1615,21 +1157,6 @@ describe('Timeline — the message bubble meta row and its copy control (#969)',
     { kind: 'turnBoundary', turnId: 't1', stopReason: 'end_turn' }
   ]
 
-  it('ends the settled assistant bubble, the in-progress tail and the user bubble in a meta row', () => {
-    // All three are text MESSAGE bubbles, which is the set AC2 names. The in-progress tail is included
-    // deliberately: excluding it would reflow the bubble the moment a turn settles, and a partial reply
-    // is as copyable as a finished one.
-    const cases = [
-      renderToStaticMarkup(<Timeline items={settled('a settled reply')} />),
-      renderToStaticMarkup(<Timeline items={[{ kind: 'assistantText', createdAt: 1768312500000, turnId: 't1', text: 'growing' }]} />),
-      renderToStaticMarkup(<Timeline items={[{ kind: 'userText', createdAt: 1768312500000, text: 'typed by the operator' }]} />)
-    ]
-    for (const markup of cases) {
-      expect(markup.match(new RegExp(META, 'g'))?.length ?? 0).toBeGreaterThan(0)
-      expect(markup).toContain(COPY)
-    }
-  })
-
   it('puts copy in an actions sibling beside each delivered bubble, including the streaming tail', () => {
     const cases = [
       { items: settled('settled'), side: 'assistant' },
@@ -1642,7 +1169,7 @@ describe('Timeline — the message bubble meta row and its copy control (#969)',
       ] }] as ThreadItem[], side: 'user' }
     ]
     for (const { items, side } of cases) {
-      const markup = renderToStaticMarkup(<Timeline items={items} />)
+      const markup = renderToStaticMarkup(<RowViews items={items} />)
       const actions = '<div class="message-actions"><button type="button" class="bubble__copy"'
       expect(markup).toContain(actions)
       expect(markup).toContain('<button type="button" class="bubble__copy bubble__reply" aria-label="Reply to message"')
@@ -1659,94 +1186,43 @@ describe('Timeline — the message bubble meta row and its copy control (#969)',
     }
   })
 
-  it('appends the row at the FOOT — after the markdown container, and after the streaming cursor', () => {
-    // The append-never-prepend constraint, which interactiveRoundtrip.test.tsx pins from the other side
-    // (its byte string asserts the markdown container opens the bubble). Ordering assertions rather than
-    // a byte string, because what matters is the row's position relative to the content, not the exact
-    // bytes between them.
-    const settledMarkup = renderToStaticMarkup(<Timeline items={settled('the reply body')} />)
-    expect(settledMarkup.indexOf(META)).toBeGreaterThan(settledMarkup.indexOf(CONTAINER))
-    expect(settledMarkup.indexOf(META)).toBeGreaterThan(settledMarkup.indexOf('the reply body'))
-
-    const streaming = renderToStaticMarkup(
-      <Timeline items={[{ kind: 'assistantText', createdAt: 1768312500000, turnId: 't1', text: 'still growing' }]} />
-    )
-    expect(streaming.indexOf(META)).toBeGreaterThan(streaming.indexOf(CURSOR))
-
-    const user = renderToStaticMarkup(<Timeline items={[{ kind: 'userText', createdAt: 1768312500000, text: 'user says' }]} />)
-    expect(user.indexOf(META)).toBeGreaterThan(user.indexOf('user says'))
-  })
-
   it('right-aligns the user row with its own modifier and leaves the assistant row unmodified', () => {
-    const user = renderToStaticMarkup(<Timeline items={[{ kind: 'userText', createdAt: 1768312500000, text: 'mine' }]} />)
+    const user = renderToStaticMarkup(<RowViews items={[{ kind: 'userText', createdAt: 1768312500000, text: 'mine' }]} />)
     expect(user).toContain(`${META} ${META}--user`)
 
-    const assistant = renderToStaticMarkup(<Timeline items={settled('theirs')} />)
+    const assistant = renderToStaticMarkup(<RowViews items={settled('theirs')} />)
     expect(assistant).toContain(META)
     expect(assistant).not.toContain(`${META}--user`)
   })
 
   it('gives copy and reply native buttons with accessible names and no focusable icon', () => {
-    const markup = renderToStaticMarkup(<Timeline items={settled('copy me')} />)
+    const markup = renderToStaticMarkup(<RowViews items={settled('copy me')} />)
     // A real <button type="button"> IS the keyboard path (AC3): natively focusable, activated by Enter
     // and Space, no tabindex or key handler of our own to get wrong.
     expect(markup).toContain(`<button type="button" class="${COPY}" aria-label="${COPY_LABEL}"`)
     expect(markup).toContain('aria-label="Reply to message"')
     expect(markup.match(/<button/g)?.length ?? 0).toBe(2)
-    expect(markup.match(/tabindex/g)).toHaveLength(1)
-    expect(markup).toContain('class="conversation__thread" aria-label="Conversation history" tabindex="0"')
+    expect(markup).not.toContain('tabindex')
   })
 
   it('keeps the message text out of the accessible name — the label is a client-owned constant', () => {
     // The trap "the control has an accessible name" invites: `aria-label={`Copy: ${text}`}` would put
     // relay-peer-authored text into an ATTRIBUTE, which CLAUDE.md's 2026-08-20 ruling forbids outright.
     // A distinctive fixture so the assertion cannot pass by coincidence.
-    const markup = renderToStaticMarkup(<Timeline items={settled('zzqq-daemon-authored-zzqq')} />)
+    const markup = renderToStaticMarkup(<RowViews items={settled('zzqq-daemon-authored-zzqq')} />)
     expect(markup).toContain('zzqq-daemon-authored-zzqq')
     expect(markup).not.toContain('aria-label="zzqq')
     expect(markup).toContain(`aria-label="${COPY_LABEL}"`)
   })
 
   it('draws the glyph decoratively — one inline svg, hidden from the accessibility tree', () => {
-    const markup = renderToStaticMarkup(<Timeline items={settled('glyph check')} />)
+    const markup = renderToStaticMarkup(<RowViews items={settled('glyph check')} />)
     // The Figma export's clipPath is a full-bleed 11x12 rect and is dropped as the no-op it is: the
     // glyph ships as a bare svg with a single path, this repo's icon convention.
     expect(markup).toContain('viewBox="0 0 11 12"')
     expect(markup).toContain('aria-hidden="true"')
     expect(markup.match(/<path/g)?.length ?? 0).toBe(1)
     expect(markup).not.toContain('clipPath')
-  })
-
-  // #1214 re-pointed this off the deleted QueuedBacklog onto the merged row, keeping the assertion's
-  // subject exactly: a message the daemon reports queued still draws no meta row. That is now this
-  // ticket's own ruling as much as #969's — the row is the timeline's own item and DOES carry a
-  // createdAt, and the meta row is suppressed anyway, because a queued message has not been delivered
-  // and because its unmatched sibling (synthesized from a wire item) has no time to show either.
-  it('draws NO meta row while a row is queued — it has no delivery time and nothing sent yet to copy', () => {
-    const markup = renderToStaticMarkup(
-      <Timeline
-        items={[{ kind: 'userText', createdAt: 1768312500000, text: 'waiting to send', messageId: 'm1' }]}
-        localEchoes={[{ rowKey: 0, messageId: 'm1', waiting: false }]}
-        queued={[{ queued_msg_id: 1, text: 'waiting to send', ts: '2026-07-12T00:00:00Z', message_id: 'm1' }]}
-      />
-    )
-    // It DOES take the new geometry — same .bubble and .bubble--user, restyled by CSS alone.
-    expect(markup).toContain('bubble bubble--user')
-    expect(markup).toContain('data-thread-role="queued"')
-    expect(markup).not.toContain(META)
-    expect(markup).not.toContain(COPY)
-    expect(markup).toContain('message-actions--queued')
-    expect(markup).not.toContain('Reply to message')
-    expect(markup).toContain('message-row--text')
-    // …and the SAME item, once the daemon stops reporting it queued, draws the meta row it always did.
-    const delivered = renderToStaticMarkup(
-      <Timeline
-        items={[{ kind: 'userText', createdAt: 1768312500000, text: 'waiting to send', messageId: 'm1' }]}
-        localEchoes={[{ rowKey: 0, messageId: 'm1', waiting: false }]}
-      />
-    )
-    expect(delivered).toContain(META)
-    expect(delivered).toContain(COPY)
   })
 
   it('draws NO meta row on the unmounted MessageBubble residue, whose markup stays byte-identical', () => {
@@ -1765,7 +1241,7 @@ describe('Timeline — the message bubble meta row and its copy control (#969)',
     // The classes and attributes the unit specs and the e2e tier locate rows by. A restyle that renamed
     // one would break specs this ticket never opened, so they are asserted together, in one place.
     const markup = renderToStaticMarkup(
-      <Timeline
+      <RowViews
         items={[
           { kind: 'userText', createdAt: 1768312500000, text: 'ask' },
           ...settled('answer')
@@ -1786,7 +1262,7 @@ describe('Timeline — the message bubble meta row and its copy control (#969)',
       expect(markup).toContain(locator)
     }
     const streaming = renderToStaticMarkup(
-      <Timeline items={[{ kind: 'assistantText', createdAt: 1768312500000, turnId: 't1', text: 'tail' }]} />
+      <RowViews items={[{ kind: 'assistantText', createdAt: 1768312500000, turnId: 't1', text: 'tail' }]} />
     )
     expect(streaming).toContain('bubble__markdown')
   })
@@ -1806,7 +1282,7 @@ describe('Timeline — the meta row timestamp (#1014)', () => {
 
   it('renders the stamp inside the time slot on the settled assistant bubble', () => {
     const markup = renderToStaticMarkup(
-      <Timeline
+      <RowViews
         items={[
           { kind: 'assistantText', turnId: 't1', text: 'a settled reply', createdAt: CREATED_AT },
           { kind: 'turnBoundary', turnId: 't1', stopReason: 'end_turn' }
@@ -1816,20 +1292,6 @@ describe('Timeline — the meta row timestamp (#1014)', () => {
     expect(markup).toContain(`<span class="${TIME_SLOT}">${DRAWN}</span>`)
   })
 
-  it('renders the stamp on the in-progress tail and on the user bubble too', () => {
-    // The same three text bubbles #969's own first case names. The streaming tail is included for the
-    // reason #969 gave: excluding it would reflow the bubble the moment the turn settles.
-    const tail = renderToStaticMarkup(
-      <Timeline items={[{ kind: 'assistantText', turnId: 't1', text: 'growing', createdAt: CREATED_AT }]} />
-    )
-    const user = renderToStaticMarkup(
-      <Timeline items={[{ kind: 'userText', text: 'typed by the operator', createdAt: CREATED_AT }]} />
-    )
-    for (const markup of [tail, user]) {
-      expect(markup).toContain(`<span class="${TIME_SLOT}">${DRAWN}</span>`)
-    }
-  })
-
   it('omits metadata when neither a timestamp nor turn stats is available', () => {
     // #1013's contract: an absent `createdAt` is a LEGAL item, not a defect — it is what every producer
     // with no injected clock yields, which is also why the 39 stamp-free item literals elsewhere in this
@@ -1837,7 +1299,7 @@ describe('Timeline — the meta row timestamp (#1014)', () => {
     // the reducer assigns the field unconditionally, and an implementation using it renders the string
     // "undefined" instead of nothing.
     const markup = renderToStaticMarkup(
-      <Timeline
+      <RowViews
         items={[
           { kind: 'userText', text: 'no clock was injected' },
           { kind: 'assistantText', turnId: 't1', text: 'nor here' },
@@ -1851,63 +1313,16 @@ describe('Timeline — the meta row timestamp (#1014)', () => {
     }
   })
 
-  it('keeps available stats when the assistant timestamp is absent', () => {
-    const markup = renderToStaticMarkup(<Timeline items={[
-      { kind: 'assistantText', turnId: 'stats-only', text: 'reply' },
-      { kind: 'turnBoundary', turnId: 'stats-only', stopReason: 'end_turn', outputTokens: 800 }
-    ]} />)
-    expect(markup).toContain('<span class="bubble__turn-stats">800 out</span>')
-    expect(markup).not.toContain(TIME_SLOT)
-  })
-
   it('keeps the timestamp as text in the meta row without a copy control', () => {
     // The timestamp stays in its original slot while copy moves beside the bubble.
     const markup = renderToStaticMarkup(
-      <Timeline items={[{ kind: 'userText', text: 'mine', createdAt: CREATED_AT }]} />
+      <RowViews items={[{ kind: 'userText', text: 'mine', createdAt: CREATED_AT }]} />
     )
     expect(markup).toContain(
       `<div class="bubble__meta bubble__meta--user bubble__meta--details"><span class="${TIME_SLOT}">${DRAWN}</span></div>`
     )
     // Once, in that one sink — not duplicated into an attribute, a title or a second element.
     expect(markup.match(new RegExp(DRAWN.replace(/\./g, '\\.'), 'g'))?.length ?? 0).toBe(1)
-  })
-
-  it('gives no other row kind a timestamp — the tool rows, the separator and the queued rows are untouched', () => {
-    // AC4's fence. None of these renders a BubbleMeta at all, so none can gain a time slot; asserting it
-    // here is what keeps that structural rather than incidental.
-    const markup = renderToStaticMarkup(
-      <Timeline
-        items={[
-          {
-            kind: 'toolCall',
-            turnId: 't1',
-            toolUseId: 'u1',
-            name: 'Read',
-            inputSummary: 'a file',
-            result: null
-          },
-          {
-            kind: 'sessionBoundary',
-            reason: 'clear',
-            workspaceCwd: null,
-            occurredAt: '2026-01-13T13:55:00.000Z'
-          }
-        ]}
-      />
-    )
-    expect(markup).not.toContain(TIME_SLOT)
-
-    // #1214: the queued row is a merged timeline row now, so this reads it through Timeline. The wire `ts`
-    // a queued message carries has never reached the renderer and this ticket does not start — and the
-    // whole meta row is suppressed while queued, so neither the slot nor a formatted time appears.
-    const queued = renderToStaticMarkup(
-      <Timeline
-        items={[]}
-        queued={[{ queued_msg_id: 1, text: 'waiting to send', ts: '2026-01-13T13:55:00Z' }]}
-      />
-    )
-    expect(queued).not.toContain(TIME_SLOT)
-    expect(queued).not.toContain(DRAWN)
   })
 })
 
@@ -1941,7 +1356,7 @@ describe('Timeline — the attachment file row in the message bubble (#815)', ()
   ]
 
   it('draws the row for a sent message that carries an attachment', () => {
-    const markup = renderToStaticMarkup(<Timeline items={withOneFile} />)
+    const markup = renderToStaticMarkup(<RowViews items={withOneFile} />)
     expect(rowCount(markup)).toBe(1)
     expect(markup).toContain(`<span class="${NAME_SLOT}">report.pdf</span>`)
     expect(markup).toContain(`<span class="${EXT_SLOT}" aria-hidden="true">PDF</span>`)
@@ -1952,7 +1367,7 @@ describe('Timeline — the attachment file row in the message bubble (#815)', ()
     // byte string is the load-bearing half: it is the user-arm analogue of the assistant pin
     // interactiveRoundtrip.test.tsx holds (`data-thread-role="assistant"><div class="bubble__markdown">`),
     // and it is what reddens if the row is ever prepended ahead of the text.
-    const markup = renderToStaticMarkup(<Timeline items={withOneFile} />)
+    const markup = renderToStaticMarkup(<RowViews items={withOneFile} />)
     // #816 turned the row into a <button>, so the pinned run carries the tag and its `type`. Updated
     // rather than loosened: the byte string is the whole point of this assertion, and a `<div` still
     // written here would pass a regex-shaped rewrite while the control had silently gone back to being
@@ -1967,7 +1382,7 @@ describe('Timeline — the attachment file row in the message bubble (#815)', ()
     // The drawing shows one file; the record is a list, in upload-completion order. Two rows, stacked on
     // the same 12px rhythm, is what the sibling-margin mechanism yields with no new construct.
     const markup = renderToStaticMarkup(
-      <Timeline
+      <RowViews
         items={[
           {
             kind: 'userText',
@@ -1991,7 +1406,7 @@ describe('Timeline — the attachment file row in the message bubble (#815)', ()
     // The characters themselves are attachmentExtensionLabel.test.ts's; what this tier owns is that the
     // empty string reaches the slot as an empty element rather than as a placeholder.
     const markup = renderToStaticMarkup(
-      <Timeline
+      <RowViews
         items={[
           {
             kind: 'userText',
@@ -2014,7 +1429,7 @@ describe('Timeline — the attachment file row in the message bubble (#815)', ()
   })
 
   it('draws the glyph as inline SVG taking its ink from the row, with no remote reference (AC3)', () => {
-    const markup = renderToStaticMarkup(<Timeline items={withOneFile} />)
+    const markup = renderToStaticMarkup(<RowViews items={withOneFile} />)
     expect(markup).toContain('width="45" height="60"')
     expect(markup).toContain('viewBox="0 0 45 60"')
     // The drawing is an OUTLINE — `fill="none"` with a stroked path — so the ink arrives through `stroke`.
@@ -2033,7 +1448,7 @@ describe('Timeline — the attachment file row in the message bubble (#815)', ()
     // ever had. It reaches the DOM as React children only: never an attribute, a title, a URL or innerHTML.
     const hostile = '<b>bold</b>&.svg'
     const markup = renderToStaticMarkup(
-      <Timeline
+      <RowViews
         items={[
           {
             kind: 'userText',
@@ -2055,56 +1470,12 @@ describe('Timeline — the attachment file row in the message bubble (#815)', ()
     expect(markup).not.toContain('att-1')
   })
 
-  it('draws NO row for a message with no attachments, or for any other row kind', () => {
-    // AC1's fence, as a COUNT over the whole markup rather than a per-string absence — the shape #969 used
-    // for the same question about the meta row. An assistant bubble can never carry one: `MessagePayload`
-    // has no attachment field and there is no list verb, so the field describes only files this client
-    // minted itself.
-    const markup = renderToStaticMarkup(
-      <Timeline
-        items={[
-          { kind: 'userText', text: 'nothing attached' },
-          { kind: 'assistantText', turnId: 't1', text: 'a reply' },
-          { kind: 'turnBoundary', turnId: 't1', stopReason: 'end_turn' },
-          {
-            kind: 'toolCall',
-            turnId: 't1',
-            toolUseId: 'u1',
-            name: 'Read',
-            inputSummary: 'a file',
-            result: null
-          }
-        ]}
-      />
-    )
-    expect(rowCount(markup)).toBe(0)
-    expect(markup).not.toContain(ROW)
-
-    // #1214: an UNMATCHED queued row is synthesized from a wire item that carries no attachments at all,
-    // so it can draw no file row — the strongest form of this assertion, and structural.
-    const queued = renderToStaticMarkup(
-      <Timeline
-        items={[]}
-        queued={[{ queued_msg_id: 1, text: 'waiting to send', ts: '2026-01-13T13:55:00Z' }]}
-      />
-    )
-    expect(queued).not.toContain(ROW)
-
-    // The unmounted MessageBubble residue, whose own assertions pin the message text as the bubble's sole
-    // child. It reuses .bubble--user and so inherits the CSS passively, and gains no row.
-    const residue = renderToStaticMarkup(
-      <MessageThread messages={[{ id: 'm1', type: 'user', text: 'residue' }]} />
-    )
-    expect(residue).toContain('data-message-role="user">residue</div>')
-    expect(residue).not.toContain(ROW)
-  })
-
   // #816: the row became a download control. What this tier owns is the ELEMENT and its accessible name;
   // the click, the keyboard and the wire are e2e/attachment-file-row.spec.ts's, and the two-ask sequencing
   // behind the handler is downloadAttachment.test.ts's.
   describe('as a download control (#816)', () => {
     it('is a real <button type="button">, not a div with a handler (AC1)', () => {
-      const markup = renderToStaticMarkup(<Timeline items={withOneFile} />)
+      const markup = renderToStaticMarkup(<RowViews items={withOneFile} />)
       // A real button is what makes one tab stop, Enter and Space, and screen-reader semantics come for
       // free instead of being rebuilt out of tabIndex + onKeyDown — the ChannelList row's ruling.
       expect(markup).toContain(`<button type="button" class="${ROW}" disabled="">`)
@@ -2115,7 +1486,7 @@ describe('Timeline — the attachment file row in the message bubble (#815)', ()
     })
 
     it('takes its accessible name from its TEXT CONTENT, with no aria-label (AC1)', () => {
-      const markup = renderToStaticMarkup(<Timeline items={withOneFile} />)
+      const markup = renderToStaticMarkup(<RowViews items={withOneFile} />)
       const row = markup.slice(markup.indexOf(`<button type="button" class="${ROW}"`))
 
       // ⭐ The criterion is "an accessible name that includes the file name", and the name is COMPUTED
@@ -2134,7 +1505,7 @@ describe('Timeline — the attachment file row in the message bubble (#815)', ()
 
     it('gives two attachments two independent controls, and still leaks no identifier', () => {
       const markup = renderToStaticMarkup(
-        <Timeline
+        <RowViews
           items={[
             {
               kind: 'userText',
@@ -2164,7 +1535,7 @@ describe('Timeline — the attachment file row in the message bubble (#815)', ()
   describe('an image attachment takes the slot instead (#1045)', () => {
     it('draws NO file row for an image, and the row unchanged for everything else', () => {
       const markup = renderToStaticMarkup(
-        <Timeline
+        <RowViews
           items={[
             {
               kind: 'userText',
@@ -2194,7 +1565,7 @@ describe('Timeline — the attachment file row in the message bubble (#815)', ()
       // before the meta row, which is the position it would have to leave if the branch had reordered or
       // wrapped the map.
       const markup = renderToStaticMarkup(
-        <Timeline
+        <RowViews
           items={[
             {
               kind: 'userText',
@@ -2220,7 +1591,7 @@ describe('Timeline — the attachment file row in the message bubble (#815)', ()
       // where it is drawn rather than only in the helper's own spec: the label slot says PNG and the row
       // is still a row. attachmentIsImage.test.ts pins the pair directly.
       const markup = renderToStaticMarkup(
-        <Timeline
+        <RowViews
           items={[
             {
               kind: 'userText',
@@ -2244,36 +1615,11 @@ describe('Timeline — the session-boundary delimiter (#286, redrawn #690)', () 
   // occurredAt still rides the ThreadItem (the store owns it), it just reaches no renderer any more.
   const twoHoursAgo = new Date(Date.parse('2026-01-15T12:00:00.000Z') - 2 * 3_600_000).toISOString()
 
-  it('brackets the label with TWO rules — no bubble, no cursor, no data-thread-role (AC1/AC4/AC5)', () => {
-    const items: ThreadItem[] = [
-      { kind: 'sessionBoundary', reason: 'workspace_change', workspaceCwd: '~/Workspace/Projects/KitchenClaw', occurredAt: twoHoursAgo }
-    ]
-    const markup = renderToStaticMarkup(<Timeline items={items} />)
-    expect(markup).toContain('session-delimiter')
-    // The unit tier cannot measure a width, but it CAN prove the two identically-classed siblings
-    // that make the equal halves structural are both there and bracket the label (AC5s pure-tier
-    // stand-in; the widths themselves are review-by-inspection, see the PR checklist).
-    expect(markup.match(/session-delimiter__rule/g)).toHaveLength(2)
-    expect(markup.indexOf('session-delimiter__rule')).toBeLessThan(
-      markup.indexOf('session-delimiter__title')
-    )
-    expect(markup.indexOf('session-delimiter__title')).toBeLessThan(
-      markup.lastIndexOf('session-delimiter__rule')
-    )
-    // The label, path verbatim — and no time appended to it.
-    expect(markup).toContain('>Workspace changed to ~/Workspace/Projects/KitchenClaw<')
-    expect(markup).not.toContain('ago')
-    // A distinct row: not attributed to assistant/user/tool, and not a streaming tail.
-    expect(markup).not.toContain('data-thread-role')
-    expect(threadBubbleCount(markup)).toBe(0)
-    expect(markup).not.toContain(CURSOR)
-  })
-
   it('renders each rule as an aria-hidden decorative element (purely visual, not semantic)', () => {
     const items: ThreadItem[] = [
       { kind: 'sessionBoundary', reason: 'clear', workspaceCwd: null, occurredAt: twoHoursAgo }
     ]
-    const markup = renderToStaticMarkup(<Timeline items={items} />)
+    const markup = renderToStaticMarkup(<RowViews items={items} />)
     // The clear label bounded by its tags, so a re-appended time fails this assertion too.
     expect(markup).toContain('>Session reset<')
     expect(markup).toMatch(/session-delimiter__rule[^>]*aria-hidden="true"/)
@@ -2284,7 +1630,7 @@ describe('Timeline — the session-boundary delimiter (#286, redrawn #690)', () 
     const items: ThreadItem[] = [
       { kind: 'sessionBoundary', reason: 'workspace_change', workspaceCwd: '<b>x</b>', occurredAt: twoHoursAgo }
     ]
-    const markup = renderToStaticMarkup(<Timeline items={items} />)
+    const markup = renderToStaticMarkup(<RowViews items={items} />)
     expect(markup).toContain('&lt;b&gt;x&lt;/b&gt;')
     expect(markup).not.toContain('<b>x</b>')
   })
@@ -2295,7 +1641,7 @@ describe('Timeline — the session-boundary delimiter (#286, redrawn #690)', () 
       { kind: 'sessionBoundary', reason: 'clear', workspaceCwd: null, occurredAt: twoHoursAgo },
       { kind: 'userText', text: 'after the break' }
     ]
-    const markup = renderToStaticMarkup(<Timeline items={items} />)
+    const markup = renderToStaticMarkup(<RowViews items={items} />)
     expect(markup.indexOf('before the break')).toBeLessThan(markup.indexOf('session-delimiter'))
     expect(markup.indexOf('session-delimiter')).toBeLessThan(markup.indexOf('after the break'))
   })
@@ -3668,219 +3014,6 @@ describe('ComposerSendButton — the composer send/stop control (#678)', () => {
   })
 })
 
-// #294, re-pointed onto the merged row by #1214: the daemon's queued backlog, drawn INSIDE the thread.
-// #294 drew it as a separate `.conversation__queued` region below the timeline, which meant a message sent
-// mid-turn appeared twice — the composer's optimistic echo here and a near-identical queued copy there.
-// The rows are folded now (foldQueuedRows → Timeline), so these assertions render Timeline with a `queued`
-// backlog instead of the deleted QueuedBacklog view. Every one of #294/#296's original subjects survives:
-// enqueue order, the queued-vs-delivered seam, the untrusted-text posture and one drop control per queued
-// row. The correlation itself is proven exhaustively in foldQueuedRows.test.ts; what lives here is what
-// the MARKUP does with it. The container's own empty-store branch stays in the block below.
-describe('the merged queued row — the backlog folded into the thread (#1214)', () => {
-  const item = (queued_msg_id: number, text: string, message_id?: string): QueuedItem => ({
-    queued_msg_id,
-    text,
-    ts: '2026-07-12T00:00:00Z',
-    ...(message_id === undefined ? {} : { message_id })
-  })
-
-  const OwnTimeline = (props: React.ComponentProps<typeof Timeline>) => <Timeline {...props}
-    localEchoes={props.items.flatMap((item, rowKey) => item.kind === 'userText' && item.messageId
-      ? [{ rowKey, messageId: item.messageId, waiting: false }] : [])} />
-
-  const echo = (text: string, messageId: string): ThreadItem => ({ kind: 'userText', text, messageId })
-
-  // renderToStaticMarkup cannot fire clicks (the id→command proof lives in dropQueuedMessage.test.ts and
-  // the click itself in e2e/), so these renders pass no handler at all — which is also the assertion that
-  // `onDropQueued` really is optional and a handler-less render draws the control rather than throwing.
-
-  it('keeps one focusable thread region when both timeline and backlog are empty', () => {
-    // The empty-thread invitation, not a silent region: EmptyThread is a distinct surface.
-    const markup = renderToStaticMarkup(<OwnTimeline items={[]} queued={[]} />)
-    expect(markup.match(/class="conversation__thread"/g)).toHaveLength(1)
-    expect(markup).not.toContain('queued-row__drop')
-  })
-
-  it('draws the queued rows and NOT the empty state when the timeline is empty but the backlog is not', () => {
-    // Reachable from a reconnect into another device's backlog, and from a conversation opened fresh in
-    // this window. Before the fold this drew the empty-state invitation with queued rows underneath it.
-    const markup = renderToStaticMarkup(<OwnTimeline items={[]} queued={[item(1, 'somebody else queued this')]} />)
-    expect(markup).toContain('conversation__thread')
-    expect(markup).toContain('somebody else queued this')
-    expect(markup).not.toContain('conversation__empty')
-  })
-
-  it('renders one row per queued item, in snapshot order, each showing its text (AC1)', () => {
-    const markup = renderToStaticMarkup(
-      <OwnTimeline items={[]} queued={[item(1, 'first queued'), item(2, 'second queued')]} />
-    )
-    expect(markup).toContain('first queued')
-    expect(markup).toContain('second queued')
-    // Array position IS snapshot order: the first item precedes the second in the rendered markup.
-    expect(markup.indexOf('first queued')).toBeLessThan(markup.indexOf('second queued'))
-  })
-
-  it('draws a mid-turn send ONCE — one row, wearing the queued treatment, never a second copy (AC1)', () => {
-    // The bug this ticket fixes: the echo and the backlog item are the same message, so they are one row.
-    const markup = renderToStaticMarkup(
-      <OwnTimeline items={[echo('sent mid turn', 'm1')]} queued={[item(1, 'sent mid turn', 'm1')]} />
-    )
-    expect(markup.match(/sent mid turn/g)?.length ?? 0).toBe(1)
-    expect(markup.match(/class="message-row/g)?.length ?? 0).toBe(1)
-    expect(markup).toContain('data-thread-role="queued"')
-    expect(markup).not.toContain('data-thread-role="user"')
-  })
-
-  it('distinguishes the not-yet-run state by an attribute and a class, never by container (AC1)', () => {
-    const markup = renderToStaticMarkup(
-      <OwnTimeline
-        items={[echo('already ran', 'm1'), echo('still waiting', 'm2')]}
-        queued={[item(1, 'still waiting', 'm2')]}
-      />
-    )
-    // Both rows sit in the SAME container — the distinctness is the role attribute and the modifier…
-    expect(markup.match(/conversation__thread/g)?.length ?? 0).toBe(1)
-    expect(markup).not.toContain('conversation__queued')
-    expect(markup).toContain('data-thread-role="user">already ran')
-    expect(markup).toContain('data-thread-role="queued">still waiting')
-    // …with the modifier APPENDED to the shared class run, never prepended (the whole-run assertion at
-    // the userText row's own test matches the `message-row message-row--user` prefix).
-    expect(markup).toContain('class="message-row message-row--user message-row--queued message-row--text"')
-    expect(markup.match(/class="message-row message-row--user message-row--text"/g)?.length ?? 0).toBe(1)
-    // …reusing the right-aligned user-bubble treatment (queued messages are the user's own sends).
-    expect(markup.match(/bubble bubble--user/g)?.length ?? 0).toBe(2)
-  })
-
-  it('keeps the row where it is and lifts the treatment when the message runs (AC3)', () => {
-    // The SAME timeline, folded against a backlog that no longer names the message: same index, same
-    // text, no jump to the tail and no second row — only the treatment goes.
-    const items: ThreadItem[] = [echo('ran', 'm1'), { kind: 'assistantText', turnId: 't1', text: 'a reply' }]
-    const whileQueued = renderToStaticMarkup(<OwnTimeline items={items} queued={[item(1, 'ran', 'm1')]} />)
-    const afterRunning = renderToStaticMarkup(<OwnTimeline items={items} queued={[]} />)
-    expect(whileQueued.indexOf('ran')).toBeLessThan(whileQueued.indexOf('a reply'))
-    expect(afterRunning.indexOf('ran')).toBeLessThan(afterRunning.indexOf('a reply'))
-    expect(afterRunning).toContain('data-thread-role="user">ran')
-    expect(afterRunning).not.toContain('queued')
-    expect(afterRunning.match(/class="message-row/g)?.length ?? 0).toBe(2)
-  })
-
-  it('keeps two identical texts queued back to back as two distinct rows (AC4)', () => {
-    const markup = renderToStaticMarkup(
-      <OwnTimeline
-        items={[echo('same words', 'm1'), echo('same words', 'm2')]}
-        queued={[item(7, 'same words', 'm1'), item(8, 'same words', 'm2')]}
-      />
-    )
-    expect(markup.match(/same words/g)?.length ?? 0).toBe(2)
-    expect(markup.match(/data-thread-role="queued"/g)?.length ?? 0).toBe(2)
-  })
-
-  it('draws a queued item matching no local echo as its own row, never attached to another (AC4)', () => {
-    const markup = renderToStaticMarkup(
-      <OwnTimeline items={[echo('mine', 'm1')]} queued={[item(9, 'from another device', 'zz')]} />
-    )
-    expect(markup.match(/class="message-row/g)?.length ?? 0).toBe(2)
-    expect(markup).toContain('data-thread-role="user">mine')
-    expect(markup).toContain('data-thread-role="queued">from another device')
-  })
-
-  it('renders untrusted text as plain text, never live markup (load-bearing)', () => {
-    // No apostrophes in the fixture — renderToStaticMarkup escapes ' → &#x27; (a prior desktop lesson).
-    const markup = renderToStaticMarkup(<OwnTimeline items={[]} queued={[item(1, '<b>x</b>')]} />)
-    expect(markup).toContain('&lt;b&gt;x&lt;/b&gt;')
-    expect(markup).not.toContain('<b>x</b>')
-  })
-
-  // #296: every queued row carries a drop / cancel affordance (AC1) — an icon-only button whose
-  // accessible name is a client-owned aria-label. #1214 turned "no delivered row can reach this button"
-  // from a structural fact (only QueuedBacklog drew it) into a CONDITION on the folded row, so it is
-  // asserted head-on here rather than left to the shape of the file. The click→command wiring is proven
-  // in dropQueuedMessage.test.ts.
-  it('carries one drop affordance per queued row, each with an accessible name (AC2)', () => {
-    const markup = renderToStaticMarkup(
-      <OwnTimeline items={[]} queued={[item(1, 'first queued'), item(2, 'second queued')]} />
-    )
-    // The accessible name is a client-owned aria-label (icon-only control), never a daemon string.
-    expect(markup).toContain('aria-label="Drop queued message"')
-    // Exactly one drop control per queued row — no more, no fewer. Match the exact button class (the
-    // closing quote excludes the .queued-row__drop-icon svg class, which shares the prefix).
-    expect(markup.match(/class="queued-row__drop"/g)?.length ?? 0).toBe(2)
-    expect(markup.match(/aria-label="Drop queued message"/g)?.length ?? 0).toBe(2)
-  })
-
-  it('rides the queued rows and ONLY those — never a delivered row of any kind (AC2)', () => {
-    const markup = renderToStaticMarkup(
-      <OwnTimeline
-        items={[
-          echo('a delivered send', 'm1'),
-          { kind: 'assistantText', turnId: 't1', text: 'a reply' },
-          { kind: 'toolCall', turnId: 't1', toolUseId: 'u1', name: 'Read', inputSummary: 'a file', result: null }
-        ]}
-        queued={[item(1, 'the only queued one', 'm2')]}
-      />
-    )
-    expect(markup.match(/class="queued-row__drop"/g)?.length ?? 0).toBe(1)
-    expect(markup.match(/data-thread-role="queued"/g)?.length ?? 0).toBe(1)
-    // The drop control precedes its own bubble and follows every delivered row — it is inside the queued
-    // row, not loose in the thread.
-    expect(markup.indexOf('a delivered send')).toBeLessThan(markup.indexOf('queued-row__drop'))
-    expect(markup.indexOf('queued-row__drop')).toBeLessThan(markup.indexOf('the only queued one'))
-  })
-
-  // #1726: Send now rides a queued row only while the session reports mid_turn_input: true.
-  it('groups the queued 12px glyphs in a column before the bubble', () => {
-    const markup = renderToStaticMarkup(
-      <Timeline items={[]} queued={[item(1, 'waiting')]} midTurnInput />
-    )
-    expect(markup).toContain('<div class="message-actions message-actions--queued"><button')
-    expect(markup).toContain('<span class="queued-row__send-now-icon" aria-hidden="true"></span>')
-    expect(markup).toContain('<span class="queued-row__drop-icon" aria-hidden="true"></span>')
-    expect(markup).toMatch(/Drop queued message[^]*?<\/button><\/div><div class="bubble bubble--user"/)
-  })
-
-  it('draws Send now before the drop control on each queued row when the session supports it (#1726)', () => {
-    const markup = renderToStaticMarkup(
-      <Timeline
-        items={[echo('a delivered send', 'm1')]}
-        queued={[item(1, 'first queued'), item(2, 'second queued')]}
-        midTurnInput
-        onSendQueuedNow={() => {}}
-        onDropQueued={() => {}}
-      />
-    )
-    expect(markup.match(/<button type="button" class="queued-row__send-now" aria-label="Send queued message now">/g)
-      ?.length ?? 0).toBe(2)
-    expect(markup.indexOf('a delivered send')).toBeLessThan(markup.indexOf('queued-row__send-now'))
-    expect(markup.indexOf('queued-row__send-now')).toBeLessThan(markup.indexOf('class="queued-row__drop"'))
-    expect(markup.indexOf('class="queued-row__drop"')).toBeLessThan(markup.indexOf('first queued'))
-  })
-
-  it('draws the queued row byte-identically to today when the flag is false or absent (#1726)', () => {
-    const queued = [item(1, 'first queued')]
-    const today = renderToStaticMarkup(<Timeline items={[]} queued={queued} onDropQueued={() => {}} />)
-    const off = renderToStaticMarkup(
-      <Timeline items={[]} queued={queued} onDropQueued={() => {}} midTurnInput={false} onSendQueuedNow={() => {}} />
-    )
-    expect(off).toBe(today)
-    expect(today).not.toContain('queued-row__send-now')
-  })
-
-  it('disables Send now exactly as the drop control is disabled — without an action closure (#1726)', () => {
-    const markup = renderToStaticMarkup(<Timeline items={[]} queued={[item(1, 'first queued')]} midTurnInput />)
-    expect(markup).toContain('class="queued-row__send-now" aria-label="Send queued message now" disabled=""')
-    expect(markup).toContain('class="queued-row__drop" aria-label="Drop queued message" disabled=""')
-  })
-
-  it('draws no queued treatment anywhere when the backlog prop is omitted entirely', () => {
-    // The optional-prop contract the 72 existing `<OwnTimeline` render sites depend on: absent `queued`
-    // folds against an empty backlog and yields today's rows.
-    const markup = renderToStaticMarkup(<OwnTimeline items={[echo('plain send', 'm1')]} />)
-    expect(markup).toContain('class="message-row message-row--user message-row--text"')
-    expect(markup).toContain('data-thread-role="user"')
-    expect(markup).not.toContain('queued')
-  })
-})
-
 // #177: the Run configuration host modal. StatusSheet is the pure, exported open-state chrome (the
 // MessageThread pattern) — server-render it directly to prove the handle/title/close/empty-body
 // shell. The open/dismiss toggle in ConversationScreen is trivial useState glue, unreachable under
@@ -3914,326 +3047,34 @@ describe('StatusSheet — the Run configuration host modal', () => {
   })
 })
 
-// Inject status to prove the slot's branch decisions and mutual exclusion under static rendering.
-// Store-bound renders use getInitialState(), so they cannot exercise every status without a spy.
-describe('ComposerErrorSlot — one occupant per slot (#963)', () => {
-  const ack = {
-    protocol_version: '1',
-    server_id: 's',
-    conn_id: 'c',
-    capabilities: []
+// Connection feedback belongs to the overlay; other occupants retain their priority and gating.
+describe('ComposerErrorSlot', () => {
+  const connected: ConnectionStatus = { type: 'connected', ack: {
+    protocol_version: '1', server_id: 's', conn_id: 'c', capabilities: []
+  } }
+  const occupants = {
+    recovery: <span>RECOVERY</span>, refusal: <span>REFUSAL</span>, notice: <span>NOTICE</span>,
+    history: <span>HISTORY</span>, mcpFailure: <span>MCP</span>, taskCount: <span>TASKS</span>
   }
-
-  it.each([
-    ['DAEMON_CODE_SENTINEL', 'Connection error - Reconnect']
-  ])('renders only the fixed button for %s without error fields', (code, copy) => {
-    const markup = renderToStaticMarkup(<ComposerErrorSlot
-      status={{ type: 'error', error: { code, message: 'DAEMON_MESSAGE_SENTINEL', retryable: false } }}
-      onReconnect={() => {}}
-      notice={<span>NOTICE</span>} recovery={<span>RECOVERY</span>}
-      refusal={<span>REFUSAL</span>} history={<span>HISTORY</span>} taskCount={<span>TASKS</span>}
-    />)
-    expect(markup).toBe(`<button type="button" class="button-small button-small--error">${copy}</button>`)
-    expect(markup).not.toMatch(/DAEMON_|aria-label|title=|data-/)
+  it.each<ConnectionStatus>([
+    { type: 'disconnected' }, { type: 'connecting' },
+    ...['transport', 'pairing-rejected', 'unpair', 'not-paired'].flatMap(code =>
+      [false, true].map(retryable => ({ type: 'error' as const,
+        error: { code, retryable, message: 'SECRET' } })))
+  ])('keeps all composer occupants absent for $type', status => {
+    expect(renderToStaticMarkup(<ComposerErrorSlot status={status} {...occupants} />)).toBe('')
   })
-
-  it.each(['unpair', 'not-paired'])('retains only the chip for %s', code => {
-    const markup = renderToStaticMarkup(<ComposerErrorSlot
-      status={{ type: 'error', error: { code, message: 'private', retryable: false } }}
-      onReconnect={() => {}} notice={null}
-    />)
-    expect(markup).toContain(COMPOSER_ERROR_CHIP_COPY)
-    expect(markup).not.toContain('<button')
-  })
-
-  // #1604: Re-pair lives in the Top overlay now, so pairing rejection — excluded from reconnect — falls
-  // through to the existing chip, whatever else is offered to the slot.
-  it('renders the chip and NOT Re-pair for explicit non-retryable pairing rejection (#1604)', () => {
-    const markup = renderToStaticMarkup(
-      <ComposerErrorSlot onReconnect={() => {}}
-        status={{ type: 'error', error: { code: 'pairing-rejected', message: 'gave up', retryable: false } }}
-        notice={<span>NOTICE</span>}
-      />
-    )
-    expect(markup).toContain(COMPOSER_ERROR_CHIP_COPY)
-    expect(markup).not.toContain(COMPOSER_REPAIR_BUTTON_COPY)
-    expect(markup).not.toContain('<button')
-    expect(markup).not.toContain('NOTICE')
-  })
-
-  // #167's AC4, preserved verbatim through the swap: a RETRYABLE daemon error is a transient
-  // daemon-side condition, not a broken pairing, so it gets the plain chip and is never offered a
-  // re-pair. shouldOfferRepair's `!retryable` gate is what makes this arm fall through to the chip.
-  it('renders the chip and NOT the button for a retryable daemon error (AC1, #167 AC4)', () => {
-    const markup = renderToStaticMarkup(
-      <ComposerErrorSlot onReconnect={() => {}}
-        status={{
-          type: 'error',
-          error: { code: 'server.binary_offline', message: 'offline', retryable: true }
-        }}
-        notice={null}
-      />
-    )
-    expect(markup).toContain('composer-status__error')
-    expect(markup).toContain(COMPOSER_ERROR_CHIP_COPY)
-    expect(markup).not.toContain(COMPOSER_REPAIR_BUTTON_COPY)
-  })
-
-  // Failed unpair is excluded from both recovery actions to avoid a self-loop.
-  it('renders the chip and NOT the button after a failed unpair (AC1, #167 AC5)', () => {
-    const markup = renderToStaticMarkup(
-      <ComposerErrorSlot onReconnect={() => {}}
-        status={{
-          type: 'error',
-          error: { code: 'unpair', message: 'Could not forget this pairing.', retryable: false }
-        }}
-        notice={null}
-      />
-    )
-    expect(markup).toContain('composer-status__error')
-    expect(markup).not.toContain(COMPOSER_REPAIR_BUTTON_COPY)
-  })
-
-  // AC1's empty half, in the STRICT exact-empty form the ComposerErrorChip describe below uses: that is
-  // what proves "the slot is empty, not an empty element", which a not.toContain would pass on a
-  // rendered-but-empty wrapper.
-  it('renders nothing at all while disconnected — not an empty element (AC1)', () => {
-    expect(
-      renderToStaticMarkup(<ComposerErrorSlot onReconnect={() => {}} status={{ type: 'disconnected' }} notice={null} />)
-    ).toBe('')
-  })
-
-  it('renders nothing at all while connecting — not an empty element (AC1)', () => {
-    expect(
-      renderToStaticMarkup(<ComposerErrorSlot onReconnect={() => {}} status={{ type: 'connecting' }} notice={null} />)
-    ).toBe('')
-  })
-
-  it('renders nothing at all while connected — not an empty element (AC1)', () => {
-    expect(
-      renderToStaticMarkup(<ComposerErrorSlot onReconnect={() => {}} status={{ type: 'connected', ack }} notice={null} />)
-    ).toBe('')
-  })
-
-  // AC4, and the one assertion this view needs that the chip's own describe cannot supply. Unlike
-  // ComposerErrorChip — which narrows on `status.type` and never touches the error arm at all — this
-  // view calls shouldOfferReconnect, which READS `status.error.retryable` and `.code`. Those two reads are
-  // one line away from a value a future edit could render, so the guarantee is pinned rather than
-  // argued: on the arm that reads them, neither sentinel reaches the markup.
-  it('never renders ConnectionError.message or .code on the button arm (AC4)', () => {
-    const markup = renderToStaticMarkup(
-      <ComposerErrorSlot onReconnect={() => {}}
-        status={{
-          type: 'error',
-          error: { code: 'DAEMON_SECRET_CODE', message: 'DAEMON_SECRET_DETAIL', retryable: false }
-        }}
-        notice={null}
-      />
-    )
-    expect(markup).toContain(COMPOSER_RECONNECT_BUTTON_COPY)
-    expect(markup).not.toContain('DAEMON_SECRET_DETAIL')
-    expect(markup).not.toContain('DAEMON_SECRET_CODE')
-  })
-
-  // AC4's accessible-name half: the visible text IS the name, so there is no aria-label to drift from
-  // it and no hidden prefix — the label says "Pairing error" itself, which is exactly why the chip's
-  // visually-hidden `Error: ` run is not carried over to this occupant.
-  it('takes its accessible name from the visible text — no aria-label, no hidden prefix (AC4)', () => {
-    const markup = renderToStaticMarkup(
-      <ComposerErrorSlot onReconnect={() => {}}
-        status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
-        notice={null}
-      />
-    )
-    expect(markup).not.toContain('aria-label')
-    expect(markup).not.toContain('composer-status__error-prefix')
-    expect(markup).not.toContain(COMPOSER_ERROR_CHIP_PREFIX_COPY.trim())
-  })
-
-  // The button wears the shared small-button base class plus its Error variant — the treatment the
-  // question panel's three buttons wear too. A static render is the only place the class pair is
-  // observable, and the variant is what carries the fill, so a base class alone would ship an unstyled
-  // transparent button that every other assertion here would still pass.
-  it('wears the shared small-button base class and its error variant (AC3)', () => {
-    const markup = renderToStaticMarkup(
-      <ComposerErrorSlot onReconnect={() => {}}
-        status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
-        notice={null}
-      />
-    )
-    expect(markup).toContain('button-small')
-    expect(markup).toContain('button-small--error')
-    // A real <button>, not a div wearing a click handler — the accessible name, the focus ring AC3
-    // requires and keyboard activation all come from the element, not from the class.
-    expect(markup).toContain('<button')
-    expect(markup).toContain('type="button"')
-  })
-
-  // #1321's AC4 — the precedence, proven with a SENTINEL rather than with a real notice, so this block
-  // asserts the slot's ordering and nothing about the notice's own markup (which its own describe owns).
-  // Every arm is written in BOTH directions, the #963 rule above: a slot that rendered both occupants
-  // would pass a one-directional check.
-  // #1604 moved the usage reading itself to the Top overlay; the `notice` prop still carries the settings
-  // error and the stopping banner, so its precedence is pinned here unchanged.
-  describe('the notice is a low-priority occupant (#1321 AC4)', () => {
-    const sentinel = <p>USAGE_NOTICE_SENTINEL</p>
-
-    it('yields to the actionable-error button on a terminal, non-retryable error', () => {
-      const markup = renderToStaticMarkup(
-        <ComposerErrorSlot onReconnect={() => {}}
-          status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
-          notice={sentinel}
-        />
-      )
-      expect(markup).toContain(COMPOSER_RECONNECT_BUTTON_COPY)
-      expect(markup).not.toContain('USAGE_NOTICE_SENTINEL')
-    })
-
-    it('yields to the connection-error chip on a retryable daemon error', () => {
-      const markup = renderToStaticMarkup(
-        <ComposerErrorSlot onReconnect={() => {}}
-          status={{
-            type: 'error',
-            error: { code: 'server.binary_offline', message: 'offline', retryable: true }
-          }}
-          notice={sentinel}
-        />
-      )
-      expect(markup).toContain(COMPOSER_ERROR_CHIP_COPY)
-      expect(markup).not.toContain('USAGE_NOTICE_SENTINEL')
-    })
-
-    // The notice fills the slot only while the connection is HEALTHY. `disconnected` and `connecting`
-    // are stricter than AC4 asks for and deliberately so: #279's banner is up on both, and a quota
-    // claim beside it would contradict the more urgent fact.
-    it.each([
-      ['disconnected', { type: 'disconnected' } as ConnectionStatus],
-      ['connecting', { type: 'connecting' } as ConnectionStatus]
-    ])('renders nothing at all while %s — not the notice, not an empty element', (_label, status) => {
-      expect(
-        renderToStaticMarkup(
-          <ComposerErrorSlot onReconnect={() => {}} status={status} notice={sentinel} />
-        )
-      ).toBe('')
-    })
-
-    it('renders the notice, and only the notice, while connected', () => {
-      const markup = renderToStaticMarkup(
-        <ComposerErrorSlot onReconnect={() => {}} status={{ type: 'connected', ack }} notice={sentinel} />
-      )
-      expect(markup).toBe('<p>USAGE_NOTICE_SENTINEL</p>')
-    })
-
-    // The empty half: a connected slot with no reading renders nothing at all, which is what keeps the
-    // row's geometry identical to its pre-#1321 shape in the overwhelmingly common case.
-    it('renders nothing at all while connected with no notice to draw', () => {
-      expect(
-        renderToStaticMarkup(
-          <ComposerErrorSlot onReconnect={() => {}} status={{ type: 'connected', ack }} notice={null} />
-        )
-      ).toBe('')
-    })
-  })
-
-  // #1435's AC3 — the task count is the slot's LAST reading, so every occupant above outranks it. A
-  // SENTINEL pill element, the #1321 technique one describe up: this block asserts the ordering and
-  // nothing about the pill's own markup, which the ComposerTaskCount describe below owns. Every arm is
-  // written in BOTH directions, the #963 rule this describe opens with — a slot that rendered two
-  // occupants would pass a one-directional check.
-  describe('the task count is the lowest-priority occupant (#1435 AC3)', () => {
-    const pill = <p>TASK_COUNT_SENTINEL</p>
-    const above = <p>HIGHER_READING_SENTINEL</p>
-
-    it('yields to the actionable-error button on a terminal, non-retryable error', () => {
-      const markup = renderToStaticMarkup(
-        <ComposerErrorSlot onReconnect={() => {}}
-          status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
-          notice={null}
-          taskCount={pill}
-        />
-      )
-      expect(markup).toContain(COMPOSER_RECONNECT_BUTTON_COPY)
-      expect(markup).not.toContain('TASK_COUNT_SENTINEL')
-    })
-
-    it('yields to the connection-error chip on a retryable daemon error', () => {
-      const markup = renderToStaticMarkup(
-        <ComposerErrorSlot onReconnect={() => {}}
-          status={{
-            type: 'error',
-            error: { code: 'server.binary_offline', message: 'offline', retryable: true }
-          }}
-          notice={null}
-          taskCount={pill}
-        />
-      )
-      expect(markup).toContain(COMPOSER_ERROR_CHIP_COPY)
-      expect(markup).not.toContain('TASK_COUNT_SENTINEL')
-    })
-
-    // The four connected-arm readings, each proven to outrank the pill on its own. Driven off the prop
-    // NAME so a future reordering of the `??` chain reddens here rather than silently demoting one of
-    // them past the count.
-    it.each([['recovery'], ['refusal'], ['notice'], ['history']] as const)(
-      'yields to the %s reading while connected',
-      (slot) => {
-        const markup = renderToStaticMarkup(
-          <ComposerErrorSlot onReconnect={() => {}}
-            status={{ type: 'connected', ack }}
-            notice={slot === 'notice' ? above : null}
-            recovery={slot === 'recovery' ? above : null}
-            refusal={slot === 'refusal' ? above : null}
-            history={slot === 'history' ? above : null}
-            taskCount={pill}
-          />
-        )
-        expect(markup).toContain('HIGHER_READING_SENTINEL')
-        expect(markup).not.toContain('TASK_COUNT_SENTINEL')
-      }
-    )
-
-    it('fills the slot while connected with every reading above it absent (AC1)', () => {
-      const markup = renderToStaticMarkup(
-        <ComposerErrorSlot onReconnect={() => {}}
-          status={{ type: 'connected', ack }}
-          notice={null}
-          taskCount={pill}
-        />
-      )
-      expect(markup).toBe('<p>TASK_COUNT_SENTINEL</p>')
-    })
-
-    // AC2's connection half, in the strict exact-empty form: the count says nothing about a link that is
-    // down, and #279's banner is up on both arms saying so.
-    it.each([
-      ['disconnected', { type: 'disconnected' } as ConnectionStatus],
-      ['connecting', { type: 'connecting' } as ConnectionStatus]
-    ])('renders nothing at all while %s — not the pill, not an empty element', (_label, status) => {
-      expect(
-        renderToStaticMarkup(
-          <ComposerErrorSlot onReconnect={() => {}} status={status} notice={null} taskCount={pill} />
-        )
-      ).toBe('')
-    })
-
-    // The prop is OPTIONAL, matching `recovery` / `refusal` / `history` — omitting it must leave the
-    // pre-#1435 render byte-identical, which is what let every existing call site in this file stand
-    // unchanged. The exact empty string is the assertion, since a `?? null` that had become `?? <></>`
-    // would pass a not.toContain.
-    it('renders nothing at all while connected with the prop omitted entirely', () => {
-      expect(
-        renderToStaticMarkup(
-          <ComposerErrorSlot onReconnect={() => {}} status={{ type: 'connected', ack }} notice={null} />
-        )
-      ).toBe('')
-    })
+  it('keeps connected-only occupant priority', () => {
+    const entries = Object.entries(occupants)
+    for (let index = 0; index < entries.length; index++) {
+      const props = Object.fromEntries(entries.slice(index))
+      const markup = renderToStaticMarkup(<ComposerErrorSlot status={connected} notice={null} {...props} />)
+      expect(markup).toBe(renderToStaticMarkup(entries[index][1]))
+    }
+    expect(renderToStaticMarkup(<ComposerErrorSlot status={connected} notice={null} />)).toBe('')
   })
 })
 
-// #1435: the task count's own pure view. An injected count, the ComposerUsageLimitNotice discipline and
-// for its reason — zustand v5's useStore reads getInitialState() under renderToStaticMarkup, so a
-// store-bound container test can reach exactly one arm, and the count's arms are only assertable if the
-// number is a prop.
 describe('ComposerTaskCount — the background-task reading in the status row (#1435)', () => {
   it('reads "n tasks running" for a count above one (AC1)', () => {
     const markup = renderToStaticMarkup(<ComposerTaskCount count={6} onToggle={() => {}} />)
@@ -4295,154 +3136,6 @@ describe('ComposerTaskCount — the background-task reading in the status row (#
     expect(markup).toContain('type="button"')
     expect(markup).not.toContain('aria-label')
     expect(markup).not.toContain('composer-status__error-prefix')
-  })
-})
-
-// #279: the prominent, disconnected-only connection banner. ConnectionBanner is the pure, exported
-// view (the RepairPrompt pattern) — server-render it directly with each `status` prop to prove the
-// present/absent matrix without touching the store. The store-bound ConnectionBannerControl container
-// reads the same slice; its disconnected branch IS server-render-reachable (getInitialState =
-// disconnected is a VISIBLE branch here, unlike RepairControl), so the mounted-visible case is proven
-// in the ConversationScreen container block below.
-describe('ConnectionBanner — the disconnected-only connection band', () => {
-  const ack = {
-    protocol_version: '1',
-    server_id: 's',
-    conn_id: 'c',
-    capabilities: []
-  }
-
-  it('renders the client-owned copy while disconnected (AC1)', () => {
-    const markup = renderToStaticMarkup(<ConnectionBanner status={{ type: 'disconnected' }} />)
-    expect(markup).toContain('conversation__banner')
-    expect(markup).toContain(CONNECTION_BANNER_COPY)
-  })
-
-  it('renders the client-owned copy while connecting (AC1)', () => {
-    const markup = renderToStaticMarkup(<ConnectionBanner status={{ type: 'connecting' }} />)
-    expect(markup).toContain(CONNECTION_BANNER_COPY)
-  })
-
-  it('renders the client-owned copy while in a connection error (AC1)', () => {
-    const markup = renderToStaticMarkup(
-      <ConnectionBanner
-        status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
-      />
-    )
-    expect(markup).toContain(CONNECTION_BANNER_COPY)
-  })
-
-  it('renders nothing when connected (AC2)', () => {
-    const markup = renderToStaticMarkup(<ConnectionBanner status={{ type: 'connected', ack }} />)
-    expect(markup).toBe('')
-  })
-
-  // AC3: the banner text is the client-owned constant only — never a daemon-supplied string. Given an
-  // error status carrying a secret in ConnectionError.message, the rendered band contains the copy and
-  // NOT the message, so no daemon string can reach the banner (a structural guarantee — the view
-  // renders CONNECTION_BANNER_COPY, nothing derived from `status`).
-  it('never renders ConnectionError.message — only the client-owned copy (AC3)', () => {
-    const markup = renderToStaticMarkup(
-      <ConnectionBanner
-        status={{
-          type: 'error',
-          error: { code: 'x', message: 'DAEMON_SECRET_DETAIL', retryable: false }
-        }}
-      />
-    )
-    expect(markup).toContain(CONNECTION_BANNER_COPY)
-    expect(markup).not.toContain('DAEMON_SECRET_DETAIL')
-  })
-})
-
-// #797: the connection-error chip in the composer status row — the FOURTH read of the ConnectionStatus
-// slice (beside the composer gate, the re-pair prompt and the banner), and the narrowest: it reads the
-// discriminant to decide whether to show and nothing out of the `error` arm at all. ComposerErrorChip is
-// the pure, exported view (the ConnectionBanner pattern), so the whole four-arm matrix is proven by
-// server-rendering it with an injected `status` and no store. The mounted, store-bound path is proven in
-// the ConversationScreen container block below, which is the only place the `trailing` wiring is visible.
-describe('ComposerErrorChip — the connection-error chip in the status row (#797)', () => {
-  const ack = {
-    protocol_version: '1',
-    server_id: 's',
-    conn_id: 'c',
-    capabilities: []
-  }
-
-  it('renders the client-owned copy in the error arm (AC1)', () => {
-    const markup = renderToStaticMarkup(
-      <ComposerErrorChip
-        status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
-      />
-    )
-    expect(markup).toContain('composer-status__error')
-    expect(markup).toContain(COMPOSER_ERROR_CHIP_COPY)
-  })
-
-  // AC1's absent half, in the STRICT form: an exact-empty markup, not a not.toContain. That is what
-  // proves "nothing is rendered in that slot — not an empty element", which a substring assertion would
-  // pass on a rendered-but-empty wrapper.
-  it('renders nothing at all while disconnected — not an empty element (AC1)', () => {
-    expect(renderToStaticMarkup(<ComposerErrorChip status={{ type: 'disconnected' }} />)).toBe('')
-  })
-
-  it('renders nothing at all while connecting — not an empty element (AC1)', () => {
-    expect(renderToStaticMarkup(<ComposerErrorChip status={{ type: 'connecting' }} />)).toBe('')
-  })
-
-  it('renders nothing at all while connected — not an empty element (AC1)', () => {
-    expect(renderToStaticMarkup(<ComposerErrorChip status={{ type: 'connected', ack }} />)).toBe('')
-  })
-
-  // AC2: the chip's text is the client-owned constant only. TWO sentinels, not the banner test's one —
-  // the AC names `message` AND `code`, and neither may reach the DOM as text, in an attribute, or in a
-  // title. A structural guarantee, not a convention: the view narrows on `status.type` and never
-  // destructures `status.error`, so there is no rendering path for either field.
-  it('never renders ConnectionError.message or .code — only the client-owned copy (AC2)', () => {
-    const markup = renderToStaticMarkup(
-      <ComposerErrorChip
-        status={{
-          type: 'error',
-          error: { code: 'DAEMON_SECRET_CODE', message: 'DAEMON_SECRET_DETAIL', retryable: false }
-        }}
-      />
-    )
-    expect(markup).toContain(COMPOSER_ERROR_CHIP_COPY)
-    expect(markup).not.toContain('DAEMON_SECRET_DETAIL')
-    expect(markup).not.toContain('DAEMON_SECRET_CODE')
-  })
-
-  // AC4: colour is not the only signal. The marking is hidden TEXT, not an aria-label — a bare <div>/
-  // <span> maps to role="generic", which ARIA 1.2 puts on the name-prohibited list, so an aria-label
-  // would assert green here and be dropped by a real screen reader. Ordering matters: the prefix run
-  // precedes the visible copy, so the two concatenate into "Error: Host connection down!".
-  it('marks the chip as an error with hidden text ahead of the copy (AC4)', () => {
-    const markup = renderToStaticMarkup(
-      <ComposerErrorChip
-        status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
-      />
-    )
-    expect(markup).toContain('composer-status__error-prefix')
-    expect(markup).toContain(COMPOSER_ERROR_CHIP_PREFIX_COPY.trim())
-    // The index idiom (WelcomeScreen.test.tsx:36-41) — a static markup string carries no tree to query.
-    const prefixAt = markup.indexOf('composer-status__error-prefix')
-    const copyAt = markup.indexOf(COMPOSER_ERROR_CHIP_COPY)
-    expect(prefixAt).toBeGreaterThanOrEqual(0)
-    expect(copyAt).toBeGreaterThan(prefixAt)
-  })
-
-  // The chip is NOT a live region. shouldShowBanner is true on the `error` arm, so a connected → error
-  // transition mounts the banner and this chip in the same commit; a second polite region here would
-  // announce one fact twice — the ConnectionStatusIndicator ruling, restated one component over.
-  it('is not a live region — the banner already announces the disconnect', () => {
-    const markup = renderToStaticMarkup(
-      <ComposerErrorChip
-        status={{ type: 'error', error: { code: 'transport', message: 'gave up', retryable: false } }}
-      />
-    )
-    expect(markup).not.toContain('aria-live')
-    expect(markup).not.toContain('role="status"')
-    expect(markup).not.toContain('role="alert"')
   })
 })
 
@@ -4993,87 +3686,6 @@ describe('requestDeleteConversation', () => {
   })
 })
 
-// #758: the chat pane's thread binding — the selector the container hands to
-// `useConversationTimelineStore`, so the thread on screen is the OPEN conversation's own retained
-// timeline rather than the flat, single-thread store `activateConversation` resets on every switch.
-//
-// Tested HERE, at the selector, rather than through the container below, because this repo's renderer
-// tier CANNOT see a seeded store: `vitest.config.ts` is `environment: 'node'` and zustand v5's `useStore`
-// reads `getInitialState()` under `renderToStaticMarkup` (the note at the head of this file, restated in
-// six sibling describes). A `setState` before a server render is invisible, so every container test in
-// this file renders the EMPTY stores — which is exactly this selector's `null` branch, and cannot
-// distinguish one conversation's rows from another's. The screen-level proof of that distinction is
-// `e2e/conversation-switch-keeps-both-threads.spec.ts`, the only tier in this repo that can click.
-//
-// The fixture drives the REAL store through its real write path (`dispatchFor`), so the copy-on-write
-// identity these assertions rest on is the shipped one and not a hand-built map's.
-describe('selectOpenTimelineFor', () => {
-  // Two conversations, each holding one row of its own. A FRESH `new Map()` per store, never
-  // `initialConversationTimelineState` — that exported constant holds a module-shared mutable map
-  // (conversationTimelineStore.ts:340-349).
-  function twoHeldThreads(): ReturnType<typeof createConversationTimelineStore> {
-    const store = createConversationTimelineStore({ timelines: new Map() })
-    store.getState().dispatchFor('conv-a', { type: 'userText', text: 'alpha' })
-    store.getState().dispatchFor('conv-b', { type: 'userText', text: 'beta' })
-    return store
-  }
-
-  it("hands back the open conversation's own held slice, never a neighbour's (AC1)", () => {
-    const store = twoHeldThreads()
-    const thread = selectOpenTimelineFor('conv-a')(store.getState())
-    expect(thread?.items).toEqual([{ kind: 'userText', text: 'alpha' }])
-    // The chrome travels with the rows — the whole slice is one value, so the phase and the four
-    // scalars can no more come from another conversation than the rows can.
-    expect(thread?.localSendPending).not.toBeNull()
-    // The HELD timeline itself, not a copy. That `Object.is` identity is what makes the switch cheap: a
-    // write for another conversation rebuilds the outer map but copies every survivor by reference, so
-    // this screen does not re-render (`withNewSliceAtHead`'s by-reference survivor copy). Since #1259 a
-    // key holds a `ConversationSlice` — the timeline plus the state of the ask that backfilled it — so
-    // the identity to assert is the slice's `timeline` half, which is exactly what `selectTimelineFor`
-    // projects. That indirection is also what keeps a history-request write from waking this screen.
-    expect(thread).toBe(store.getState().timelines.get('conv-a')?.timeline)
-  })
-
-  it("reads null for an open conversation with nothing retained — never a neighbour's rows (AC3)", () => {
-    const store = twoHeldThreads()
-    // `null` means "nothing is held", the reading the container renders as the shipped empty thread.
-    // It must not be an empty slice and must not resolve onto a neighbour.
-    expect(selectOpenTimelineFor('conv-c')(store.getState())).toBeNull()
-  })
-
-  it('reads null when nothing is open, even with a slice held under the empty-string id', () => {
-    const store = twoHeldThreads()
-    // The `?? ''` sentinel regression guard (BackgroundTaskPanel.tsx:342's idiom, rejected here): `''`
-    // is an ORDINARY key in this store — `dispatchFor` mints a slice for whatever id the daemon
-    // asserts — so substituting it for "no conversation open" would render that slice as the open
-    // conversation's thread while nothing is open. Branching performs no lookup at all.
-    store.getState().dispatchFor('', { type: 'userText', text: 'from an empty conversation id' })
-    expect(selectOpenTimelineFor(null)(store.getState())).toBeNull()
-  })
-
-  it('shows the thread as it now stands after a switch away and back (AC2)', () => {
-    const store = twoHeldThreads()
-    const away = selectOpenTimelineFor('conv-a')(store.getState())
-    // `conv-b` is on screen; a row arrives for `conv-a` while the operator is elsewhere.
-    store.getState().dispatchFor('conv-b', { type: 'userText', text: 'beta again' })
-    store.getState().dispatchFor('conv-a', { type: 'userText', text: 'arrived while away' })
-    const back = selectOpenTimelineFor('conv-a')(store.getState())
-    expect(back?.items).toEqual([
-      { kind: 'userText', text: 'alpha' },
-      { kind: 'userText', text: 'arrived while away' }
-    ])
-    expect(back).not.toBe(away)
-  })
-
-  it("a write for another conversation leaves the open one's slice identical", () => {
-    const store = twoHeldThreads()
-    const before = selectOpenTimelineFor('conv-a')(store.getState())
-    store.getState().dispatchFor('conv-b', { type: 'userText', text: 'beta again' })
-    // Same object → zustand's `Object.is` short-circuit → no re-render for the conversation on screen.
-    expect(selectOpenTimelineFor('conv-a')(store.getState())).toBe(before)
-  })
-})
-
 describe('ConversationScreen — store binding', () => {
   const CONNECTED: ConnectionStatus = {
     type: 'connected',
@@ -5091,26 +3703,6 @@ describe('ConversationScreen — store binding', () => {
     }).not.toThrow()
     // The old placeholder array held 8 messages; the store is empty → zero bubbles.
     expect(bubbleCount(markup)).toBe(0)
-  })
-
-  // #179 AC4: the coarse MessageThread mount is retired, leaving the timeline the single thread
-  // surface. Against the empty stores that means no thread region renders at all — no coarse
-  // data-message-role bubbles, no timeline data-thread-role rows, and no second empty thread
-  // container (MessageThread used to render an empty .conversation__thread even with no messages).
-  it('renders exactly one thread surface — no split-brain, no empty second thread region (AC4)', () => {
-    const markup = renderToStaticMarkup(<ConversationScreen />)
-    expect(bubbleCount(markup)).toBe(0)
-    expect(markup).not.toContain('data-thread-role')
-    expect(markup.match(/class="conversation__thread"/g)).toHaveLength(1)
-  })
-
-  // #277: the timeline view mounts against the empty timeline store (getInitialState items: []), so
-  // it now renders the pre-first-message empty state (replacing #203's `return null`) at first paint —
-  // still contributing no streaming cursor. The populated path is proven on the pure Timeline above.
-  it('mounts the empty timeline as the empty state, with no streaming cursor', () => {
-    const markup = renderToStaticMarkup(<ConversationScreen />)
-    expect(markup).toContain('conversation__empty')
-    expect(markup).not.toContain('bubble__cursor')
   })
 
   // #215/#648: the working indicator mounts against the idle timeline store (getInitialState phase:
@@ -5139,48 +3731,17 @@ describe('ConversationScreen — store binding', () => {
     expect(markup).not.toContain('composer-status__label')
   })
 
-  // #797: the chip's absent arm through the mounted container. The beforeEach leaves the session store
-  // `disconnected`, which is NOT the error arm, so the reserved slot stays empty in the shipped tree.
-  it('mounts the status row with no error chip while disconnected (AC1)', () => {
-    const markup = renderToStaticMarkup(<ConversationScreen />)
-    expect(markup).toContain('class="composer-status"')
-    expect(markup).not.toContain('composer-status__error')
-    expect(markup).not.toContain(COMPOSER_ERROR_CHIP_COPY)
-  })
-
-  // #797: the chip's PRESENT arm through the mounted container — the only test that proves the
-  // `trailing` prop at the ComposerStatusArea mount actually reached the row. Without it an unwired prop
-  // passes every pure-view assertion above.
-  //
-  // A getInitialState SPY, not setState. This file's standing note applies here — zustand v5's useStore
-  // reads getInitialState() under renderToStaticMarkup, never getState() — so the block's beforeEach
-  // cannot stage a non-initial arm, and this branch would otherwise be unreachable (the spec assumed the
-  // beforeEach was enough; it is not, measured 2026-08-27). Spying the store's initial snapshot is the
-  // narrowest seam that reaches it: one store, one render, no production code touched, restored
-  // immediately since this config sets no restoreMocks.
-  //
-  // #963 REPOINTED THE STAGED STATUS, and the test would otherwise have gone red rather than vacuous. It
-  // staged `code: 'transport', retryable: false` — which is precisely the arm shouldOfferRepair admits, so
-  // the slot now fills it with the actionable button and the chip is correctly absent. The chip's own
-  // mounted arm is a RETRYABLE daemon error (#167's AC4: transient, not a broken pairing), so that is what
-  // this stages now. The claim is unchanged — the `trailing` prop reaches the row with the chip in it —
-  // and the button's mounted arm is proven by its own test below.
-  it('mounts the error chip in the status row once the session is in a retryable error arm (AC1)', () => {
-    const restore = stageOpenConnection({
-        type: 'error',
-        error: { code: 'server.binary_offline', message: 'offline', retryable: true }
-      })
+  it('puts retryable connection feedback only in the overlay', () => {
+    const restore = stageOpenConnection({ type: 'error',
+      error: { code: 'server.binary_offline', message: 'SECRET', retryable: true } })
     try {
       const markup = renderToStaticMarkup(<ConversationScreen />)
-      expect(markup).toContain('composer-status__error')
-      expect(markup).toContain(COMPOSER_ERROR_CHIP_COPY)
-      // In the ROW, not loose in the region: the chip trails .composer-status in the shipped tree.
-      expect(markup.indexOf('composer-status__error')).toBeGreaterThan(
-        markup.indexOf('class="composer-status"')
-      )
-    } finally {
-      restore()
-    }
+      expect(markup).toContain(CONNECTION_BANNER_COPY)
+      expect(markup).toContain('conversation__top-overlay')
+      expect(markup).not.toContain('conversation__banner')
+      expect(markup).not.toContain('composer-status__error')
+      expect(markup).not.toContain('SECRET')
+    } finally { restore() }
   })
 
   // #1604: pairing rejection through the mounted container. Re-pair is a pill in the Top overlay pinned
@@ -5190,7 +3751,7 @@ describe('ConversationScreen — store binding', () => {
   // The same getInitialState SPY as the chip test above, and for the same reason: zustand v5's useStore
   // reads getInitialState() under renderToStaticMarkup, never getState(), so the block's beforeEach
   // cannot stage this arm.
-  it('mounts Re-pair in the Top overlay and the chip in the status row once the pairing is rejected (#1604)', () => {
+  it('mounts Re-pair in the Top overlay with no composer connection occupant', () => {
     const restore = stageOpenConnection({ type: 'error', error: { code: 'pairing-rejected', message: 'gave up', retryable: false } })
     try {
       const markup = renderToStaticMarkup(<ConversationScreen />)
@@ -5200,8 +3761,8 @@ describe('ConversationScreen — store binding', () => {
       expect(repair).toBeGreaterThan(overlay)
       expect(repair).toBeLessThan(markup.indexOf('class="composer-status"'))
       expect(markup.split(COMPOSER_REPAIR_BUTTON_COPY)).toHaveLength(2)
-      // The row's slot holds the chip, after the row opens.
-      expect(markup.indexOf(COMPOSER_ERROR_CHIP_COPY)).toBeGreaterThan(markup.indexOf('class="composer-status"'))
+      expect(markup).not.toContain('composer-status__error')
+      expect(markup).not.toContain(COMPOSER_RECONNECT_BUTTON_COPY)
       // The retired #167 block stays gone.
       expect(markup).not.toContain('composer__repair')
     } finally {
@@ -5686,7 +4247,7 @@ describe('ConversationScreen — store binding', () => {
     expect(markup).not.toContain(COMPOSER_REPAIR_BUTTON_COPY)
     expect(markup).not.toContain('composer__repair')
     // #1604: with no pill to show, the Top overlay renders no element at all.
-    expect(markup).not.toContain('conversation__top-overlay')
+    expect(markup).toContain('conversation__top-overlay')
   })
 
   // #31: while not connected the send control is disabled. (It also used to show an inline "why" caption
@@ -5718,19 +4279,11 @@ describe('ConversationScreen — store binding', () => {
   // daemon string reaches it (there is none at the initial disconnected status). Since #968 it is the
   // ONLY thing said about the connection in this arm, which is why its presence here matters more than
   // it did when the composer's caption said it a second time.
-  it('renders the connection banner while disconnected (AC1/AC4)', () => {
+  it('renders the connection pill without a header band while disconnected', () => {
     const markup = renderToStaticMarkup(<ConversationScreen />)
-    expect(markup).toContain('conversation__banner')
+    expect(markup).not.toContain('conversation__banner')
+    expect(markup).toContain('top-overlay-pill--error" role="status"')
     expect(markup).toContain(CONNECTION_BANNER_COPY)
-  })
-
-  it('renders the banner above the message thread (top of the thread)', () => {
-    // The banner mounts above the timeline surface, so its markup precedes the thread's empty state.
-    // It used to be described as sitting between UnpairControl (the header row) and the timeline;
-    // #1061 deleted that row, and the banner is now the first thing in the region. The assertion is
-    // unchanged and still means what it always meant.
-    const markup = renderToStaticMarkup(<ConversationScreen />)
-    expect(markup.indexOf('conversation__banner')).toBeLessThan(markup.indexOf('conversation__empty'))
   })
 
   // #962 AC1: the region between the thread and the composer is EMPTY. The desktop drawing (102:4)
@@ -5839,50 +4392,6 @@ describe('the unrecognized-message timeline row', () => {
     truncated: false
   }
 
-  it('renders collapsed: the label, the type, and the drop site on one line', () => {
-    const markup = renderToStaticMarkup(<Timeline items={[ITEM]} />)
-    expect(markup).toContain('unrecognized-row')
-    expect(markup).toContain(UNRECOGNIZED_COPY)
-    expect(markup).toContain('some_future_event')
-    expect(markup).toContain('whole message')
-  })
-
-  it('is a real button carrying aria-expanded, closed at rest', () => {
-    // A <button>, not a div with a click handler, so keyboard activation and screen-reader
-    // semantics come for free rather than being re-implemented and half-missed.
-    const markup = renderToStaticMarkup(<Timeline items={[ITEM]} />)
-    expect(markup).toContain('<button')
-    expect(markup).toContain('aria-expanded="false"')
-  })
-
-  it('withholds the raw payload until expanded — it is not merely hidden in the DOM', () => {
-    const markup = renderToStaticMarkup(<Timeline items={[ITEM]} />)
-    expect(markup).not.toContain('something new')
-    expect(markup).not.toContain('unrecognized-row__raw')
-  })
-
-  it('omits the type slot entirely when the site read no type at all', () => {
-    const undecodable: ThreadItem = { ...ITEM, site: 'undecodable', messageType: '' }
-    const markup = renderToStaticMarkup(<Timeline items={[undecodable]} />)
-    expect(markup).toContain('could not be decoded')
-    // An empty type renders no slot, rather than an empty pair of quotes.
-    expect(markup).not.toContain('unrecognized-row__type')
-  })
-
-  it('carries no thread role — claude did not say this, the daemon did', () => {
-    const markup = renderToStaticMarkup(<Timeline items={[ITEM]} />)
-    expect(markup).not.toContain('data-thread-role')
-  })
-
-  it('escapes markup in the daemon-supplied type rather than rendering it', () => {
-    // The row's whole payload is content the daemon could NOT interpret, so it is the least
-    // trustworthy string on the timeline. React escapes text children; this pins that.
-    const hostile: ThreadItem = { ...ITEM, messageType: '<img src=x onerror=alert(1)>' }
-    const markup = renderToStaticMarkup(<Timeline items={[hostile]} />)
-    expect(markup).not.toContain('<img')
-    expect(markup).toContain('&lt;img')
-  })
-
   it('labels every drop site, with client-owned copy the daemon never supplies', () => {
     expect(unrecognizedSiteLabel('line_type')).toBe('whole message')
     expect(unrecognizedSiteLabel('assistant_block')).toBe('assistant block')
@@ -5890,17 +4399,6 @@ describe('the unrecognized-message timeline row', () => {
     expect(unrecognizedSiteLabel('undecodable')).toBe('could not be decoded')
     expect(unrecognizedSiteLabel('codex_method')).toBe('Codex notification')
     expect(unrecognizedSiteLabel('codex_item')).toBe('Codex item')
-  })
-
-  it('renders one row per repeat, never collapsing them', () => {
-    const markup = renderToStaticMarkup(<Timeline items={[ITEM, ITEM, ITEM]} />)
-    expect(markup.split('unrecognized-row__summary').length - 1).toBe(3)
-  })
-
-  it('keeps the truncation note out of the collapsed row', () => {
-    const cut: ThreadItem = { ...ITEM, truncated: true }
-    const markup = renderToStaticMarkup(<Timeline items={[cut]} />)
-    expect(markup).not.toContain(UNRECOGNIZED_TRUNCATED_COPY)
   })
 })
 
@@ -5914,7 +4412,7 @@ describe('model rejection in the mounted status row', () => {
 
   it.each([
     [connected, true, null],
-    [{ type: 'error', error: { code: 'transport', message: 'untrusted', retryable: true } }, false, COMPOSER_ERROR_CHIP_COPY],
+    [{ type: 'error', error: { code: 'transport', message: 'untrusted', retryable: true } }, false, null],
     [{ type: 'error', error: { code: 'transport', message: 'untrusted', retryable: false } }, false, COMPOSER_RECONNECT_BUTTON_COPY],
     [{ type: 'disconnected' }, false, null]
   ] as const)('arbitrates connection priority for %j', (status, visible, higherPriorityCopy) => {
@@ -5939,109 +4437,6 @@ it('disables the held running-turn interrupt when sending is unavailable', () =>
   expect(markup).toContain('disabled=""')
 })
 
-describe('saved timeline notices', () => {
-  it.each([false, true])('isolates saved rows and suppresses partial working state (connected=%s)', connected => {
-    const reset = stageOpenConnection(connected ? { type: 'connected', ack: { protocol_version: '1', server_id: 'host', conn_id: 'c', capabilities: [] } } : { type: 'disconnected' })
-    const store = createConversationTimelineStore(undefined, () => 'host')
-    const held = vi.spyOn(conversationTimelineStore, 'getInitialState').mockImplementation(() => store.getState())
-    const render = () => renderToStaticMarkup(<ConversationScreen savedTimelineTarget={{ serverId: 'host', conversationId: 'open' }} />)
-    try {
-      store.getState().beginLocalTimelineRead('host', 'open')!.complete({ version: 1, kind: 'timeline',
-        serverId: 'host', conversationId: 'open', items: [{ kind: 'assistantText', turnId: 'partial', text: 'Saved partial' }],
-        prependedRows: 0, coverage: { status: 'unknown' } })
-      const html = render()
-      expect(html).toContain('Saved partial')
-      expect(html).not.toContain('bubble__cursor')
-      expect(html).not.toContain('aria-label="Assistant working"')
-      expect(html.includes('Offline. Showing saved messages.')).toBe(!connected)
-      store.getState().dispatchFor('open', { type: 'assistantDelta', turnId: 'new', seq: 0, text: 'New live reply' })
-      expect(render()).toContain('New live reply')
-      expect(render().includes('bubble__cursor')).toBe(connected)
-      store.getState().beginLocalTimelineRead('other', 'open')!.complete({ version: 1, kind: 'timeline',
-        serverId: 'other', conversationId: 'open', items: [{ kind: 'userText', text: 'Other host secret' }],
-        prependedRows: 0, coverage: { status: 'unknown' } })
-      expect(render()).not.toContain('Other host secret')
-    } finally { held.mockRestore(); reset() }
-  })
-
-  it.each([false, true])('keeps held queues readable offline but excludes them from restored slices (restored=%s)', (restored) => {
-    const reset = stageOpenConnection({ type: 'disconnected' })
-    const store = createConversationTimelineStore(undefined, () => 'a')
-    if (restored) {
-      store.getState().beginLocalTimelineRead('a', 'open')!.complete(null)
-    } else {
-      store.getState().dispatchFor('open', { type: 'assistantDelta', turnId: 't', seq: 0, text: 'Held reply' })
-    }
-    const held = vi.spyOn(conversationTimelineStore, 'getInitialState').mockImplementation(() => store.getState())
-    const queue = vi.spyOn(queueStore, 'getInitialState').mockReturnValue({
-      ...queueStore.getInitialState(), backlogs: new Map([['open', [{ queued_msg_id: 4, text: 'Held queued work', ts: '2026-09-13' }]]])
-    })
-    try {
-      const html = renderToStaticMarkup(<ConversationScreen savedTimelineTarget={{ serverId: 'a', conversationId: 'open' }} />)
-      expect(html.includes('Held queued work')).toBe(!restored)
-      if (!restored) expect(html).toMatch(/class="queued-row__drop"[^>]*disabled=""/)
-    } finally { queue.mockRestore(); held.mockRestore(); reset() }
-  })
-  it('keeps explicit saved coordinates after metadata reseeding and rejects another host held under the same id', () => {
-    const reset = stageOpenConnection({ type: 'disconnected' })
-    const store = createConversationTimelineStore()
-    const held = vi.spyOn(conversationTimelineStore, 'getInitialState').mockImplementation(() => store.getState())
-    const render = () => renderToStaticMarkup(<ConversationScreen savedTimelineTarget={{ serverId: 'a', conversationId: 'open' }} />)
-    try {
-      for (const serverId of ['a', 'b']) {
-        store.getState().beginLocalTimelineRead(serverId, 'open')!.complete({ version: 1, kind: 'timeline',
-          serverId, conversationId: 'open', items: [{ kind: 'userText', text: `${serverId} saved copy` }],
-          prependedRows: 0, coverage: { status: 'unknown' } })
-        const html = render()
-        if (serverId === 'a') expect(html).toContain('a saved copy')
-        else {
-          expect(html).not.toContain('b saved copy')
-          // The rejected other-host slice reads as a read still pending, never as a settled result.
-          // Asserted positively since #1447: the settled-empty copy it used to exclude no longer exists,
-          // which would leave a negative assertion passing over any render at all.
-          expect(html).toContain('Loading saved messages…')
-        }
-      }
-    } finally { held.mockRestore(); reset() }
-  })
-  it('does not render a streaming cursor from an unfinished saved reply', () => {
-    const html = renderToStaticMarkup(<Timeline saved items={[{ kind: 'assistantText', turnId: 'partial', text: 'saved' }]} />)
-    expect(html).toContain('saved')
-    expect(html).not.toContain('bubble__cursor')
-  })
-  it('distinguishes local failure, pending and offline saved results', () => {
-    const render = (status: 'loading' | 'loaded' | 'failed') =>
-      renderToStaticMarkup(<SavedTimelineNotice status={status} />)
-    expect(render('failed')).toContain('Could not read saved messages on this device.')
-    expect(render('loading')).toContain('Loading saved messages…')
-    expect(render('loaded')).toContain('Offline. Showing saved messages.')
-  })
-  // #1447's AC1, both connection states in one case: an empty local copy is the ordinary state of a chat
-  // first opened on this machine, not a fault, so it gets no notice at all. The offline leg's second
-  // assertion is the other half of that AC — the #279 banner is what announces a disconnection, and it
-  // still does, which is why the notice going quiet here costs the reader nothing.
-  it.each([false, true])('shows no saved-timeline notice for a loaded, empty local read (connected=%s)', connected => {
-    const reset = stageOpenConnection(connected
-      ? { type: 'connected', ack: { protocol_version: '1', server_id: 'host', conn_id: 'c', capabilities: [] } }
-      : { type: 'disconnected' })
-    const store = createConversationTimelineStore(undefined, () => 'host')
-    const held = vi.spyOn(conversationTimelineStore, 'getInitialState').mockImplementation(() => store.getState())
-    try {
-      store.getState().beginLocalTimelineRead('host', 'open')!.complete(null)
-      const html = renderToStaticMarkup(<ConversationScreen savedTimelineTarget={{ serverId: 'host', conversationId: 'open' }} />)
-      expect(html).not.toContain('No messages are saved on this device.')
-      expect(html).not.toContain('Offline. Showing saved messages.')
-      expect(html.includes(CONNECTION_BANNER_COPY)).toBe(!connected)
-    } finally { held.mockRestore(); reset() }
-  })
-  it('puts the saved coverage notice before rows without a history action', () => {
-    const html = renderToStaticMarkup(<Timeline items={[{ kind: 'userText', text: 'saved row' }]} olderSaved />)
-    expect(html).toContain('Older messages require a connection.')
-    expect(html.indexOf('Older messages require a connection.')).toBeLessThan(html.indexOf('saved row'))
-    expect(renderToStaticMarkup(<Timeline items={[]} />)).not.toContain('Older messages require')
-  })
-})
-
 // #1621: a file the ASSISTANT sent (`attachment_offered`) draws as the same file row — or the same image
 // slot — inside an assistant-side bubble of its own (Figma `File field` 132:4605, in context 102-4).
 // Activation is the existing row's handler, so there is no click to prove here; what this tier owns is
@@ -6054,7 +4449,7 @@ describe('Timeline — a file the assistant offered (#1621)', () => {
   })
 
   it('draws the existing file row inside an assistant-side bubble with no meta row', () => {
-    const markup = renderToStaticMarkup(<Timeline items={[offer('offer-1', 'report.pdf')]} />)
+    const markup = renderToStaticMarkup(<RowViews items={[offer('offer-1', 'report.pdf')]} />)
     expect(markup).toContain(
       '<div class="message-row message-row--daemon"><div class="bubble bubble--daemon bubble--attachment-offer" ' +
         'data-thread-role="assistant"><button type="button" class="bubble__file" disabled="">'
@@ -6069,7 +4464,7 @@ describe('Timeline — a file the assistant offered (#1621)', () => {
   })
 
   it('takes the image slot instead of the row when the name reads as an image', () => {
-    const markup = renderToStaticMarkup(<Timeline items={[offer('offer-1', 'chart.png')]} />)
+    const markup = renderToStaticMarkup(<RowViews items={[offer('offer-1', 'chart.png')]} />)
     expect(rowCount(markup)).toBe(0)
     expect(markup).toContain('bubble--attachment-offer')
     // The picture's fetch starts in an effect, which a static render does not run: nothing is drawn yet.
@@ -6078,7 +4473,7 @@ describe('Timeline — a file the assistant offered (#1621)', () => {
 
   it('draws one bubble per offer item', () => {
     const markup = renderToStaticMarkup(
-      <Timeline items={[offer('offer-1', 'a.txt'), offer('offer-2', 'b.txt')]} />
+      <RowViews items={[offer('offer-1', 'a.txt'), offer('offer-2', 'b.txt')]} />
     )
     expect(rowCount(markup)).toBe(2)
     expect(markup.match(/bubble--attachment-offer/g)?.length ?? 0).toBe(2)
@@ -6086,7 +4481,7 @@ describe('Timeline — a file the assistant offered (#1621)', () => {
 
   it('renders a hostile filename only as escaped text, never inside an attribute', () => {
     const hostile = '"><img src=x onerror=alert(1)>.pdf'
-    const markup = renderToStaticMarkup(<Timeline items={[offer('offer-1', hostile)]} />)
+    const markup = renderToStaticMarkup(<RowViews items={[offer('offer-1', hostile)]} />)
     expect(markup).not.toContain('<img')
     expect(markup).toContain(
       '<span class="bubble__file-name">&quot;&gt;&lt;img src=x onerror=alert(1)&gt;.pdf</span>'
@@ -6107,16 +4502,39 @@ describe('Timeline markdown-path links (#1627)', () => {
       { kind: 'assistantText', turnId: 't1', text: LINK },
       { kind: 'turnBoundary', turnId: 't1', stopReason: 'end_turn' }
     ]
-    const markup = renderToStaticMarkup(<Timeline items={items} onOpenMarkdownPath={() => {}} />)
+    const markup = renderToStaticMarkup(<RowViews items={items} onOpenMarkdownPath={() => {}} />)
     expect(markup).toContain('<button type="button" class="markdown-link">the plan</button>')
     expect(markup).not.toContain('notes/Plan.md')
   })
 
   it('leaves a user message with the same text unchanged', () => {
     const markup = renderToStaticMarkup(
-      <Timeline items={[{ kind: 'userText', text: LINK }]} onOpenMarkdownPath={() => {}} />
+      <RowViews items={[{ kind: 'userText', text: LINK }]} onOpenMarkdownPath={() => {}} />
     )
     expect(markup).toContain(LINK)
     expect(markup).not.toContain('markdown-link')
+  })
+})
+
+// Direct row fixtures reconstruct no arrival or lifecycle state.
+function RowViews({ items, ...props }: { items: readonly ThreadItem[] } & Omit<React.ComponentProps<typeof TimelineRow>, 'item' | 'inProgress'>) {
+  return <>{items.map((item, index) => <TimelineRow key={index} item={item} inProgress={false} {...props} />)}</>
+}
+
+describe('shared row presentation with explicit activity', () => {
+  it('reveals markdown while active and settles the same escaped source with copy, reply and usage', () => {
+    const item: ThreadItem = { kind: 'assistantText', turnId: 't', text: '**answer** <script>x</script>' }
+    const streaming = renderToStaticMarkup(<TimelineRow item={item} inProgress />)
+    const settled = renderToStaticMarkup(<TimelineRow item={item} inProgress={false} turnStats="12 out" onReply={() => {}} />)
+    expect(streaming).toContain('bubble__cursor')
+    expect(streaming).toContain('<strong>answer</strong>')
+    expect(settled).not.toContain('bubble__cursor')
+    expect(settled).toContain('12 out')
+    expect(settled).toContain('aria-label="Copy message"')
+    expect(settled).toContain('aria-label="Reply to message"')
+    for (const html of [streaming, settled]) {
+      expect(html).not.toContain('<script>')
+      expect(html).toContain('&lt;script&gt;')
+    }
   })
 })

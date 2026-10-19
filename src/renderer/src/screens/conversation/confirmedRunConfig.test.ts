@@ -6,7 +6,7 @@ import { foldWriteEvent } from '../../store/runSettingsWriteBridge'
 import { subscribeConfirmedRunConfig } from './confirmedRunConfig'
 
 afterEach(() => vi.useRealTimers())
-function setup() {
+function setup(ownsSnapshot = true) {
   vi.useFakeTimers()
   let listener: (event: StampedDaemonEvent) => void = () => {}
   let contextChanged = () => {}
@@ -17,7 +17,7 @@ function setup() {
   const off = subscribeConfirmedRunConfig({
     onDaemonEvent: fn => { listener = fn; return unsubscribe },
     subscribeContext: fn => { contextChanged = fn; return unsubscribe },
-    getContext: () => context, writes, config, refresh, log, setSessionId
+    getContext: () => context, writes, config, refresh, log, setSessionId, ownsSnapshot: () => ownsSnapshot
   })
   const emit = (event: DaemonEvent, serverId = 'host') => listener({ ...event, serverId })
   const report = (permissionMode = 'bypassPermissions', sessionId = 'session') => emit({
@@ -34,6 +34,19 @@ function setup() {
   const switchTo = (conversationId: string, serverId: string) => { context = { conversationId, serverId }; contextChanged() }
   return { config, writes, refresh, log, off, emit, report, pick, settle, switchTo, unsubscribe }
 }
+
+it('confirms authoritative readings without becoming a second snapshot writer', () => {
+  const h = setup(false)
+  h.report('default'); h.pick('plan'); h.settle()
+  expect(h.refresh).toHaveBeenCalledTimes(1)
+  h.report('default'); vi.advanceTimersByTime(500)
+  expect(h.refresh).toHaveBeenCalledTimes(2)
+  h.report('plan'); vi.advanceTimersByTime(15_000)
+  expect(h.log).toHaveBeenCalledWith('confirmed')
+  expect(h.refresh).toHaveBeenCalledTimes(2)
+  expect(h.config.getState().snapshot).toBeNull()
+  h.off()
+})
 
 it('retains reports while pending and acknowledged, retries an early old reading, then stops on confirmation', () => {
   const h = setup()

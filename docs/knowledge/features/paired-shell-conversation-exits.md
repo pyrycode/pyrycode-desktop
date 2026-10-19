@@ -1,16 +1,17 @@
 # Paired shell — conversation exits and stamps
 
-What happens to the open thread when its conversation is deleted or archived, and the last-read and view stamps written as the user moves between conversations.
+Conversation activation, configuration refresh and active exits. Legacy last-read and view stamps
+are retired; navigation does not establish read evidence.
 
 Part of [Paired shell (list/thread two-pane desktop shell)](paired-shell.md); see that document for what the package does, its edge cases and its links.
 
 ## Confirmed deletion
 
 [Confirmed conversation deletion](paired-shell-conversation-deletion.md) owns the stamped-origin
-callback and host-ownership decision. An explicitly owned confirmation clears its exact retained
-slice even with another conversation or no conversation active. Only an owned active deletion runs
-`exitActiveConversation`'s clear-before-navigation sequence; its mismatched-id/no-active gate remains
-unchanged. The archive predicate below continues using that gated helper directly.
+callback and host-ownership decision. Only an owned active deletion runs
+`exitActiveConversation`'s clear-before-navigation sequence. Inactive confirmation leaves the
+legacy holder unchanged; authoritative item and pending-send removal has its own runtime boundary.
+The archive predicate below continues using the gated active-exit helper directly.
 
 ## The archive exit (`conversationArchivedBridge.ts`, #653)
 
@@ -161,9 +162,9 @@ export function reseededActiveConversation(
   `conversations` reply is its *authoritative answer*, decoded through the same main-side path every
   other reader of this snapshot trusts. Reading the announcement instead would put unvalidated daemon
   text into the snapshot, bypassing that path.
-- **It is not `activateConversation`.** No timeline reset, no session-id clear, no run-config clear, no
-  navigation — the id has not changed, so none of that is owed, and calling it here would blank the
-  thread the operator is reading.
+- **Reseeding changes only the active payload.** It neither clears session/configuration nor
+  navigates or requests configuration. Calling `activateConversation` here would cause unnecessary
+  configuration requests on list refresh, even though same-ID activation preserves held settings.
 
 Wired in `PairedShell` beside the archive-exit bridge, through `activateDeps`'s own getter/setter — no
 new deps object:
@@ -181,7 +182,7 @@ reply currently being handled.
 
 **Security residual, accepted rather than fixed: a cross-server id collision.** Two paired servers can
 both claim one conversation id
-([`selectExclusiveConversationIdsFor`](conversation-list-store.md#the-per-server-drop-and-its-stricter-sibling-selector-since-1196)
+([`selectExclusiveConversationIdsFor`](conversation-list-store-per-server-keying.md#the-per-server-drop-and-its-stricter-sibling-selector-since-1196)
 is the precedent for that threat). Server B's list reply carrying server A's open chat's id would re-seed A's snapshot with
 B's name, `cwd` and `workspace_label` — this bridge refuses ambiguity only *within* one reply, not across
 two. The obvious tightening — joining the reply's origin against the id's attributed server before
@@ -215,135 +216,23 @@ rewritten by `conversation_updated`" — true before this bridge, false since.
 
 ## The last-read stamp (`conversationLastReadBridge.ts`, #777)
 
-[Conversation last-read store](conversation-last-read-store.md) (#775) shipped with a write path and no
-caller. #777 is that write path: **the open conversation's mark equals its own held timeline item
-count**, restored at two points — opening (above) and, here, content landing while it stays open. Both
-are the same write of the same quantity (`stampLastReadFor`), which is why this is one write function
-called from two places rather than two.
+The local item-count writer and `conversationTimelineStore` subscription were removed in
+[#2028](https://github.com/pyrycode/pyrycode-desktop/issues/2028), including `stampLastReadFor`
+and its dependency wiring. Opening, reopening and incoming legacy timeline changes no longer
+record local read counts. The former teardown re-stamp of a missing slice as `0` is unreachable.
 
-`useConversationLastRead()` is mounted in `PairedShell`, beside its other headless hooks — deliberately
-**not** app-level, the opposite of every other bridge under `store/`. Every existing app-level bridge
-exists because it must observe a conversation the operator has *never opened* (`conversationActivityBridge.ts`
-says so in as many words). This one only ever writes the **open** conversation, and "open" is a concept
-that exists only inside the paired shell:
-
-```ts
-useConversationLastRead()   // #777 — restore point 2, subscribes to conversationTimelineStore
-```
-
-It subscribes to **`conversationTimelineStore`**, not `window.pyry.onDaemonEvent` — the repo's first
-production store→store subscription. Two facts forced that: the composer's optimistic echo writes the
-keyed timeline slice directly (`composerSend.ts:88`) with no IPC arm behind it, so a daemon-event listener
-would miss the operator's own sent message and mark his own open chat unread; and a second
-`onDaemonEvent` listener would race `useTimelineBridge`'s fan-out (`timelineBridge.ts:432`) on listener
-registration order. Observing the store instead has no such race — zustand's `setState` reassigns state
-and only then calls listeners, so a read inside one always sees the value just written.
-
-The write itself is an **assignment of the sampled count, never an increment** — a fact about the
-`threadTimeline` reducer, not a preference. A continuing `assistantDelta` coalesces into the tail bubble
-and leaves `items.length` unchanged, `toolResult` fills a held row in place, and `turnState` /
-`stallDetected` / `apiRetry` / `reconnected` never touch `items` at all — a counter bumped
-on arrival would be wrong on most arms. The common case (an unchanged count) re-records an identical
-mark and `recordLastRead`'s own `===` guard hands back the state object, so zustand's `Object.is`
-short-circuit fires and nothing downstream wakes.
-
-AC4 ("a conversation that is not open never acquires a mark") is **available by construction, not by a
-guard**: the listener names exactly one id — `getOpenConversationId()`'s — on every path, so a
-conversation that is not open is never an argument to `recordLastRead`. There is no filter to forget
-because the wrong write is structurally unavailable, the same posture `conversationLastReadStore`'s hard
-import constraint takes (see that doc). It re-stamps on **every** timeline emission, including a fold
-into a background conversation's slice — filtering to "did the open conversation's slice change" would
-need the previous state, which the deliberately nullary listener seam (`() => void`, not zustand's
-`(state, prevState)`) rules out.
-
-This bridge imports `activeConversationStore`, which every other bridge under `store/` bans importing for
-itself (`timelineBridge.ts:236-240`, `conversationActivityBridge.ts:183-184`). That ban stops an
-*arriving event that carries its own `conversationId`* from being misattributed to the conversation on
-screen — the `?? activeConversation` fallback the #675 family removed. Here nothing arrives: there is no
-event and no `conversationId` on the wire, so there is no attribution to get wrong. The open conversation
-is the subject of the quantity being written, not a fallback for a missing id.
-
-**Reachable edge case, first found by code review on PR #792 — resolved for the pairing-end path by #779,
-still open for the delete/archive path.** Both teardown paths that end a pairing or an active conversation
-clear the timeline store **before** they clear the active conversation: `clearPairingScopedState` calls
-`clearAllTimelines()` ahead of `clearActiveConversation()`; `exitActiveConversation` calls
-`clearTimelineFor(conversationId)` ahead of `clearActiveConversation()`. Either clear emits from
-`conversationTimelineStore`, which this bridge is subscribed to for as long as `PairedShell` is mounted —
-both teardown paths run *inside* that mounted window. The listener fires mid-teardown, reads
-`getOpenConversationId()` (still the conversation being torn down — `activeConversationStore` hasn't
-cleared yet), reads its now-absent timeline slice, and writes a **spurious `0`** over what may have been a
-true, higher mark — persisted, since [#776](conversation-last-read-store.md). Concretely: archiving or
-deleting the conversation you have 20 rows read into, or ending the pairing while it's open, drops its
-last-read mark to `0` on the way out.
-
-This is what falsified `clearPairingScopedState.ts`'s former claim that its clears are order-independent —
-`clearAllTimelines` synchronously triggers a read of `activeConversationStore` and a write to
-`conversationLastReadStore` through this listener, coupling two of the helper's effects through an observer
-neither docstring used to account for. PR #792's own follow-up named two options: swap the clear order at
-both sites, or state the coupling explicitly and pin it with a test. **[#779](conversation-last-read-store.md)
-took the second option, for `clearPairingScopedState` only**: it added `clearAllLastRead()` as the helper's
-seventh effect, placed **last** — after `clearAllTimelines()` — specifically so this re-mint is wiped, in
-memory and on disk, before the helper returns, and the coupling is now pinned by a dedicated regression test
-that wires the real `subscribeConversationLastRead` against isolated stores (the only way the hazard is
-reachable under `environment: 'node'`). See [§ #779 above](paired-shell-pair-server-route.md#the-pairserver-route-152) for the ordering
-argument and why it must also run **last** overall, not merely after `clearAllTimelines`.
-
-**`exitActiveConversation` was out of #779's scope and still has the bare hazard.** Deleting or archiving
-the open conversation still writes and persists the spurious `0` with no floor to wipe it — that helper has
-no whole-map clear to place after `clearTimelineFor`, only per-conversation ones. No acceptance criterion of
-\#779 is violated (its ACs are pairing-boundary-scoped), and no acceptance criterion of #652/#653 is violated
-either (the write still names only the open conversation, and `0` is its honest count at that instant), but
-the hazard PR #792 first flagged is only half closed. A future ticket picking this up should start from the
-code review on PR #792 and [#779's PR (#798)](https://github.com/pyrycode/pyrycode-desktop/pull/798) rather
-than re-deriving either half.
+`useConversationLastRead()` remains mounted in `PairedShell` and calls only `useReadPublication()`.
+Removing the entire hook would also remove authoritative publication. That publisher still requires
+[committed visible content](conversation-shell.md#authoritative-thread-read-publication); navigation
+itself supplies no read evidence. The local count store, persistence and pairing/per-server clears
+remain for other consumers; see [the retained store](conversation-last-read-store.md).
 
 ## The view stamp (`activateConversation.ts`, #786)
 
-[Conversation timeline holder](conversation-timeline-holder.md)'s `markViewed` — the store's only
-tail-writer, and the whole enforcement of "least recently **viewed**" eviction — shipped with no
-production caller (#755/#756/#757). Every retained slice was therefore never-viewed, and eviction silently
-degraded to first-write order: exactly the failure the word "viewed" exists to prevent. #786 is that
-caller, wired at the same seam as #777's last-read stamp — `ActivateConversationDeps` gains a sixth
-required member, called unconditionally at the end of `activateConversation`, **after**
-`stampLastRead` and **outside** the id-change gate:
-
-```
-previous = getActiveConversation()
-if (previous?.id !== conversation.id) { dispatchTimeline({type:'reset'}); clearSessionId() }
-setActiveConversation(conversation)
-stampLastRead(conversation.id)      // #777, unchanged
-markViewed(conversation.id)         // #786, new — outside the gate, last
-```
-
-**Outside the gate, not inside.** `markViewed`'s already-the-tail branch is documented on the holder as
-the *common* case, justified by this very seam: `onOpen` fires on every row click, including a re-click of
-the already-open row. Inside the gate that branch would be unreachable — after a real switch the tail is
-always the *previous* conversation, never the one being opened — leaving a shipped, tested branch dead.
-Outside the gate is also free: the store's no-churn guard hands back the state object unchanged, so no map
-is cloned and no subscriber wakes.
-
-**After `setActiveConversation`, and after `stampLastRead` — the ordering is load-bearing for the first,
-free for the second.** `markViewed` can *create* a slice, and creating one notifies
-`conversationTimelineStore`'s subscribers — among them #777's `useConversationLastRead`, which reads
-`getOpenConversationId()` and re-stamps whatever conversation that names. Run before the set, that
-listener would fire while the *previous* conversation is still open, writing an unrequested mark for it.
-Run after, it re-records the mark `stampLastRead` just wrote a line earlier, so `recordLastRead`'s `===`
-guard (see [Conversation last-read store](conversation-last-read-store.md)) returns the state object,
-wakes nobody, and performs no `localStorage` write — the cascade terminates at depth 2, synchronously,
-with no `await` anywhere. The order relative to `stampLastRead` itself is not forced by any of this: that
-function never reads the open conversation, so either order records the same mark. Appending after it
-was chosen because it leaves #777's line untouched.
-
-**Cross-wire hazard, named rather than defended by type.** `markViewed`, `stampLastRead` and, since
-[#1166](#the-run-configuration-and-model-list-ask-activateconversationts-modellistbridgets-1166) below,
-`requestConversationConfig` all share the *identical* signature — `(conversationId: string) => void` — so
-swapping any two at a deps site compiles, and every `toHaveBeenCalledWith(conversation.id)` spy assertion
-still passes for all three. What catches a swap is that the three land in three different places: with
-real deps wired, a swap leaves one conversation unstamped or unpromoted **and** no request sent, so
-\#777's, #786's and #1166's own tests fail together (`activateConversation.test.ts`'s `realDeps` cases). At
-the one production site (`activateDeps` above) the defence is that the three arrow bodies are visibly
-different and each member name matches the effect it performs — no branded type for a three-member wiring
-object.
+`activateConversation` no longer calls `markViewed`, resets the flat timeline or creates a keyed
+slice. Creation likewise no longer calls `initializeCreatedTimeline`. The legacy holder's standalone
+methods and tests remain until #2030; their eviction policy is not production navigation policy.
+Production creation and opening use the host-qualified [thread runtime](thread-runtime.md).
 
 ## The run-configuration and model-list ask (`activateConversation.ts`, `modelListBridge.ts`, #1166)
 
@@ -356,25 +245,25 @@ inert footer until one of those edges eventually fired. Since pyrycode#2085 the 
 `session_id` and its stored model, effort and permission mode (rather than the old all-zero reply), which
 is what makes asking immediately on open worth doing.
 
-`ActivateConversationDeps` gains a **seventh, required** member, called **last** and **outside** the
-id-change gate. Every activation reaches it, including re-opening the same chat;
+`ActivateConversationDeps.requestConversationConfig` runs last and outside the
+host-or-ID-change gate. Every activation reaches it, including re-opening the same chat;
 requests require the unique owning host to be connected:
 
 ```
 previous = getActiveConversation()
-if (previous?.id !== conversation.id) { dispatchTimeline({type:'reset'}); clearSessionId() }
+if (previous?.id !== conversation.id || previous?.serverId !== conversation.serverId) {
+  clearSessionId(); clearRunConfig()
+}
 setActiveConversation(conversation)
-stampLastRead(conversation.id)              // #777, unchanged
-markViewed(conversation.id)                 // #786, unchanged
-requestConversationConfig(conversation.id)  // #1166, new — outside the gate, last (#1231 widened its body)
+requestConversationConfig(conversation.id)
 ```
 
 `PairedShell.activateDeps.requestConversationConfig` checks current unique ownership and
 host status before requesting settings, context usage, the model list and system prompt.
 The [context ask](reported-context-store.md#how-it-works) runs once beside the settings ask,
 including on same-chat reopening, never on a sheet open or settings refresh. Offline activation
-still records local viewing. Opening never requests history. Replies land through app-lifetime
-subscribers; none of these activation asks retries.
+updates the active payload without a local view/read stamp. Content recovery belongs separately to
+the thread runtime. Replies land through app-lifetime subscribers; none of these activation asks retries.
 
 Creation confirmation can arrive before its list row. The shell preserves local activation
 and waits for the creating host's first authoritative list update before initializing once.
@@ -424,13 +313,6 @@ mechanism.
 request, so there is nothing to correlate against. Filed as
 [#1192](https://github.com/pyrycode/pyrycode-desktop/issues/1192).
 
-**Security consequence: the tail is no longer an operator-only region.** `activateConversation` is also
-reached ungated from a daemon-confirmed create (`useConversationCreatedNav`, above) — the store's own
-docstring used to claim only the operator's activation could promote a key to the tail; #786 falsifies
-that claim, and the holder's docstring and package overview were corrected in the same change (see
-[Conversation timeline holder § The eviction invariant](conversation-timeline-holder.md#how-it-works) for
-the corrected reasoning and why it was accepted rather than gated — architect security review, PASS).
-
 ## The run-configuration clear (`activateConversation.ts`, `exitActiveConversation.ts`, both stores, #1167)
 
 The snapshot half of the run-configuration defect is bounded by #1166 (asks on every activation) and
@@ -472,26 +354,18 @@ newly opened one — the one arrow of the four that never self-heals, since noth
 nothing pushes it unsolicited. **The member is not renamed** for the fourth store it now covers — it
 names the act, not the store list, and its signature stays `() => void` at both declaration sites.
 
-`activateConversation`'s full sequence, current as of #1250 (extending the #1166 snippet above by one
-line inside the gate, widened again by #1231 and #1250 without a new line of its own — the addition is
-inside `clearRunConfig`'s own body, shown above):
-
-```
-previous = getActiveConversation()
-if (previous?.id !== conversation.id) {
-  dispatchTimeline({type:'reset'}); clearSessionId(); clearRunConfig()   // #1167, new — inside the gate
-}
-setActiveConversation(conversation)
-stampLastRead(conversation.id)              // #777, unchanged
-markViewed(conversation.id)                 // #786, unchanged
-requestConversationConfig(conversation.id)  // #1166, unchanged — outside the gate, last
-```
+`activateConversation` clears session and configuration when either the conversation ID or the
+renderer-owned `serverId` changes (#2068), before publishing the incoming payload. Two hosts with
+colliding conversation IDs therefore have separate configuration lifetimes. Host metadata appearing
+or disappearing also ends the lifetime; when both hosts are absent, legacy same-ID reopening remains
+unchanged. Every activation refreshes the payload and requests configuration. Same-host/same-ID
+reopening preserves held configuration, including confirmed choices, while refreshing it.
 
 **Placement differs between the two helpers, and each placement is load-bearing:**
 
-- **`activateConversation`** calls it *inside* the id-change gate, alongside `clearSessionId` — so a
-  re-open of the chat already open (AC2) leaves the run configuration standing, exactly like the timeline
-  and the session id. Being inside the gate also puts it ahead of `requestConversationConfig`, which
+- **`activateConversation`** calls it *inside* the host-or-ID-change gate, alongside `clearSessionId` — so a
+  re-open of the same host's chat leaves the run configuration and session id standing. Being
+  inside the gate also puts it ahead of `requestConversationConfig`, which
   sits last and outside the gate: the ordering #1166 documents for `clearSessionId` applies unchanged
   here — the clear must precede the ask, or a reply landing in the same tick would be blanked by the
   clear sent to repair it.
@@ -499,14 +373,13 @@ requestConversationConfig(conversation.id)  // #1166, unchanged — outside the 
   before `navigateToList` — there is no successor chat to preserve it for, so unlike the activate path
   there is no gate to sit inside.
 
-**Cross-wire hazard, worse here than at `activateConversation`'s existing three-identical-signature
-note.** `clearRunConfig` is nullary, so on `ActivateConversationDeps` it is swappable with
+**Nullary dependency swaps still compile.** `clearRunConfig` is nullary, so on
+`ActivateConversationDeps` it is swappable with
 `clearSessionId`, and on `ExitActiveConversationDeps` with `clearSessionId`, `clearActiveConversation`
 and `navigateToList` — every swap compiles, and a bare `toHaveBeenCalled()` passes for both halves. The
-defence is unchanged in kind: both test files' `realDeps` integration cases wire the real
-`createRunConfigStore`/`createRunSettingsWriteStore`/`createSystemPromptStore` (since #1231)/
-`createSystemPromptWriteStore` (since #1250) instances alongside the other real stores, so a swap
-leaves one store uncleared and another wrongly cleared, failing several cases together.
+defence uses existing real-store dependency factories: activation and exit tests check actual
+session/configuration state, and confirmed-deletion tests include settings and both prompt stores.
+Spy call counts alone cannot prove that the right store was cleared.
 
 **Consequence, already carried by the session-id clear and now widened by one more reading.** Clearing
 the snapshot drops `usedTokens`/`windowTokens` with it, so the footer's context-usage reading unmounts
@@ -518,7 +391,7 @@ window, not a regression — see [Run configuration store § Scoped to the open 
 stores inherit the same reasoning rather than re-arguing it.** An unpair leaves all four stores held,
 but no footer renders until a chat is opened, and that open clears them by construction through
 `activateConversation` — a member there would guard state nothing can read. That mirrors this document's
-[conversation-boundary exclusions](paired-shell-conversation-deletion.md#the-delete-exit-exitactiveconversationts-conversationdeletedbridgets-652) for `exitActiveConversation`'s five clears.
+[conversation-boundary exclusions](paired-shell-conversation-deletion.md#the-delete-exit-exitactiveconversationts-conversationdeletedbridgets-652) for `exitActiveConversation`'s retained clears.
 
 The Playwright drive this ticket added, `e2e/run-config-scoped-to-conversation.spec.ts`, is deliberately
 not the shape of the sibling `run-config-cross-conversation.spec.ts` that [Run configuration
@@ -530,9 +403,3 @@ effort label locator down to a count of 0 immediately after the switch (the dura
 any reply), then checks it again after pushing B's own correlated reply (a second, independent detector:
 with the clear deleted, A's confirmed override would still beat B's snapshot and the label would read
 A's value instead of B's).
-
-See [Conversation timeline holder](conversation-timeline-holder.md) for `markViewed`'s own branches
-(already-tail no-churn, present-not-tail move, absent-creates-at-tail) and why creating on an absent key
-is load-bearing: the operator opens a conversation before any event for it has arrived, so a no-op there
-would let a later fold create the slice at the head, making the conversation on screen the next eviction
-victim.

@@ -10,7 +10,7 @@ export type ThreadQueryState =
   | { type: 'loading'; purpose: Purpose }
   | { type: 'failed'; purpose: Purpose; reason: string; retryable: true }
 export type ThreadQueryInput =
-  | { type: 'sync'; serverId: string; conversationId: string | null; connected: boolean; restorePending?: boolean }
+  | { type: 'sync'; serverId: string; conversationId: string | null; connected: boolean; restorePending?: boolean; initialize?: boolean }
   | { type: 'daemon'; event: Extract<StampedDaemonEvent, { type: 'threadReply' | 'threadQueryFailed' | 'threadUpdate' | 'threadRepairNeeded' }> }
   | { type: 'older' | 'retry'; serverId: string }
 export interface ThreadQueryDeps {
@@ -19,11 +19,12 @@ export interface ThreadQueryDeps {
   /** Fresh across attempts and coordinator lifetimes, e.g. the caller's UUID factory. */
   requestId: () => string
   onState: (serverId: string, conversationId: string, state: ThreadQueryState) => void
+  onComplete?: (serverId: string, conversationId: string, epoch: string, version: number) => void
   log?: { event: (fields: { event: string; code: string }) => void }
 }
 type Scope = { id: string; restorePending: boolean; catchUp: boolean; older: boolean; recovery: boolean; resetRecovery: boolean;
-  ready: boolean; exhausted: boolean; state: ThreadQueryState }
-type Pending = { scope: Scope; requestId: string; query: ThreadQuery; generation: symbol | undefined;
+  ready: boolean; exhausted: boolean; state: ThreadQueryState; initialize?: boolean }
+type Pending = { scope: Scope; requestId: string; query: Exclude<ThreadQuery, { type: 'thread_read_tool_body' | 'thread_read_children' }>; generation: symbol | undefined;
   recovery: boolean; resetRecovery: boolean; cancelled: boolean; sent: boolean; captured?: { epoch: string; version: number };
   batch?: NonNullable<ReturnType<ThreadItemStore['beginBatch']>>; timer?: ReturnType<typeof setTimeout> }
 type Host = { connected: boolean; scope?: Scope; pending?: Pending }
@@ -65,7 +66,8 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
     let query: ThreadQuery
     if (s.catchUp) {
       query = { type: 'thread_catch_up', payload: { conversation_id: s.id,
-        epoch: snapshot?.epoch ?? '', version: snapshot?.checkpoint ?? 0 } }
+        epoch: snapshot?.epoch ?? '', version: s.initialize ? 0 : snapshot?.checkpoint ?? 0 } }
+      s.initialize = false
       s.catchUp = false
     } else {
       const boundary = snapshot?.ranges.at(-1)?.start
@@ -99,6 +101,8 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
     if (host === null) return
     if (!p || p.requestId !== event.requestId || p.scope.id !== event.conversationId) return
     if (event.type === 'threadQueryFailed') { fail(host, h, p, event.reason); return }
+    if ('projection' in event.reply.payload) return
+    if (event.reply.type === 'thread_tool_body' || event.reply.type === 'thread_children') return
     const reply = event.reply, value = reply.payload
     if (value.conversation_id !== p.scope.id) return
     deadline(host, h, p)
@@ -109,8 +113,7 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
     if (reply.type === 'thread_reset') {
       deps.log?.event({ event: 'thread-query-reset', code: 'reset' })
       release(h, p)
-      store().deleteConversation(host, s.id)
-      store().acceptEpoch(host, s.id, value.epoch)
+      store().acceptEpoch(host, s.id, value.epoch, true)
       s.catchUp = true; s.ready = false; s.exhausted = false
       if (p.resetRecovery) {
         present(host, s, { type: 'failed', purpose: 'catch-up', reason: 'recovery', retryable: true })
@@ -155,6 +158,7 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
     release(h, p)
     deps.log?.event({ event: 'thread-query-completed', code: p.query.type })
     if (p.query.type === 'thread_catch_up') { s.catchUp = false; s.ready = true; s.recovery = false; s.resetRecovery = false }
+    if (p.query.type === 'thread_catch_up') deps.onComplete?.(host, s.id, v.epoch, v.version)
     if ('older_exists' in v) s.exhausted = !v.older_exists
     present(host, s, { type: 'idle' }); pump(host, h)
   }
@@ -172,6 +176,7 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
           present(host, pending.scope, { type: 'idle' })
         }
         h.scope = value.conversationId === null ? undefined : { id: value.conversationId,
+          initialize: value.initialize,
           restorePending: value.restorePending ?? false, catchUp: value.connected, older: false,
           recovery: false, resetRecovery: false, ready: false, exhausted: false, state: { type: 'idle' } }
       }
@@ -195,7 +200,12 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
       if (e.type === 'threadReply' || e.type === 'threadQueryFailed') receive(e, h)
       else if (e.type === 'threadUpdate') {
         if (e.conversationId !== e.update.payload.conversation_id) return
-        if (store().applyUpdate(e.serverId, e.update).type === 'repair') repair(e.serverId, h, e.conversationId)
+        const applied = store().applyUpdate(e.serverId, e.update)
+        if (applied.type === 'repair') repair(e.serverId, h, e.conversationId)
+        else if (applied.type === 'applied' && h.scope?.id === e.conversationId && h.scope.ready) {
+          const snapshot = store().snapshot(e.serverId, e.conversationId)
+          if (snapshot && !snapshot.repair) deps.onComplete?.(e.serverId, e.conversationId, snapshot.epoch, snapshot.checkpoint)
+        }
       } else {
         const snapshot = store().snapshot(e.serverId, e.conversationId)
         if (snapshot) {

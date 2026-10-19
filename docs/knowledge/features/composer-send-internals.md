@@ -4,113 +4,85 @@ Part of [Composer send](composer-send.md).
 
 ## How it works
 
-The submit helper publishes the echo, then sends through the bridge; the controlled
-container clears its draft only when that bridge call returns successfully.
+The submit helper retains ordinary sends before calling the bridge. The controlled
+container clears only the unchanged captured draft after successful submission.
+Ack-only reset commands use the same bridge path without local retention.
 
 ### 1. The pure submit helper — `composerSend.ts`
 
-Framework-free and React-free, co-located with the screen and mirroring `pairingState.ts` / `messageViewModel.ts`: the effects are **injected**, so the helper is a pure, deterministic function tested with plain spies (no React, no store, no Electron).
+`submitMessage` is framework-free and React-free. Its bridge, pending store,
+identity, clock, diagnostics and attachment take are injected, so unit tests can
+exercise the actual pending inventory without mounting React or Electron.
 
 ```ts
-// src/renderer/src/screens/conversation/composerSend.ts — RENDERER ONLY
 export interface ComposerSendDeps {
-  serverId?: string   // attribution of main routing refusal; outside the wire payload
+  serverId: string
+  threadSend: {
+    store: ReturnType<typeof createThreadSendStore>
+    deviceId: string | null
+    version?: number
+  }
   diagnose?: (record: MessageLifecycleDiagnostic) => void
   sendCommand: (command: RendererCommand) => void
-  dispatch: (event: ThreadEvent) => void
-  dispatchFor: (conversationId: string, event: ThreadEvent) => void   // #756
   newMessageId: () => string
-  now?: () => number   // #1013 — optional, no Date.now fallback
-  takeAttachments?: () => PendingAttachmentTake   // #1039, reworked #1055 — optional, destructive read + undo
+  now?: () => number
+  takeAttachments?: () => PendingAttachmentTake
 }
 
 export function submitMessage(text: string, conversationId: string | null, deps: ComposerSendDeps): boolean
 ```
 
-Current signature — see [conversation timeline holder § Configuration and usage](conversation-timeline-holder.md)
-for `dispatchFor`'s target. `dispatch` writes the same `ThreadEvent` into the flat `timelineStore` this
-section originally described as `sessionStore`/`SessionAction`; that retarget happened in
-[#179](../codebase/179.md) and the active-conversation `conversationId` parameter was added in #448 (see
-[conversation timeline store](conversation-timeline-store.md) for the current bridge-side model). [#756](../codebase/756.md)
-added `dispatchFor`, **required** rather than an arity widening of `dispatch` — unlike
-`subscribeTimeline`'s 20 call sites, this deps object had only 6, so requiring the field cost six
-mechanical test edits and buys a compile error for "forgot to wire it." `submitMessage` builds the
-`userText` echo once and hands the same `ThreadEvent` reference to both `dispatch` and `dispatchFor(conversationId, echo)`,
-under the conversation the message was sent to — safe because `reduceTimeline` is pure and always builds
-fresh arrays.
+The [thread runtime](thread-runtime.md#sending-and-authenticated-identity) supplies
+captured ownership; private identity material never reaches this helper.
+`submitMessage` follows this contract:
 
-[#1013](https://github.com/pyrycode/pyrycode-desktop/issues/1013) added `now?: () => number` — the echo's
-clock, read once as `createdAt: deps.now?.()` when the `userText` `ThreadEvent` is built, so the stamp
-that reaches `dispatch` and `dispatchFor` is the same value in both (the "built once" property above,
-now also true of the timestamp). It goes the **opposite** way from `dispatchFor`'s own #756 precedent, and
-for a reason that precedent did not face: `dispatchFor`'s six call sites made *requiring* it cheap (six
-mechanical test edits for a compile error on "forgot to wire it"); requiring `now` here would not merely
-cost edits — this deps object now has thirteen call sites, not `dispatchFor`'s six — it would **redden**
-every whole-object `toHaveBeenCalledWith` assertion on the echo in `composerSend.test.ts`, since every
-deps literal would then supply a clock and every echo would carry a defined `createdAt` where those
-assertions name none. ([#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213) paid exactly
-that price for `messageId` below, which *is* required in this deps object as `newMessageId` and so is
-always defined: five such assertions gained the field. That cost was accepted because the id is not
-optional at the producer — the wire frame needs it either way — whereas a clock genuinely may be
-absent.) So `now` is optional with **no `Date.now` fallback** —
-absent clock means no stamp, the same rule [conversation timeline store](conversation-timeline-store.md)'s
-`translateTimelineEvent`/`subscribeTimeline` follow for the assistant side. The cost: the wiring at `ConversationScreen.tsx`'s `Composer.sendText` — the one production call site
-that builds a `ComposerSendDeps` literal and now includes `now: Date.now` — is not compile-enforced; a
-forgotten `now` there would silently ship unstamped echoes. `composerSend.test.ts` pins the wired
-behavior with its own spec instead of relying on the type system. See [Thread timeline §
-Types](thread-timeline-internals.md#types) for the full field-pair contract and why the clock rides the event
-rather than a `reduceTimeline` parameter.
-
-**`message_id` is minted once and used twice — the wire command and the echo**
-([#1213](https://github.com/pyrycode/pyrycode-desktop/issues/1213)). [#179](../codebase/179.md) had
-retired the original "reuse the id so the daemon's re-echo dedupes" rationale, and that stays retired: in
-interactive mode the daemon streams no user-message event, so the echo is the sole source of the user
-message and needs no dedup key. #1213 puts the id back on the echo (`ThreadEvent.userText.messageId`) for
-an unrelated purpose — **correlation** with the queued row the daemon draws when it parks this message
-mid-turn (`QueuedItem.message_id`, pyrycode#2092) — so a later cancel
-([dequeue message envelope](dequeue-message-envelope.md)'s `dropQueuedMessage`) can find this exact echo
-again. It also correlates local delivery status. Both the ID and attachments survive a bridge
-exception on the failed echo; its Not sent label makes the outcome explicit without claiming
-daemon delivery. See [Thread timeline §
-Types](thread-timeline-internals.md#types) for the full field-pair contract.
-
-`submitMessage` contract:
-
-1. Trim `text`. Whitespace-only input or a null conversation ID returns `false` with no effects, including no attachment take or clock read.
-2. Mint `message_id` once and take pending attachments once. Build the payload with the selected conversation, trimmed text and any attachment IDs.
-3. Publish one `userText` event with the same ID, original timestamp and attachments to both the active timeline and `dispatchFor(conversationId, echo)` before calling the bridge. This ordering lets synchronous delivery status find the echo in both stores.
-4. Call `deps.sendCommand(sendMessageCommand(payload, deps.serverId))`. A successful return yields `true`, so the container clears only the selected draft. This means bridge acceptance, not socket write or daemon acknowledgement.
-5. On a synchronous bridge exception, swallow the exception, roll back the attachment take and dispatch `messageDelivery{messageId,status:'not-sent'}` to both stores. Return `false` so the draft and pending attachments remain available for resubmission. The existing echo keeps its text and attachments and shows Not sent; no ordinary sent echo is added. Diagnostics use fixed categories and never log the caught object.
+1. Trim `text`. Whitespace-only input, a null conversation ID or a missing host
+   returns `false` before minting an ID, taking attachments or reading the clock.
+2. Mint `message_id` once and take pending attachments once. Build the payload with
+   the captured conversation, trimmed text and attachment IDs in pending-set order.
+3. Emit the content-free `message-queued` diagnostic. For ordinary sends, build one
+   `userText` event with that ID, optional timestamp and attachments, then call
+   `retain(host, conversation, deviceId, event)` before the bridge. Synchronous
+   feedback can therefore find the row.
+4. Skip only that retention step when trimmed text matches the module-private
+   `INTERCEPTED_RESET_COMMAND = /^\/(?:clear|reset)(?:\p{White_Space}|$)/u`.
+   Matching is case-sensitive and permits arguments after Unicode whitespace.
+   Neither a pending row nor a new `localSendPending` is created. `/clear-cache`,
+   `/resetfoo`, `/Clear`, `/compact` and `/clear\u200bargs` remain ordinary sends.
+5. Call `deps.sendCommand(sendMessageCommand(payload, deps.serverId))` with the same
+   payload for both paths. Clear scoped reports at `threadSend.version ?? 0`, then
+   return `true`. The container can clear its submitted draft without waiting for
+   a socket write or daemon acknowledgement.
+6. On a synchronous bridge exception, emit `message-bridge-failed`, roll back the
+   attachment take and send `not-sent` feedback to the pending store. Return
+   `false` to preserve the draft. A still-local ordinary row retains its text and
+   attachments with Not sent feedback; an accepted item remains authoritative.
+   A reset has no retained row to mark, but its draft and attachments remain
+   recoverable. Diagnostics never log the caught object or payload text.
 
 ### 2. Local delivery status and receipt settlement
 
-`userText` creates durable content plus a `localEchoes` identity sidecar. Delivery
-presentation stays in that sidecar (`delivery?: 'waiting' | 'not-sent'`, `held?: true`),
-preserving message object identity and the saved-history row contract. Main's typed
-`messageDelivery` event carries conversation/message IDs and `waiting | not-sent | written`,
-with its host stamp; there is no payload text, raw error, key or frame byte.
+The pending store owns local rows and the newest send's feedback, scoped by host
+and conversation. Transport feedback can change an ordinary pending row to
+Sending, Waiting for connection or Not sent. A socket write or generic ack does
+not establish daemon acceptance. The
+[bounded transport hold](daemon-connection-disconnected-delivery.md#disconnected-composer-message-delivery)
+remains independent of renderer settlement.
 
-Waiting shows “Waiting for connection” and participates in `foldQueuedRows`' pending
-placement without inventing a daemon `queued_msg_id` or showing queue controls.
-Not sent preserves the failed message. Written clears only the transport label:
-a socket write is not daemon acknowledgement, and main never retries a written
-message merely because its receipt has not arrived. The main-memory hold and
-unchanged-pairing Reconnect rules live in [connection lifecycle](daemon-connection-lifecycle.md#disconnected-composer-message-delivery);
-holds end on pairing replacement/removal, disposal or app shutdown and do not survive restart.
+Only an authoritative `user_message` with usable matching `content.device_id`
+and `content.message_id` settles a retained row. Matching text, an equal message
+ID on another device, an ack or a session divider is insufficient. Accepted
+queued work can show Waiting for Claude until delivery. The
+[overview's data flow](composer-send.md#data-flow) describes epoch ownership,
+hidden-item settlement and late-feedback handling.
 
-`timelineTargetFor` routes delivery events to their own conversation. The mounted
-bridge updates the active flat store only for the open conversation and matching
-retained host; `dispatchFor` updates an existing host-owned slice even when inactive.
-A host mismatch or missing slice is a no-op, rather than replacing another host's
-timeline. The reducer also requires an unsettled local echo with the same message ID
-and no daemon queue ID; late statuses cannot overwrite queue admission or settlement.
-
-A matching queue snapshot clears delivery status and binds the existing echo to the
-daemon's real queue ID. A user receipt clears status and settles that same row through
-the [queue correlation rules](thread-timeline-internals.md#queued-own-echo-settlement),
-retaining original text, timestamp and attachments and placing it before its reply.
-A locally held echo uses delivery placement even if no daemon queue ID was observed.
-Duplicate/replayed receipts neither duplicate nor move a settled row.
+The daemon intercepts `/clear` and `/reset` and only acknowledges them, so retaining
+those submissions would strand Sending and leave a row below later delivered
+messages. Skipping retention avoids that state without weakening ordinary
+settlement or clearing unrelated pending sends. Later transport feedback for a
+reset cannot recreate a row. The native
+[regression](composer-send-limits.md#ack-only-reset-regression) keeps ordinary sends
+pending after ack alone as a control.
 
 ### 3. The controlled composer — `ConversationScreen.tsx`
 
@@ -130,15 +102,15 @@ Duplicate/replayed receipts neither duplicate nor move a settled row.
   menus and other transient pane state still reset on remount.
 - Typing and slash-command completion use the same coordinate-bound `setText` setter. Restoration
   feeds the existing controlled textarea and its sizing, so a multiline draft expands on return.
-- The optimistic echo uses the flat timeline dispatch and host-owned held-timeline dispatch; input
-  retention does not change `submitMessage`'s send contract.
+- Ordinary sends use the scoped pending-send store; intercepted reset commands skip retention.
+  Retained drafts do not change `submitMessage`'s send contract.
 - The `<textarea>` gains `value={text}`, `onChange`, and `onKeyDown`; the send `<button>` gains `onClick={handleSubmit}`. Existing `className`/`placeholder`/`aria-label="Send"`/SVG untouched.
 - **Since [#678](https://github.com/pyrycode/pyrycode-desktop/issues/678), that button is `ComposerSendButton`, not a bare `<button>`.** `Composer` also takes a required `phase: TurnPhase` prop from the container and derives `isRunning={isTurnRunning(phase)}` on every render; while a turn is running the control swaps to a stop affordance in place, reusing the same `.composer__send` chrome and the same `aria-label="Send"` string only in the idle branch. `onClick={handleSubmit}`/`disabled={!canSend}` still gate the send branch exactly as above — `isRunning` and `canSend` are independent, so the send-gate logic on this page is unchanged by the swap. See [Interrupt envelope § The render affordance](interrupt-envelope.md#the-render-affordance-307-merged-into-the-send-button-by-678) for the stop variant's own contract.
 - `handleSubmit` calls `sendText(text)` and clears only the selected draft when it returns `true`,
   then emits the content-free `composer-draft-cleared` diagnostic. This is local submit success,
-  without a daemon acknowledgement. A caught bridge exception returns false, marks the echo
-  Not sent and preserves draft and pending attachments. Unavailable-host and whitespace-only
-  rejection leave the draft intact
+  without a daemon acknowledgement. A caught bridge exception returns false, marks a still-local
+  ordinary row Not sent and preserves draft and pending attachments, including for resets.
+  Unavailable-host and whitespace-only rejection leave the draft intact
   through subsequent switches. Actions-menu commands call `sendText` directly and leave typed text
   alone. Bridge dependencies are built inside `sendText`, at interaction time, so server rendering
   never dereferences `window.pyry` through this send path.
@@ -176,7 +148,7 @@ history persistence.
 
 The send control is gated on the live connection status: while the session is not
 `connected`, sending is disabled. Accepted submissions that encounter a main-process
-disconnect or handshake gap use the [bounded transport hold](daemon-connection-lifecycle.md#disconnected-composer-message-delivery)
+disconnect or handshake gap use the [bounded transport hold](daemon-connection-disconnected-delivery.md#disconnected-composer-message-delivery)
 and visible delivery status; the offline Send gate is unchanged.
 
 The decision lives in `composerSend.ts` as a pure, React-free predicate — a *total* mapping over the store's `ConnectionStatus` (from [session store](session-store.md)):
@@ -195,9 +167,12 @@ export function composerAvailability(status: ConnectionStatus): ComposerAvailabi
 | `disconnected` | `false` |
 | `error` | `false` |
 
-Through [#968](../codebase/968.md), `ComposerAvailability` also carried `hint: string | null` — a short "why unavailable" caption (`Connecting…` / `Not connected` / `Connection error`), rendered directly above the message box as `<p className="composer__hint" role="status">`. #968 retired the caption and the field: the connection state is said by [the banner](conversation-shell-chrome.md#connection-banner-279) (#279) in every non-connected arm and by [the status row's chip or button](conversation-shell-composer-error-chip.md#composer-error-chip-797) (#797/#963) in the `error` arm, so the caption was a third read in `error` and a second read in `connecting`/`disconnected` — the banner is what survives in every arm. `ComposerAvailability` stays a one-field record rather than collapsing to a bare boolean: the call site already destructures from it, and the ruling was "drop the caption," not "redesign the gate." The function now reads `status.type` and nothing else, so there is no string on this path to leak — the docblock paragraph that used to reserve `ConnectionError.message` for the banner's exclusive use went with the field it was reserving.
-
-Both facts (`canSend` and, before #968, `hint`) derive from the single `selectStatus` read, so there is one source of truth. A `default: assertNever(status)` arm makes a new `ConnectionStatus` arm a compile error — unchanged by #968.
+`ComposerAvailability` remains a one-field `{ canSend }` record. The caption and
+`hint` field retired in #968; #2076 moved their surviving connection explanation
+into the [Top overlay](conversation-shell-chrome.md#connection-banner-279).
+The send gate reads only `status.type`; the host-qualified `useOpenConnectionStatus`
+read supplies both it and the overlay. Its exhaustive `assertNever` switch makes a
+new connection arm a compile error. A connection change does not change thread data.
 
 In the container, `Composer` combines connection availability with the
 [new-chat model-recall hold](remembered-model.md#eligibility-and-settlement). It selects
@@ -210,7 +185,7 @@ the settings command returns; unrelated chats remain available.
 ### 5. Re-pair gate — `shouldOfferRepair` ([#167](../codebase/167.md))
 
 `shouldOfferRepair` and `shouldOfferReconnect` are pure, disjoint decisions over
-`ConnectionStatus`, used by the [composer's actionable-error slot](conversation-shell-composer-repair-button.md).
+`ConnectionStatus`, used by the [Top overlay’s recovery actions](conversation-shell-composer-repair-button.md).
 Since [#1510](https://github.com/pyrycode/pyrycode-desktop/issues/1510), terminal failure alone
 cannot offer re-pairing:
 
@@ -233,42 +208,34 @@ including 4421 or 4401, establishes only a connection failure and offers Reconne
 Transport, handshake and unknown terminal error codes therefore take the reconnect arm.
 `unpair` is excluded to avoid the failed-removal self-loop; `not-paired` has no saved
 host to dial. Both predicates reject retryable errors and every non-error status;
-remaining errors retain the chip. Unit tables assert both decisions together so an
-accidental overlap cannot pass as two independently plausible gates.
+every non-connected state retains the explanatory overlay pill. Unit tables assert
+both decisions together so an accidental overlap cannot pass as two independently plausible gates.
 
 These recovery gates do not enable sending. `composerAvailability` (§4) still:
 
 - **Guards `handleSubmit`** with `if (!canSend) return` at the top — the authoritative gate, blocking the **Enter** path (`handleKeyDown → handleSubmit`) as well as the button. `submitMessage` is never reached while not connected, so no `sendCommand` and no optimistic `dispatch` fire; the input is **not** cleared.
 - **Natively disables** the send `<button>` with `disabled={!canSend}` (a disabled button fires no `onClick` — the visible affordance, platform-blocked in addition to the handler guard).
 
-The `<textarea>` stays **enabled** while not connected — the user may draft while `connecting`; only the send control is gated. Selecting `status` re-renders `Composer` when it changes, so the re-enable is reactive; the thread (which selects only `selectMessages`) doesn't re-render on status change.
+The `<textarea>` stays **enabled** while not connected — the user may draft while `connecting`; only the send control is gated. Selecting the open host’s `status` makes the control re-enable reactively; it does not reconstruct thread rows.
 
-Through [#968](../codebase/968.md), a third bullet rendered the hint above the input/button row as `<p className="composer__hint" role="status">` — a polite live region so a screen reader announced the status change without stealing focus. That element and its rule (`conversation.css`'s `.composer__hint`) are retired; the announcement isn't lost, since [the connection banner](conversation-shell-chrome.md#connection-banner-279) (#279) is the polite live region for the same transition in every non-connected arm and was already written to avoid double-announcing with the caption. Deleting the caption *is* the 8px between the status row and the message box: `.composer`'s `padding-top` (`--space-2`) was always the caption's own inset, `ComposerStatusArea` renders unconditionally as `.composer`'s sibling, and `.composer__row` is now `.composer`'s first child — so that gap is identical in all four connection states with no new CSS rule.
+The old `.composer__hint` live region and CSS remain retired. The overlay now owns
+one atomic polite connection/restoration region; recovery buttons add no second
+announcement. `.composer` retains its existing 8px top inset independently of
+connection state.
 
 ### 6. Connection banner gate — `shouldShowBanner` / `CONNECTION_BANNER_COPY` ([#279](../codebase/279.md))
 
-A third pure predicate beside `composerAvailability`/`shouldOfferRepair`, over the same
-`ConnectionStatus` — whether the conversation screen should render the prominent, disconnected-only
-banner across the top of the thread (see
-[Conversation shell → Connection banner](conversation-shell-chrome.md#connection-banner-279)).
+The names remain after #2076 retired the banner view. `shouldShowBanner(status)`
+returns `status.type !== 'connected'`; `connectionNotice(status)` uses it to return
+`null` when connected and fixed client-owned copy otherwise. Pairing rejection
+selects the pairing-expired explanation; daemon `update-required` selects
+`DAEMON_UPDATE_REQUIRED_COPY`; all other non-connected states use
+`CONNECTION_BANNER_COPY`. Error messages never supply visible or accessible text.
+See [the exact copy and saved/loading rules](conversation-shell-chrome.md#connection-banner-279).
 
-```ts
-export function shouldShowBanner(status: ConnectionStatus): boolean {
-  return status.type !== 'connected'
-}
-```
-
-Unlike `composerAvailability`, this is not an exhaustive per-arm switch: every non-connected arm
-(`disconnected`/`connecting`/`error`) maps to the identical behavior (show the banner), so `!==
-'connected'` is the honest shape — and its fail-mode is correct, since a hypothetical future 5th
-`ConnectionStatus` arm defaults to *showing* the not-connected banner rather than silently hiding it.
-
-`CONNECTION_BANNER_COPY` ships alongside it — a single client-owned string constant. Through [#968](../codebase/968.md)
-it was lexically distinct from all three `composerAvailability` hints; those retired with the caption, and
-it is now argued distinct from the status row's chip and button strings instead (`COMPOSER_ERROR_CHIP_COPY`
-§8, `COMPOSER_REPAIR_BUTTON_COPY` and `COMPOSER_RECONNECT_BUTTON_COPY` §9), so the banner and the row directly above the message box never read
-as the same string stacked twice. One constant, not a per-arm map: every non-connected arm is a state
-where pyry is unreachable, so one sentence covers all three honestly.
+Unlike the exhaustive send gate, the notice predicate deliberately defaults any
+future non-connected arm to showing an explanation. It does not change sending,
+retry policy or pairing storage.
 
 ### 7. Keystroke-intent gates — `shouldSubmitOnKeyDown` ([#512](../codebase/512.md)) and `shouldInterruptOnKeyDown` ([#1072](https://github.com/pyrycode/pyrycode-desktop/issues/1072))
 
@@ -309,36 +276,15 @@ A second binding lives outside this module, on `ComposerSendButton`'s running va
 
 ### 8. Error chip copy — `composerSend.ts` (#797)
 
-The chip's visible copy and hidden prefix share this module with the connection banner
-(§6) and both recovery buttons (§9). These are plain constants, not predicates — no
-`shouldShowErrorChip` was added beside them. The gate is already the discriminant of the one arm the [composer status row's error chip](conversation-shell-composer-error-chip.md#composer-error-chip-797)
-belongs to (`status.type === 'error'`), so a named predicate would only restate that in an export and a
-test matrix.
-
-```ts
-export const COMPOSER_ERROR_CHIP_COPY = 'Host connection down!'
-export const COMPOSER_ERROR_CHIP_PREFIX_COPY = 'Error: '
-```
-
-Both carry `CONNECTION_BANNER_COPY`'s three-part contract: a client-owned constant, lexically distinct
-from the banner copy (`COMPOSER_ERROR_CHIP_COPY` leads with "Host", sharing no leading word with `Cannot
-reach pyrybox…`; its distinctness from the button that replaces it in the same slot is argued in §9's own
-docblock), and zero daemon-supplied substring — structural here, not conventional, since the chip view
-narrows on `status.type` and never destructures `status.error`. Apostrophe-free like every string in this
-module (`renderToStaticMarkup` escapes `'` → `&#x27;`, so a `toContain` only matches verbatim without one).
-
-`COMPOSER_ERROR_CHIP_PREFIX_COPY`'s **trailing space is load-bearing** — it is the separator between the
-hidden prefix and the visible copy when a screen reader concatenates them into `Error: Host connection
-down!`; an editor's trim would silently degrade the announcement. `composerSend.test.ts` pins it.
-
-These two live here, beside `CONNECTION_BANNER_COPY`, rather than as module-level constants in
-`ConversationScreen.tsx` (where `THINKING_COPY`/`STALL_COPY`/`EMPTY_THREAD_COPY` live): every string that
-speaks about `ConnectionStatus` lives in this one module, which is what makes the lexical-distinctness
-comparison reviewable in one place.
+\#2076 removed `ComposerErrorChip`, `COMPOSER_ERROR_CHIP_COPY` and
+`COMPOSER_ERROR_CHIP_PREFIX_COPY`. Connection feedback now uses the single overlay
+announcement described in §6. The remaining `.composer-status__error` styling
+still serves other reports and per-message delivery feedback; its presence does
+not imply a connection chip.
 
 ### 9. Actionable-error button copy — `COMPOSER_REPAIR_BUTTON_COPY` ([#963](https://github.com/pyrycode/pyrycode-desktop/issues/963))
 
-The two client-owned labels live beside the connection banner and error-chip copy in
+The two client-owned labels live beside the connection explanation copy in
 `composerSend.ts`. The corresponding predicate in §5 selects exactly one:
 
 ```ts
@@ -348,26 +294,19 @@ export const COMPOSER_RECONNECT_BUTTON_COPY = 'Connection error - Reconnect'
 
 Both follow “Type of error - Action” with an ASCII hyphen-minus separator. Their
 visible text is their accessible name: no `aria-label`, hidden `Error: ` prefix or
-additional live region. The connection banner already announces loss of connectivity.
-Both render with `button-small button-small--error` in the same trailing slot.
+additional live region. The connection/restoration pill announces loss of connectivity.
+Both actions render with `top-overlay-pill top-overlay-pill--error` in the Top overlay.
 
 Error fields select the branch but never supply markup, attributes or accessible copy.
 Static-render tests use sentinel messages on both buttons and a sentinel code on
 Reconnect; repair must retain the real `pairing-rejected` code to exercise its branch.
-See [the actionable-error slot](conversation-shell-composer-repair-button.md) for
+See [the recovery actions](conversation-shell-composer-repair-button.md) for
 host resolution, recovery ownership and interaction coverage.
 
 ### 10. Attachments named on the outbound frame — `takeAttachments` ([#1039](https://github.com/pyrycode/pyrycode-desktop/issues/1039), reworked by [#1055](https://github.com/pyrycode/pyrycode-desktop/issues/1055))
 
-`ComposerSendDeps` carries a fifth optional field, `takeAttachments?: () => PendingAttachmentTake` — the
-files this message is being sent with, i.e. the uploads that completed since the last send. It follows
-`now`'s (§1) trade for the same two reasons: this deps object has thirteen call sites in
-`composerSend.test.ts` (above the ten-call-site boundary this pipeline splits at), so requiring the field
-would cost thirteen mechanical edits to buy a compile error; and an unwired take means no attachments
-rather than a fallback to some other source. It differs from `now` in the one way that decides where it
-sits in `submitMessage`: **the take is destructive.** [Composer attach § Pending
-attachments](composer-attach-pending.md#pending-attachments-1039)'s implementation, `drainPendingAttachments`,
-removes the pending set from its holder *and* hands back the means to put it back:
+`takeAttachments?: () => PendingAttachmentTake` claims the completed uploads for
+one submission and returns their rollback together:
 
 ```ts
 export interface PendingAttachmentTake {
@@ -376,40 +315,27 @@ export interface PendingAttachmentTake {
 }
 ```
 
-**#1055 moved the read above the guarded send, and that is what forced the shape above.** The taken ids
-now ride the outbound `SendMessagePayload.attachment_ids`, so they must be known *before* that payload
-literal is built — the read can no longer sit below the send the way `now`'s precedent originally did.
-But a send whose `deps.sendCommand` throws named nothing on the wire, so the files it took must still be
-attached for the retry (the third acceptance criterion); `rollback` is what makes that possible without
-splitting the take into a peek/consume pair, which would reopen the exact double-record window
-`drainPendingAttachments`'s "take and clear cannot be split" rule closes. Handing the undo back *with*
-the take, rather than as a second optional dep, means a caller cannot hold one without the other and
-cannot restore into the wrong holder — the closure captures its own holder.
+The take is destructive: it clears the pending set and captures its holder in the
+undo closure. Splitting it into separate peek and consume operations would reopen
+a double-record window. See [pending attachments](composer-attach-pending.md#pending-attachments-1039).
 
-The take remains below both early `false` returns and above payload construction.
-Whitespace-only input or a null conversation takes nothing. One normalized `named`
-value feeds the echo's attachments and the payload's `attachment_ids`, preserving
-pending-set order. Empty or unwired means `undefined`; JSON encoding omits
-`attachment_ids` entirely, never sending `null` or `[]` for a message with none.
+The take happens after all input/host guards and before payload construction.
+One normalized `named` value supplies an ordinary row's attachments and the
+payload's ordered `attachment_ids`. An absent or empty take yields `undefined`,
+so JSON omits the field rather than sending `null` or `[]`.
 
-The echo is now published to both stores before the bridge call, with `messageId`,
-`createdAt` and `attachments: named`. A bridge exception calls `take?.rollback()`,
-marks that echo Not sent and returns `false`. Its attachment presentation survives,
-while the pending set and draft are restored for resubmission. A failed echo records
-what the operator attempted, rather than claiming those files reached the daemon.
-Dropping attachments from it would lose the failed message's original presentation.
-A bridge call that returns successfully consumes the take even if main subsequently
-holds or rejects delivery; that outcome updates the same echo through typed status.
+Reset commands still take and forward attachment IDs despite omitting the local
+row. A throwing bridge calls `take?.rollback()` and returns `false` on both paths,
+keeping the draft and pending attachments recoverable. A still-local ordinary row
+keeps its attempted attachment presentation. A successful bridge return consumes
+the take; later transport feedback does not roll it back.
 
-The production call site, `ConversationScreen.tsx`'s `Composer.sendText`, wires
-`takeAttachments: attach.takePendingAttachments`, `now: Date.now` and the retained
-host ID. Both typed submissions and picked Actions-menu commands reach this helper.
-`composerSend.test.ts` checks no take on either early rejection, one take on a real
-submission, ordered IDs on the command, and a throwing bridge that rolls back,
-retains echo attachments and returns false. `localMessageDelivery.test.ts` exercises
-synchronous status reporting after both echo writes and inactive-host isolation.
-See [delivery verification](daemon-connection-lifecycle.md#delivery-verification) for
-recorded mounted fake-daemon evidence; no new real-Claude acceptance is required.
+`ConversationScreen.tsx` wires `attach.takePendingAttachments`, `now: Date.now`
+and the captured host. Typed submissions and Actions-menu commands share this
+helper. `composerSend.test.ts` covers attachment forwarding and rollback for both
+reset commands as well as ordinary sends. See the
+[native regression](composer-send-limits.md#ack-only-reset-regression) for the
+mounted ack-only contract; no real-provider execution is implied.
 
 **No canonical-shape check on the ids here, by deliberate omission.** Upstream (`pyrycode#2038`) mandates
 and enforces the lowercase-UUIDv4 check on the *receiver*; this client's own posture for the identical

@@ -10,6 +10,19 @@ click handlers, focus changes, or layout. A removed bridge mount can leave its
 import and all unit tests green. Check that each bridge is mounted in the app.
 Use the fake-transport browser tier to prove event delivery through the app.
 
+Embedded renderer source in Playwright fixture strings is outside TypeScript
+checking. When an API signature changes, audit those strings as well as typed
+production callers. A retired four-argument `isConversationUnread` call in
+`e2e/thread-items.spec.ts` survived typecheck and made both committed-visible-read
+scenarios report false unread state. Updating it to `isConversationUnread(row)`
+and removing unused legacy composer callbacks preserved the existing
+acknowledgement, epoch and host-isolation assertions; no duplicate proof was
+needed. Both widths are present and passed in the
+[Linux retirement gate](thread-runtime.md#renderer-producer-retirement-validation):
+435 executed/passed, 0 failed, 3 skipped overall, with all 12 thread-items cases
+executed and passed. Static/typecheck success alone did not establish the fixture's
+runtime contract.
+
 Keep builds sequential with Electron suites: launches read generated renderer assets.
 A concurrent rebuild can rewrite those assets during Welcome setup and produce
 timeouts unrelated to the scenario under review. Record that full run as failed
@@ -82,6 +95,59 @@ confirms both tests below were present, executed and passed in that run (scoped 
 
 - `remote marks clear mounted attention before refresh and survive stale lists and local opening`
 - `two hosts sharing an ID retain independent read state, dots and badge contribution`
+
+### Scalar client evidence validation
+
+The [scalar turn evidence helpers](e2e-harness.md#scalar-turn-evidence) share their
+actual reducers with the scenarios. Typed fixture tests check that tool-body data
+and final replies cannot establish fresh assistant output or completion, with
+held/missing IDs, incomplete and legitimate completed turns, subsequent scalar
+changes/appends, and queue detail interleaved inside the same-revision suffix pair.
+Client-test compilation and [fixture-input checking](e2e-harness-limitations.md#edge-cases-and-limitations)
+cover different source sets; neither runtime transpilation nor the app build
+checks those unit constructors.
+
+Retained Linux x86_64 results for #2119, 2026-10-19, reviewed head
+`4c39c7aed215a685ec7744960e83c2c30f2faaed`, are recorded in the
+[accepted verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2136#issuecomment-6263973207)
+and [builder validation](../../specs/architecture/2119-tool-content-evidence.md#validation-evidence).
+These are recorded results, not documentation reruns:
+
+- Affected fixture suites: **68 executed/passed, 0 failed/skipped** — handover 45,
+  queue 20, Codex 3. Each suite's held/missing-ID `excludes tool-body data and final
+  replies for item %i` cases was present and passed. Existing cases also passed:
+  `folds only correlated newer revisions without duplicate text`,
+  `retains the captured field-change/text-suffix pair at one revision without counting a duplicate suffix`,
+  `retains Codex scalar revision checks and host/chat/epoch ownership`,
+  `cannot combine different epochs, sessions, agents or child-agent replies`, and
+  `same-epoch reset discards held items before identifiers are reused`.
+- Unchanged `npm run typecheck:client-tests`: zero diagnostics in both builder and
+  final verifier checks. The builder separately records zero diagnostics for the
+  scratch fixture-unit project. Normal build and docs guard passed.
+- Builder's complete guarded `npm run e2e:recorded`: **29 executed/passed,
+  0 failed, 1 skipped**, zero retries and zero forbidden launches. Codex and all
+  five queue scenarios were present and passed; all 29 exchanges had zero remaining
+  requests. The skip was the existing system-prompt Reset fixme.
+- Configured verifier application gate: **506 executed, 505 passed, 1 failed,
+  5 skipped**. All 29 captured scenarios were present and passed, including Codex
+  and all five queue cases, with zero remaining requests in every recorded exchange.
+  The initial `history-writer-native.spec.ts` failure remains failed; the separate
+  rerun was **3 executed/passed, 0 failed/skipped**, including the exact case
+  `finite protected writer backlog preserves native keyboard and both event loops`.
+  The dispatcher accepted that existing flake under #2125. Skips were three
+  macOS-only cases, the Reset fixme and sidebar-unpair blocked on #2089; they prove
+  no acceptance.
+
+The controlled historical catch-all produced six TS2339 diagnostics and a queue
+run of **20 executed, 18 passed, 2 deliberately failed, 0 skipped**. Interleaving
+detail with the original suffix bookkeeping independently produced **20 executed,
+18 passed, 2 failed, 0 skipped** before repair. These red controls remain separate
+from the passing acceptance runs.
+
+Replay proves captured client assertions with the original requests/assertions;
+it establishes no fresh provider/daemon, transport or physical-effect acceptance.
+macOS is outside this Linux ticket's verification scope. This test-only repair
+does not change production code, IPC/wire unions or the client-test compiler scope.
 
 ### Visible-tail read publication
 
@@ -303,4 +369,3 @@ would reject the intended behavior. The current execution is recorded below.
 
 Inline permission, scrolling and session-grant evidence lives in
 [inline permission verification](development-verification-test-tiers.md#inline-permission-verification).
-

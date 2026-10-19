@@ -2,6 +2,9 @@ import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/lau
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { EnvelopeType } from '../src/shared/wire/types'
 
+// Scripted history is published as thread catch-up/pages by the shared fake daemon.
+test.use({ scriptedHistory: true })
+
 const ts = '2026-10-05T12:00:00Z'
 const payload = (id: string) => ({ conversation_id: SEEDED_ROW.id, turn_id: 'run-turn', tool_use_id: id })
 const frame = (type: EnvelopeType, value: unknown) => encodeEnvelope({ id: 1, type, ts, payload: value })
@@ -10,7 +13,12 @@ for (const width of [800, 1280]) test(`tool runs retain expansion and update col
   let historyRequest: number | undefined
   const { page, daemon, app } = await launchPairedApp({ buildReplyFrames: (bytes) => {
     const request = decodeEnvelope(bytes)
-    if (request.type === 'request_history') { historyRequest = request.id; return [] }
+    if (request.type === 'request_history') {
+      const opening = historyRequest === undefined
+      historyRequest = request.id
+      return opening ? [encodeEnvelope({ id: 1, type: 'history_page', ts, in_reply_to: request.id,
+        payload: { entries: [], cursor: 'older', at_start: false } })] : []
+    }
     return [seedConversationsFrame()]
   } })
   await app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size, 800), width)
@@ -26,14 +34,14 @@ for (const width of [800, 1280]) test(`tool runs retain expansion and update col
   const header = page.locator('.tool-run button')
   const capture = async (state: string) => {
     await page.mouse.move(0, 0)
-    await page.screenshot({ path: `/tmp/builder-1764/${width}-${state}.png`, animations: 'disabled' })
+    await page.screenshot({ path: `/tmp/builder-2127/rework-tools-${width}-${state}.png`, animations: 'disabled' })
   }
   use('agent', undefined, 'Agent')
   use('read')
   use('child', 'agent')
   await expect(header).toHaveText('Using tools: 2')
   await expect(header).toHaveAttribute('aria-expanded', 'false')
-  await expect(row('agent')).toBeHidden()
+  await expect(row('agent')).toHaveCount(0)
   await expect(header.getByRole('img', { name: 'Running', exact: true })).toBeVisible()
   await capture('running')
   use('third')
@@ -46,7 +54,7 @@ for (const width of [800, 1280]) test(`tool runs retain expansion and update col
   await page.keyboard.press('Enter')
   await expect(header).toHaveAttribute('aria-expanded', 'true')
   await expect(row('agent')).toBeVisible()
-  await expect(row('child')).toBeHidden()
+  await expect(row('child')).toHaveCount(0)
   await row('agent').locator('button').click()
   await row('child').locator('button').click()
   await expect(row('child').locator('.tool-row__result')).toBeVisible()
@@ -66,7 +74,9 @@ for (const width of [800, 1280]) test(`tool runs retain expansion and update col
   expect(geometry[0].width).toBe(geometry[1].width)
   await capture('expanded')
   await header.click()
-  await expect(row('child')).toBeHidden()
+  await expect(header).toHaveAttribute('aria-expanded', 'false')
+  await expect(row('agent')).toHaveCount(0)
+  await expect(row('child')).toHaveCount(0)
   await header.focus()
   await page.keyboard.press('Space')
   await expect(row('child').locator('.tool-row__result')).toBeVisible()
@@ -88,12 +98,13 @@ for (const width of [800, 1280]) test(`tool runs retain expansion and update col
   await expect(header).toHaveAttribute('aria-expanded', 'true')
   await expect(row('child').locator('.tool-row__result')).toBeVisible()
   await header.click()
+  await expect(header).toHaveAttribute('aria-expanded', 'false')
+  await expect(row('fourth')).toHaveCount(0)
   daemon.pushFrame(frame('tool_denied', { ...payload('fourth'), tool_name: 'Read', decision_reason_type: 'rule',
     decision_reason: '', message: 'Denied', truncated_fields: null, dropped_fields: null }))
   await expect(header).toContainText('1 failed')
   await expect(header.getByRole('img', { name: 'Running', exact: true })).toBeVisible()
   result('fourth', true)
-  await expect(row('fourth').locator('.tool-row__count')).toHaveText('recorded')
   await expect(header).toContainText('1 failed')
   use('fifth')
   await expect(header).toContainText('Using tools: 6')
@@ -105,5 +116,10 @@ for (const width of [800, 1280]) test(`tool runs retain expansion and update col
   await expect(header.getByRole('img', { name: 'Running', exact: true })).toHaveCount(0)
   await expect(header.getByRole('img', { name: 'Done', exact: true })).toHaveCount(0)
   await expect(header).toContainText('2 failed')
+  await expect(row('fourth')).toHaveCount(0)
   await capture('failure')
+  await header.click()
+  await expect(header).toHaveAttribute('aria-expanded', 'true')
+  await expect(row('fourth').locator('.tool-row__count')).toHaveText('recorded')
+  await expect(row('child').locator('.tool-row__result')).toBeVisible()
 })

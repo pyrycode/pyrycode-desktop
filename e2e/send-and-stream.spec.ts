@@ -29,7 +29,7 @@ const MESSAGE_TIMEOUT_MS = 15_000
 // `message` fan-out that #179 retired. Assistant text now renders ONLY via `assistant_delta` (a coarse
 // `message` decodes to a `messageReceived` sessionStore write the timeline never renders — pyrycode #699).
 // Two frames, streamed in order: an `assistant_delta` carrying the whole REPLY_TEXT (→ an `assistantText`
-// timeline item, `.bubble[data-thread-role="assistant"]`), then a `turn_end` closing the turn (→ a
+// timeline item, `[data-thread-role="assistant"]`), then a `turn_end` closing the turn (→ a
 // `turnBoundary`, which drops the streaming cursor off the bubble so its text is EXACTLY REPLY_TEXT — an
 // assistant_delta alone leaves a trailing ▎ that fails toHaveText). Fixed literals keep the assertion
 // deterministic; the decoded fields (turn_id, seq, stop_reason) are not inspected, and conversation_id is
@@ -106,19 +106,19 @@ test('send a message and see the streamed daemon reply render in the thread', as
   await sendButton.click()
 
   // --- Optimistic user bubble (AC3): dispatched synchronously inside submitMessage, before any reply.
-  // Since #179 the echo routes into the timeline as a `userText` item — `.bubble[data-thread-role="user"]`,
+  // Since #179 the echo routes into the timeline as a `userText` item — `[data-thread-role="user"]`,
   // NOT the retired MessageThread's `data-message-role`. Asserted as a distinct step before the daemon
   // assertion; NOT paired with a daemon-absent check (the reply is a real round-trip that could land fast
   // — a "user present AND daemon absent" assert is racy).
-  await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveText(bubbleTextExactly(TYPED_TEXT))
+  await expect(page.locator('[data-thread-role="user"]')).toHaveText(bubbleTextExactly(TYPED_TEXT))
 
   // --- Streamed daemon bubble (AC4): auto-waited through the genuine handshake + Noise round-trip. The
-  // assistant text renders as an `assistantText` timeline row — `.bubble[data-thread-role="assistant"]`
+  // assistant text renders as an `assistantText` timeline row — `[data-thread-role="assistant"]`
   // (the retired coarse `message` / `data-message-role` path no longer renders in the timeline). A
   // regression to echoing the `send_message` (the default-echo trap) decodes to no assistant_delta and
   // times out here; the [assistant_delta, turn_end] stream is the guard, and turn_end drops the streaming
   // cursor so the bubble text matches REPLY_TEXT exactly. ---
-  await expect(page.locator('.bubble[data-thread-role="assistant"]')).toHaveText(
+  await expect(page.locator('[data-thread-role="assistant"]')).toHaveText(
     bubbleTextExactly(REPLY_TEXT),
     { timeout: MESSAGE_TIMEOUT_MS }
   )

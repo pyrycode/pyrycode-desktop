@@ -1,0 +1,4584 @@
+{
+  "format": "pyrycode.daemon-exchange",
+  "version": 2,
+  "source": {
+    "capturedAt": "2026-10-16T12:27:52.983Z",
+    "desktopRevision": "00ec821f9380b00cf2dfc0dd4817ee15584106a5",
+    "daemonRevision": "58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf",
+    "daemonBinarySha256": "5f5b3b9ce42eda74024637f4929dd720d36c1226ce6e370eb62fbe9e6b22f7c0",
+    "claudeVersion": "2.1.280 (Claude Code)"
+  },
+  "scenario": {
+    "id": "claude-queue-delivery-974dca90",
+    "inputs": {
+      "nonce": 1792153673008
+    },
+    "workspace": "/recorded/workspace"
+  },
+  "capabilities": [
+    "interactive",
+    "multi_agent",
+    "stop_background_task",
+    "thread"
+  ],
+  "deviceId": "e3cfe03fb35f1c5880ade2ae89f3ed01fb792cd677bf48c0bf4ecda5ae0b4f2d",
+  "devices": [
+    "e3cfe03fb35f1c5880ade2ae89f3ed01fb792cd677bf48c0bf4ecda5ae0b4f2d"
+  ],
+  "barriers": [
+    {
+      "before": 77,
+      "name": "live-proof"
+    },
+    {
+      "before": 77,
+      "name": "live-proof"
+    },
+    {
+      "before": 83,
+      "name": "live-proof"
+    },
+    {
+      "before": 83,
+      "name": "release-tool"
+    }
+  ],
+  "closures": [],
+  "wire": [
+    {
+      "direction": "client",
+      "atMs": 292,
+      "message": {
+        "id": 2,
+        "type": "list_conversations",
+        "ts": "2026-10-16T12:27:53.443Z",
+        "payload": {}
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 302,
+      "message": {
+        "id": 2,
+        "type": "model_list",
+        "ts": "2026-10-16T12:27:53.368363Z",
+        "payload": {},
+        "conversation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "session_id": "77777777-7777-4777-8777-777777777777",
+        "session_state_cleared": true
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 302,
+      "message": {
+        "id": 3,
+        "type": "model_list",
+        "ts": "2026-10-16T12:27:53.368363Z",
+        "payload": {
+          "conversation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          "models": [
+            {
+              "resolved_model": "claude-sonnet-5",
+              "value": "default",
+              "display_name": "Default (recommended)",
+              "effort_levels": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "supports_auto_mode": true,
+              "truncated_fields": null,
+              "agent": "claude",
+              "family": "default"
+            },
+            {
+              "resolved_model": "claude-sonnet-5",
+              "value": "sonnet",
+              "display_name": "Sonnet",
+              "effort_levels": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "supports_auto_mode": true,
+              "truncated_fields": null,
+              "agent": "claude",
+              "family": "sonnet"
+            },
+            {
+              "resolved_model": "claude-fable-5-1",
+              "value": "claude-fable-5-1[1m]",
+              "display_name": "Fable",
+              "effort_levels": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "supports_auto_mode": true,
+              "truncated_fields": null,
+              "agent": "claude",
+              "family": "fable[1m]"
+            },
+            {
+              "resolved_model": "claude-opus-5-5",
+              "value": "opus",
+              "display_name": "Opus",
+              "effort_levels": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "supports_auto_mode": true,
+              "truncated_fields": null,
+              "agent": "claude",
+              "family": "opus"
+            },
+            {
+              "resolved_model": "claude-haiku-4-5-20251001",
+              "value": "haiku",
+              "display_name": "Haiku",
+              "effort_levels": [],
+              "supports_auto_mode": false,
+              "truncated_fields": null,
+              "agent": "claude",
+              "family": "haiku"
+            }
+          ],
+          "dropped_models": 0
+        },
+        "conversation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "session_id": "77777777-7777-4777-8777-777777777777"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 303,
+      "message": {
+        "id": 4,
+        "type": "slash_command_list",
+        "ts": "2026-10-16T12:27:53.368877Z",
+        "payload": {},
+        "conversation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "session_id": "77777777-7777-4777-8777-777777777777",
+        "session_state_cleared": true
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 303,
+      "message": {
+        "id": 5,
+        "type": "slash_command_list",
+        "ts": "2026-10-16T12:27:53.368877Z",
+        "payload": {
+          "conversation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          "commands": [
+            {
+              "name": "deep-research",
+              "argument_hint": "",
+              "description": "Deep research harness — fan-out web searches, fetch sources, adversarially verify claims, synthesize a cited report. (dynamic workflow)",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "design",
+              "argument_hint": "consent | revoke",
+              "description": "Grant or revoke Claude agent access to your Design projects",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "design-sync",
+              "argument_hint": "[<project hint, e.g. \"Acme DS\">]",
+              "description": "Push a React design system to claude.ai/design. This runs a converter that bundles the real component code (from Storybook or a bare package) and uploads it. Use when the user runs /design-sync or says \"sync my design system to Claude Design\".",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "dataviz",
+              "argument_hint": "",
+              "description": "Use this skill whenever you are about to create ANY chart, graph, plot, dashboard, or data visualization, in ANY output medium — an HTML or React artifact, inline SVG, plotting code in any library (matplotlib, plotly, d3, Recharts, …), an image/PNG you",
+              "aliases": [],
+              "truncated_fields": [
+                "description"
+              ]
+            },
+            {
+              "name": "update-config",
+              "argument_hint": "",
+              "description": "Use this skill to configure the Claude Code harness via settings.json. Automated behaviors (\"from now on when X\", \"each time X\", \"whenever X\", \"before/after X\") require hooks configured in settings.json - the harness executes these, not Claude, so memory/p",
+              "aliases": [],
+              "truncated_fields": [
+                "description"
+              ]
+            },
+            {
+              "name": "verify",
+              "argument_hint": "",
+              "description": "Verify that a code change actually does what it's supposed to by exercising it end-to-end and observing behavior — drive the affected flow, not just tests or typecheck. Run before committing nontrivial changes; bootstraps this repo's project verify skill",
+              "aliases": [],
+              "truncated_fields": [
+                "description"
+              ]
+            },
+            {
+              "name": "debug",
+              "argument_hint": "[issue description]",
+              "description": "Enable debug logging for this session and help diagnose issues",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "code-review",
+              "argument_hint": "[low|medium|high|xhigh|max|ultra] [--fix] [--comment] [<pr#>|<branch>|<path>]",
+              "description": "Review the current diff, or a PR number/branch/path target, for correctness bugs (plus reuse/simplification/efficiency cleanups where the model's review recipe covers them) at the given effort level (low/medium: fewer, high-confidence findings; high→max:",
+              "aliases": [
+                "review"
+              ],
+              "truncated_fields": [
+                "description"
+              ]
+            },
+            {
+              "name": "simplify",
+              "argument_hint": "[<target>]",
+              "description": "Review the changed code for reuse, simplification, efficiency, and altitude cleanups, then apply the fixes. Quality only — it does not hunt for bugs; use /code-review for that.",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "batch",
+              "argument_hint": "<instruction>",
+              "description": "Research and plan a large-scale change, then execute it in parallel across 5–30 isolated worktree agents that each open a PR.",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "fewer-permission-prompts",
+              "argument_hint": "",
+              "description": "Scan your transcripts for common read-only Bash and MCP tool calls, then add a prioritized allowlist to project .claude/settings.json to reduce permission prompts.",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "doctor",
+              "argument_hint": "",
+              "description": "Health-check the user's Claude Code setup and fix issues: diagnose installation health — what the `claude doctor` terminal diagnostics cover — from local data (duplicate or leftover installs, PATH, unparseable settings files, broken or colliding agent ",
+              "aliases": [
+                "checkup"
+              ],
+              "truncated_fields": [
+                "description"
+              ]
+            },
+            {
+              "name": "loop",
+              "argument_hint": "[interval] [prompt]",
+              "description": "Run a prompt or slash command on a recurring interval (e.g. /loop 5m /foo). Omit the interval to let the model self-pace.",
+              "aliases": [
+                "proactive"
+              ],
+              "truncated_fields": null
+            },
+            {
+              "name": "schedule",
+              "argument_hint": "",
+              "description": "Create, update, list, or run scheduled cloud agents (routines) that execute on a cron schedule.",
+              "aliases": [
+                "routines"
+              ],
+              "truncated_fields": null
+            },
+            {
+              "name": "claude-api",
+              "argument_hint": "",
+              "description": "Reference for the Claude API / Anthropic SDK — model ids, pricing, params, streaming, tool use, MCP, agents, caching, token counting, model migration.\nTRIGGER — read BEFORE opening the target file; don't skip because it \"looks like a one-liner\" — whe",
+              "aliases": [],
+              "truncated_fields": [
+                "description"
+              ]
+            },
+            {
+              "name": "workflow-authoring",
+              "argument_hint": "",
+              "description": "Reference for writing a Workflow tool script (script API and gotchas, resume, quality patterns, worked examples). Load before authoring a script for a workflow the user already opted into; it does not itself authorize running one.",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "run",
+              "argument_hint": "",
+              "description": "Launch and drive this project's app to see a change working. Use when asked to run, start, or screenshot the app, or to confirm a change works in the real app (not just tests). First looks for a project skill that already covers launching the app; otherwis",
+              "aliases": [],
+              "truncated_fields": [
+                "description"
+              ]
+            },
+            {
+              "name": "run-skill-generator",
+              "argument_hint": "",
+              "description": "Author or improve the run-<unit> skill - a per-project skill that tells agents how to build, launch, and drive this project's app. Use when the user asks to set up the project, get it running, write run instructions, or verify build/run steps work from a c",
+              "aliases": [],
+              "truncated_fields": [
+                "description"
+              ]
+            },
+            {
+              "name": "advisor",
+              "argument_hint": "[fable|opus|sonnet|off]",
+              "description": "Let Claude consult a stronger model at key moments",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "agents",
+              "argument_hint": "",
+              "description": "(removed) Ask Claude to create/manage subagents, or edit .claude/agents/",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "auto-mode-setup",
+              "argument_hint": "[--request-id <uuid>] (--wizard posture=… scope=… depth=… --propose | --expect-sha256 <64-hex> --apply-file <path>)",
+              "description": "Teach auto mode about your environment, plus optional rule tweaks",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "autocompact",
+              "argument_hint": "[auto|<tokens>]",
+              "description": "Configure the auto-compact window size",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "clear",
+              "argument_hint": "[name]",
+              "description": "Start a new session with empty context; previous session stays on disk (resumable with /resume)",
+              "aliases": [
+                "reset",
+                "new"
+              ],
+              "truncated_fields": null
+            },
+            {
+              "name": "color",
+              "argument_hint": "[red|blue|green|yellow|purple|orange|pink|cyan|default]",
+              "description": "Set the prompt bar color for this session",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "compact",
+              "argument_hint": "<optional custom summarization instructions>",
+              "description": "Free up context by summarizing the conversation so far",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "config",
+              "argument_hint": "key=value",
+              "description": "Set a setting by key",
+              "aliases": [
+                "settings"
+              ],
+              "truncated_fields": null
+            },
+            {
+              "name": "output-style",
+              "argument_hint": "[style]",
+              "description": "List output styles or switch to one",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "context",
+              "argument_hint": "",
+              "description": "Show current context usage",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "effort",
+              "argument_hint": "<low|medium|high|xhigh|max|auto>",
+              "description": "Set effort level for model usage",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "fast",
+              "argument_hint": "[on|off]",
+              "description": "Toggle fast mode (Opus 5.5)",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "heapdump",
+              "argument_hint": "",
+              "description": "Dump the JS heap to the Desktop; on Linux with no Desktop folder, the home directory",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "init",
+              "argument_hint": "",
+              "description": "Initialize a new CLAUDE.md file with codebase documentation",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "mcp",
+              "argument_hint": "[reconnect|enable|disable [<server>|all]]",
+              "description": "Manage MCP servers",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "import",
+              "argument_hint": "",
+              "description": "Import config from another AI coding agent",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "model",
+              "argument_hint": "<model>",
+              "description": "Set the AI model for Claude Code",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "__remote-workflow",
+              "argument_hint": "",
+              "description": "Run the workflow script delivered in this session environment (server-launched sessions only)",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "workflow-launch-exec",
+              "argument_hint": "",
+              "description": "Execute a server-launched workflow handoff (workflow_launch event sessions only)",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "reload-plugins",
+              "argument_hint": "[--force]",
+              "description": "Activate pending plugin changes in the current session",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "reload-skills",
+              "argument_hint": "",
+              "description": "Pick up skills added or changed on disk during this session",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "rename",
+              "argument_hint": "[name]",
+              "description": "Rename the current conversation",
+              "aliases": [
+                "name"
+              ],
+              "truncated_fields": null
+            },
+            {
+              "name": "ultrareview",
+              "argument_hint": "",
+              "description": "Start a cloud agent that finds and verifies bugs in your branch (~15-25 min, $5-$25 USD) · Runs in a cloud session. See https://code.claude.com/docs/en/claude-code-on-the-web",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "security-review",
+              "argument_hint": "",
+              "description": "Complete a security review of the pending changes on the current branch",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "usage-credits",
+              "argument_hint": "",
+              "description": "Configure usage credits or request them from your admin when you hit a limit",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "extra-usage",
+              "argument_hint": "",
+              "description": "Renamed to /usage-credits",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "usage",
+              "argument_hint": "",
+              "description": "Show session cost, plan usage, and what's contributing to your limits",
+              "aliases": [
+                "cost",
+                "stats"
+              ],
+              "truncated_fields": null
+            },
+            {
+              "name": "insights",
+              "argument_hint": "",
+              "description": "Generate a report analyzing your Claude Code sessions",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "recap",
+              "argument_hint": "",
+              "description": "Generate a one-line session recap now",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "skill-doctor",
+              "argument_hint": "",
+              "description": "Show which loaded skills are unused and costing context",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "goal",
+              "argument_hint": "",
+              "description": "Set a goal — keep working until the condition is met",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "design-consent",
+              "argument_hint": "",
+              "description": "Grant Claude agent access to your Design projects",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "design-revoke",
+              "argument_hint": "",
+              "description": "Revoke Claude agent access to your Design projects",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "list-agents",
+              "argument_hint": "",
+              "description": "List subagents, teammates, and other Claude sessions you can message",
+              "aliases": [
+                "peers"
+              ],
+              "truncated_fields": null
+            },
+            {
+              "name": "team-onboarding",
+              "argument_hint": "",
+              "description": "Help teammates ramp on Claude Code with a guide from your usage",
+              "aliases": [],
+              "truncated_fields": null
+            }
+          ],
+          "dropped_commands": 0
+        },
+        "conversation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "session_id": "77777777-7777-4777-8777-777777777777"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 305,
+      "message": {
+        "id": 6,
+        "type": "conversations",
+        "ts": "2026-10-16T12:27:53.452545Z",
+        "payload": {
+          "conversations": [
+            {
+              "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+              "name": null,
+              "is_promoted": false,
+              "current_session_id": "77777777-7777-4777-8777-777777777777",
+              "is_archived": false,
+              "is_muted": false,
+              "read_up_to": 0,
+              "latest_entry_id": 0,
+              "archived_at": null,
+              "cwd": "/recorded/workspace",
+              "workspace_label": null,
+              "last_message_ts": "2026-01-01T00:00:00Z",
+              "last_used_at": "2026-01-01T00:00:00Z",
+              "agent": "claude",
+              "last_shown_version": 0
+            }
+          ]
+        },
+        "in_reply_to": 2
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 386,
+      "message": {
+        "id": 3,
+        "type": "create_conversation",
+        "ts": "2026-10-16T12:27:53.537Z",
+        "payload": {
+          "is_promoted": false,
+          "name": null,
+          "cwd": null
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 407,
+      "message": {
+        "id": 7,
+        "type": "conversation_created",
+        "ts": "2026-10-16T12:27:53.558228Z",
+        "payload": {
+          "id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "is_promoted": false,
+          "cwd": "/recorded/workspace",
+          "workspace_label": null,
+          "name": null,
+          "last_used_at": "2026-10-16T12:27:53.554221Z",
+          "agent": "claude"
+        },
+        "in_reply_to": 3
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 407,
+      "message": {
+        "id": 4,
+        "type": "list_conversations",
+        "ts": "2026-10-16T12:27:53.558Z",
+        "payload": {}
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 410,
+      "message": {
+        "id": 8,
+        "type": "conversations",
+        "ts": "2026-10-16T12:27:53.559319Z",
+        "payload": {
+          "conversations": [
+            {
+              "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+              "name": null,
+              "is_promoted": false,
+              "current_session_id": "77777777-7777-4777-8777-777777777777",
+              "is_archived": false,
+              "is_muted": false,
+              "read_up_to": 0,
+              "latest_entry_id": 0,
+              "archived_at": null,
+              "cwd": "/recorded/workspace",
+              "workspace_label": null,
+              "last_message_ts": "2026-01-01T00:00:00Z",
+              "last_used_at": "2026-01-01T00:00:00Z",
+              "agent": "claude",
+              "last_shown_version": 0
+            },
+            {
+              "id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+              "name": null,
+              "is_promoted": false,
+              "current_session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+              "is_archived": false,
+              "is_muted": false,
+              "read_up_to": 0,
+              "latest_entry_id": 0,
+              "archived_at": null,
+              "cwd": "/recorded/workspace",
+              "workspace_label": null,
+              "last_message_ts": "2026-10-16T12:27:53.554221Z",
+              "last_used_at": "2026-10-16T12:27:53.554221Z",
+              "agent": "claude"
+            }
+          ]
+        },
+        "in_reply_to": 4
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 413,
+      "message": {
+        "id": 5,
+        "type": "thread_catch_up",
+        "ts": "2026-10-16T12:27:53.564Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "epoch": "",
+          "version": 0
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 414,
+      "message": {
+        "id": 6,
+        "type": "request_session_settings",
+        "ts": "2026-10-16T12:27:53.565Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389"
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 414,
+      "message": {
+        "id": 7,
+        "type": "request_context_usage",
+        "ts": "2026-10-16T12:27:53.565Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389"
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 414,
+      "message": {
+        "id": 8,
+        "type": "request_model_list",
+        "ts": "2026-10-16T12:27:53.565Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389"
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 414,
+      "message": {
+        "id": 9,
+        "type": "request_system_prompt",
+        "ts": "2026-10-16T12:27:53.565Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389"
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 414,
+      "message": {
+        "id": 9,
+        "type": "model_list",
+        "ts": "2026-10-16T12:27:53.565538Z",
+        "payload": {},
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "77777777-7777-4777-8777-777777777777",
+        "session_state_cleared": true
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 414,
+      "message": {
+        "id": 10,
+        "type": "system_prompt",
+        "ts": "2026-10-16T12:27:53.565618Z",
+        "payload": {
+          "session_prompt_status": "matches"
+        },
+        "in_reply_to": 9
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 415,
+      "message": {
+        "id": 11,
+        "type": "model_list",
+        "ts": "2026-10-16T12:27:53.565538Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "models": [
+            {
+              "resolved_model": "claude-sonnet-5",
+              "value": "default",
+              "display_name": "Default (recommended)",
+              "effort_levels": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "supports_auto_mode": true,
+              "truncated_fields": null,
+              "agent": "claude",
+              "family": "default"
+            },
+            {
+              "resolved_model": "claude-sonnet-5",
+              "value": "sonnet",
+              "display_name": "Sonnet",
+              "effort_levels": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "supports_auto_mode": true,
+              "truncated_fields": null,
+              "agent": "claude",
+              "family": "sonnet"
+            },
+            {
+              "resolved_model": "claude-fable-5-1",
+              "value": "claude-fable-5-1[1m]",
+              "display_name": "Fable",
+              "effort_levels": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "supports_auto_mode": true,
+              "truncated_fields": null,
+              "agent": "claude",
+              "family": "fable[1m]"
+            },
+            {
+              "resolved_model": "claude-opus-5-5",
+              "value": "opus",
+              "display_name": "Opus",
+              "effort_levels": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "supports_auto_mode": true,
+              "truncated_fields": null,
+              "agent": "claude",
+              "family": "opus"
+            },
+            {
+              "resolved_model": "claude-haiku-4-5-20251001",
+              "value": "haiku",
+              "display_name": "Haiku",
+              "effort_levels": [],
+              "supports_auto_mode": false,
+              "truncated_fields": null,
+              "agent": "claude",
+              "family": "haiku"
+            }
+          ],
+          "dropped_models": 0
+        },
+        "in_reply_to": 8,
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "77777777-7777-4777-8777-777777777777"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 424,
+      "message": {
+        "id": 12,
+        "type": "thread_items",
+        "ts": "2026-10-16T12:27:53.575566Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "epoch": "67d694e2c6269acb09a44474510d6253",
+          "version": 0,
+          "items": [],
+          "final": true,
+          "lower_order": 0,
+          "upper_order": 1,
+          "continuation": 0,
+          "older_exists": false
+        },
+        "in_reply_to": 5
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 425,
+      "message": {
+        "id": 13,
+        "type": "session_settings",
+        "ts": "2026-10-16T12:27:53.57589Z",
+        "payload": {},
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+        "session_state_cleared": true
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 425,
+      "message": {
+        "id": 14,
+        "type": "session_settings",
+        "ts": "2026-10-16T12:27:53.57589Z",
+        "payload": {
+          "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+          "model": "",
+          "effort": "",
+          "yolo": false,
+          "permission_mode": "",
+          "used_tokens": 0,
+          "window_tokens": 200000
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 425,
+      "message": {
+        "id": 15,
+        "type": "session_settings",
+        "ts": "2026-10-16T12:27:53.57589Z",
+        "payload": {
+          "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+          "model": "",
+          "effort": "",
+          "yolo": false,
+          "permission_mode": "",
+          "used_tokens": 0,
+          "window_tokens": 200000,
+          "capabilities": {
+            "interrupt": true,
+            "mid_turn_input": true,
+            "slash_commands": true,
+            "mcp_servers": true,
+            "context_usage_detail": true,
+            "effort_levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "permission_modes": [
+              "default",
+              "acceptEdits",
+              "plan",
+              "auto",
+              "dontAsk"
+            ],
+            "attachment_types": [
+              "*/*"
+            ],
+            "models": [
+              "default",
+              "sonnet",
+              "claude-fable-5-1[1m]",
+              "opus",
+              "haiku"
+            ]
+          },
+          "memory_search": {
+            "availability": "unknown",
+            "providers": []
+          }
+        },
+        "in_reply_to": 6,
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 426,
+      "message": {
+        "id": 16,
+        "type": "error",
+        "ts": "2026-10-16T12:27:53.576078Z",
+        "payload": {
+          "code": "context_usage.unavailable",
+          "message": "context usage is unavailable",
+          "retryable": true
+        },
+        "in_reply_to": 7
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 431,
+      "message": {
+        "id": 10,
+        "type": "send_message",
+        "ts": "2026-10-16T12:27:53.582Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "message_id": "52c03d58-98ce-4863-9304-741214ea7803",
+          "text": "Use Bash to run this exact command in the foreground, never in the background: `touch \"/recorded/workspace/queue-entered-1792153673008\"; until [ -f \"/recorded/workspace/queue-release-1792153673008\" ]; do sleep 0.2; done`. After the command finishes, reply with only QUEUE_FIRST_1792153673008_DONE. Do not write the release file yourself."
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 433,
+      "message": {
+        "id": 17,
+        "type": "ack",
+        "ts": "2026-10-16T12:27:53.5837Z",
+        "payload": {},
+        "in_reply_to": 10
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 447,
+      "message": {
+        "id": 18,
+        "type": "turn_state",
+        "ts": "2026-10-16T12:27:53.59721Z",
+        "payload": {},
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+        "session_state_cleared": true
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 447,
+      "message": {
+        "id": 19,
+        "type": "stall",
+        "ts": "2026-10-16T12:27:53.59723Z",
+        "payload": {},
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+        "session_state_cleared": true
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 447,
+      "message": {
+        "id": 20,
+        "type": "api_retry",
+        "ts": "2026-10-16T12:27:53.597233Z",
+        "payload": {},
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+        "session_state_cleared": true
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 447,
+      "message": {
+        "id": 21,
+        "type": "compacting",
+        "ts": "2026-10-16T12:27:53.597235Z",
+        "payload": {},
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+        "session_state_cleared": true
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 447,
+      "message": {
+        "id": 22,
+        "type": "thinking_progress",
+        "ts": "2026-10-16T12:27:53.597237Z",
+        "payload": {},
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+        "session_state_cleared": true
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 447,
+      "message": {
+        "id": 23,
+        "type": "tool_progress",
+        "ts": "2026-10-16T12:27:53.597239Z",
+        "payload": {},
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+        "session_state_cleared": true
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 447,
+      "message": {
+        "id": 24,
+        "type": "background_task_progress",
+        "ts": "2026-10-16T12:27:53.597241Z",
+        "payload": {},
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+        "session_state_cleared": true
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 447,
+      "message": {
+        "id": 25,
+        "type": "rate_limited",
+        "ts": "2026-10-16T12:27:53.597242Z",
+        "payload": {},
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+        "session_state_cleared": true
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 448,
+      "message": {
+        "id": 26,
+        "type": "context_usage",
+        "ts": "2026-10-16T12:27:53.597244Z",
+        "payload": {},
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+        "session_state_cleared": true
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 448,
+      "message": {
+        "id": 27,
+        "type": "model_announced",
+        "ts": "2026-10-16T12:27:53.597251Z",
+        "payload": {},
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+        "session_state_cleared": true
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 448,
+      "message": {
+        "id": 28,
+        "type": "session_facts",
+        "ts": "2026-10-16T12:27:53.597253Z",
+        "payload": {},
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+        "session_state_cleared": true
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 448,
+      "message": {
+        "id": 29,
+        "type": "mcp_status",
+        "ts": "2026-10-16T12:27:53.597255Z",
+        "payload": {},
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+        "session_state_cleared": true
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 448,
+      "message": {
+        "id": 30,
+        "type": "slash_command_list",
+        "ts": "2026-10-16T12:27:53.597257Z",
+        "payload": {},
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+        "session_state_cleared": true
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 448,
+      "message": {
+        "id": 31,
+        "type": "model_list",
+        "ts": "2026-10-16T12:27:53.597258Z",
+        "payload": {},
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+        "session_state_cleared": true
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 448,
+      "message": {
+        "id": 32,
+        "type": "modal_shown",
+        "ts": "2026-10-16T12:27:53.59726Z",
+        "payload": {},
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+        "session_state_cleared": true
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 448,
+      "message": {
+        "id": 33,
+        "type": "question_shown",
+        "ts": "2026-10-16T12:27:53.597264Z",
+        "payload": {},
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+        "session_state_cleared": true
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 448,
+      "message": {
+        "id": 34,
+        "type": "resetting",
+        "ts": "2026-10-16T12:27:53.597266Z",
+        "payload": {},
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+        "session_state_cleared": true
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 448,
+      "message": {
+        "id": 35,
+        "type": "session_error",
+        "ts": "2026-10-16T12:27:53.597268Z",
+        "payload": {},
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+        "session_state_cleared": true
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 448,
+      "message": {
+        "id": 36,
+        "type": "reply_suggestion",
+        "ts": "2026-10-16T12:27:53.59727Z",
+        "payload": {},
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+        "session_state_cleared": true
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 448,
+      "message": {
+        "id": 37,
+        "type": "session_settings",
+        "ts": "2026-10-16T12:27:53.597272Z",
+        "payload": {},
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+        "session_state_cleared": true
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 451,
+      "message": {
+        "id": 38,
+        "type": "conversation_updated",
+        "ts": "2026-10-16T12:27:53.601774Z",
+        "payload": {
+          "id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "is_promoted": false,
+          "is_archived": false,
+          "is_muted": false,
+          "read_up_to": 0,
+          "name": "Use Bash to run this exact command in…",
+          "cwd": "/recorded/workspace",
+          "workspace_label": null,
+          "last_used_at": "2026-10-16T12:27:53.583706Z",
+          "agent": "claude",
+          "last_shown_version": 1
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 455,
+      "message": {
+        "id": 11,
+        "type": "request_session_settings",
+        "ts": "2026-10-16T12:27:53.606Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389"
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 455,
+      "message": {
+        "id": 12,
+        "type": "request_model_list",
+        "ts": "2026-10-16T12:27:53.606Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389"
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 456,
+      "message": {
+        "id": 13,
+        "type": "list_conversations",
+        "ts": "2026-10-16T12:27:53.607Z",
+        "payload": {}
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 457,
+      "message": {
+        "id": 39,
+        "type": "model_list",
+        "ts": "2026-10-16T12:27:53.60778Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "models": [
+            {
+              "resolved_model": "claude-sonnet-5",
+              "value": "default",
+              "display_name": "Default (recommended)",
+              "effort_levels": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "supports_auto_mode": true,
+              "truncated_fields": null,
+              "agent": "claude",
+              "family": "default"
+            },
+            {
+              "resolved_model": "claude-sonnet-5",
+              "value": "sonnet",
+              "display_name": "Sonnet",
+              "effort_levels": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "supports_auto_mode": true,
+              "truncated_fields": null,
+              "agent": "claude",
+              "family": "sonnet"
+            },
+            {
+              "resolved_model": "claude-fable-5-1",
+              "value": "claude-fable-5-1[1m]",
+              "display_name": "Fable",
+              "effort_levels": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "supports_auto_mode": true,
+              "truncated_fields": null,
+              "agent": "claude",
+              "family": "fable[1m]"
+            },
+            {
+              "resolved_model": "claude-opus-5-5",
+              "value": "opus",
+              "display_name": "Opus",
+              "effort_levels": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "supports_auto_mode": true,
+              "truncated_fields": null,
+              "agent": "claude",
+              "family": "opus"
+            },
+            {
+              "resolved_model": "claude-haiku-4-5-20251001",
+              "value": "haiku",
+              "display_name": "Haiku",
+              "effort_levels": [],
+              "supports_auto_mode": false,
+              "truncated_fields": null,
+              "agent": "claude",
+              "family": "haiku"
+            }
+          ],
+          "dropped_models": 0
+        },
+        "in_reply_to": 12,
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "77777777-7777-4777-8777-777777777777"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 457,
+      "message": {
+        "id": 40,
+        "type": "session_settings",
+        "ts": "2026-10-16T12:27:53.607632Z",
+        "payload": {
+          "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+          "model": "",
+          "effort": "",
+          "yolo": false,
+          "permission_mode": "",
+          "used_tokens": 0,
+          "window_tokens": 200000
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 464,
+      "message": {
+        "id": 41,
+        "type": "thread_item_added",
+        "ts": "2026-10-16T12:27:53.61476Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "epoch": "67d694e2c6269acb09a44474510d6253",
+          "version": 1,
+          "item": {
+            "id": 1,
+            "kind": "user_message",
+            "rev": 1,
+            "session": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+            "agent": "claude",
+            "status": "queued",
+            "active": true,
+            "shown": true,
+            "summary": "Use Bash to run this exact command in the foreground, never in the background: `touch \"/recorded/workspace/queue-entered-1792153673008\"; until [ -f \"/recorded/workspace/queue-release-1792153673008\" ]; do sleep 0.2; done`. After the command finishes, reply with only QUEUE_FIRST_1792153673008_DONE. Do not write the release file yourself.",
+            "content": {
+              "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+              "device_id": "e3cfe03fb35f1c5880ade2ae89f3ed01fb792cd677bf48c0bf4ecda5ae0b4f2d",
+              "message_id": "52c03d58-98ce-4863-9304-741214ea7803",
+              "queued_msg_id": 1,
+              "text": "Use Bash to run this exact command in the foreground, never in the background: `touch \"/recorded/workspace/queue-entered-1792153673008\"; until [ -f \"/recorded/workspace/queue-release-1792153673008\" ]; do sleep 0.2; done`. After the command finishes, reply with only QUEUE_FIRST_1792153673008_DONE. Do not write the release file yourself.",
+              "accepted_at": "2026-10-16T15:27:53.583104+03:00"
+            }
+          }
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 658,
+      "message": {
+        "id": 42,
+        "type": "model_list",
+        "ts": "2026-10-16T12:27:53.807884Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "models": [
+            {
+              "resolved_model": "claude-sonnet-5",
+              "value": "default",
+              "display_name": "Default (recommended)",
+              "effort_levels": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "supports_auto_mode": true,
+              "truncated_fields": null,
+              "agent": "claude",
+              "family": "default"
+            },
+            {
+              "resolved_model": "claude-sonnet-5",
+              "value": "sonnet",
+              "display_name": "Sonnet",
+              "effort_levels": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "supports_auto_mode": true,
+              "truncated_fields": null,
+              "agent": "claude",
+              "family": "sonnet"
+            },
+            {
+              "resolved_model": "claude-fable-5-1",
+              "value": "claude-fable-5-1[1m]",
+              "display_name": "Fable",
+              "effort_levels": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "supports_auto_mode": true,
+              "truncated_fields": null,
+              "agent": "claude",
+              "family": "fable[1m]"
+            },
+            {
+              "resolved_model": "claude-opus-5-5",
+              "value": "opus",
+              "display_name": "Opus",
+              "effort_levels": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "supports_auto_mode": true,
+              "truncated_fields": null,
+              "agent": "claude",
+              "family": "opus"
+            },
+            {
+              "resolved_model": "claude-haiku-4-5-20251001",
+              "value": "haiku",
+              "display_name": "Haiku",
+              "effort_levels": [],
+              "supports_auto_mode": false,
+              "truncated_fields": null,
+              "agent": "claude",
+              "family": "haiku"
+            }
+          ],
+          "dropped_models": 0
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 658,
+      "message": {
+        "id": 43,
+        "type": "slash_command_list",
+        "ts": "2026-10-16T12:27:53.808245Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "commands": [
+            {
+              "name": "deep-research",
+              "argument_hint": "",
+              "description": "Deep research harness — fan-out web searches, fetch sources, adversarially verify claims, synthesize a cited report. (dynamic workflow)",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "design",
+              "argument_hint": "consent | revoke",
+              "description": "Grant or revoke Claude agent access to your Design projects",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "design-sync",
+              "argument_hint": "[<project hint, e.g. \"Acme DS\">]",
+              "description": "Push a React design system to claude.ai/design. This runs a converter that bundles the real component code (from Storybook or a bare package) and uploads it. Use when the user runs /design-sync or says \"sync my design system to Claude Design\".",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "dataviz",
+              "argument_hint": "",
+              "description": "Use this skill whenever you are about to create ANY chart, graph, plot, dashboard, or data visualization, in ANY output medium — an HTML or React artifact, inline SVG, plotting code in any library (matplotlib, plotly, d3, Recharts, …), an image/PNG you",
+              "aliases": [],
+              "truncated_fields": [
+                "description"
+              ]
+            },
+            {
+              "name": "update-config",
+              "argument_hint": "",
+              "description": "Use this skill to configure the Claude Code harness via settings.json. Automated behaviors (\"from now on when X\", \"each time X\", \"whenever X\", \"before/after X\") require hooks configured in settings.json - the harness executes these, not Claude, so memory/p",
+              "aliases": [],
+              "truncated_fields": [
+                "description"
+              ]
+            },
+            {
+              "name": "verify",
+              "argument_hint": "",
+              "description": "Verify that a code change actually does what it's supposed to by exercising it end-to-end and observing behavior — drive the affected flow, not just tests or typecheck. Run before committing nontrivial changes; bootstraps this repo's project verify skill",
+              "aliases": [],
+              "truncated_fields": [
+                "description"
+              ]
+            },
+            {
+              "name": "debug",
+              "argument_hint": "[issue description]",
+              "description": "Enable debug logging for this session and help diagnose issues",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "code-review",
+              "argument_hint": "[low|medium|high|xhigh|max|ultra] [--fix] [--comment] [<pr#>|<branch>|<path>]",
+              "description": "Review the current diff, or a PR number/branch/path target, for correctness bugs (plus reuse/simplification/efficiency cleanups where the model's review recipe covers them) at the given effort level (low/medium: fewer, high-confidence findings; high→max:",
+              "aliases": [
+                "review"
+              ],
+              "truncated_fields": [
+                "description"
+              ]
+            },
+            {
+              "name": "simplify",
+              "argument_hint": "[<target>]",
+              "description": "Review the changed code for reuse, simplification, efficiency, and altitude cleanups, then apply the fixes. Quality only — it does not hunt for bugs; use /code-review for that.",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "batch",
+              "argument_hint": "<instruction>",
+              "description": "Research and plan a large-scale change, then execute it in parallel across 5–30 isolated worktree agents that each open a PR.",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "fewer-permission-prompts",
+              "argument_hint": "",
+              "description": "Scan your transcripts for common read-only Bash and MCP tool calls, then add a prioritized allowlist to project .claude/settings.json to reduce permission prompts.",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "doctor",
+              "argument_hint": "",
+              "description": "Health-check the user's Claude Code setup and fix issues: diagnose installation health — what the `claude doctor` terminal diagnostics cover — from local data (duplicate or leftover installs, PATH, unparseable settings files, broken or colliding agent ",
+              "aliases": [
+                "checkup"
+              ],
+              "truncated_fields": [
+                "description"
+              ]
+            },
+            {
+              "name": "loop",
+              "argument_hint": "[interval] [prompt]",
+              "description": "Run a prompt or slash command on a recurring interval (e.g. /loop 5m /foo). Omit the interval to let the model self-pace.",
+              "aliases": [
+                "proactive"
+              ],
+              "truncated_fields": null
+            },
+            {
+              "name": "schedule",
+              "argument_hint": "",
+              "description": "Create, update, list, or run scheduled cloud agents (routines) that execute on a cron schedule.",
+              "aliases": [
+                "routines"
+              ],
+              "truncated_fields": null
+            },
+            {
+              "name": "claude-api",
+              "argument_hint": "",
+              "description": "Reference for the Claude API / Anthropic SDK — model ids, pricing, params, streaming, tool use, MCP, agents, caching, token counting, model migration.\nTRIGGER — read BEFORE opening the target file; don't skip because it \"looks like a one-liner\" — whe",
+              "aliases": [],
+              "truncated_fields": [
+                "description"
+              ]
+            },
+            {
+              "name": "workflow-authoring",
+              "argument_hint": "",
+              "description": "Reference for writing a Workflow tool script (script API and gotchas, resume, quality patterns, worked examples). Load before authoring a script for a workflow the user already opted into; it does not itself authorize running one.",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "run",
+              "argument_hint": "",
+              "description": "Launch and drive this project's app to see a change working. Use when asked to run, start, or screenshot the app, or to confirm a change works in the real app (not just tests). First looks for a project skill that already covers launching the app; otherwis",
+              "aliases": [],
+              "truncated_fields": [
+                "description"
+              ]
+            },
+            {
+              "name": "run-skill-generator",
+              "argument_hint": "",
+              "description": "Author or improve the run-<unit> skill - a per-project skill that tells agents how to build, launch, and drive this project's app. Use when the user asks to set up the project, get it running, write run instructions, or verify build/run steps work from a c",
+              "aliases": [],
+              "truncated_fields": [
+                "description"
+              ]
+            },
+            {
+              "name": "advisor",
+              "argument_hint": "[fable|opus|sonnet|off]",
+              "description": "Let Claude consult a stronger model at key moments",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "agents",
+              "argument_hint": "",
+              "description": "(removed) Ask Claude to create/manage subagents, or edit .claude/agents/",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "auto-mode-setup",
+              "argument_hint": "[--request-id <uuid>] (--wizard posture=… scope=… depth=… --propose | --expect-sha256 <64-hex> --apply-file <path>)",
+              "description": "Teach auto mode about your environment, plus optional rule tweaks",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "autocompact",
+              "argument_hint": "[auto|<tokens>]",
+              "description": "Configure the auto-compact window size",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "clear",
+              "argument_hint": "[name]",
+              "description": "Start a new session with empty context; previous session stays on disk (resumable with /resume)",
+              "aliases": [
+                "reset",
+                "new"
+              ],
+              "truncated_fields": null
+            },
+            {
+              "name": "color",
+              "argument_hint": "[red|blue|green|yellow|purple|orange|pink|cyan|default]",
+              "description": "Set the prompt bar color for this session",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "compact",
+              "argument_hint": "<optional custom summarization instructions>",
+              "description": "Free up context by summarizing the conversation so far",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "config",
+              "argument_hint": "key=value",
+              "description": "Set a setting by key",
+              "aliases": [
+                "settings"
+              ],
+              "truncated_fields": null
+            },
+            {
+              "name": "output-style",
+              "argument_hint": "[style]",
+              "description": "List output styles or switch to one",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "context",
+              "argument_hint": "",
+              "description": "Show current context usage",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "effort",
+              "argument_hint": "<low|medium|high|xhigh|max|auto>",
+              "description": "Set effort level for model usage",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "fast",
+              "argument_hint": "[on|off]",
+              "description": "Toggle fast mode (Opus 5.5)",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "heapdump",
+              "argument_hint": "",
+              "description": "Dump the JS heap to the Desktop; on Linux with no Desktop folder, the home directory",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "init",
+              "argument_hint": "",
+              "description": "Initialize a new CLAUDE.md file with codebase documentation",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "mcp",
+              "argument_hint": "[reconnect|enable|disable [<server>|all]]",
+              "description": "Manage MCP servers",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "import",
+              "argument_hint": "",
+              "description": "Import config from another AI coding agent",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "model",
+              "argument_hint": "<model>",
+              "description": "Set the AI model for Claude Code",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "__remote-workflow",
+              "argument_hint": "",
+              "description": "Run the workflow script delivered in this session environment (server-launched sessions only)",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "workflow-launch-exec",
+              "argument_hint": "",
+              "description": "Execute a server-launched workflow handoff (workflow_launch event sessions only)",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "reload-plugins",
+              "argument_hint": "[--force]",
+              "description": "Activate pending plugin changes in the current session",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "reload-skills",
+              "argument_hint": "",
+              "description": "Pick up skills added or changed on disk during this session",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "rename",
+              "argument_hint": "[name]",
+              "description": "Rename the current conversation",
+              "aliases": [
+                "name"
+              ],
+              "truncated_fields": null
+            },
+            {
+              "name": "ultrareview",
+              "argument_hint": "",
+              "description": "Start a cloud agent that finds and verifies bugs in your branch (~15-25 min, $5-$25 USD) · Runs in a cloud session. See https://code.claude.com/docs/en/claude-code-on-the-web",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "security-review",
+              "argument_hint": "",
+              "description": "Complete a security review of the pending changes on the current branch",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "usage-credits",
+              "argument_hint": "",
+              "description": "Configure usage credits or request them from your admin when you hit a limit",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "extra-usage",
+              "argument_hint": "",
+              "description": "Renamed to /usage-credits",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "usage",
+              "argument_hint": "",
+              "description": "Show session cost, plan usage, and what's contributing to your limits",
+              "aliases": [
+                "cost",
+                "stats"
+              ],
+              "truncated_fields": null
+            },
+            {
+              "name": "insights",
+              "argument_hint": "",
+              "description": "Generate a report analyzing your Claude Code sessions",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "recap",
+              "argument_hint": "",
+              "description": "Generate a one-line session recap now",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "skill-doctor",
+              "argument_hint": "",
+              "description": "Show which loaded skills are unused and costing context",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "goal",
+              "argument_hint": "",
+              "description": "Set a goal — keep working until the condition is met",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "design-consent",
+              "argument_hint": "",
+              "description": "Grant Claude agent access to your Design projects",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "design-revoke",
+              "argument_hint": "",
+              "description": "Revoke Claude agent access to your Design projects",
+              "aliases": [],
+              "truncated_fields": null
+            },
+            {
+              "name": "list-agents",
+              "argument_hint": "",
+              "description": "List subagents, teammates, and other Claude sessions you can message",
+              "aliases": [
+                "peers"
+              ],
+              "truncated_fields": null
+            },
+            {
+              "name": "team-onboarding",
+              "argument_hint": "",
+              "description": "Help teammates ramp on Claude Code with a guide from your usage",
+              "aliases": [],
+              "truncated_fields": null
+            }
+          ],
+          "dropped_commands": 0
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 660,
+      "message": {
+        "id": 44,
+        "type": "session_settings",
+        "ts": "2026-10-16T12:27:53.607632Z",
+        "payload": {
+          "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+          "model": "",
+          "effort": "",
+          "yolo": false,
+          "permission_mode": "",
+          "used_tokens": 0,
+          "window_tokens": 200000,
+          "effective_effort": null,
+          "capabilities": {
+            "interrupt": true,
+            "mid_turn_input": true,
+            "slash_commands": true,
+            "mcp_servers": true,
+            "context_usage_detail": true,
+            "effort_levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "permission_modes": [
+              "default",
+              "acceptEdits",
+              "plan",
+              "auto",
+              "dontAsk"
+            ],
+            "attachment_types": [
+              "*/*"
+            ],
+            "models": [
+              "default",
+              "sonnet",
+              "claude-fable-5-1[1m]",
+              "opus",
+              "haiku"
+            ]
+          },
+          "memory_search": {
+            "availability": "available",
+            "providers": [
+              {
+                "id": "qmd",
+                "display_name": "QMD",
+                "installed": true,
+                "enabled": true,
+                "availability": "available"
+              }
+            ]
+          }
+        },
+        "in_reply_to": 11,
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 662,
+      "message": {
+        "id": 45,
+        "type": "conversations",
+        "ts": "2026-10-16T12:27:53.812981Z",
+        "payload": {
+          "conversations": [
+            {
+              "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+              "name": null,
+              "is_promoted": false,
+              "current_session_id": "77777777-7777-4777-8777-777777777777",
+              "is_archived": false,
+              "is_muted": false,
+              "read_up_to": 0,
+              "latest_entry_id": 0,
+              "archived_at": null,
+              "cwd": "/recorded/workspace",
+              "workspace_label": null,
+              "last_message_ts": "2026-01-01T00:00:00Z",
+              "last_used_at": "2026-01-01T00:00:00Z",
+              "agent": "claude",
+              "last_shown_version": 0
+            },
+            {
+              "id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+              "name": "Use Bash to run this exact command in…",
+              "is_promoted": false,
+              "current_session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+              "is_archived": false,
+              "is_muted": false,
+              "read_up_to": 0,
+              "latest_entry_id": 1,
+              "archived_at": null,
+              "cwd": "/recorded/workspace",
+              "workspace_label": null,
+              "last_message_ts": "2026-10-16T12:27:53.583706Z",
+              "last_used_at": "2026-10-16T12:27:53.583706Z",
+              "agent": "claude",
+              "last_shown_version": 1
+            }
+          ]
+        },
+        "in_reply_to": 13
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 1490,
+      "message": {
+        "id": 46,
+        "type": "model_announced",
+        "ts": "2026-10-16T12:27:54.640411Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "model": "claude-haiku-4-5-20251001",
+          "truncated": false
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 1490,
+      "message": {
+        "id": 47,
+        "type": "session_facts",
+        "ts": "2026-10-16T12:27:54.640439Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "claude_code_version": "2.1.280",
+          "permission_mode": "bypassPermissions",
+          "truncated_fields": null
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 3015,
+      "message": {
+        "id": 48,
+        "type": "thread_item_changed",
+        "ts": "2026-10-16T12:27:56.165365Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "epoch": "67d694e2c6269acb09a44474510d6253",
+          "version": 7,
+          "item_id": 1,
+          "base_rev": 1,
+          "rev": 7,
+          "changes": {
+            "active": false,
+            "content": {
+              "accepted_at": "2026-10-16T15:27:53.583104+03:00",
+              "client_version": "pyrycode-desktop/0.1.0",
+              "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+              "device_id": "e3cfe03fb35f1c5880ade2ae89f3ed01fb792cd677bf48c0bf4ecda5ae0b4f2d",
+              "device_name": "realclaude-e2e",
+              "message_id": "52c03d58-98ce-4863-9304-741214ea7803",
+              "outcome": {
+                "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+                "accepted_entry_id": 1,
+                "delivery_entry_id": 6,
+                "occurred_at": "2026-10-16T12:27:56.116364Z",
+                "reason": "delivered"
+              },
+              "queued_msg_id": 1,
+              "role": "user",
+              "text": "Use Bash to run this exact command in the foreground, never in the background: `touch \"/recorded/workspace/queue-entered-1792153673008\"; until [ -f \"/recorded/workspace/queue-release-1792153673008\" ]; do sleep 0.2; done`. After the command finishes, reply with only QUEUE_FIRST_1792153673008_DONE. Do not write the release file yourself."
+            },
+            "order": 6,
+            "status": "delivered"
+          }
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 3022,
+      "message": {
+        "id": 14,
+        "type": "mark_conversation_read",
+        "ts": "2026-10-16T12:27:56.173Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "up_to": 1
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 3030,
+      "message": {
+        "id": 49,
+        "type": "conversation_updated",
+        "ts": "2026-10-16T12:27:56.180334Z",
+        "payload": {
+          "id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "is_promoted": false,
+          "is_archived": false,
+          "is_muted": false,
+          "read_up_to": 1,
+          "name": "Use Bash to run this exact command in…",
+          "cwd": "/recorded/workspace",
+          "workspace_label": null,
+          "last_used_at": "2026-10-16T12:27:53.583706Z",
+          "agent": "claude",
+          "last_shown_version": 6
+        },
+        "in_reply_to": 14
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 3030,
+      "message": {
+        "id": 50,
+        "type": "conversation_updated",
+        "ts": "2026-10-16T12:27:56.180365Z",
+        "payload": {
+          "id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "is_promoted": false,
+          "is_archived": false,
+          "is_muted": false,
+          "read_up_to": 1,
+          "name": "Use Bash to run this exact command in…",
+          "cwd": "/recorded/workspace",
+          "workspace_label": null,
+          "last_used_at": "2026-10-16T12:27:53.583706Z",
+          "agent": "claude",
+          "last_shown_version": 6
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 3032,
+      "message": {
+        "id": 15,
+        "type": "list_conversations",
+        "ts": "2026-10-16T12:27:56.183Z",
+        "payload": {}
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 3036,
+      "message": {
+        "id": 51,
+        "type": "conversations",
+        "ts": "2026-10-16T12:27:56.185709Z",
+        "payload": {
+          "conversations": [
+            {
+              "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+              "name": null,
+              "is_promoted": false,
+              "current_session_id": "77777777-7777-4777-8777-777777777777",
+              "is_archived": false,
+              "is_muted": false,
+              "read_up_to": 0,
+              "latest_entry_id": 0,
+              "archived_at": null,
+              "cwd": "/recorded/workspace",
+              "workspace_label": null,
+              "last_message_ts": "2026-01-01T00:00:00Z",
+              "last_used_at": "2026-01-01T00:00:00Z",
+              "agent": "claude",
+              "last_shown_version": 0
+            },
+            {
+              "id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+              "name": "Use Bash to run this exact command in…",
+              "is_promoted": false,
+              "current_session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+              "is_archived": false,
+              "is_muted": false,
+              "read_up_to": 1,
+              "latest_entry_id": 7,
+              "archived_at": null,
+              "cwd": "/recorded/workspace",
+              "workspace_label": null,
+              "last_message_ts": "2026-10-16T12:27:53.583706Z",
+              "last_used_at": "2026-10-16T12:27:53.583706Z",
+              "agent": "claude",
+              "last_shown_version": 6
+            }
+          ]
+        },
+        "in_reply_to": 15
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 3036,
+      "message": {
+        "id": 16,
+        "type": "list_conversations",
+        "ts": "2026-10-16T12:27:56.187Z",
+        "payload": {}
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 3039,
+      "message": {
+        "id": 17,
+        "type": "mark_conversation_read",
+        "ts": "2026-10-16T12:27:56.190Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "up_to": 6
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 3039,
+      "message": {
+        "id": 52,
+        "type": "conversations",
+        "ts": "2026-10-16T12:27:56.18963Z",
+        "payload": {
+          "conversations": [
+            {
+              "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+              "name": null,
+              "is_promoted": false,
+              "current_session_id": "77777777-7777-4777-8777-777777777777",
+              "is_archived": false,
+              "is_muted": false,
+              "read_up_to": 0,
+              "latest_entry_id": 0,
+              "archived_at": null,
+              "cwd": "/recorded/workspace",
+              "workspace_label": null,
+              "last_message_ts": "2026-01-01T00:00:00Z",
+              "last_used_at": "2026-01-01T00:00:00Z",
+              "agent": "claude",
+              "last_shown_version": 0
+            },
+            {
+              "id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+              "name": "Use Bash to run this exact command in…",
+              "is_promoted": false,
+              "current_session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+              "is_archived": false,
+              "is_muted": false,
+              "read_up_to": 1,
+              "latest_entry_id": 7,
+              "archived_at": null,
+              "cwd": "/recorded/workspace",
+              "workspace_label": null,
+              "last_message_ts": "2026-10-16T12:27:53.583706Z",
+              "last_used_at": "2026-10-16T12:27:53.583706Z",
+              "agent": "claude",
+              "last_shown_version": 6
+            }
+          ]
+        },
+        "in_reply_to": 16
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 3046,
+      "message": {
+        "id": 53,
+        "type": "conversation_updated",
+        "ts": "2026-10-16T12:27:56.196955Z",
+        "payload": {
+          "id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "is_promoted": false,
+          "is_archived": false,
+          "is_muted": false,
+          "read_up_to": 6,
+          "name": "Use Bash to run this exact command in…",
+          "cwd": "/recorded/workspace",
+          "workspace_label": null,
+          "last_used_at": "2026-10-16T12:27:53.583706Z",
+          "agent": "claude",
+          "last_shown_version": 6
+        },
+        "in_reply_to": 17
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 3046,
+      "message": {
+        "id": 54,
+        "type": "conversation_updated",
+        "ts": "2026-10-16T12:27:56.196967Z",
+        "payload": {
+          "id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "is_promoted": false,
+          "is_archived": false,
+          "is_muted": false,
+          "read_up_to": 6,
+          "name": "Use Bash to run this exact command in…",
+          "cwd": "/recorded/workspace",
+          "workspace_label": null,
+          "last_used_at": "2026-10-16T12:27:53.583706Z",
+          "agent": "claude",
+          "last_shown_version": 6
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 3047,
+      "message": {
+        "id": 18,
+        "type": "list_conversations",
+        "ts": "2026-10-16T12:27:56.198Z",
+        "payload": {}
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 3048,
+      "message": {
+        "id": 19,
+        "type": "list_conversations",
+        "ts": "2026-10-16T12:27:56.199Z",
+        "payload": {}
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 3049,
+      "message": {
+        "id": 55,
+        "type": "conversations",
+        "ts": "2026-10-16T12:27:56.199419Z",
+        "payload": {
+          "conversations": [
+            {
+              "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+              "name": null,
+              "is_promoted": false,
+              "current_session_id": "77777777-7777-4777-8777-777777777777",
+              "is_archived": false,
+              "is_muted": false,
+              "read_up_to": 0,
+              "latest_entry_id": 0,
+              "archived_at": null,
+              "cwd": "/recorded/workspace",
+              "workspace_label": null,
+              "last_message_ts": "2026-01-01T00:00:00Z",
+              "last_used_at": "2026-01-01T00:00:00Z",
+              "agent": "claude",
+              "last_shown_version": 0
+            },
+            {
+              "id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+              "name": "Use Bash to run this exact command in…",
+              "is_promoted": false,
+              "current_session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+              "is_archived": false,
+              "is_muted": false,
+              "read_up_to": 6,
+              "latest_entry_id": 7,
+              "archived_at": null,
+              "cwd": "/recorded/workspace",
+              "workspace_label": null,
+              "last_message_ts": "2026-10-16T12:27:53.583706Z",
+              "last_used_at": "2026-10-16T12:27:53.583706Z",
+              "agent": "claude",
+              "last_shown_version": 6
+            }
+          ]
+        },
+        "in_reply_to": 18
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 3049,
+      "message": {
+        "id": 56,
+        "type": "conversations",
+        "ts": "2026-10-16T12:27:56.200035Z",
+        "payload": {
+          "conversations": [
+            {
+              "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+              "name": null,
+              "is_promoted": false,
+              "current_session_id": "77777777-7777-4777-8777-777777777777",
+              "is_archived": false,
+              "is_muted": false,
+              "read_up_to": 0,
+              "latest_entry_id": 0,
+              "archived_at": null,
+              "cwd": "/recorded/workspace",
+              "workspace_label": null,
+              "last_message_ts": "2026-01-01T00:00:00Z",
+              "last_used_at": "2026-01-01T00:00:00Z",
+              "agent": "claude",
+              "last_shown_version": 0
+            },
+            {
+              "id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+              "name": "Use Bash to run this exact command in…",
+              "is_promoted": false,
+              "current_session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+              "is_archived": false,
+              "is_muted": false,
+              "read_up_to": 6,
+              "latest_entry_id": 7,
+              "archived_at": null,
+              "cwd": "/recorded/workspace",
+              "workspace_label": null,
+              "last_message_ts": "2026-10-16T12:27:53.583706Z",
+              "last_used_at": "2026-10-16T12:27:53.583706Z",
+              "agent": "claude",
+              "last_shown_version": 6
+            }
+          ]
+        },
+        "in_reply_to": 19
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 3567,
+      "message": {
+        "id": 57,
+        "type": "turn_state",
+        "ts": "2026-10-16T12:27:56.716678Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "state": "thinking"
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 3571,
+      "message": {
+        "id": 58,
+        "type": "turn_state",
+        "ts": "2026-10-16T12:27:56.720872Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "state": "thinking"
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 4211,
+      "message": {
+        "id": 59,
+        "type": "turn_state",
+        "ts": "2026-10-16T12:27:57.361039Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "state": "responding"
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 4214,
+      "message": {
+        "id": 60,
+        "type": "thread_item_added",
+        "ts": "2026-10-16T12:27:57.364651Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "epoch": "67d694e2c6269acb09a44474510d6253",
+          "version": 11,
+          "item": {
+            "id": 11,
+            "kind": "tool_call",
+            "order": 11,
+            "rev": 11,
+            "session": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+            "agent": "claude",
+            "turn": "dc428816-11cf-4be2-888b-a05bf2542314",
+            "status": "running",
+            "active": true,
+            "shown": true,
+            "summary": "Bash: {\"command\":\"touch \\\"/recorded/workspace/queue-entered-1792153673008\\\"; until [ -f \\\"/recorded/workspace/queue-release-1792153673008\\\" ]; do sleep 0.2; done\",\"descript…",
+            "content": {
+              "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+              "turn_id": "dc428816-11cf-4be2-888b-a05bf2542314",
+              "tool_use_id": "toolu_01WABB8FVvZAgpHBDHjzRJtr",
+              "parent_tool_use_id": "",
+              "name": "Bash",
+              "input_summary": "{\"command\":\"touch \\\"/recorded/workspace/queue-entered-1792153673008\\\"; until [ -f \\\"/recorded/workspace/queue-release-1792153673008\\\" ]; do sleep 0.2; done\",\"descript…",
+              "input": {
+                "command": "touch \"/recorded/workspace/queue-entered-1792153673008\"; until [ -f \"/recorded/workspace/queue-release-1792153673008\" ]; do sleep 0.2; done",
+                "description": "Queue synchronization command"
+              }
+            }
+          }
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 4310,
+      "message": {
+        "id": 20,
+        "type": "send_message",
+        "ts": "2026-10-16T12:27:57.461Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "message_id": "5b17997c-7732-4ac0-b0d5-0109f6953084",
+          "text": "Reply with only QUEUE_SECOND_1792153673008_DONE. Do not use tools."
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 4311,
+      "message": {
+        "id": 61,
+        "type": "ack",
+        "ts": "2026-10-16T12:27:57.462316Z",
+        "payload": {},
+        "in_reply_to": 20
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 4314,
+      "message": {
+        "id": 62,
+        "type": "thread_item_added",
+        "ts": "2026-10-16T12:27:57.464714Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "epoch": "67d694e2c6269acb09a44474510d6253",
+          "version": 12,
+          "item": {
+            "id": 12,
+            "kind": "user_message",
+            "rev": 12,
+            "session": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+            "agent": "claude",
+            "status": "queued",
+            "active": true,
+            "shown": true,
+            "summary": "Reply with only QUEUE_SECOND_1792153673008_DONE. Do not use tools.",
+            "content": {
+              "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+              "device_id": "e3cfe03fb35f1c5880ade2ae89f3ed01fb792cd677bf48c0bf4ecda5ae0b4f2d",
+              "message_id": "5b17997c-7732-4ac0-b0d5-0109f6953084",
+              "queued_msg_id": 2,
+              "text": "Reply with only QUEUE_SECOND_1792153673008_DONE. Do not use tools.",
+              "accepted_at": "2026-10-16T15:27:57.462034+03:00"
+            }
+          }
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 4344,
+      "message": {
+        "id": 21,
+        "type": "send_message",
+        "ts": "2026-10-16T12:27:57.495Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "message_id": "fa1f8d4e-8670-4b48-a24a-1369fd0670da",
+          "text": "Reply with only QUEUE_THIRD_1792153673008_DONE. Do not use tools."
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 4344,
+      "message": {
+        "id": 63,
+        "type": "ack",
+        "ts": "2026-10-16T12:27:57.495565Z",
+        "payload": {},
+        "in_reply_to": 21
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 4364,
+      "message": {
+        "id": 64,
+        "type": "thread_item_added",
+        "ts": "2026-10-16T12:27:57.514762Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "epoch": "67d694e2c6269acb09a44474510d6253",
+          "version": 13,
+          "item": {
+            "id": 13,
+            "kind": "user_message",
+            "rev": 13,
+            "session": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+            "agent": "claude",
+            "status": "queued",
+            "active": true,
+            "shown": true,
+            "summary": "Reply with only QUEUE_THIRD_1792153673008_DONE. Do not use tools.",
+            "content": {
+              "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+              "device_id": "e3cfe03fb35f1c5880ade2ae89f3ed01fb792cd677bf48c0bf4ecda5ae0b4f2d",
+              "message_id": "fa1f8d4e-8670-4b48-a24a-1369fd0670da",
+              "queued_msg_id": 3,
+              "text": "Reply with only QUEUE_THIRD_1792153673008_DONE. Do not use tools.",
+              "accepted_at": "2026-10-16T15:27:57.49531+03:00"
+            }
+          }
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 4476,
+      "message": {
+        "id": 65,
+        "type": "turn_state",
+        "ts": "2026-10-16T12:27:57.627175Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "state": "responding"
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 4515,
+      "message": {
+        "id": 66,
+        "type": "thread_item_changed",
+        "ts": "2026-10-16T12:27:57.665197Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "epoch": "67d694e2c6269acb09a44474510d6253",
+          "version": 14,
+          "item_id": 11,
+          "base_rev": 11,
+          "rev": 14,
+          "changes": {
+            "active": false,
+            "content": {
+              "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+              "input": {
+                "command": "touch \"/recorded/workspace/queue-entered-1792153673008\"; until [ -f \"/recorded/workspace/queue-release-1792153673008\" ]; do sleep 0.2; done",
+                "description": "Queue synchronization command"
+              },
+              "input_summary": "{\"command\":\"touch \\\"/recorded/workspace/queue-entered-1792153673008\\\"; until [ -f \\\"/recorded/workspace/queue-release-1792153673008\\\" ]; do sleep 0.2; done\",\"descript…",
+              "name": "Bash",
+              "parent_tool_use_id": "",
+              "result": {
+                "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+                "turn_id": "dc428816-11cf-4be2-888b-a05bf2542314",
+                "tool_use_id": "toolu_01WABB8FVvZAgpHBDHjzRJtr",
+                "parent_tool_use_id": "",
+                "is_error": false,
+                "result_summary": "(Bash completed with no output)",
+                "result_detail": ""
+              },
+              "tool_use_id": "toolu_01WABB8FVvZAgpHBDHjzRJtr",
+              "turn_id": "dc428816-11cf-4be2-888b-a05bf2542314"
+            },
+            "status": "done"
+          }
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 5704,
+      "message": {
+        "id": 67,
+        "type": "turn_state",
+        "ts": "2026-10-16T12:27:58.852653Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "state": "thinking"
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 5705,
+      "message": {
+        "id": 68,
+        "type": "turn_state",
+        "ts": "2026-10-16T12:27:58.854295Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "state": "thinking"
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 5705,
+      "message": {
+        "id": 69,
+        "type": "turn_state",
+        "ts": "2026-10-16T12:27:58.856164Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "state": "responding"
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 5730,
+      "message": {
+        "id": 70,
+        "type": "turn_state",
+        "ts": "2026-10-16T12:27:58.880576Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "state": "responding"
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 5746,
+      "message": {
+        "id": 71,
+        "type": "turn_state",
+        "ts": "2026-10-16T12:27:58.896689Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "state": "responding"
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 5772,
+      "message": {
+        "id": 72,
+        "type": "turn_state",
+        "ts": "2026-10-16T12:27:58.922846Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "state": "idle"
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 5772,
+      "message": {
+        "id": 22,
+        "type": "request_session_settings",
+        "ts": "2026-10-16T12:27:58.923Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389"
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 5775,
+      "message": {
+        "id": 73,
+        "type": "session_settings",
+        "ts": "2026-10-16T12:27:58.925902Z",
+        "payload": {
+          "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+          "model": "",
+          "effort": "",
+          "yolo": true,
+          "permission_mode": "bypassPermissions",
+          "used_tokens": 24377,
+          "window_tokens": 200000
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 5788,
+      "message": {
+        "id": 74,
+        "type": "context_usage",
+        "ts": "2026-10-16T12:27:58.938431Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "model": "claude-haiku-4-5-20251001",
+          "total_tokens": 24335,
+          "max_tokens": 200000,
+          "percentage": 12,
+          "categories": [
+            {
+              "name": "Free space",
+              "tokens": 169689
+            },
+            {
+              "name": "MCP tools (deferred)",
+              "tokens": 33309
+            },
+            {
+              "name": "System tools (deferred)",
+              "tokens": 26887
+            },
+            {
+              "name": "System tools",
+              "tokens": 20254
+            },
+            {
+              "name": "System prompt",
+              "tokens": 7637
+            },
+            {
+              "name": "Skills",
+              "tokens": 1556
+            },
+            {
+              "name": "MCP tools",
+              "tokens": 856
+            },
+            {
+              "name": "Messages",
+              "tokens": 8
+            }
+          ],
+          "dropped_categories": 0,
+          "mcp_tools": [
+            {
+              "name": "mcp__indesign__set_book_properties",
+              "server_name": "indesign",
+              "tokens": 945
+            },
+            {
+              "name": "mcp__codegraph__codegraph_explore",
+              "server_name": "codegraph",
+              "tokens": 856
+            },
+            {
+              "name": "mcp__indesign__create_text_frame",
+              "server_name": "indesign",
+              "tokens": 657
+            },
+            {
+              "name": "mcp__indesign__set_spread_properties",
+              "server_name": "indesign",
+              "tokens": 657
+            },
+            {
+              "name": "mcp__indesign__set_document_grid_settings",
+              "server_name": "indesign",
+              "tokens": 616
+            },
+            {
+              "name": "mcp__indesign__create_document",
+              "server_name": "indesign",
+              "tokens": 614
+            },
+            {
+              "name": "mcp__indesign__package_book",
+              "server_name": "indesign",
+              "tokens": 599
+            },
+            {
+              "name": "mcp__indesign__create_master_text_frame",
+              "server_name": "indesign",
+              "tokens": 569
+            },
+            {
+              "name": "mcp__indesign__adjust_page_layout",
+              "server_name": "indesign",
+              "tokens": 542
+            },
+            {
+              "name": "mcp__indesign__resize_page",
+              "server_name": "indesign",
+              "tokens": 504
+            },
+            {
+              "name": "mcp__indesign__place_image",
+              "server_name": "indesign",
+              "tokens": 499
+            },
+            {
+              "name": "mcp__indesign__create_master_guides",
+              "server_name": "indesign",
+              "tokens": 497
+            },
+            {
+              "name": "mcp__indesign__create_spread_guides",
+              "server_name": "indesign",
+              "tokens": 491
+            },
+            {
+              "name": "mcp__indesign__create_page_guides",
+              "server_name": "indesign",
+              "tokens": 484
+            },
+            {
+              "name": "mcp__indesign__set_document_layout_preferences",
+              "server_name": "indesign",
+              "tokens": 478
+            },
+            {
+              "name": "mcp__indesign__set_page_properties",
+              "server_name": "indesign",
+              "tokens": 476
+            },
+            {
+              "name": "mcp__indesign__create_rectangle",
+              "server_name": "indesign",
+              "tokens": 459
+            },
+            {
+              "name": "mcp__indesign__create_table",
+              "server_name": "indesign",
+              "tokens": 457
+            },
+            {
+              "name": "mcp__indesign__create_polygon",
+              "server_name": "indesign",
+              "tokens": 450
+            },
+            {
+              "name": "mcp__indesign__create_paragraph_style",
+              "server_name": "indesign",
+              "tokens": 436
+            },
+            {
+              "name": "mcp__indesign__create_master_rectangle",
+              "server_name": "indesign",
+              "tokens": 423
+            },
+            {
+              "name": "mcp__indesign__create_ellipse",
+              "server_name": "indesign",
+              "tokens": 414
+            },
+            {
+              "name": "mcp__indesign__resize_page_item",
+              "server_name": "indesign",
+              "tokens": 393
+            },
+            {
+              "name": "mcp__indesign__create_character_style",
+              "server_name": "indesign",
+              "tokens": 372
+            },
+            {
+              "name": "mcp__indesign__place_file_on_spread",
+              "server_name": "indesign",
+              "tokens": 365
+            },
+            {
+              "name": "mcp__indesign__set_page_item_properties",
+              "server_name": "indesign",
+              "tokens": 361
+            },
+            {
+              "name": "mcp__indesign__place_file_on_page",
+              "server_name": "indesign",
+              "tokens": 359
+            },
+            {
+              "name": "mcp__indesign__create_object_style",
+              "server_name": "indesign",
+              "tokens": 342
+            },
+            {
+              "name": "mcp__indesign__execute_indesign_code",
+              "server_name": "indesign",
+              "tokens": 342
+            },
+            {
+              "name": "mcp__indesign__reframe_page",
+              "server_name": "indesign",
+              "tokens": 342
+            },
+            {
+              "name": "mcp__indesign__create_master_spread",
+              "server_name": "indesign",
+              "tokens": 314
+            },
+            {
+              "name": "mcp__indesign__find_text_in_document",
+              "server_name": "indesign",
+              "tokens": 306
+            }
+          ],
+          "dropped_mcp_tools": 104,
+          "memory_files": [],
+          "dropped_memory_files": 0
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 5793,
+      "message": {
+        "id": 75,
+        "type": "session_settings",
+        "ts": "2026-10-16T12:27:58.925902Z",
+        "payload": {
+          "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+          "model": "",
+          "effort": "",
+          "yolo": true,
+          "permission_mode": "bypassPermissions",
+          "used_tokens": 24377,
+          "window_tokens": 200000,
+          "effective_effort": null,
+          "capabilities": {
+            "interrupt": true,
+            "mid_turn_input": true,
+            "slash_commands": true,
+            "mcp_servers": true,
+            "context_usage_detail": true,
+            "effort_levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "permission_modes": [
+              "default",
+              "acceptEdits",
+              "plan",
+              "auto",
+              "dontAsk"
+            ],
+            "attachment_types": [
+              "*/*"
+            ],
+            "models": [
+              "default",
+              "sonnet",
+              "claude-fable-5-1[1m]",
+              "opus",
+              "haiku"
+            ]
+          },
+          "memory_search": {
+            "availability": "available",
+            "providers": [
+              {
+                "id": "qmd",
+                "display_name": "QMD",
+                "installed": true,
+                "enabled": true,
+                "availability": "available"
+              }
+            ]
+          }
+        },
+        "in_reply_to": 22,
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 5793,
+      "message": {
+        "id": 76,
+        "type": "model_announced",
+        "ts": "2026-10-16T12:27:58.943794Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "model": "claude-haiku-4-5-20251001",
+          "truncated": false
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 5793,
+      "message": {
+        "id": 77,
+        "type": "session_facts",
+        "ts": "2026-10-16T12:27:58.943924Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "claude_code_version": "2.1.280",
+          "permission_mode": "bypassPermissions",
+          "truncated_fields": null
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 5814,
+      "message": {
+        "id": 78,
+        "type": "thread_item_added",
+        "ts": "2026-10-16T12:27:58.96515Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "epoch": "67d694e2c6269acb09a44474510d6253",
+          "version": 17,
+          "item": {
+            "id": 17,
+            "kind": "assistant_message",
+            "order": 17,
+            "rev": 17,
+            "session": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+            "agent": "claude",
+            "turn": "dc428816-11cf-4be2-888b-a05bf2542314",
+            "status": "running",
+            "active": true,
+            "shown": true,
+            "summary": "QUEUE_FIRST_1792153673008_DONE",
+            "content": {
+              "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+              "turn_id": "dc428816-11cf-4be2-888b-a05bf2542314",
+              "seq": 0,
+              "parent_tool_use_id": "",
+              "text": "QUEUE_FIRST_1792153673008_DONE"
+            }
+          }
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 5814,
+      "message": {
+        "id": 79,
+        "type": "thread_item_changed",
+        "ts": "2026-10-16T12:27:58.96521Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "epoch": "67d694e2c6269acb09a44474510d6253",
+          "version": 18,
+          "item_id": 17,
+          "base_rev": 17,
+          "rev": 18,
+          "changes": {
+            "active": false,
+            "status": "done"
+          }
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 5814,
+      "message": {
+        "id": 80,
+        "type": "thread_item_added",
+        "ts": "2026-10-16T12:27:58.965224Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "epoch": "67d694e2c6269acb09a44474510d6253",
+          "version": 18,
+          "item": {
+            "id": 18,
+            "kind": "turn_end",
+            "order": 18,
+            "rev": 18,
+            "session": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+            "agent": "claude",
+            "turn": "dc428816-11cf-4be2-888b-a05bf2542314",
+            "status": "done",
+            "active": false,
+            "shown": false,
+            "summary": "end_turn",
+            "content": {
+              "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+              "turn_id": "dc428816-11cf-4be2-888b-a05bf2542314",
+              "stop_reason": "end_turn",
+              "outcome": "success",
+              "is_error": false,
+              "terminal_reason": "completed",
+              "error_category": "",
+              "duration_ms": 4301,
+              "duration_api_ms": 4019,
+              "num_turns": 2,
+              "cost_usd_total": 0.025403000000000002,
+              "input_tokens": 18,
+              "output_tokens": 241,
+              "cache_read_tokens": 38220,
+              "cache_creation_tokens": 10179
+            }
+          }
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 6914,
+      "message": {
+        "id": 81,
+        "type": "thread_item_changed",
+        "ts": "2026-10-16T12:28:00.065095Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "epoch": "67d694e2c6269acb09a44474510d6253",
+          "version": 24,
+          "item_id": 12,
+          "base_rev": 12,
+          "rev": 24,
+          "changes": {
+            "active": false,
+            "content": {
+              "accepted_at": "2026-10-16T15:27:57.462034+03:00",
+              "client_version": "pyrycode-desktop/0.1.0",
+              "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+              "device_id": "e3cfe03fb35f1c5880ade2ae89f3ed01fb792cd677bf48c0bf4ecda5ae0b4f2d",
+              "device_name": "realclaude-e2e",
+              "message_id": "5b17997c-7732-4ac0-b0d5-0109f6953084",
+              "outcome": {
+                "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+                "accepted_entry_id": 12,
+                "delivery_entry_id": 23,
+                "occurred_at": "2026-10-16T12:28:00.021844Z",
+                "reason": "delivered"
+              },
+              "queued_msg_id": 2,
+              "role": "user",
+              "text": "Reply with only QUEUE_SECOND_1792153673008_DONE. Do not use tools."
+            },
+            "order": 23,
+            "status": "delivered"
+          }
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 7178,
+      "message": {
+        "id": 82,
+        "type": "turn_state",
+        "ts": "2026-10-16T12:28:00.328406Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "state": "thinking"
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 7179,
+      "message": {
+        "id": 83,
+        "type": "turn_state",
+        "ts": "2026-10-16T12:28:00.329229Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "state": "thinking"
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 7179,
+      "message": {
+        "id": 84,
+        "type": "turn_state",
+        "ts": "2026-10-16T12:28:00.329955Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "state": "responding"
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 7179,
+      "message": {
+        "id": 85,
+        "type": "turn_state",
+        "ts": "2026-10-16T12:28:00.330424Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "state": "responding"
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 7196,
+      "message": {
+        "id": 86,
+        "type": "turn_state",
+        "ts": "2026-10-16T12:28:00.346346Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "state": "responding"
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 7240,
+      "message": {
+        "id": 87,
+        "type": "turn_state",
+        "ts": "2026-10-16T12:28:00.390766Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "state": "idle"
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 7241,
+      "message": {
+        "id": 23,
+        "type": "request_session_settings",
+        "ts": "2026-10-16T12:28:00.392Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389"
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 7245,
+      "message": {
+        "id": 88,
+        "type": "session_settings",
+        "ts": "2026-10-16T12:28:00.395489Z",
+        "payload": {
+          "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+          "model": "",
+          "effort": "",
+          "yolo": true,
+          "permission_mode": "bypassPermissions",
+          "used_tokens": 24496,
+          "window_tokens": 200000
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 7254,
+      "message": {
+        "id": 89,
+        "type": "context_usage",
+        "ts": "2026-10-16T12:28:00.404168Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "model": "claude-haiku-4-5-20251001",
+          "total_tokens": 24439,
+          "max_tokens": 200000,
+          "percentage": 12,
+          "categories": [
+            {
+              "name": "Free space",
+              "tokens": 169689
+            },
+            {
+              "name": "MCP tools (deferred)",
+              "tokens": 33309
+            },
+            {
+              "name": "System tools (deferred)",
+              "tokens": 26887
+            },
+            {
+              "name": "System tools",
+              "tokens": 20254
+            },
+            {
+              "name": "System prompt",
+              "tokens": 7637
+            },
+            {
+              "name": "Skills",
+              "tokens": 1556
+            },
+            {
+              "name": "MCP tools",
+              "tokens": 856
+            },
+            {
+              "name": "Messages",
+              "tokens": 8
+            }
+          ],
+          "dropped_categories": 0,
+          "mcp_tools": [
+            {
+              "name": "mcp__indesign__set_book_properties",
+              "server_name": "indesign",
+              "tokens": 945
+            },
+            {
+              "name": "mcp__codegraph__codegraph_explore",
+              "server_name": "codegraph",
+              "tokens": 856
+            },
+            {
+              "name": "mcp__indesign__create_text_frame",
+              "server_name": "indesign",
+              "tokens": 657
+            },
+            {
+              "name": "mcp__indesign__set_spread_properties",
+              "server_name": "indesign",
+              "tokens": 657
+            },
+            {
+              "name": "mcp__indesign__set_document_grid_settings",
+              "server_name": "indesign",
+              "tokens": 616
+            },
+            {
+              "name": "mcp__indesign__create_document",
+              "server_name": "indesign",
+              "tokens": 614
+            },
+            {
+              "name": "mcp__indesign__package_book",
+              "server_name": "indesign",
+              "tokens": 599
+            },
+            {
+              "name": "mcp__indesign__create_master_text_frame",
+              "server_name": "indesign",
+              "tokens": 569
+            },
+            {
+              "name": "mcp__indesign__adjust_page_layout",
+              "server_name": "indesign",
+              "tokens": 542
+            },
+            {
+              "name": "mcp__indesign__resize_page",
+              "server_name": "indesign",
+              "tokens": 504
+            },
+            {
+              "name": "mcp__indesign__place_image",
+              "server_name": "indesign",
+              "tokens": 499
+            },
+            {
+              "name": "mcp__indesign__create_master_guides",
+              "server_name": "indesign",
+              "tokens": 497
+            },
+            {
+              "name": "mcp__indesign__create_spread_guides",
+              "server_name": "indesign",
+              "tokens": 491
+            },
+            {
+              "name": "mcp__indesign__create_page_guides",
+              "server_name": "indesign",
+              "tokens": 484
+            },
+            {
+              "name": "mcp__indesign__set_document_layout_preferences",
+              "server_name": "indesign",
+              "tokens": 478
+            },
+            {
+              "name": "mcp__indesign__set_page_properties",
+              "server_name": "indesign",
+              "tokens": 476
+            },
+            {
+              "name": "mcp__indesign__create_rectangle",
+              "server_name": "indesign",
+              "tokens": 459
+            },
+            {
+              "name": "mcp__indesign__create_table",
+              "server_name": "indesign",
+              "tokens": 457
+            },
+            {
+              "name": "mcp__indesign__create_polygon",
+              "server_name": "indesign",
+              "tokens": 450
+            },
+            {
+              "name": "mcp__indesign__create_paragraph_style",
+              "server_name": "indesign",
+              "tokens": 436
+            },
+            {
+              "name": "mcp__indesign__create_master_rectangle",
+              "server_name": "indesign",
+              "tokens": 423
+            },
+            {
+              "name": "mcp__indesign__create_ellipse",
+              "server_name": "indesign",
+              "tokens": 414
+            },
+            {
+              "name": "mcp__indesign__resize_page_item",
+              "server_name": "indesign",
+              "tokens": 393
+            },
+            {
+              "name": "mcp__indesign__create_character_style",
+              "server_name": "indesign",
+              "tokens": 372
+            },
+            {
+              "name": "mcp__indesign__place_file_on_spread",
+              "server_name": "indesign",
+              "tokens": 365
+            },
+            {
+              "name": "mcp__indesign__set_page_item_properties",
+              "server_name": "indesign",
+              "tokens": 361
+            },
+            {
+              "name": "mcp__indesign__place_file_on_page",
+              "server_name": "indesign",
+              "tokens": 359
+            },
+            {
+              "name": "mcp__indesign__create_object_style",
+              "server_name": "indesign",
+              "tokens": 342
+            },
+            {
+              "name": "mcp__indesign__execute_indesign_code",
+              "server_name": "indesign",
+              "tokens": 342
+            },
+            {
+              "name": "mcp__indesign__reframe_page",
+              "server_name": "indesign",
+              "tokens": 342
+            },
+            {
+              "name": "mcp__indesign__create_master_spread",
+              "server_name": "indesign",
+              "tokens": 314
+            },
+            {
+              "name": "mcp__indesign__find_text_in_document",
+              "server_name": "indesign",
+              "tokens": 306
+            }
+          ],
+          "dropped_mcp_tools": 104,
+          "memory_files": [],
+          "dropped_memory_files": 0
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 7254,
+      "message": {
+        "id": 90,
+        "type": "session_settings",
+        "ts": "2026-10-16T12:28:00.395489Z",
+        "payload": {
+          "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+          "model": "",
+          "effort": "",
+          "yolo": true,
+          "permission_mode": "bypassPermissions",
+          "used_tokens": 24496,
+          "window_tokens": 200000,
+          "effective_effort": null,
+          "capabilities": {
+            "interrupt": true,
+            "mid_turn_input": true,
+            "slash_commands": true,
+            "mcp_servers": true,
+            "context_usage_detail": true,
+            "effort_levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "permission_modes": [
+              "default",
+              "acceptEdits",
+              "plan",
+              "auto",
+              "dontAsk"
+            ],
+            "attachment_types": [
+              "*/*"
+            ],
+            "models": [
+              "default",
+              "sonnet",
+              "claude-fable-5-1[1m]",
+              "opus",
+              "haiku"
+            ]
+          },
+          "memory_search": {
+            "availability": "available",
+            "providers": [
+              {
+                "id": "qmd",
+                "display_name": "QMD",
+                "installed": true,
+                "enabled": true,
+                "availability": "available"
+              }
+            ]
+          }
+        },
+        "in_reply_to": 23,
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 7259,
+      "message": {
+        "id": 91,
+        "type": "model_announced",
+        "ts": "2026-10-16T12:28:00.409444Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "model": "claude-haiku-4-5-20251001",
+          "truncated": false
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 7259,
+      "message": {
+        "id": 92,
+        "type": "session_facts",
+        "ts": "2026-10-16T12:28:00.409614Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "claude_code_version": "2.1.280",
+          "permission_mode": "bypassPermissions",
+          "truncated_fields": null
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 7264,
+      "message": {
+        "id": 93,
+        "type": "thread_item_added",
+        "ts": "2026-10-16T12:28:00.414674Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "epoch": "67d694e2c6269acb09a44474510d6253",
+          "version": 28,
+          "item": {
+            "id": 28,
+            "kind": "assistant_message",
+            "order": 28,
+            "rev": 28,
+            "session": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+            "agent": "claude",
+            "turn": "c2c9a0b8-7d09-469a-ae09-9be7ffb94fb9",
+            "status": "running",
+            "active": true,
+            "shown": true,
+            "summary": "QUEUE_SECOND_1792153673008_DONE",
+            "content": {
+              "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+              "turn_id": "c2c9a0b8-7d09-469a-ae09-9be7ffb94fb9",
+              "seq": 0,
+              "parent_tool_use_id": "",
+              "text": "QUEUE_SECOND_1792153673008_DONE"
+            }
+          }
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 7264,
+      "message": {
+        "id": 94,
+        "type": "thread_item_changed",
+        "ts": "2026-10-16T12:28:00.414723Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "epoch": "67d694e2c6269acb09a44474510d6253",
+          "version": 30,
+          "item_id": 28,
+          "base_rev": 28,
+          "rev": 29,
+          "changes": {
+            "active": false,
+            "status": "done"
+          }
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 7264,
+      "message": {
+        "id": 95,
+        "type": "thread_item_added",
+        "ts": "2026-10-16T12:28:00.414739Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "epoch": "67d694e2c6269acb09a44474510d6253",
+          "version": 30,
+          "item": {
+            "id": 29,
+            "kind": "turn_end",
+            "order": 29,
+            "rev": 29,
+            "session": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+            "agent": "claude",
+            "turn": "c2c9a0b8-7d09-469a-ae09-9be7ffb94fb9",
+            "status": "done",
+            "active": false,
+            "shown": false,
+            "summary": "end_turn",
+            "content": {
+              "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+              "turn_id": "c2c9a0b8-7d09-469a-ae09-9be7ffb94fb9",
+              "stop_reason": "end_turn",
+              "outcome": "success",
+              "is_error": false,
+              "terminal_reason": "completed",
+              "error_category": "",
+              "duration_ms": 1450,
+              "duration_api_ms": 5460,
+              "num_turns": 1,
+              "cost_usd_total": 0.028334700000000004,
+              "input_tokens": 10,
+              "output_tokens": 57,
+              "cache_read_tokens": 24327,
+              "cache_creation_tokens": 102
+            }
+          }
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 8365,
+      "message": {
+        "id": 96,
+        "type": "thread_item_changed",
+        "ts": "2026-10-16T12:28:01.515252Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "epoch": "67d694e2c6269acb09a44474510d6253",
+          "version": 35,
+          "item_id": 13,
+          "base_rev": 13,
+          "rev": 35,
+          "changes": {
+            "active": false,
+            "content": {
+              "accepted_at": "2026-10-16T15:27:57.49531+03:00",
+              "client_version": "pyrycode-desktop/0.1.0",
+              "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+              "device_id": "e3cfe03fb35f1c5880ade2ae89f3ed01fb792cd677bf48c0bf4ecda5ae0b4f2d",
+              "device_name": "realclaude-e2e",
+              "message_id": "fa1f8d4e-8670-4b48-a24a-1369fd0670da",
+              "outcome": {
+                "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+                "accepted_entry_id": 13,
+                "delivery_entry_id": 34,
+                "occurred_at": "2026-10-16T12:28:01.471869Z",
+                "reason": "delivered"
+              },
+              "queued_msg_id": 3,
+              "role": "user",
+              "text": "Reply with only QUEUE_THIRD_1792153673008_DONE. Do not use tools."
+            },
+            "order": 34,
+            "status": "delivered"
+          }
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 8455,
+      "message": {
+        "id": 97,
+        "type": "turn_state",
+        "ts": "2026-10-16T12:28:01.606174Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "state": "thinking"
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 8456,
+      "message": {
+        "id": 98,
+        "type": "turn_state",
+        "ts": "2026-10-16T12:28:01.607044Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "state": "thinking"
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 8483,
+      "message": {
+        "id": 99,
+        "type": "turn_state",
+        "ts": "2026-10-16T12:28:01.633389Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "state": "responding"
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 8483,
+      "message": {
+        "id": 100,
+        "type": "turn_state",
+        "ts": "2026-10-16T12:28:01.63363Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "state": "responding"
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 8509,
+      "message": {
+        "id": 101,
+        "type": "turn_state",
+        "ts": "2026-10-16T12:28:01.659779Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "state": "responding"
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 8524,
+      "message": {
+        "id": 102,
+        "type": "turn_state",
+        "ts": "2026-10-16T12:28:01.674862Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "state": "idle"
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "client",
+      "atMs": 8524,
+      "message": {
+        "id": 24,
+        "type": "request_session_settings",
+        "ts": "2026-10-16T12:28:01.675Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389"
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 8527,
+      "message": {
+        "id": 103,
+        "type": "session_settings",
+        "ts": "2026-10-16T12:28:01.67772Z",
+        "payload": {
+          "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+          "model": "",
+          "effort": "",
+          "yolo": true,
+          "permission_mode": "bypassPermissions",
+          "used_tokens": 24599,
+          "window_tokens": 200000
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 8533,
+      "message": {
+        "id": 104,
+        "type": "context_usage",
+        "ts": "2026-10-16T12:28:01.683724Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "model": "claude-haiku-4-5-20251001",
+          "total_tokens": 24558,
+          "max_tokens": 200000,
+          "percentage": 12,
+          "categories": [
+            {
+              "name": "Free space",
+              "tokens": 169689
+            },
+            {
+              "name": "MCP tools (deferred)",
+              "tokens": 33309
+            },
+            {
+              "name": "System tools (deferred)",
+              "tokens": 26887
+            },
+            {
+              "name": "System tools",
+              "tokens": 20254
+            },
+            {
+              "name": "System prompt",
+              "tokens": 7637
+            },
+            {
+              "name": "Skills",
+              "tokens": 1556
+            },
+            {
+              "name": "MCP tools",
+              "tokens": 856
+            },
+            {
+              "name": "Messages",
+              "tokens": 8
+            }
+          ],
+          "dropped_categories": 0,
+          "mcp_tools": [
+            {
+              "name": "mcp__indesign__set_book_properties",
+              "server_name": "indesign",
+              "tokens": 945
+            },
+            {
+              "name": "mcp__codegraph__codegraph_explore",
+              "server_name": "codegraph",
+              "tokens": 856
+            },
+            {
+              "name": "mcp__indesign__create_text_frame",
+              "server_name": "indesign",
+              "tokens": 657
+            },
+            {
+              "name": "mcp__indesign__set_spread_properties",
+              "server_name": "indesign",
+              "tokens": 657
+            },
+            {
+              "name": "mcp__indesign__set_document_grid_settings",
+              "server_name": "indesign",
+              "tokens": 616
+            },
+            {
+              "name": "mcp__indesign__create_document",
+              "server_name": "indesign",
+              "tokens": 614
+            },
+            {
+              "name": "mcp__indesign__package_book",
+              "server_name": "indesign",
+              "tokens": 599
+            },
+            {
+              "name": "mcp__indesign__create_master_text_frame",
+              "server_name": "indesign",
+              "tokens": 569
+            },
+            {
+              "name": "mcp__indesign__adjust_page_layout",
+              "server_name": "indesign",
+              "tokens": 542
+            },
+            {
+              "name": "mcp__indesign__resize_page",
+              "server_name": "indesign",
+              "tokens": 504
+            },
+            {
+              "name": "mcp__indesign__place_image",
+              "server_name": "indesign",
+              "tokens": 499
+            },
+            {
+              "name": "mcp__indesign__create_master_guides",
+              "server_name": "indesign",
+              "tokens": 497
+            },
+            {
+              "name": "mcp__indesign__create_spread_guides",
+              "server_name": "indesign",
+              "tokens": 491
+            },
+            {
+              "name": "mcp__indesign__create_page_guides",
+              "server_name": "indesign",
+              "tokens": 484
+            },
+            {
+              "name": "mcp__indesign__set_document_layout_preferences",
+              "server_name": "indesign",
+              "tokens": 478
+            },
+            {
+              "name": "mcp__indesign__set_page_properties",
+              "server_name": "indesign",
+              "tokens": 476
+            },
+            {
+              "name": "mcp__indesign__create_rectangle",
+              "server_name": "indesign",
+              "tokens": 459
+            },
+            {
+              "name": "mcp__indesign__create_table",
+              "server_name": "indesign",
+              "tokens": 457
+            },
+            {
+              "name": "mcp__indesign__create_polygon",
+              "server_name": "indesign",
+              "tokens": 450
+            },
+            {
+              "name": "mcp__indesign__create_paragraph_style",
+              "server_name": "indesign",
+              "tokens": 436
+            },
+            {
+              "name": "mcp__indesign__create_master_rectangle",
+              "server_name": "indesign",
+              "tokens": 423
+            },
+            {
+              "name": "mcp__indesign__create_ellipse",
+              "server_name": "indesign",
+              "tokens": 414
+            },
+            {
+              "name": "mcp__indesign__resize_page_item",
+              "server_name": "indesign",
+              "tokens": 393
+            },
+            {
+              "name": "mcp__indesign__create_character_style",
+              "server_name": "indesign",
+              "tokens": 372
+            },
+            {
+              "name": "mcp__indesign__place_file_on_spread",
+              "server_name": "indesign",
+              "tokens": 365
+            },
+            {
+              "name": "mcp__indesign__set_page_item_properties",
+              "server_name": "indesign",
+              "tokens": 361
+            },
+            {
+              "name": "mcp__indesign__place_file_on_page",
+              "server_name": "indesign",
+              "tokens": 359
+            },
+            {
+              "name": "mcp__indesign__create_object_style",
+              "server_name": "indesign",
+              "tokens": 342
+            },
+            {
+              "name": "mcp__indesign__execute_indesign_code",
+              "server_name": "indesign",
+              "tokens": 342
+            },
+            {
+              "name": "mcp__indesign__reframe_page",
+              "server_name": "indesign",
+              "tokens": 342
+            },
+            {
+              "name": "mcp__indesign__create_master_spread",
+              "server_name": "indesign",
+              "tokens": 314
+            },
+            {
+              "name": "mcp__indesign__find_text_in_document",
+              "server_name": "indesign",
+              "tokens": 306
+            }
+          ],
+          "dropped_mcp_tools": 104,
+          "memory_files": [],
+          "dropped_memory_files": 0
+        },
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 8535,
+      "message": {
+        "id": 105,
+        "type": "session_settings",
+        "ts": "2026-10-16T12:28:01.67772Z",
+        "payload": {
+          "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+          "model": "",
+          "effort": "",
+          "yolo": true,
+          "permission_mode": "bypassPermissions",
+          "used_tokens": 24599,
+          "window_tokens": 200000,
+          "effective_effort": null,
+          "capabilities": {
+            "interrupt": true,
+            "mid_turn_input": true,
+            "slash_commands": true,
+            "mcp_servers": true,
+            "context_usage_detail": true,
+            "effort_levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "permission_modes": [
+              "default",
+              "acceptEdits",
+              "plan",
+              "auto",
+              "dontAsk"
+            ],
+            "attachment_types": [
+              "*/*"
+            ],
+            "models": [
+              "default",
+              "sonnet",
+              "claude-fable-5-1[1m]",
+              "opus",
+              "haiku"
+            ]
+          },
+          "memory_search": {
+            "availability": "available",
+            "providers": [
+              {
+                "id": "qmd",
+                "display_name": "QMD",
+                "installed": true,
+                "enabled": true,
+                "availability": "available"
+              }
+            ]
+          }
+        },
+        "in_reply_to": 24,
+        "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+        "session_id": "058a1bc9-8d37-446e-af34-545e6d3cc95b"
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 8564,
+      "message": {
+        "id": 106,
+        "type": "thread_item_added",
+        "ts": "2026-10-16T12:28:01.714549Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "epoch": "67d694e2c6269acb09a44474510d6253",
+          "version": 40,
+          "item": {
+            "id": 39,
+            "kind": "assistant_message",
+            "order": 39,
+            "rev": 40,
+            "session": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+            "agent": "claude",
+            "turn": "f26af795-1c13-4f7d-a74b-acf4dda390b9",
+            "status": "done",
+            "active": false,
+            "shown": true,
+            "summary": "QUEUE_THIRD_1792153673008_DONE",
+            "content": {
+              "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+              "turn_id": "f26af795-1c13-4f7d-a74b-acf4dda390b9",
+              "seq": 0,
+              "parent_tool_use_id": "",
+              "text": "QUEUE_THIRD_1792153673008_DONE"
+            }
+          }
+        }
+      },
+      "connection": 1
+    },
+    {
+      "direction": "daemon",
+      "atMs": 8564,
+      "message": {
+        "id": 107,
+        "type": "thread_item_added",
+        "ts": "2026-10-16T12:28:01.714592Z",
+        "payload": {
+          "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+          "epoch": "67d694e2c6269acb09a44474510d6253",
+          "version": 40,
+          "item": {
+            "id": 40,
+            "kind": "turn_end",
+            "order": 40,
+            "rev": 40,
+            "session": "058a1bc9-8d37-446e-af34-545e6d3cc95b",
+            "agent": "claude",
+            "turn": "f26af795-1c13-4f7d-a74b-acf4dda390b9",
+            "status": "done",
+            "active": false,
+            "shown": false,
+            "summary": "end_turn",
+            "content": {
+              "conversation_id": "f9da218e-ff76-4e97-93fb-6b731a308389",
+              "turn_id": "f26af795-1c13-4f7d-a74b-acf4dda390b9",
+              "stop_reason": "end_turn",
+              "outcome": "success",
+              "is_error": false,
+              "terminal_reason": "completed",
+              "error_category": "",
+              "duration_ms": 1269,
+              "duration_api_ms": 6720,
+              "num_turns": 1,
+              "cost_usd_total": 0.031230600000000004,
+              "input_tokens": 10,
+              "output_tokens": 41,
+              "cache_read_tokens": 24429,
+              "cache_creation_tokens": 119
+            }
+          }
+        }
+      },
+      "connection": 1
+    }
+  ]
+}

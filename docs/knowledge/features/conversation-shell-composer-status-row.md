@@ -2,8 +2,8 @@
 
 Split from [Conversation shell — composer status row and error slot](conversation-shell-composer-status.md)
 on 2026-09-15 to stay under the size cap. Part of [Composer](conversation-shell-composer.md); see the
-parent page for the trailing slot's occupants (error chip, repair button, recovery, refusal, notices,
-history failure, usage-limit notice, task count) and [Conversation shell](conversation-shell.md) for
+parent page for the trailing slot's connected-only occupants (recovery, refusal, notices,
+history failure, MCP failure and task count) and [Conversation shell](conversation-shell.md) for
 the screen overall.
 
 ## Composer status row (#796)
@@ -167,10 +167,11 @@ the row gained a second, sibling slot of its own, `trailing`, in
 below. Through #796 that right-hand slot was empty and got **no placeholder element**, relying on the
 row's own `height: 24px` to reserve the space (the Figma error frame is itself 24 tall, so a second flex
 child was never going to grow it); #797 kept that posture when filling it — `trailing` still renders bare,
-with no wrapper div, so the three non-error arms emit nothing there today either. **Since
+with no wrapper div. #2076 removed the connection chip and Reconnect;
+remaining occupants render only while connected. **Since
 [#963](https://github.com/pyrycode/pyrycode-desktop/issues/963) the row is sized *by* its occupant rather
 than reserved ahead of it** — `.composer-status` declares `min-height: 24px`, not `height` — because the
-slot gained a second, taller occupant; see [Actionable-error button](conversation-shell-composer-repair-button.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963)
+slot gained a second, taller occupant. That connection-driven growth retired in #2076; see [Actionable-error button](conversation-shell-composer-repair-button.md#actionable-error-button-and-the-row-that-grows-to-fit-it-963)
 below.
 
 **The turning state is a CSS class, never a resolved style.** `.composer-status__icon--spinning` drives a

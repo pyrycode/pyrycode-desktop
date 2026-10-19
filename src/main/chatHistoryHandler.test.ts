@@ -21,6 +21,20 @@ describe('chat history injected handler', () => {
     expect(h.execute).toHaveBeenCalledWith({ operation: 'readList', serverId: 'saved' })
     expect(JSON.stringify(h.event.mock.calls)).not.toContain('secret')
   })
+  it('validates bounded pages before membership and authorizes saved-host opening', async () => {
+    const h = setup(), request = { operation: 'openThreadPage', serverId: 'saved', conversationId: 'chat', limit: 200 }
+    for (const limit of [0, -1, 201, 1.5, '200', null, Infinity])
+      expect(await h.handle(null, { ...request, limit })).toEqual({ status: 'error', code: 'invalid-request' })
+    expect(await h.handle(null, { ...request, path: '/private' })).toEqual({ status: 'error', code: 'invalid-request' })
+    expect(h.loadById).not.toHaveBeenCalled()
+    expect(await h.handle(null, { ...request, serverId: 'other' })).toEqual({ status: 'error', code: 'unknown-host' })
+    expect(h.execute).not.toHaveBeenCalled()
+    for (const operation of ['openThreadPage', 'newestThreadPage', 'beforeThreadPage']) {
+      const page = { ...request, operation, ...(operation === 'beforeThreadPage' ? { continuation: 'opaque' } : {}) }
+      expect(await h.handle(null, page)).toEqual({ status: 'missing' })
+      expect(h.execute).toHaveBeenLastCalledWith(page)
+    }
+  })
   it('contains lookup exceptions and orders membership checks before queued removals', async () => {
     const h = setup()
     h.loadById.mockRejectedValueOnce(new Error('/secret'))
@@ -42,12 +56,12 @@ describe('chat history injected handler', () => {
     expect(h.loadById).not.toHaveBeenCalled()
     const snapshots = {
       list: { version: 1, kind: 'list', serverId: 'saved', conversations: [] },
-      timeline: { version: 1, kind: 'timeline', serverId: 'saved', conversationId: 'chat', items: [], prependedRows: 0, coverage: { status: 'unknown' } }
+      thread: { version: 1, kind: 'daemon-items', serverId: 'saved', conversationId: 'chat', thread: { hostId: 'saved', conversationId: 'chat', epoch: 'e', version: 0, checkpoint: 0, ranges: [], repair: null, items: [] } }
     }
-    for (const operation of ['readList', 'readTimeline', 'replaceList', 'replaceTimeline', 'removeConversation', 'removeServer']) {
+    for (const operation of ['readList', 'readThread', 'replaceList', 'replaceThread', 'removeConversation', 'removeServer']) {
       const request = { operation, serverId: 'saved',
-        ...(['readTimeline', 'replaceTimeline', 'removeConversation'].includes(operation) ? { conversationId: 'chat' } : {}),
-        ...(operation === 'replaceList' ? { snapshot: snapshots.list } : operation === 'replaceTimeline' ? { snapshot: snapshots.timeline } : {}) }
+        ...(['readThread', 'replaceThread', 'removeConversation'].includes(operation) ? { conversationId: 'chat' } : {}),
+        ...(operation === 'replaceList' ? { snapshot: snapshots.list } : operation === 'replaceThread' ? { snapshot: snapshots.thread } : {}) }
       h.execute.mockRejectedValueOnce(new Error('/secret token private-content'))
       expect(await h.handle(null, request)).toEqual({ status: 'error', code: operation.startsWith('read') ? 'unreadable'
         : operation.startsWith('replace') ? 'write-failed' : 'remove-failed' })
@@ -95,6 +109,22 @@ describe('chat history injected handler', () => {
       [{ event: 'history-unpair-cleanup', code: 'ok' }]
     ])
     expect(JSON.stringify(h.event.mock.calls)).not.toMatch(/saved|private-/)
+  })
+
+  it('invalidates queued conversation work while allowing fresh identical coordinates', async () => {
+    const h = setup()
+    h.execute.mockResolvedValue({ status: 'ok' })
+    const remove = h.handle(null, { operation: 'removeConversation', serverId: 'saved', conversationId: 'chat' })
+    const stale = h.handle(null, { operation: 'readThread', serverId: 'saved', conversationId: 'chat' })
+    const staleList = h.handle(null, { operation: 'replaceList', serverId: 'saved', snapshot: {
+      version: 1, kind: 'list', serverId: 'saved', conversations: [{ id: 'chat', name: null, cwd: '/',
+        is_promoted: false, is_archived: false, last_message_ts: '', last_used_at: '', workspace_label: null }] } })
+    const peer = h.handle(null, { operation: 'readThread', serverId: 'saved', conversationId: 'peer' })
+    await remove
+    expect(await stale).toEqual({ status: 'error', code: 'unknown-host' })
+    expect(await staleList).toEqual({ status: 'error', code: 'unknown-host' })
+    expect(await peer).toEqual({ status: 'ok' })
+    expect(await h.handle(null, { operation: 'readThread', serverId: 'saved', conversationId: 'chat' })).toEqual({ status: 'ok' })
   })
 
   it('composes cleanup failure with successful unpair and connection teardown', async () => {

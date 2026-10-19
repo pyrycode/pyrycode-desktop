@@ -296,7 +296,7 @@ before its reply rather than remain pinned below later content. Settled duplicat
 receipts cannot move it again. Host and inactive-conversation isolation belongs to
 the [composer delivery bridge](composer-send-internals.md#2-local-delivery-status-and-receipt-settlement).
 `localMessageDelivery.test.ts` covers these sidecar transitions and original metadata;
-[mounted delivery evidence](daemon-connection-lifecycle.md#delivery-verification)
+[mounted delivery evidence](daemon-connection-disconnected-delivery.md#delivery-verification)
 checks decoded fake-daemon frames and visible waiting/failure/settlement behavior.
 
 **`TurnEndMetrics` ([#1565](https://github.com/pyrycode/pyrycode-desktop/issues/1565)) is a
@@ -308,12 +308,11 @@ intersected onto both arms (`& TurnEndMetrics`), rather than repeated inline the
 `costUsdTotal`, which is the **session's** running total in US dollars — claude's own
 estimate, never recomputed here. Carried as received: no summing, differencing or clamping,
 so `0` and a negative both survive; what "not reported" means (absent or `0`) is left to the
-display tickets that read the field, not this reducer. **Live-only by design**:
-`TurnEndMetrics` is not part of `DurableThreadItem`
-([Protected local chat history § Durable display rows](chat-history.md#durable-display-rows)), so a reload never restores
-these six fields, and `chatHistoryContract.test.ts`'s exact-equality guard is narrowed to
-compare against `ThreadItem` with them omitted from `turnBoundary`, rather than widened to
-include them. See [Inbound message decode § Optional stopped-turn
+display tickets that read the field, not this reducer. These fields were excluded
+from the retired app-built row persistence format. `DurableThreadItem` and its
+equality fixture have since been removed; protected history retains daemon items
+under the [current snapshot contract](chat-history.md#snapshot-contract).
+See [Inbound message decode § Optional stopped-turn
 reports](inbound-message-decode.md#optional-stopped-turn-reports) for the wire-side parse
 and the `Number.isFinite` guard's load-bearing role.
 

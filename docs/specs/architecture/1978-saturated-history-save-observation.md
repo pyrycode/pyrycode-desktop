@@ -1,0 +1,52 @@
+# Saturated history save observation
+
+## Files read
+
+- `e2e/chat-history-recording.spec.ts` → receipt saturation scenario, `observeCommands`, protected-handler observation in confirmed deletion: retain the persistence proof and observe actual successful operations.
+- `e2e/fixtures/launchPairedApp.ts` → `launchPairedApp`: reused profiles reconnect through the first daemon; the hook follows handler registration.
+- `e2e/fixtures/mainProcessRead.ts` → `readMainProcess`: only inspection reads may tolerate transient context loss; installation must remain single-shot.
+- `src/renderer/src/store/chatHistoryWriter.ts` → `capture`, `drain`: received snapshots are buffered before real protected replacement.
+- `src/renderer/src/store/newestHistoryDemand.ts` → `createNewestHistoryDemand`; `historyPageBridge.ts` → `requestHistoryPage`: one opening request, independent oldest coverage.
+- `src/renderer/src/store/savedTimelineRestorer.ts` → `readSavedTimeline`: owned restoration precedes newest demand.
+- Root `CLAUDE.md`, `docs/knowledge/INDEX.md`, `docs/knowledge/features/development-verification.md`, `chat-history.md`, `chat-history-testing.md`, `development-verification-history.md`: separate receipt/save evidence, exact saturation and identity invariants.
+- `docs/specs/architecture/1918-receipt-saturation-synchronization.md`, `1986-offline-settings-reliability.md`: neither earlier diagnosis establishes this recurrence's cause.
+
+## Change
+
+Keep the repair inside the named scenario. Before second-launch navigation, wrap the existing protected-history handler once, forwarding every request unchanged and recording only successful matching `replaceTimeline` completions by item count. Poll this small observation with the existing five-second budget before reading the complete saturated snapshot once for exact equality. Do the same for later live content, after observing its typed host/conversation/message-id-specific `messageReceived` event. Restore the original handler before closing the second process. A failure tears down that process through the existing fixture. Receipt observation and protected-save success remain separate; successful storage, not receipt or elapsed time, releases the full-snapshot assertion. No application, transport, IPC contract, presentation or shared fixture changes.
+
+Preserve immediate correlated fake replies, 500 receipts × 200 ids, only `page-0` eviction, held oldest-end coverage, exactly one newest command, the single assistant at `-8`, later live key `42` / next key `43`, and full saved equality after a third fresh process. Keep the existing CDP command observer: an alternating comparison did not establish it as responsible. No in-flight remote feature branch overlapped the spec during the dependency audit. One deliverable, three criteria, approximately 160 final written lines, zero exported types or consumer migrations, zero production files.
+
+The [recovered original gate excerpt](https://github.com/pyrycode/pyrycode-desktop/issues/1978#issuecomment-6186764616) identifies the failure at historical `3d527863366852cdfa49d945daa192d16df380ce`: second-launch repeated-page full-snapshot equality timed out after five seconds, still returning the seed with `page-0`, without the `repeat` receipt, newest cursor or empty gaps. Its full run recorded 395 executed, 394 passed, 1 failed, 3 skipped; the named rerun recorded 1 executed/passed, 0 failed/skipped. The excerpt establishes the assertion and stale result, not whether that original replacement was delayed or skipped. Managed evidence queries returned no raw bundles; this excerpt is separate evidence from the controlled diagnosis below.
+
+Observed controlled failures at that exact historical revision: eight-worker unchanged named runs alongside its original full suite produced 32 executed, 16 passed, 16 failed, zero skips/retries (`/tmp/builder-1978/historical-contention.json`). Fifteen failures occurred in the second launch's later-live five-second saved-text predicate: expected `retained assistant|later live content`, received `retained assistant`; the DOM already contained the live row. One failed repeated-page snapshot equality. Instrumented runs produced 16 executed, 11 passed, 5 failed, zero skips/retries. Their real-handler traces show the stale read preceding live replacement; replacement returned `ok`, and the first subsequent diagnostic read held two items, keys `[-8, 42]`, next key `43`, 500 receipts and newest cursor `repeat` (`history-instrumented.json`). The expensive full-snapshot read can consume the polling deadline while returning an earlier snapshot. This establishes an observation race for the instrumented later-live failures, without demonstrating lost persistence or proving the original occurrence's timing. It is distinct from #1918's missing receipt observation, whose barrier remained intact.
+
+The CDP/main-observer alternating control recorded 12/4 passed/failed with CDP and 10/4 with main, plus two main-inspection setup failures; it does not justify an observer repair (`observer-comparison.json`). Both unchanged complete suites passed: current main 405 passed / three platform skips, historical revision 395 passed / three skips, zero retries. Passing baselines are not repair proof.
+
+## Testing strategy
+
+- Retain the unchanged failure reports and real-handler traces as test-first evidence. Run the repaired scenario under the same eight-worker contention configuration; exact snapshot assertions must pass without transferring stale large records during save polling.
+- Exercise the save observation against a held unsuccessful/pending replacement in a scratch control: receipt alone must not satisfy it; the unchanged full-snapshot equality must still detect incorrect persisted state.
+- After final main integration, run pre-verify and build, then 20 consecutive named executions with retries disabled and the complete recording spec with retries disabled. Record commit, counts, skip reasons and artifact paths on the ticket and PR.
+- Dispatcher owns the full fake-transport acceptance gate. No live-Claude check is required.
+
+## Revisions
+
+2026-10-15: The initial rendered-text barrier failed under contention even though failure snapshots displayed the live text (`repaired-contention.json`, 16 failed). Use a typed, host/conversation/message-id-specific `messageReceived` listener installed before the push instead. Its small boolean establishes receipt independently from the successful protected replacement; no layout readiness is required by this persistence proof. Both new receipt and save polls retain the default five-second budget. The repeated-page receipt listener and all original persisted-state assertions remain intact.
+
+2026-10-15: The typed-receipt contention run passed all 15 cases that installed observation; one observer installation hit Electron's transient inspection-context loss (`repaired-receipt-contention.json`). Install the wrapper in the fixture's existing `onLaunched` hook, immediately after window/handler readiness and before list startup settles. Installation remains single-shot; only small count reads use the existing `readMainProcess` policy. No fixture API change or mutation retry is introduced. The first scratch held-save probe patched an unrelated handler and is excluded (`held-save-control.json`); the corrected control targets the named scenario's wrapper.
+
+2026-10-15: Final eight-worker contention proof: 16 executed/passed, zero failures/skips/retries (`final-contention.json`). Corrected held-save control: one intentional failure at the five-second save counter, zero skips/retries; receipt had passed, successful counts remained `[1]`, protected text remained `retained assistant`, and releasing the real pending write produced `retained assistant|later live content` (`held-save-control-final.json`, inline `held-save-boundary` attachment). This confirms that receipt cannot satisfy protected completion. No production change was needed.
+
+## Final validation
+
+Implementation revision `b6059c79033045f1822941a218664a0674fed75e`, after final integration of main `3af69885191d5166d232bb7a8cb950f67cfe5e4f`. Linux x64 / Node 25.8.0 / Electron 33.4.11 / Playwright 1.61.1. All paths below are under `/tmp/builder-1978/`; each Playwright report has matching `.stderr` and `-results/` artifacts.
+
+| Proof, in execution order | Executed | Passed | Failed | Skipped | Retries | Report |
+| --- | --- | --- | --- | --- | --- | --- |
+| Named case, 20 consecutive executions, one worker | 20 | 20 | 0 | 0 | 0 | `final-named-20.json` |
+| Complete recording spec, one worker | 10 | 10 | 0 | 0 | 0 | `final-spec.json` |
+
+Commands: `xvfb-run -a npx playwright test e2e/chat-history-recording.spec.ts --grep 'receipt saturation still saves' --repeat-each=20 --workers=1 --retries=0 --reporter=json --output=/tmp/builder-1978/final-named-20-results`, then the same command without `--grep` / `--repeat-each` and with output `final-spec-results`. No acceptance skip reasons: no tests skipped. Pre-verify passes all five checks, including 10,274 unit tests passed / three existing skips (`pre-verify.log`). `npm run build` passes (`build-final.log`). These focused runs preceded the dispatcher-owned full fake-transport acceptance gate below; diagnostic unchanged full-suite passes above do not replace it. No live-Claude test is required.
+
+Subsequent dispatcher verifier gate 6 passed on 2026-10-15 at `f7866f3e7331b5ae99fa3412ba3ecb1131eb2baa`: 405 executed/passed, 0 failed, 3 skipped, zero retries. The supplied per-test gate report and [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1997#issuecomment-6188310409) confirm the named saturation test was present, executed and passed. Skips were the two macOS-only badge cases and macOS last-window reopening. This completes the full fake-transport acceptance evidence; no live-Claude run applies. The verifier's documentation handoff corrects the diagnostic accounting above and carries the successful-save observation pattern into history testing guidance.

@@ -1,5 +1,6 @@
+import { scenarioNonce } from './fixtures/clientScenario'
 import { type Page } from '@playwright/test'
-import { test, expect, encodePairingPayload } from './fixtures/realDaemon'
+import { test, expect, encodePairingPayload } from './fixtures/clientScenario'
 import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
@@ -103,7 +104,7 @@ test('real claude streams a reply into a UI-created conversation for two consecu
   // A per-run nonce so turn 2 differs from turn 1 and reruns differ (defeats any accidental reply caching),
   // never asserted on. The single-short-word phrasing (from #854) discourages tool calls without pinning
   // content — the strictly-increasing count below is robust to a tool split regardless.
-  const runNonce = Date.now()
+  const runNonce = scenarioNonce()
   const message = (turn: number): string => `Reply with a single short word. run=${runNonce} turn=${turn}`
 
   // --- Precondition (AC1): pair against the real daemon, dial the test relay's /v1/client leg. ---

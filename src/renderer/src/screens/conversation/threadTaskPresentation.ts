@@ -1,14 +1,18 @@
+import { createStore } from 'zustand/vanilla'
+import type { StampedDaemonEvent } from '@shared/ipc/events'
 import type { ThreadSnapshot } from '../../store/threadItemStore'
 import type { ConnectionStatus } from '../../store/sessionStore'
 import type { HeldBackgroundTaskProgress } from '../../store/backgroundTaskRosterStore'
 import { backgroundTaskStopSupported, type SuppliedBackgroundTask } from './BackgroundTaskPanel'
 import { taskLinked, usable } from './threadItemPresentation'
 
-type TaskScope = { hostId: string; conversationId: string; epoch: string; session?: string; agent?: string;
+export type TaskScope = { hostId: string; conversationId: string; epoch: string; session?: string; agent?: string;
   taskId: string; creatingItemId?: number }
 export interface ThreadTaskInputs {
   connection?: { hostId: string; status: ConnectionStatus }
   progress?: readonly (TaskScope & { progress: HeldBackgroundTaskProgress })[]
+  /** Independently admitted current-session identities; never inferred from a compact header. */
+  liveTasks?: readonly (TaskScope & { progress: HeldBackgroundTaskProgress })[]
   stops?: readonly (TaskScope & { pending: boolean; refused?: boolean })[]
   onStopTask?: (hostId: string, conversationId: string, taskId: string) => void
 }
@@ -45,7 +49,7 @@ function savedText(content: Record<string, unknown>, ...path: (string | number)[
   return displayed === undefined ? undefined : { text: displayed, cut }
 }
 
-/** Item membership and lifecycle are supplied facts; live readings only decorate matching rows. */
+/** Full links own recorded lifecycle; admitted live identities can stand alone without tool linkage. */
 export function threadTaskPresentations(snapshot: ThreadSnapshot, inputs: ThreadTaskInputs = {}): SuppliedBackgroundTask[] {
   const rows = new Map<string, SuppliedBackgroundTask>()
   for (const source of snapshot.items) {
@@ -96,5 +100,58 @@ export function threadTaskPresentations(snapshot: ThreadSnapshot, inputs: Thread
         subagentType: liveProgress.subagentType.slice(0, 4096), lastToolName: liveProgress.lastToolName.slice(0, 4096) } : null
     })
   }
+  for (const live of inputs.liveTasks ?? []) {
+    if (live.hostId !== snapshot.hostId || live.conversationId !== snapshot.conversationId || live.epoch !== snapshot.epoch ||
+        !usable(live, 'session') || !usable(live, 'agent') || !usable(live, 'taskId')) continue
+    const rowKey = key(live)
+    if (rows.has(rowKey)) continue
+    const stop = inputs.stops?.find(entry => key(entry) === rowKey)
+    rows.set(rowKey, { rowKey, taskId: live.taskId, toolCallId: null, taskType: '',
+      description: 'Background task', truncatedFields: null, active: true,
+      pending: stop?.pending === true && stop.refused !== true,
+      canStop: live.agent === 'claude' && inputs.onStopTask !== undefined && inputs.connection?.hostId === snapshot.hostId &&
+        backgroundTaskStopSupported(inputs.connection.status, live.agent),
+      status: null, outcomeLabel: 'Running', summary: null, latestUpdate: null,
+      progress: { ...live.progress, currentActivity: live.progress.currentActivity.slice(0, 4096),
+        subagentType: live.progress.subagentType.slice(0, 4096), lastToolName: live.progress.lastToolName.slice(0, 4096) } })
+  }
   return [...rows.values()]
+}
+
+/** Only the pending Stop control is client-owned. Membership and outcomes remain daemon facts. */
+export function createThreadTaskStops() {
+  return createStore<{ entries: readonly (TaskScope & { pending: boolean })[];
+    begin: (snapshot: ThreadSnapshot, taskId: string, inputs?: ThreadTaskInputs) => boolean;
+    settle: (snapshot: ThreadSnapshot, inputs?: ThreadTaskInputs) => void;
+    event: (event: StampedDaemonEvent) => void;
+    remove: (host: string, chat?: string) => void }>((set, get) => ({
+    entries: [],
+    begin(snapshot, taskId, inputs = {}) {
+      const row = threadTaskPresentations(snapshot, inputs).find(row => row.active && row.taskId === taskId)
+      if (!row) return false
+      const item = snapshot.items.find(item => item.active === true && item.agent === 'claude' &&
+        taskLinked(item) && record(item.content)?.task_id === taskId)
+      const live = inputs.liveTasks?.find(entry => key(entry) === row.rowKey && entry.agent === 'claude')
+      const scope: TaskScope | undefined = live ?? (item ? { hostId: snapshot.hostId, conversationId: snapshot.conversationId, epoch: snapshot.epoch,
+        taskId, session: attribution(item.session), agent: attribution(item.agent), creatingItemId: item.id } : undefined)
+      if (!scope) return false
+      if (get().entries.some(entry => key(entry) === key(scope))) return false
+      set({ entries: [...get().entries, { ...scope, pending: true }] }); return true
+    },
+    settle(snapshot, inputs) {
+      const active = new Set(threadTaskPresentations(snapshot, inputs).filter(row => row.active).map(row => row.rowKey))
+      const entries = get().entries.filter(entry => entry.hostId !== snapshot.hostId ||
+        entry.conversationId !== snapshot.conversationId || active.has(key(entry)))
+      if (entries.length !== get().entries.length) set({ entries })
+    },
+    event(event) {
+      if (event.type === 'connected') get().remove(event.serverId ?? '')
+      if (event.type === 'backgroundTaskStopRejected') set({ entries: get().entries.filter(entry =>
+        entry.hostId !== event.serverId || entry.conversationId !== event.conversationId || entry.taskId !== event.taskId) })
+    },
+    remove(host, chat) {
+      const entries = get().entries.filter(entry => entry.hostId !== host || chat !== undefined && entry.conversationId !== chat)
+      if (entries.length !== get().entries.length) set({ entries })
+    }
+  }))
 }

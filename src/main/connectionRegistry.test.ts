@@ -4,9 +4,11 @@
 // Electron, no socket.
 import { describe, expect, it, vi } from 'vitest'
 import { createConnectionRegistry } from './connectionRegistry'
+import { createHostedResources } from './transport/hostedResources'
+import { createHostedApps } from './transport/hostedApps'
 import type { DaemonConnection } from './daemonConnection'
 import type { PairedServerRecord, PairedServerStore } from './pairedServerStore'
-import type { SwitchAgentPayload } from '../shared/wire/types'
+import type { SwitchAgentPayload, SetConversationPinnedPayload } from '../shared/wire/types'
 import type { DiagnosticEvent } from './diagnosticLog'
 
 /** A record whose four fields are all derived from `server`, so a mix-up is visible in an assertion. */
@@ -74,6 +76,7 @@ function createStoreFake(initial: PairedServerRecord[] = []) {
 }
 
 interface BuiltConnection {
+  hostedResources: DaemonConnection['hostedResources']
   serverId: string | null
   pairedServer: PairedServerStore
   calls: { start: number; stop: number; reconnect: number; interrupt: number }
@@ -90,6 +93,7 @@ interface BuiltConnection {
   mcpReconnects: Array<[string, string]>
   mcpToggles: Array<[string, string, boolean]>
   taskStops: Array<[string, string]>
+  pins: SetConversationPinnedPayload[]
   /**
    * The conversation ids this connection's `interrupt` was handed (#1092), recorded beside `calls` for
    * the reason `newSessions` is: `calls.interrupt` survives as this file's lifecycle-delegation probe
@@ -114,8 +118,11 @@ function createFactoryFake() {
     const mcpReconnects: Array<[string, string]> = []
     const mcpToggles: Array<[string, string, boolean]> = []
     const taskStops: Array<[string, string]> = []
+    const pins: SetConversationPinnedPayload[] = []
     const interrupts: string[] = []
+    const hostedResources = createHostedResources({ nextId: () => 2, now: () => '2026-10-10T18:00:03Z', connected: () => false, send: () => {} })
     built.push({
+      hostedResources,
       serverId: spec.serverId,
       pairedServer: spec.pairedServer,
       calls,
@@ -126,10 +133,14 @@ function createFactoryFake() {
       mcpReconnects,
       mcpToggles,
       taskStops,
+      pins,
       interrupts
     })
     const noop = (): void => {}
     return {
+      hostedResources,
+      hostedApps: createHostedApps({ resources: hostedResources, nextId: () => 2,
+        now: () => '2026-10-10T18:00:03Z', connected: () => false }),
       queryThread: () => {},
       requestHostSystemPrompt: () => {},
       setHostSystemPrompt: () => {},
@@ -160,7 +171,6 @@ function createFactoryFake() {
         mcpToggles.push([conversationId, serverName, enabled])
       },
       stopBackgroundTask: (conversationId, taskId) => { taskStops.push([conversationId, taskId]) },
-      requestHistory: noop,
       requestSystemPrompt: noop,
       requestConversations: noop,
       requestRecentWorkspaces: noop,
@@ -177,6 +187,7 @@ function createFactoryFake() {
       renameWorkspace: noop,
       setSystemPrompt: noop,
       setConversationMuted: noop,
+      setConversationPinned: payload => { pins.push(payload) },
       setSessionSettings: noop,
       answerModal: noop,
       cancelModal: noop,
@@ -531,6 +542,16 @@ describe('createConnectionRegistry', () => {
   // server; this answers for the one NAMED, which is the whole difference between a command reaching
   // the right daemon and reaching whichever was paired last.
   describe('the per-server accessor', () => {
+    it('exposes hosted resources only on the explicitly named host connection', async () => {
+      const { factory, registry } = harness([record('alpha'), record('beta')])
+      await settle()
+      expect(registry.connectionFor('alpha')?.hostedResources).toBe(factory.for('alpha').hostedResources)
+      expect(registry.connectionFor('beta')?.hostedResources).toBe(factory.for('beta').hostedResources)
+      expect(registry.connectionFor('alpha')?.hostedResources).not.toBe(registry.active.hostedResources)
+      expect(registry.connectionFor('missing')).toBeNull()
+      expect(registry.connectionFor('alpha')?.hostedApps).not.toBe(registry.connectionFor('beta')?.hostedApps)
+      expect(registry.connectionFor('beta')?.hostedApps).toBe(registry.active.hostedApps)
+    })
     it('forwards context requests only to the named host', async () => {
       const { factory, registry } = harness([record('alpha'), record('beta')])
       await settle()
@@ -608,6 +629,15 @@ describe('createConnectionRegistry', () => {
 
       expect(factory.for('alpha').newSessions).toEqual(['conv-1'])
       expect(factory.for('beta').newSessions).toEqual([])
+    })
+
+    it('delegates pins only to the named connection view', async () => {
+      const { factory, registry } = harness([record('alpha'), record('beta')])
+      await settle()
+      const payload = { conversation_id: 'channel', pinned: false }
+      registry.connectionFor('alpha')?.setConversationPinned(payload)
+      expect(factory.for('alpha').pins).toEqual([payload])
+      expect(factory.for('beta').pins).toEqual([])
     })
 
     it('forwards switchAgent payload unchanged only to the named server', async () => {

@@ -84,295 +84,128 @@ was frozen 2026-08-26, and this section is #854's only home.
 
 ## Subagent tool groups
 
-`groupToolRows.ts` projects the conversation's stored arrival order into display order;
-it does not reorder timeline state. Only calls named exactly `Agent` or `Task` can own
-tool and assistant-text children through `parentToolUseId`. Owners come from loaded
-rows in this conversation, including retained completed calls, or the provisional
-Agent projection described below. Ordinary ownership does not require current
-roster membership. Roots and mixed text/tool siblings retain their relative arrival
-order, including interleaved parallel agents. Each attributed reply appears once
-under its owner, using the existing assistant bubble and meta row at child indentation;
-parentless replies retain their ordinary rendering and relative order.
+`ThreadItemsView` uses metadata-only `threadItemIndex`, sharing `nest` with the
+complete adapter, to nest shown supplied items under
+a shown `agent` with the matching item-id `parent` in the same snapshot. It does not
+join `parentToolUseId` against stored arrival order. Missing, hidden and non-agent
+parents leave children flat; a catch-up parent or revision relocates each child
+once. Cycle/self edges are disconnected without losing rows. Visual indentation
+uses 16px steps capped at two levels, while full ancestry controls visibility/counts.
+See [supplied daemon item presentation](conversation-shell-timeline-render.md#supplied-daemon-item-presentation).
 
-A missing parent leaves the tool or reply at the root until a history prepend supplies
-its Agent/Task owner; regrouping uses the same retained item without duplication.
-A reference to an ordinary tool also stays flat. Iterative traversal
-and disconnection of cyclic parent links keep every row reachable; identifiers are
-Map equality hints within this conversation, never authority or DOM attributes.
-Indentation uses `--space-4` per level, capped at two levels (16px and 32px with the
-current tokens). Deeper descendants retain their full ancestry for visibility and counts.
+New groups start collapsed. Text-only descendants still permit disclosure and do
+not add tools. Counts include distinct shown descendant `tool_call` item ids,
+excluding messages, nested agent cards and the owner; equal `tool_use_id` values do
+not merge supplied items. Supplied `active` determines activity independently of
+launch results, child activity or main-turn endings. Expanding admits and mounts
+already-held children; closing a parent unmounts them and defers full adaptation,
+preserving their independent source-ID expansion state. Closed headers use lightweight
+presentation; body-only command and denial formatting wait for expansion. Complete
+composer-report and notification projection stays independent of this local visibility.
 
-New groups start collapsed. `hasChildren` controls disclosure independently of the
-distinct descendant tool count: a pending Agent/Task with only text still has a
-chevron and a “running · 0 tools” count. Assistant text never adds to the count.
-Headers retain the call description and count distinct descendant tool-use ids,
-excluding the parent. For ordinary groups, `running` remains visible while the parent
-or any descendant tool has neither a result nor a denial. Both readings update while
-collapsed. Expanding a pending group reveals children without drawing an empty result
-body; nested groups keep their own collapse state. Text is hidden while its owner
-is collapsed, visible when expanded, and hidden again on collapse.
+`groupToolRows` and `withProvisionalAgents` were deleted in
+[#2023](https://github.com/pyrycode/pyrycode-desktop/issues/2023).
+`groupToolRows.ts` still owns the shared `GroupedToolRow` interface consumed by
+`foldToolRuns`; `foldQueuedRows.ts` retains only the shared `QueuedRowHandle` action
+type. Neither module reconstructs rows. Shared `ThreadItem` and live types keep
+their existing homes; producer APIs remain until #2024.
 
 ### Started background agents
 
-A connect roster's exact `local_agent` task with a usable launch id immediately
-supplies one provisional full Agent row at the bottom, before either a start frame
-or launch history. Placement prefers the latest nonempty roster id, falling back to
-a known usable started id; neither means no new provisional row. The existing Agent
-header uses the held description and “running · 0 tools” treatment, without a launch
-marker until a real call loads. See
-[retained lifecycle evidence](background-task-roster-store-internals.md#retained-agent-timeline-evidence)
-for qualification and ownership.
+A usable saved task link establishes background membership for an already supplied
+item. A direct link or one matching row in a roster-shaped `task_link.tasks` must
+match both saved `task_id` and `tool_use_id`; source roster events, names,
+`run_in_background` or result prose cannot synthesize provisional cards.
 
-`withProvisionalAgents` adds synthetic display items after queue folding, never to
-stored timeline state or saved history. A later live or historical call named exactly
-`Agent` with the matching id replaces synthesis, attaching its marker and children
-to the same full row without duplication. Any loaded matching non-Agent suppresses
-provisional Agent presentation and retains ordinary rendering. Foreground calls,
-`Task`, other task types and unlisted/unconfirmed starts keep their existing behavior.
-Ids compare exactly without trimming or coercion within the conversation and owning
-host; they remain inert equality hints, never authority, DOM attributes or selectors.
-
-The launch position becomes a one-line “Agent started, still working” marker with
-the Agent description and “Go to agent ↓”. The whole marker is a native button:
-pointer activation or Enter/Space scrolls the destination Agent's full row into view,
-without expanding it or any enclosing collapsed tool run. This effect runs
-after the parent's scroll-pin layout pass so explicit navigation wins. The description
-is escaped plain text, bounded to 4096 characters and ellipsized; the action keeps its
-width. Refs and row keys use retained client-owned identities, never daemon ids as DOM
-attributes or selectors.
-
-While running, full Agent groups follow all ordinary rows, including user and queued
-messages, in established evidence order. Already-received start order stays authoritative;
-new connect-only entries append in initial roster order. Later starts/confirmation,
-roster refresh or older launch history never reshuffle established rows.
-Descendants and attributed assistant text
-move with their group; text adds no tools. The background lifecycle controls the
-header's distinct descendant count and running treatment independently of “Async agent
-launched” resolving the parent or gaps between child calls. A childless Agent shows
-“running · 0 tools”; background treatment removes launch-pending dimming and elapsed
-timing. Markers and background roots break folded tool runs, while visible live rows
-reuse the existing joined borders.
-
-The first received update whose status is exactly `completed`, `failed` or `stopped`
-settles the full group at that update's chronological position, before later ordinary
-arrivals. Equal boundaries follow terminal arrival order, rather than start order.
-The launch marker reads “Agent finished” with a green dot and retains navigation;
-the full header shows the tool count without “running”. Roster omission cannot finish
-an Agent, and repeats cannot move or revive an established finish. Placement survives
-roster removal before the update, inactive-conversation delivery and late launch/child
-history. Launch markers remain chronological anchors: confirming a newer Agent must
-not move its marker above an already settled group. See
-[placement and history limits](conversation-timeline-store-limits.md#edge-cases-and-limitations).
-
-Retained row identity preserves expansion through provisional-to-loaded attachment,
-relocation, prepends and late children. A pinned thread follows live-row growth;
-a scrolled-up thread holds the reader's position until explicit navigation.
-`readSavedTimeline` contains no task frames and keeps its existing saved format and
-placement. A saved Agent/result alone cannot recover this lifecycle.
-
-Daemon pages reconstruct finished rows when a valid historical start names exactly
-`local_agent`, has a nonempty tool-call id matching a loaded call named exactly
-`Agent`, and joins an exact `completed`, `failed` or `stopped` update. Current roster
-membership is unnecessary. Finish, start, launch and children can load on separate
-newest-first pages; unmatched evidence stays retained without creating historical
-running/provisional rows. Foreground, other-type, empty-id and matching non-Agent
-calls keep ordinary placement. Existing connect-roster provisional rows can still
-attach their late launches, retaining established start order and roster fallback.
-
-The full historical group settles at its first retained terminal entry, above later
-ordinary rows; tied anchors follow chronological finish-entry order. Its launch
-marker reads “Agent finished” and uses the retained historical start description,
-escaped and bounded to 4096 characters through the existing marker. Older launch/child
-pages reuse the same row/marker and client-owned identity, without moving an established
-finish or losing expansion/navigation. History overlapping live evidence keeps one
-row and marker; replay never revives finished evidence or changes roster/panel/pill
-membership or live turn state. A historical start/launch followed by the first live
-terminal also qualifies without roster membership, retaining the live finish under
-later historical replay. See [retained qualification](background-task-roster-store-internals.md#retained-agent-timeline-evidence)
-and [ordinary-row/echo anchors and host/reset boundaries](conversation-timeline-store-internals.md#background-agent-history-placement).
-
-Durable history admission/persistence and automatic newest-page requests remain
-with #1814/#1815; memory-only lifecycle joins from daemon pages do not change saved
-snapshots.
+Within a sibling lane, active linked cards follow ordinary rows in creation order;
+inactive cards settle at positive `ended_order`, otherwise retaining creation
+placement. Descendants move with their owner, and supplied nesting takes precedence.
+The launch marker remains at creation order and shows supplied activity/outcome.
+Its escaped, bounded description and native “Go to agent” button navigate to the
+same card, reveal ancestors and preserve the card's expansion. Refs are scoped to
+host/conversation/epoch. Marker and background rows break adjacent tool runs.
+Prior-session inactive work stays settled on reopen without reconstructing terminal
+positions from retained roster/start/finish evidence.
 
 ### Expansion identity
 
-`Timeline` controls expansion for **every** tool row. Ordinary rows use retained client-owned
-numeric identity at their source item index. For retained Agent evidence, `agentKeys`
-remembers the first observed UI key: an existing ordinary key if already loaded,
-otherwise `agent-${identity}` from its client-owned numeric identity. Late launch
-attachment reuses that key, keeping the wrapper mounted and expansion intact.
-Store resets never recycle these identities: a fresh provisional row must not inherit
-an old mounted Timeline's expansion. Queue projection can change display indices;
-ancestor and run lookups must resolve through `FoldedRow.itemIndex` too. The fallback for
-callers without retained keys is `firstRowKey + itemIndex`. Separate leaf and group state would close an expanded
-leaf when history gives it its first child. Tool and attributed-text wrappers stay
-under one React parent and remain mounted while hidden, preserving child-result
-and inner-group expansion
-through outer collapse, results, history prepends and regrouping. The mounted timeline
-is keyed by conversation, so this UI state cannot leak into another conversation.
+`ThreadItemsTimeline` keys its inner view by host/conversation/epoch. Numeric daemon
+item ids key the stable sibling wrappers and tool expansion within that scope;
+marker and run headers derive keys from those ids. Appends, revisions, prepends and
+late reparenting preserve source identity and expansion. Closed descendants and folded
+members unmount; reopening can create new DOM elements for the same sources. Equal
+ids in a new scope cannot inherit expansion or refs. There is no `agentKeys`,
+`firstRowKey`, `FoldedRow.itemIndex` or provisional-to-loaded key handoff.
 
-Run expansion uses a separate local `expandedRuns` set with the same origins. Opening
-marks the first root origin; a run stays expanded when **any** surviving member origin
-is marked. A history prepend can introduce an earlier root or a previously missing
-Agent owner, changing the header's key without changing existing member origins.
-Checking only the current first root would close the run in that case. Closing clears
-markers for **all** current run members, so an older mark cannot reopen it. Appends,
-results and closing/reopening the run preserve each member's independent expansion;
-run membership never depends on whether an inner Agent group is open.
-See [history prepend identity](conversation-timeline-store-limits.md#edge-cases-and-limitations).
-
-`hiddenRows` checks every ancestor's tool expansion **and** enclosing run expansion,
-as well as the row's own run. Run membership contains tool indexes only: checking
-just an assistant row's membership leaves its reply visible when an expanded owner
-is hidden by a collapsed tool run. Reopening the run restores the owner's held
-expansion and its text without another toggle. The two controls must be exercised
-together; owner-only collapse coverage cannot detect that leak.
+Run expansion uses its own member-id set. Opening marks every current member id;
+any surviving member keeps a regrouped run open. Marking only the first root would
+lose expansion when a prepend or late parent changes that root. Closing clears all
+current members. Visibility checks both ancestor tool expansion and an enclosing
+run; checking only a text row's own membership can leave it visible through an
+outer run collapse. Test the two controls together, not just owner collapse.
 
 ### Visible tool-row joins
 
-Join decisions follow visible neighbours at the same **capped** indentation, skipping
-collapsed descendants and undrawn `turnBoundary` items. With `foldTools` enabled,
-undrawn informational banners are skipped too; optional-off joins retain their prior
-reading. An expanded run header joins its first root member using the same wrapper
-classes, with the header above the member stack. A visible non-tool row or a
-change in indentation ends the stack. Direct `.tool-row + .tool-row` selectors alone
-cannot implement this: the mounted wrappers interrupt DOM adjacency even for ordinary
-calls with no children. Client-owned wrapper classes extend the existing join rules
-for flattened internal corners, overlapping plain borders and a shadow only on the
-stack's last row. `Timeline`'s `joins` map emits only `tool-group-row--joined-above`
-and `tool-group-row--joined-below`; #1748 removed `tool-group-row--error-above` and
-`tool-group-row--error-below` and their CSS retints. Failure stays local to the
-header's [Failed icon](conversation-shell-tool-rows.md#failed-icon), without changing
-stack geometry or its neighbours' border colour.
-
-Visible wrappers are flex columns so the child's negative join margin reduces wrapper
-height without collapsing through it. Hidden wrappers retain `display: none`, consuming
-neither height nor thread gap. See [tool-row box treatment](conversation-shell-tool-row-body.md).
+`ThreadItemsView` computes joins from visible neighbours at the same capped depth.
+Hidden descendants do not join; shown non-tools, including supplied informational
+notices and turn endings, separate stacks. An expanded run header joins its first
+member. The wrapper map emits only `tool-group-row--joined-above` and
+`tool-group-row--joined-below`. Direct `.tool-row + .tool-row` selectors miss these
+siblings because their mounted wrappers interrupt DOM adjacency. Failure stays
+local to the [Failed icon](conversation-shell-tool-rows.md#failed-icon), with plain
+borders on neighbours. Wrappers are flex columns so negative join margins affect
+height; closed descendants have no mounted wrappers. See
+[tool-row box treatment](conversation-shell-tool-row-body.md).
 
 ### Verification
 
-`toolGroups.test.tsx` covers projection order, depth cap, orphan recovery, cycles,
-distinct counts, denial completion and reducer/history attribution. It also covers
-mixed assistant/tool order, two parents sharing a turn, parent-aware
-tail growth, text-only disclosure, ordinary-tool fallback, late completed owners
-and version-1 snapshot grouping. Static markup
-cannot prove retained interaction or border geometry. `e2e/tool-groups.spec.ts` drives
-interleaved live calls, nested expansion, result resolution and history regrouping;
-it also measures joins through collapse and child-result expansion, including plain
-borders on both sides of a failed row at a collapsed-group boundary. Keep the ordinary
-stack assertion in `e2e/tool-row-toggle.spec.ts`: unchanged inner ToolRow markup did
-not prevent the wrapper regression. Fake transport proves this client behavior; no
-additional live-Claude acceptance gate is needed.
+`threadItems.test.tsx` covers supplied ancestry, cycle/depth handling, shown-item
+counts, activity/outcomes, links, placement and escaped fallback.
+`threadTaskPresentation.test.tsx` covers supplied drawer membership and controls.
+`ConversationScreen.test.tsx`, `banner.test.tsx`, `compactionBoundaryViewModel.test.tsx`
+and `stoppedTurn.test.tsx` render surviving shared rows directly; they do not need
+an event-to-item reconstruction helper. `toolRuns.test.tsx` uses supplied snapshots.
+The removed `toolGroups.test.tsx`, `groupToolRows.test.ts` and `foldQueuedRows.test.ts`
+no longer own presentation coverage.
 
-Background lifecycle units in `backgroundAgentTimeline.test.ts` and
-`groupToolRows.test.ts` cover roster provenance, retained first finish/order, exact
-qualification, projection and queued receipt chronology. Static Timeline coverage
-checks escaped marker content and a zero-child running row; it cannot exercise
-navigation or scrolling. The dispatcher gate at
-`a85d004b2144461c7fb65716e469797f471ebf11` on 2026-10-07 executed 327 fake-transport tests:
-327 passed, 0 failed, 4 skipped. Its named
-“started background agents follow the tail, navigate markers, and settle on inactive
-delivery” test in `e2e/tool-groups.spec.ts` is present and passed, covering pointer and
-Enter/Space navigation, expansion, pinned/held scrolling, inactive delivery, late
-confirmation, equal-boundary finishes and composer-driven queued settlement with
-mounted identity retained. The
-[verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1843#issuecomment-6032197466)
-confirms that evidence; no live-Claude acceptance was required.
+Mixed presentation suites also contained independent producer proofs. Preserve
+those at assertion level while their APIs survive: `threadTimeline.test.ts` checks
+result identity/parent precedence and adjacent-delta coalescing;
+`historyPageBridge.test.ts` checks newest-first tool/assistant attribution;
+`queuedEchoSettlement.test.ts` checks row identity, receipt idempotence, reset and
+Send now stream placement. Delta timestamps must differ to prove retention of the
+first stamp: identical stamps allow an overwriting implementation to pass.
+Roster/history/receipt/delivery/stop suites retain their direct producer assertions,
+and `src/shared/chatHistory.test.ts` retains version-1 assistant-parent round trips.
 
-Connect-roster coverage adds parser cases for missing/empty/exact ids and malformed
-non-strings, actual-store provenance/fallback/reset checks, and projection/static
-render checks for provisional descriptions, exact joins, matching non-Agent suppression,
-late children and retained finish order. Static renders cannot prove DOM continuity.
+Mounted `e2e/tool-groups.spec.ts` retains its four existing cases: marker navigation,
+interleaved groups, joined borders and started-agent lifecycle. `e2e/thread-items.spec.ts`
+adds authoritative supplied nesting/expansion/scroll and task-control proofs.
+Keep the ordinary stack geometry in `e2e/tool-row-toggle.spec.ts`; unchanged inner
+ToolRow markup does not establish wrapper geometry. Static markup cannot prove
+navigation, listeners, scrolling or expansion retention across remounts. Both native
+window variants of the keyboard-collapse regression additionally check the complete
+controlling header between real application chrome; see
+[counted Linux expansion/anchor evidence](conversation-shell-scroll-pin.md#deferred-expansion-verification).
 
-For reviewed head `1887ed4a8de85e0cc02f3b6ddee5ab1fa93582bb`, the
-[verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1847#issuecomment-6032797140)
-records a focused `e2e/tool-groups.spec.ts` run: 4 executed, 4 passed, 0 failed,
-0 skipped. All four named tests in that spec were present and passed:
-
-- “interleaved subagents group, update while collapsed, and retain expansion through history”
-- “visible tool rows keep joined borders across collapsed descendants”
-- “started background agents follow the tail, navigate markers, and settle on inactive delivery”
-- “connect roster Agents appear before history and keep identity through live and historical launches”
-
-The connect test covers pre-history rows, non-Agent suppression, live/history launches,
-same mounted row/expansion, late children, pointer/Enter/Space marker navigation,
-roster removal and inactive-chat finish without duplication. The existing lifecycle
-test retains pinned growth, held scrolled-up position and equal-boundary terminal
-ordering. Separately, the dispatcher full fake-transport gate on 2026-10-07 at the
-same head recorded 328 executed, 328 passed, 0 failed and 4 skipped; the focused
-counted run supplies the named-test evidence above. Live Claude was not run or required.
-
-The same verdict records comparison with
-[Figma background Agent states](https://www.figma.com/design/g2HIq2UyPhslEoHRokQmHG/Pyrycode-Client?node-id=789-10437)
-for running and finished captures at 1280×800 and 800×600. Typography, joined borders,
-counts, chevrons and retained placement matched the reused treatment, with no in-scope
-deviation. Builder captures were `two-provisional-{1280,800}.png` and
-`finished-{1280,800}.png` under `/tmp/builder-1840`; verifier copies/hashes were recorded
-in `/tmp/verifier-1847/capture-manifest.json`. These scratch paths are not durable
-artifacts; the linked verdict records the reviewed evidence.
-
-Finished-history coverage in `finishedAgentHistory.test.ts` includes separate-page
-start/finish/launch joins, late children, tied anchors, echo mapping, evidence-only
-tails and live/history overlap. The history-start → live-terminal → terminal-replay
-regressions exercise all three exact terminal statuses and assert unchanged live
-membership/turn state and finish identity; testing only live → history misses that
-qualification transition.
-
-For reviewed head `eefeb6ffb20ec8aeba135e7b8aa4aeb931557e1a`, the
-[verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1848#issuecomment-6033846146)
-records 9,297 unit tests executed/passed, 0 failed and 3 skipped, including all
-14 tests in `finishedAgentHistory.test.ts` present and passed. Its browser evidence
-records 5 `tool-groups.spec.ts` tests executed/passed, 0 failed and 0 skipped,
-including the named “finished agents reconstruct across pages, attach late children,
-navigate and preserve the reader” scenario and the four existing scenarios listed
-above. The new scenario serves finish, start, launch and child on separate pages;
-it checks unique rows/markers, retained DOM nodes/expansion, later-row chronology,
-pointer/Enter/Space navigation and a held reader anchor after prepend. The initial
-full browser gate recorded 329 executed, 328 passed, 1 failed and 4 skipped; its
-unrelated offline-conversation-actions failure passed the dispatcher rerun
-(1 executed/passed, 0 failed, 0 skipped). No live-Claude run was required or performed.
-
-The [initial visual verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1848#issuecomment-6033526700)
-records comparison with Figma section `789:10437` at 1280×800 and 800×600, covering
-finished chronology, green marker, description and Go to agent with no additional
-in-scope visual finding. The qualification repair did not change presentation;
-the final verdict retains that comparison. Scratch captures under `/tmp/builder-1781`
-are not durable artifacts; the verdicts record the evidence.
-
-[`e2e/assistant-parent-text.spec.ts`](../../../e2e/assistant-parent-text.spec.ts)
-streams deltas before the owner has a result, then checks text-only and mixed groups,
-single occurrence, arrival order, tool-only counts, collapse/expand/collapse and
-enclosing-run collapse/reopen. The
-[verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1791#issuecomment-6003391417)
-confirms both tests executed and passed in the 2026-10-05 dispatcher gate at
-`fbd9003c4775d5ce00be65917ee0ab84497e238c`: 273 executed, 273 passed, 0 failed,
-4 skipped. The tests are “streamed assistant text folds under its owner and follows
-expansion without inflating tool counts” and “attributed text follows its owner when
-an enclosing tool run collapses”. No real-Claude acceptance is required.
-The same verdict records Figma comparison of integrated expanded captures at
-1280×773 and 800×773 content viewports, retaining the assistant presentation and
-16px child indentation. Scratch captures are not a permanent artifact; the verdict
-records the reviewed visual evidence.
-
-Source: [subagent tool groups design](../../specs/architecture/1239-subagent-tool-groups.md)
-and [reviewed implementation](https://github.com/pyrycode/pyrycode-desktop/pull/1328);
-[assistant parent attribution design](../../specs/architecture/1789-assistant-parent-attribution.md)
-and [implementation](https://github.com/pyrycode/pyrycode-desktop/pull/1791);
-[provisional live Agent design](../../specs/architecture/1840-provisional-live-agent-rows.md)
-and [implementation](https://github.com/pyrycode/pyrycode-desktop/pull/1847);
-[finished Agent history design](../../specs/architecture/1781-finished-agent-history.md)
-and [implementation](https://github.com/pyrycode/pyrycode-desktop/pull/1848).
-
+The [cleanup verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/2027#issuecomment-6202221899)
+at `11b4c95e4f3e2a665b5342882fd64ce569882793` records the complete configured
+fake-transport gate on 2026-10-15: **432 executed, 432 passed, 0 failed, 19 skipped**,
+zero flaky results/retries. It confirms active thread activation (15/15), item
+rendering (12/12), frame streaming (1/1) and tool groups (4/4) were present and passed.
+Exactly two skipped legacy tool-group cases and the skipped roster-reconnect case
+were removed; `e2e/background-task-reconnect.spec.ts` is gone. The remaining skips
+are 16 legacy cases owned by #2024 and three macOS-only cases. No active case was
+removed/newly skipped. No live-Claude run or new visual comparison was required.
 
 ## Adjacent tool runs
 
 `ConversationScreen` subscribes to the client-wide
 [collapse assistant tool uses preference](collapse-tool-uses-preference-store.md)
-and passes it to `Timeline.foldTools`. Settings → Thread defaults the switch on;
+and passes it to `ThreadItemsTimeline.foldTools`. Settings → Thread defaults the switch on;
 off restores ordinary tool rows and existing joins without “Using tools: N” headers.
 Turning it on restores folding without restarting, including retained conversations
-and those on another paired host. The optional `Timeline.foldTools` prop still
+and those on another paired host. The optional `ThreadItemsTimeline.foldTools` prop still
 defaults to false: absent or false retains ordinary rendering and joins for other
 callers. The persisted preference and expansion remain local presentation, with no
 IPC, transport or wire changes.
@@ -380,24 +213,25 @@ IPC, transport or wire changes.
 ### Membership and boundaries
 
 [`foldToolRuns.ts`](../../../src/renderer/src/screens/conversation/foldToolRuns.ts)
-projects the output of `foldQueuedRows` and `groupToolRows` into runs of at least two
-adjacent root tool rows. An Agent/Task counts as one root and retains its owned
-tool descendants and indentation. Attributed text follows ancestor visibility
+consumes `ThreadItemsView`'s shared row projection with supplied ancestry/activity
+and card/marker barriers, forming runs of at least two adjacent root tool rows.
+An eligible Agent/Task counts as one root and retains owned tool descendants and
+indentation; task-linked cards instead form barriers. Attributed text follows ancestor visibility
 without becoming a tool-run member. A lone root keeps its existing row. Each new run
 starts collapsed as “Using tools: N”, where N counts roots only.
 
-Every drawn non-tool ends a run: user/assistant messages, queued rows, warning/error
-notices, unrecognized-message notices, session/compaction delimiters and stopped-turn
-records. Undrawn turn boundaries and informational banners do not split visually
-adjacent roots. Filter for what `TimelineRow` actually draws before deriving runs;
-an invisible notice would otherwise create two headers with no visible separator.
-Agent expansion does not change membership or N.
+Every shown non-tool ends a run: user/assistant messages, queued items, notices,
+session/compaction delimiters, turn endings and summary fallbacks. Hidden supplied
+items have no projection and cannot split a run. Shown informational banners and
+normal endings remain authoritative rows, even when the standalone shared row would
+suppress them without its summary input. Agent expansion does not change membership
+or N.
 
 ### Status and disclosure
 
 The header shows a Primary spinner with the client-owned accessible name `Running`
-while any root is running. Agent/Task roots use their existing descendant-inclusive
-running reading: a completed parent with an unfinished child keeps the spinner.
+while any root's supplied activity is true. Descendant activity cannot make an
+inactive root run; supplied activity remains independent of status/result.
 “K failed” and the existing `tool-row__failed` glyph (`Failed`) count roots with a
 result error **or** denial once each, even if a denied root later receives an error
 result. Descendant failures stay on existing member/group surfaces and do not add
@@ -411,15 +245,18 @@ The header is a native button: click, Enter and Space toggle it and `aria-expand
 reflects the local state. Its chevron follows the label, pointing down when collapsed
 and up when expanded; member-row chevrons keep their existing treatment. It shares
 the Desktop tool outline, fill and joins. Headers are keyed **siblings** of the
-existing mounted tool wrappers, rather than containers that reparent members.
-Hidden members consume no space but retain their result and nested-group state;
+visible tool wrappers, rather than containers that reparent members. A folded run
+keeps its header while its members and their bodies are absent. Metadata supplies
+membership, count and status without full hidden-body construction; separate
+source-ID sets retain result and nested-group expansion across remounts;
 see [Expansion identity](#expansion-identity) and [Visible tool-row joins](#visible-tool-row-joins).
 
 ### Coverage and recorded evidence
 
 [`toolRuns.test.tsx`](../../../src/renderer/src/screens/conversation/toolRuns.test.tsx)
-pins optional-off equivalence, lone tools, drawn/undrawn boundaries (including queued
-rows and informational banners), Agent ownership and root status combinations.
+pins optional-off equivalence, lone tools, shown/hidden supplied boundaries and root
+status combinations. Supplied ancestry and member retention also live in
+`threadItems.test.tsx` and `e2e/thread-items.spec.ts`.
 Static renders cannot exercise disclosure, state retention or geometry.
 The [preference spec](../../../e2e/collapse-tool-uses-preference.spec.ts) covers
 Settings off/on round trips, keyboard activation, retained chats, another host,

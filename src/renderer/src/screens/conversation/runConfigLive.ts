@@ -1,3 +1,4 @@
+import { sendConversationCommand } from './conversationActionAvailability'
 // The run-configuration read's APP-LIFETIME half (#810): the always-on subscriber that lands every
 // `runConfigReceived` in the two stores, plus the refresh trigger that re-requests the reply on the two
 // edges where the context-usage figures can have moved. It is the conversationListBridge shape — a `.ts`
@@ -159,12 +160,17 @@ export function subscribeRunConfigRefresh(
 export function RunConfigLiveData(): null {
   useEffect(() => {
     return subscribeConfirmedRunConfig({
-      onDaemonEvent: window.pyry.onDaemonEvent,
+      onDaemonEvent: onSessionLifecycleEvent,
+      ownsSnapshot: () => {
+        const row = activeConversationStore.getState().activeConversation
+        return !row || !('serverId' in row) || typeof row.serverId !== 'string' || !threadRuntime.isThread(row.serverId, row.id)
+      },
       getContext: () => {
-        const conversationId = activeConversationStore.getState().activeConversation?.id ?? null
-        return { conversationId, serverId: serverIdForOpenConversation(
-          selectConversations(conversationListStore.getState()), conversationId
-        ) }
+        const row = activeConversationStore.getState().activeConversation
+        const conversationId = row?.id ?? null
+        const host = row && 'serverId' in row && typeof row.serverId === 'string' ? row.serverId : null
+        return { conversationId, serverId: threadRuntime.isThread(host, conversationId) ? host
+          : serverIdForOpenConversation(selectConversations(conversationListStore.getState()), conversationId) }
       },
       subscribeContext: listener => {
         const offActive = activeConversationStore.subscribe(listener)
@@ -173,8 +179,12 @@ export function RunConfigLiveData(): null {
       },
       writes: runSettingsWriteStore,
       config: runConfigStore,
-      setSessionId: id => sessionIdStore.getState().setSessionId(id),
-      refresh: () => requestRunConfigSnapshot(window.pyry.sendCommand,
+      setSessionId: id => {
+        const open = activeConversationStore.getState().activeConversation
+        if (!open || !('serverId' in open) || typeof open.serverId !== 'string' || !threadRuntime.isThread(open.serverId, open.id))
+          sessionIdStore.getState().setSessionId(id)
+      },
+      refresh: () => requestRunConfigSnapshot(sendConversationCommand,
         activeConversationStore.getState().activeConversation?.id ?? null),
       log: code => window.pyry.sendDiagnostic({ event: 'permission-confirmation', code })
     })
@@ -183,16 +193,16 @@ export function RunConfigLiveData(): null {
   useEffect(() => {
     // Re-request on each true edge, naming the conversation the sheet describes (#946) — read
     // non-reactively at call time, the same `getState()` shape this module already uses for its sibling
-    // stores, so this leaf still subscribes to nothing. `window.pyry.sendCommand` and the store are both
+    // stores, so this leaf still subscribes to nothing. `sendConversationCommand` and the store are both
     // touched only when the arrow runs (an edge fired), never during render, so the
     // server-render-to-empty-markup invariant is unaffected. An edge arriving with no conversation active
     // — a `connected` edge before the first open, typically — sends nothing rather than a request whose
     // zero reply would wipe the held snapshot. A duplicate, a sheet-open request landing alongside an
     // edge-driven one, needs no designing around: the reply is a whole-snapshot replace, so it is
     // idempotent.
-    return subscribeRunConfigRefresh(window.pyry.onDaemonEvent, () =>
+    return subscribeRunConfigRefresh(onSessionLifecycleEvent, () =>
       requestRunConfigSnapshot(
-        window.pyry.sendCommand,
+        sendConversationCommand,
         activeConversationStore.getState().activeConversation?.id ?? null
       )
     )
@@ -200,3 +210,4 @@ export function RunConfigLiveData(): null {
 
   return null
 }
+import { onSessionLifecycleEvent, threadRuntime } from '../../store/threadRuntime'

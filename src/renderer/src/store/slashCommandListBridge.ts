@@ -126,10 +126,11 @@ export function SlashCommandListData(): null {
     // Subscribe on mount; the returned off handle is the effect cleanup, so a StrictMode
     // double-mount nets exactly one live listener (the announcedModelBridge idiom). Each frame
     // replaces its own conversation's menu and leaves every other conversation untouched.
-    return subscribeSlashCommandList(window.pyry.onDaemonEvent, (snapshot) =>
+    return subscribeSlashCommandList(onCurrentSessionEvent, (snapshot) =>
       slashCommandListStore.getState().setSlashCommandList(snapshot)
     )
   }, [])
 
   return null
 }
+import { onCurrentSessionEvent } from './threadRuntime'

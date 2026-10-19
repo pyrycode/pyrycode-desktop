@@ -1,5 +1,19 @@
 import { describe, it, expect } from 'vitest'
 
+it('validates the explicit owning host on thread prompt and queue actions', () => {
+  const commands = [answerModalCommand({ modal_id: 'modal', option_id: 'deny' }),
+    cancelModalCommand({ modal_id: 'modal' }), refuseQuestionsCommand({ question_batch_id: 'questions' }),
+    answerQuestionsCommand({ question_batch_id: 'questions', answers: [{ question_index: 0, values: ['yes'] }] }),
+    dequeueMessageCommand({ conversation_id: 'chat', queued_msg_id: 7 }),
+    sendQueuedNowCommand({ conversation_id: 'chat', queued_msg_id: 7 }),
+    { type: 'stopBackgroundTask', payload: { conversation_id: 'chat', task_id: 'task' } }]
+  for (const command of commands) {
+    expect(isRendererCommand({ ...command, serverId: 'host' })).toBe(true)
+    for (const serverId of ['', 'x'.repeat(1025), null, 42])
+      expect(isRendererCommand({ ...command, serverId })).toBe(false)
+  }
+})
+
 it('carries a bounded refusal owner outside the send wire payload', () => {
   const payload = { conversation_id: 'conv', message_id: 'message', text: 'text' }
   expect(sendMessageCommand(payload, 'host')).toEqual({ type: 'sendMessage', payload, serverId: 'host' })
@@ -785,82 +799,9 @@ describe('isRendererCommand', () => {
     expect(isRendererCommand(cleared)).toBe(true)
   })
 
-  it('accepts a requestHistory carrying all three fields, EMPTY cursor included (#1222)', () => {
-    // The empty cursor is not a tolerated edge here — it is the NORMAL OPENING VALUE of every walk
-    // ("start at the newest"), so a non-empty clause on that field would refuse the first ask of every
-    // scroll-back. `limit: 0` is the daemon's published "you choose" and equally ordinary, and `''` for
-    // the conversation id passes for the siblings' reason (type, not emptiness).
-    expect(
-      isRendererCommand({
-        type: 'requestHistory',
-        payload: { conversation_id: 'conv-1', cursor: '', limit: 0 }
-      })
-    ).toBe(true)
-    expect(
-      isRendererCommand({
-        type: 'requestHistory',
-        payload: { conversation_id: 'conv-1', cursor: 'opaque-daemon-minted', limit: 50 }
-      })
-    ).toBe(true)
-    expect(
-      isRendererCommand({
-        type: 'requestHistory',
-        payload: { conversation_id: '', cursor: '', limit: 0 }
-      })
-    ).toBe(true)
-    // A negative limit passes THIS layer: it is a documented daemon reject, and buildRequestHistory
-    // normalises it to the "you choose" value before the wire — one bound, not two.
-    expect(
-      isRendererCommand({
-        type: 'requestHistory',
-        payload: { conversation_id: 'conv-1', cursor: '', limit: -1 }
-      })
-    ).toBe(true)
-    // A structurally extra field is harmless; the builder's fresh literal is what bounds the wire.
-    expect(
-      isRendererCommand({
-        type: 'requestHistory',
-        payload: { conversation_id: 'conv-1', cursor: '', limit: 0, extra: 'ignored' }
-      })
-    ).toBe(true)
-  })
-
-  it('rejects requestHistory with no payload, or an explicitly undefined one (#1222)', () => {
-    // Rejected BY VALUE, not by `'payload' in value` — structured clone preserves an
-    // explicitly-undefined property across the bridge (the requestModelList arm's reason).
-    expect(isRendererCommand({ type: 'requestHistory' })).toBe(false)
-    expect(isRendererCommand({ type: 'requestHistory', payload: undefined })).toBe(false)
-    expect(isRendererCommand({ type: 'requestHistory', payload: null })).toBe(false)
-  })
-
-  it('rejects a requestHistory missing or mistyping ANY of the three fields (#1222)', () => {
-    // All three are always on the wire (the daemon declares no `omitempty`), so an absent one is a
-    // caller bug rather than a shorthand — and each is asserted separately, so a guard that checked
-    // only the id would pass three of these six.
-    const bad: unknown[] = [
-      { cursor: '', limit: 0 },
-      { conversation_id: 42, cursor: '', limit: 0 },
-      { conversation_id: 'conv-1', limit: 0 },
-      { conversation_id: 'conv-1', cursor: null, limit: 0 },
-      { conversation_id: 'conv-1', cursor: '' },
-      { conversation_id: 'conv-1', cursor: '', limit: '50' }
-    ]
-    for (const payload of bad) {
-      expect(isRendererCommand({ type: 'requestHistory', payload })).toBe(false)
-    }
-  })
-
-  it('types requestHistory as payload-REQUIRED — a bare send does not compile (#1222)', () => {
-    // The requestModelList arm's compile-time half; see its comment for why the directive cannot open
-    // a prose line.
-    // @ts-expect-error payload is required — a request with no conversation has nothing to ask about
-    const bare: RendererCommand = { type: 'requestHistory' }
-    const named: RendererCommand = {
-      type: 'requestHistory',
-      payload: { conversation_id: 'conv-1', cursor: '', limit: 0 }
-    }
-    expect(isRendererCommand(bare)).toBe(false)
-    expect(isRendererCommand(named)).toBe(true)
+  it.each(['', 'opaque-daemon-minted'])('rejects the removed history command with cursor %s', cursor => {
+    expect(isRendererCommand({ type: 'requestHistory',
+      payload: { conversation_id: 'conv-1', cursor, limit: 50 } })).toBe(false)
   })
 
   it('accepts a newSession naming a conversation (#1217)', () => {
@@ -1852,7 +1793,7 @@ describe('the server-scoped commands name their server (#1120)', () => {
     }
   })
 
-  it('leaves every command outside the table unaffected, `notify` included', () => {
+  it('keeps main-local extras inert and validates conversation routing coordinates', () => {
     // `notify` is main-local: fireNotification owns the copy table, no command field supplies text,
     // and no frame results — so a server id on it would be a field nothing reads. A stray one is
     // ignored as any extra field is (structural minimum), NOT validated.
@@ -1860,7 +1801,7 @@ describe('the server-scoped commands name their server (#1120)', () => {
     expect(isRendererCommand(notify)).toBe(true)
     expect(
       isRendererCommand({ type: 'archiveConversation', payload: { conversation_id: 'c-1' }, serverId: 42 })
-    ).toBe(true)
+    ).toBe(false)
   })
 
   it('types the optional field on each of the six members', () => {
@@ -1878,18 +1819,30 @@ describe('the server-scoped commands name their server (#1120)', () => {
     expect(isRendererCommand(bare)).toBe(true)
   })
 
-  it('leaves interrupt out of the set entirely, serverId and all (#1092)', () => {
-    // Not merely "no longer validated": the field is GONE from the member, so a command carrying one
-    // is an ordinary extra field the structural minimum ignores — it reaches no router and no wire.
-    // The named payload is the whole address now.
+  it('keeps bare interrupt compatibility and validates an optional owning host', () => {
     expect(interruptCommand({ conversation_id: 'c-1' })).toEqual({
       type: 'interrupt',
       payload: { conversation_id: 'c-1' }
     })
     expect(
       isRendererCommand({ type: 'interrupt', payload: { conversation_id: 'c-1' }, serverId: 42 })
-    ).toBe(true)
+    ).toBe(false)
   })
+})
+
+it('validates optional owning hosts on conversation reads, writes and session commands', () => {
+  const commands = [
+    { type: 'requestSessionSettings', payload: { conversation_id: 'chat' } },
+    { type: 'requestModelList', payload: { conversation_id: 'chat' } },
+    { type: 'interrupt', payload: { conversation_id: 'chat' } },
+    { type: 'newSession', payload: { conversation_id: 'chat' } },
+    { type: 'setSessionSettings', payload: { session_id: 'session', permission_mode: 'plan' }, changeId: 'change' }
+  ]
+  for (const command of commands) {
+    expect(isRendererCommand(command)).toBe(true)
+    expect(isRendererCommand({ ...command, serverId: 'owner' })).toBe(true)
+    for (const serverId of ['', 'x'.repeat(1025), null, 42]) expect(isRendererCommand({ ...command, serverId })).toBe(false)
+  }
 })
 
 it('bounds optional workspace rename attempt identifiers', () => {
@@ -1901,6 +1854,25 @@ it('bounds optional workspace rename attempt identifiers', () => {
     expect(isRendererCommand({ ...command, attemptId })).toBe(true)
   }
   expect(isRendererCommand(command)).toBe(true)
+})
+
+describe('setConversationPinned', () => {
+  const command = { type: 'setConversationPinned', serverId: 'host-a',
+    payload: { conversation_id: 'channel', pinned: true } }
+  it.each([true, false])('admits a strict %s value', pinned => {
+    expect(isRendererCommand({ ...command, payload: { ...command.payload, pinned } })).toBe(true)
+  })
+  it.each([undefined, null, [], {}, { conversation_id: 'channel' },
+    ...[undefined, null, 1, 0, 'true', 'false'].map(pinned => ({ conversation_id: 'channel', pinned })),
+    ...['', null, 1].map(conversation_id => ({ conversation_id, pinned: true })),
+    { ...command.payload, serverId: 'host-b' }, { ...command.payload, extra: undefined },
+    { ...command.payload, [Symbol('extra')]: true }, Object.create(command.payload)
+  ])('refuses malformed payload %j', payload => {
+    expect(isRendererCommand({ ...command, payload })).toBe(false)
+  })
+  it.each([undefined, null, '', [], 1, 'x'.repeat(1025)])('refuses invalid host %j', serverId => {
+    expect(isRendererCommand({ ...command, serverId })).toBe(false)
+  })
 })
 
 describe('setConversationMuted (#1595)', () => {

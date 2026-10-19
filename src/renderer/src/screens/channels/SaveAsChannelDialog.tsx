@@ -97,12 +97,12 @@ export function requestPromoteConversation(
  * channel info sheet's `SystemPromptSection` reports it; this dialog closes on dispatch and never
  * waits for the acknowledgement, so it has no second failure surface.
  */
-function writePrompt(conversationId: string, draft: string): void {
+function writePrompt(conversationId: string, draft: string, serverId: string): void {
   if (draft.trim() === '') return
   try {
     submitSystemPrompt(
       {
-        sendCommand: window.pyry.sendCommand,
+        sendCommand: command => window.pyry.sendCommand({ ...command, serverId }),
         dispatch: (event) => systemPromptWriteStore.getState().dispatch(event)
       },
       conversationId,
@@ -186,10 +186,10 @@ export function SaveAsChannelDialog({
       // is belt-and-suspenders over an already-disabled OK, exactly as the blank-name arm beside it is:
       // a keyboard activation can land before React paints.
       onSave={() => {
-        if (abandoned.current || !isHostConnected(serverId) || name.trim() === '' || promptOverLimit) return
-        requestPromoteConversation(window.pyry.sendCommand, row.id, name, row.cwd)
+        if (typeof serverId !== 'string' || abandoned.current || !isHostConnected(serverId) || name.trim() === '' || promptOverLimit) return
+        requestPromoteConversation(command => window.pyry.sendCommand({ ...command, serverId }), row.id, name, row.cwd)
         window.pyry.sendDiagnostic({ event: 'sidebar-promotion', code: 'sent' })
-        writePrompt(row.id, systemPrompt)
+        writePrompt(row.id, systemPrompt, serverId)
         onPromoted()
       }}
     />

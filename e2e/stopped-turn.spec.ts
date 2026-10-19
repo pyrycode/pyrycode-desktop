@@ -2,11 +2,13 @@ import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
 import { encodeEnvelope, decodeEnvelope } from '../src/main/transport/codec'
 import type { EnvelopeType, SendMessagePayload } from '../src/shared/wire/types'
 import { DAEMON_EVENT_CHANNEL } from '../src/shared/ipc/events'
+import { CONNECTION_BANNER_COPY } from '../src/renderer/src/screens/conversation/composerSend'
 
 const other = { ...SEEDED_ROW, id: 'other-chat', name: 'Other discussion' }
 const frame = (type: EnvelopeType, payload: unknown) => encodeEnvelope({ id: 1, type, ts: '2026-09-11T12:00:00Z', payload })
+let stopSequence = 0
 const stop = (terminal_reason: string, extra = {}, conversation_id = SEEDED_ROW.id) => frame('turn_end', {
-  conversation_id, turn_id: terminal_reason, stop_reason: 'end_turn', outcome: 'success', is_error: true, terminal_reason, ...extra
+  conversation_id, turn_id: `${terminal_reason}-${++stopSequence}`, stop_reason: 'end_turn', outcome: 'success', is_error: true, terminal_reason, ...extra
 })
 const commands = (available: boolean) => frame('slash_command_list', {
   conversation_id: SEEDED_ROW.id, dropped_commands: 0,
@@ -82,7 +84,7 @@ test('stopped records survive recovery, Compact uses the guarded composer path, 
 test('connection errors outrank recovery, usage stays in the overlay, and trailing idle preserves it', async ({ launchPairedApp }) => {
   const { page, app, daemon } = await launchPairedApp()
   const recovery = page.locator('.stopped-turn-recovery')
-  const notice = page.locator('.conversation__top-overlay .top-overlay-pill--error')
+  const notice = page.locator('.conversation__top-overlay .top-overlay-pill--error').filter({ hasText: 'Usage limit reached' })
   daemon.pushFrame(frame('rate_limited', { conversation_id: SEEDED_ROW.id, status: 'rejected', limit_type: 'five_hour', resets_at: 4102444800, truncated_fields: null }))
   await expect(notice).toBeVisible()
   daemon.pushFrame(stop('api_error', { error_category: 'authentication_failed' }))
@@ -97,7 +99,8 @@ test('connection errors outrank recovery, usage stays in the overlay, and traili
       type: 'failed', serverId: 'fake-daemon', error: { code: 'transport', message: '', retryable: true }
     })
   }, DAEMON_EVENT_CHANNEL)
-  await expect(page.locator('.composer-status__error')).toBeVisible()
+  await expect(page.locator('.conversation__top-overlay [role="status"]')).toContainText(CONNECTION_BANNER_COPY)
+  await expect(page.locator('.composer-status__error')).toHaveCount(0)
   await expect(recovery).toHaveCount(0)
   await expect(notice).toBeVisible()
   await expect(page.locator('.stopped-turn')).toHaveCount(1)

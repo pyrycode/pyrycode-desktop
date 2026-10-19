@@ -2,6 +2,7 @@ import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
 import { encodeEnvelope, decodeEnvelope } from '../src/main/transport/codec'
 import type { EnvelopeType } from '../src/shared/wire/types'
 import type { Page } from '@playwright/test'
+import { installPausedClock } from './fixtures/pausedClock'
 
 const OTHER = { ...SEEDED_ROW, id: 'resolution-other', name: 'Other resolution discussion' }
 const frame = (type: EnvelopeType, payload: unknown) => encodeEnvelope({
@@ -24,8 +25,7 @@ const open = async (page: Page, name: string) => {
 }
 const freezeTime = async (page: Page) => {
   const instant = new Date('2026-10-01T12:00:00Z')
-  await page.clock.install({ time: instant })
-  await page.clock.pauseAt(instant)
+  await installPausedClock(page, instant)
 }
 
 // Only synthetic frames and DOM are inspected; no pairing material or answer tokens are serialized.
@@ -73,7 +73,7 @@ test('remote and timeout resolutions use the Default pill, X and four seconds fr
   await page.evaluate(() => {
     Object.assign(window, { resolutionBarrierDelivered: false })
     const off = window.pyry.onDaemonEvent(event => {
-      if (event.type === 'assistantDelta' && event.turnId === 'barrier') {
+      if (event.type === 'threadUpdate' && event.update.type === 'thread_item_added' && event.update.payload.item.kind === 'assistant_message') {
         Object.assign(window, { resolutionBarrierDelivered: true })
         off()
       }

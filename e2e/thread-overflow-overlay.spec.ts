@@ -32,7 +32,7 @@ test('thread overflow menu paints and receives clicks above Top overlay pills', 
     }, size)
     await expect.poll(() => page.evaluate(() => innerWidth)).toBe(size.width)
     if (size.kind === 'connection') {
-      // The rejection banner pushes a second pill below the popup. Test Re-pair on its own.
+      // Replace usage with the connection explanation and Re-pair action.
       await page.getByRole('button', { name: 'Dismiss usage notice', exact: true }).click()
       await expect(overlay).toHaveCount(0)
       daemon.pushFrame(encodeEnvelope({
@@ -42,7 +42,7 @@ test('thread overflow menu paints and receives clicks above Top overlay pills', 
         payload: { code: 'auth.invalid_token', message: 'Synthetic pairing rejection', retryable: false }
       }))
       await expect(page.getByRole('button', { name: 'Pairing error - Re-pair', exact: true })).toBeVisible()
-      await expect(pills).toHaveCount(1)
+      await expect(pills).toHaveCount(2)
     }
     await page.getByRole('button', { name: 'More actions', exact: true }).click()
     const menu = page.getByRole('menu', { name: 'More actions', exact: true })
@@ -75,7 +75,7 @@ test('thread overflow menu paints and receives clicks above Top overlay pills', 
     // Click an item at a point inside the pill's box, through the real menu handler.
     const target = await menu.evaluate((element, kind) => {
       if (kind === 'connection') {
-        // Occupied rejection-banner height now places Re-pair below this short menu.
+        // Activate the actual menu handler while connection feedback remains mounted beneath it.
         const item = element.querySelector('[role="menuitem"]')
         if (!item) throw new Error('Overflow item missing')
         const rect = item.getBoundingClientRect()
@@ -99,6 +99,6 @@ test('thread overflow menu paints and receives clicks above Top overlay pills', 
     await expect(menu).toHaveCount(0)
     await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click()
     await expect(page.getByRole('dialog')).toHaveCount(0)
-    await expect(pills).toHaveCount(1)
+    await expect(pills).toHaveCount(size.kind === 'connection' ? 2 : 1)
   }
 })

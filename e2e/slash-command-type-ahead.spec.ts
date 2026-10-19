@@ -227,11 +227,11 @@ test('typing a slash opens the published menu; Enter completes, a second Enter s
   // THE NEGATIVE HALF, and the reason this spec captures outbounds at all: nothing was sent. Read after
   // the box assertion above, which is downstream of the same keystroke, so this is not a race with itself.
   expect(sent).toHaveLength(0)
-  await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveCount(0)
+  await expect(page.locator('[data-thread-role="user"]')).toHaveCount(0)
 
   // --- 5. The SECOND Enter sends, through the composer's unchanged path (AC3). ---
   await page.keyboard.press('Enter')
-  await expect(page.locator('.bubble[data-thread-role="user"]')).toHaveText(
+  await expect(page.locator('[data-thread-role="user"]')).toHaveText(
     bubbleTextExactly('/compact'),
     { timeout: ROUNDTRIP_TIMEOUT_MS }
   )

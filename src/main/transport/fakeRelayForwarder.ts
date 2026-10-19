@@ -68,6 +68,10 @@ export interface FakeRelayForwarder {
    * frame, so the module's content-blind import discipline holds.
    */
   closeClientLeg(code: number): void
+  /** Replay an observed close only after this many server frames have been forwarded, in order. */
+  closeClientAfterServerFrames(count: number, code: number): void
+  /** Wait for actual successful socket writes, not replay's count of generated frames. */
+  whenServerFramesForwarded(count: number, timeoutMs?: number): Promise<void>
   /**
    * Terminates both legs and closes the server. Idempotent: a second call returns the same
    * promise and never re-closes. Mirrors the existing startRelay close contract.
@@ -163,7 +167,7 @@ export function startFakeRelayForwarder(): Promise<FakeRelayForwarder> {
     diagnostics.versionValid = version === 8 || version === 13
     if (socket.writableEnded) diagnostics.upgradeRejections += 1
   })
-  http.listen(0)
+  http.listen(0, '127.0.0.1')
 
   let clientLeg: WebSocket | null = null
   let serverLeg: WebSocket | null = null
@@ -173,6 +177,37 @@ export function startFakeRelayForwarder(): Promise<FakeRelayForwarder> {
   let readySettled = false
   let readyTimer: ReturnType<typeof setTimeout> | null = null
   let closePromise: Promise<void> | null = null
+
+  let serverFrames = 0
+  const deliveryWaiters = new Set<() => void>()
+  let deliveryError: Error | undefined
+  const notifyDelivery = (): void => { for (const finish of [...deliveryWaiters]) finish() }
+  function whenServerFramesForwarded(count: number, timeoutMs = 5_000): Promise<void> {
+    if (!Number.isSafeInteger(count) || count < 0) return Promise.reject(new Error('Invalid replay delivery boundary'))
+    return new Promise((resolve, reject) => {
+      const cleanup = (): void => { clearTimeout(timer); deliveryWaiters.delete(finish) }
+      const finish = (): void => {
+        if (deliveryError) { cleanup(); reject(deliveryError) }
+        else if (serverFrames >= count) { cleanup(); resolve() }
+        else if (closed) { cleanup(); reject(new Error('fake relay: closed before frame delivery')) }
+      }
+      const timer = setTimeout(() => { cleanup(); reject(new Error('fake relay: frame delivery incomplete')) }, timeoutMs)
+      deliveryWaiters.add(finish)
+      finish()
+    })
+  }
+  let pendingClose: { count: number; code: number } | undefined
+  const flushClose = (): void => {
+    if (!pendingClose || serverFrames < pendingClose.count) return
+    const { code } = pendingClose; pendingClose = undefined
+    if (code === 1005 || code === 1006 || code === 1015) dropClientLeg()
+    else closeClientLeg(code)
+  }
+  function closeClientAfterServerFrames(count: number, code: number): void {
+    if (!Number.isSafeInteger(count) || count < 1 || !Number.isSafeInteger(code) || code < 1000 || code > 4999 || pendingClose)
+      throw new Error('Invalid recorded transport close')
+    pendingClose = { count, code }; flushClose()
+  }
 
   const ready = deferred<void>()
   // Internal handler so a rejection with no external awaiter (e.g. close() before whenReady())
@@ -224,7 +259,12 @@ export function startFakeRelayForwarder(): Promise<FakeRelayForwarder> {
       // Byte-for-byte, opcode-preserving: forward the normalised bytes and the isBinary flag
       // verbatim so a binary frame stays binary and a text frame stays text. The relay never
       // reads, parses, or branches on frame content.
-      dest.send(toBytes(data), { binary: isBinary })
+      dest.send(toBytes(data), { binary: isBinary }, (error) => {
+        if (leg !== 'server') return
+        if (error) deliveryError ??= new Error('fake relay: frame delivery failed')
+        else { serverFrames++; flushClose() }
+        notifyDelivery()
+      })
     })
 
     // Free the leg slot on this socket's close so a re-dial can re-splice (#416). The identity guard
@@ -274,6 +314,7 @@ export function startFakeRelayForwarder(): Promise<FakeRelayForwarder> {
   function close(): Promise<void> {
     if (closePromise !== null) return closePromise
     closed = true
+    notifyDelivery()
     clearReadyTimer()
     // Unblock an awaiting consumer if teardown beats both legs; a no-op once ready has settled.
     if (!readySettled) {
@@ -303,6 +344,8 @@ export function startFakeRelayForwarder(): Promise<FakeRelayForwarder> {
         whenReady,
         dropClientLeg,
         closeClientLeg,
+        closeClientAfterServerFrames,
+        whenServerFramesForwarded,
         close
       })
     })

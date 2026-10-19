@@ -4,7 +4,7 @@ import { createConversationListStore } from './conversationListStore'
 import { createServerInfoStore } from './serverInfoStore'
 import { createSavedListRestorer } from './savedListRestorer'
 import { createChatHistoryWriter } from './chatHistoryWriter'
-import { createConversationTimelineStore } from './conversationTimelineStore'
+import { createThreadItemStore } from './threadItemStore'
 
 const row = (id = 'same') => ({ id, name: '<saved>', is_promoted: false, is_archived: false,
   cwd: '/workspace', last_message_ts: '', last_used_at: '', workspace_label: null })
@@ -30,7 +30,7 @@ describe('saved list restoration', () => {
     const s = setup()
     const write = vi.fn(async () => ({ status: 'ok' as const }))
     let receipt: { type: string; serverId: string } | null = null
-    const writer = createChatHistoryWriter({ lists: s.lists, timelines: createConversationTimelineStore(),
+    const writer = createChatHistoryWriter({ lists: s.lists, threads: createThreadItemStore(),
       receipt: () => receipt, write, log: vi.fn(), schedule: () => () => {} })
     s.saved('a', '__proto__')
     s.pending.get('a')!.resolve(stored('a', [row('z'), row('same'), row('a')]))
@@ -65,8 +65,9 @@ describe('saved list restoration', () => {
       const results: Record<string, ChatHistoryResult> = {
         missing: { status: 'missing' }, empty: stored('a', []),
         error: { status: 'error', code: 'unreadable' }, 'wrong-host': stored('b'),
-        'wrong-kind': { status: 'stored', snapshot: { version: 1, kind: 'timeline', serverId: 'a',
-          conversationId: 'same', items: [], prependedRows: 0, coverage: { status: 'unknown' } } },
+        'wrong-kind': { status: 'stored', snapshot: { version: 1, kind: 'daemon-items', serverId: 'a',
+          conversationId: 'same', thread: { hostId: 'a', conversationId: 'same', epoch: 'e', version: 0,
+            checkpoint: 0, ranges: [], repair: null, items: [] } } },
         ok: { status: 'ok' }
       }
       if (kind === 'rejected') s.pending.get('a')!.reject()

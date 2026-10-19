@@ -26,6 +26,8 @@ export function decodeInnerFrame(bytes: Uint8Array): InnerFrameV2
 // Envelope ↔ UTF-8 plaintext bytes (the Noise plaintext / handshake early-data).
 export function encodeEnvelope(envelope: Envelope): Uint8Array
 export function decodeEnvelope(bytes: Uint8Array): Envelope
+// Unvalidated JSON-object routing hints; original bytes still require validation.
+export function parseJsonObject(bytes: Uint8Array): Record<string, unknown>
 
 // The one default-injecting constructor (see Defaults).
 export function makeHelloClientPayload(input: {
@@ -53,8 +55,31 @@ Taken directly from mobile's `NoiseSessionPump` + `OkHttpRelayTransport`:
 Mobile relies on Kotlin runtime defaults (`encodeDefaults = true`). TS interfaces carry no runtime defaults, so "always emit defaults" (AC #3) is split by how each field is enforced:
 
 - **Literal-typed fields enforce themselves.** `InnerFrameV2.v: 2` and `HelloClientPayload.role: 'client'` are literal types — you cannot construct the object without them, so `JSON.stringify` always emits them. **No runtime injector.**
-- **Non-literal defaults need one constructor.** `makeHelloClientPayload` injects `protocol_versions: ['v2']` (reusing `PROTOCOL_VERSION` from `types.ts`) and the fixed `client_features` report below. `capabilities` is a caller argument defaulting to `[]`; production `loadDialConfig` in `daemonConnection` supplies `['interactive', 'multi_agent', 'stop_background_task']` through [hello exchange](hello-exchange.md). `interactive` enables the structured stream; `multi_agent` unlocks Codex conversations, frames and model rows on supporting v0.27.0+ daemons; `stop_background_task` detects support for that verb. The advertised set belongs at the caller: the [capability probe](real-claude-liveness-e2e.md#capability-gated-skip--the-one-check-that-runs-after-the-daemon-exists) supplies exactly its spec's required set. Optional `lastEventId` and legacy `lastSeenTs` become `last_event_id` and `last_seen_ts` only when provided, never `null`. `HelloClientPayload` is the only encode-side payload with non-literal defaults, so it has one constructor. `Envelope` has no defaulted fields; callers build it directly.
+- **Non-literal defaults need one constructor.** `makeHelloClientPayload` injects `protocol_versions: ['v2']` (reusing `PROTOCOL_VERSION` from `types.ts`) and the fixed `client_features` report below. `capabilities` is a caller argument defaulting to `[]`; production `loadDialConfig` in `daemonConnection` supplies `['interactive', 'multi_agent', 'stop_background_task', 'hosted_apps_v1']` through [hello exchange](hello-exchange.md). `interactive` enables the structured stream; `multi_agent` unlocks Codex conversations, frames and model rows on supporting v0.27.0+ daemons; `stop_background_task` detects support for that verb; `hosted_apps_v1` enables host-scoped discovery/resource negotiation with the background handlers installed. The advertised set belongs at the caller: the [capability probe](real-claude-liveness-e2e.md#capability-gated-skip--the-one-check-that-runs-after-the-daemon-exists) supplies exactly its spec's required set. Optional `lastEventId` and legacy `lastSeenTs` become `last_event_id` and `last_seen_ts` only when provided, never `null`. `HelloClientPayload` is the only encode-side payload with non-literal defaults, so it has one constructor. `Envelope` has no defaulted fields; callers build it directly.
 - **`client_version` gets an app-name prefix, added once, here.** `input.clientVersion` is the bare app version (`app.getVersion()`, e.g. `"0.1.0"`); the constructor writes `client_version` as `` `${CLIENT_APP_NAME}/${input.clientVersion}` `` (`CLIENT_APP_NAME = 'pyrycode-desktop'`), the `<app>/<MAJOR>.<MINOR>.<PATCH>` format the daemon parses (pyrycode `docs/protocol-mobile.md` § `hello`, "`client_version` format"; \#1612). The prefix is added inside this constructor rather than by the caller because the same bare `clientVersion` also feeds the relay `User-Agent` header and the session-start log banner, and prefixing it upstream would double-prefix both (see [daemon connection lifecycle](daemon-connection-lifecycle.md) `clientVersion` field). Once a daemon release enforces a minimum `client_version` it cannot parse, an unprefixed hello is rejected — desktop shipped this format ahead of that gate.
+
+### Channel pin protocol
+
+`SetConversationPinnedPayload` and the `set_conversation_pinned` envelope name mirror
+[Core #3538](https://github.com/pyrycode/pyrycode/issues/3538). The request body is exactly:
+
+```json
+{ "conversation_id": "channel-id", "pinned": false }
+```
+
+Both fields are required: `conversation_id` is a nonempty string and `pinned` is a strict boolean,
+`true` to pin and a present `false` to unpin. Do not omit false, add `serverId`, or send `pinned_at`.
+`buildSetConversationPinned` in `src/main/transport/setConversationPinnedEnvelope.ts` encodes the
+ordinary `{ id, type: 'set_conversation_pinned', ts, payload }` envelope; the authenticated
+connection rebuilds the payload from named fields before calling it. Envelope units assert exact
+fields for both boolean values; the [IPC admission boundary](daemon-connection-methods.md#channel-pin-writes)
+rejects malformed payloads and carries observed-host attribution separately.
+
+The host owns pin persistence: repeated pinning preserves the original timestamp, unpinning clears
+it, and pinning a non-channel is refused. Desktop uses `conversation_updated` followed by the
+owning host's authoritative re-list to read `pinned_at` and change placement. An error, including an
+older host's `protocol.unknown_type`, leaves placement unchanged; no pin-specific result event or
+capability negotiation is introduced. See [the sidebar contract](channel-list.md#pin-and-unpin-actions).
 
 ### Desktop feature report
 
@@ -95,16 +120,13 @@ This is an absence rule for optional fields, not a blanket null-removal rule.
 Hosted discovery requires explicit nullable fields; see
 [null and omission preservation](#hosted-null-and-omission-preservation).
 
-`last_event_id` requests bounded current-conversation replay after a daemon-wide
-event position. `last_seen_ts` has no daemon consumer; connection-produced hellos
-never send it. The codec passes the numeric position through without validating
-its range. [Daemon connection](daemon-connection-lifecycle.md#replay-cursor-lifetime)
-owns positive-safe-integer validation and the in-memory cursor; `decodeEnvelope`
-keeps payloads opaque and only retains numeric `event_id` values. Observe an
-admitted envelope before narrowing its payload, so unknown types and malformed
-payloads can still advance replay. Failed size or envelope guards cannot advance
-or reset it. An expired or unknown position yields `resync`; the connection clears
-that host's cursor without automatically loading history.
+The generic codec still supports optional replay fields and numeric envelope
+`event_id`; this preserves the shared daemon/Mobile contract. Desktop's production
+connection passes neither replay field on initial or reconnect hellos (#2025),
+keeps no replay cursor and treats legacy `resync` as unmodeled. Its admitted-envelope
+observer retains live-session metadata before payload narrowing, not replay progress.
+See [hello and pairing lifetime](daemon-connection-lifecycle.md#hello-and-held-send-pairing-lifetime)
+and [thread recovery](thread-runtime.md#restore-recovery-and-cleanup).
 
 ### Data flow
 
@@ -318,19 +340,70 @@ stateless correspondence only, without a pending-operation table or ownership cl
 
 ### Consumer obligations and testing
 
-These functions retain no connection or assembly state. Consumers still own cursor
-authenticity/expiry, connection-lifetime ID uniqueness, matching replies and cancels
-to owned pending work, and host-wide discovery reconciliation, including readiness
-[#1959](https://github.com/pyrycode/pyrycode-desktop/issues/1959).
-Capability activation and production dispatch integration remain unwired:
-`parseInboundMessage` is not migrated, and these validators do not advertise
-`hosted_apps_v1`. Transport
-[#1958](https://github.com/pyrycode/pyrycode-desktop/issues/1958) owns request ownership,
-generation identity, ordering, cumulative bytes/digest completion, credit progression
-and retirement. Viewer
-[#1960](https://github.com/pyrycode/pyrycode-desktop/issues/1960) owns selected-view
-binding and resource assembly delivery. Manifest/build validation and asset-handle
-containment remain daemon-owned.
+These validators retain no connection or assembly state. The main-process consumer,
+`src/main/transport/hostedResources.ts`, now owns admission, correlation, assembly
+and retirement. A trusted caller selects `registry.connectionFor(serverId)`, then
+uses `connection.hostedApps.openView(appId)` for a readiness-gated binding. It
+returns a view only for an authoritative running record with an active release;
+the underlying `hostedResources.openView(appId, release)` supplies the transport
+lifetime without establishing discovery readiness. Each view pins the connection,
+app, release, unique view scope and generation;
+request/credit/cancel IDs come from the connection's existing monotonic allocator.
+Only an authenticated named connection whose current acknowledgement includes
+`hosted_apps_v1` dispatches requests. Other cases settle locally as `unavailable`.
+Completed results contain validated metadata and a `Buffer`, including non-2xx
+HTTP status and empty HEAD/204/205/304 bodies. No bytes cross IPC or the renderer,
+and no direct HTTP path or separate socket/key is introduced.
+
+The consumer permits eight active requests per connection and sixteen pending
+operations per view, including active work. Metadata reserves its declared size
+against a connection-wide 16 MiB allowance before buffer allocation. Contextual
+validation enforces asset 8 MiB/256 chunks, API 1 MiB/32 chunks, and 32768 decoded
+bytes per request body or chunk. Assembly requires exactly one metadata frame,
+feasible chunk counts, consecutive granted indices, exact length/count and SHA-256;
+validated zero-byte metadata completes immediately. The request grants chunk 0
+only. Each consumed nonfinal chunk sends one next credit; queued credits grant
+nothing until `SendOutcome` reports them written.
+
+An operation has a fixed thirty-second deadline from enqueue and a five-second
+active progress timeout. Other traffic cannot extend them. Abort, view `retire()`
+and owner `hostedResources.retire()` settle owned work once; connection lifecycle
+resets invalidate all views and discard partial bytes. Connected cancellation uses
+its own envelope ID, matched independently of the retired target and checked
+against the original request/app. Discovery lists/cancellations and resource
+credits/cancellations share sixteen control reservations, counting pending
+correlations and held sends separately. Cancellation correlations expire after
+five seconds; held-send reservations survive until send observation or connection
+reset. Late frames cannot revive work. Failed attempted POST/PUT/PATCH/
+DELETE requests report `uncertain: true` and are never replayed. See
+[hosted resource lifecycle](daemon-connection-lifecycle.md#hosted-resource-views)
+for cleanup, failure categories, bulk discovery-driven retirement and caller lifetimes.
+
+`onDriverEvent` routes hosted responses before `parseInboundMessage`. Using only
+`decodeEnvelope` for that routing would both erase forbidden fields and reject
+some identifiable malformed replies before their owning operation could retire.
+For example, numeric `session_id` or null `history_entry_id`/`session_state_cleared`
+must fail the correlated operation immediately, releasing its reservation; a later
+valid frame must not rescue it. `parseJsonObject` supplies unvalidated type and
+correlation hints solely to locate or retire work. Only contextual hosted validation
+of the original plaintext admits metadata/chunks or control replies. Valid fatal
+authentication and update-required errors take precedence over hosted correlation
+and retain their connection-wide effect. Unrelated traffic follows the existing
+parser and remains runnable during held transfers.
+
+Host-wide discovery reconciliation, cursor expiry/restarts and readiness refresh
+now belong to `hostedApps`; connection hello construction advertises
+`hosted_apps_v1`. Validators remain stateless. See
+[hosted readiness and retirement](daemon-connection-hosted-resource-views.md#deadlines-and-retirement)
+for atomic snapshots, contiguous updates, fixed deadlines and explicit retry. The
+[native viewer](daemon-connection-hosted-resource-views.md#native-viewer) consumes
+that readiness-bound service. Fetch adaptation remains with
+[#1961](https://github.com/pyrycode/pyrycode-desktop/issues/1961), trusted chrome/placement
+with [#1992](https://github.com/pyrycode/pyrycode-desktop/issues/1992),
+Apps rows/navigation/stable links with [#1928](https://github.com/pyrycode/pyrycode-desktop/issues/1928), and real paired
+round trips/browser interaction/SQL persistence acceptance with
+[#1929](https://github.com/pyrycode/pyrycode-desktop/issues/1929). Manifest/build
+validation and asset-handle containment remain daemon-owned.
 
 `src/main/transport/hostedCodec.test.ts` keeps the unchanged shared JSON examples
 local with the pinned source revision. Negotiation uses the existing codec and
@@ -354,8 +427,17 @@ and neighbors, metadata/index limits, HEAD/204/205/304 and supplied-context mism
 A base64-helper spy checks rejection before allocating decode, including an
 over-limit decoded body whose encoded length fits. Request/chunk size cases measure
 final escaping and additive fields on both encode and decode. Repeated frames and
-context revalidation prove frame semantics only: no assembly, capability activation,
-production admission or live SQL writes are established.
+context revalidation prove frame semantics only. Stateful background coverage lives
+in `hostedResources.test.ts`: multiframe binary/POST-204, exact bounds and credit
+pacing, corruption, fixed deadlines, cleanup, cancellation and host/view isolation.
+`daemonConnection.test.ts` adds supplied-ack fake-driver lifecycle and malformed
+correlation cases, plus positive message/control processing during a held transfer;
+`connectionRegistry.test.ts` checks named-host delegation. The malformed-frame cases
+assert immediate settlement, reused active/view/reservation capacity, discarded late
+replies and cleared timers. `hostedApps.test.ts` adds authoritative discovery and
+readiness-driven retirement; fake-driver tests exercise production advertisement
+and fresh per-host negotiation. These background fixtures establish no viewer
+interaction or live SQL persistence.
 
 ## Configuration and usage
 

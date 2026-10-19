@@ -303,7 +303,7 @@ export interface FakeDaemonOptions {
    *  precedent; this generalizes it to N frames per inbound. */
   buildReplyFrames?: (inboundPlaintext: Uint8Array) => Uint8Array[]
   /** hello_ack payload overrides. Defaults: protocol_version 'v2', server_id 'fake-daemon',
-   *  conn_id 'conn-1', capabilities []. */
+   *  conn_id 'conn-1', capabilities ['thread'], since the app requires the daemon-built thread (#1908). */
   helloAck?: Partial<HelloAckPayload>
   /** Forwarded to loadNoiseLib as its load deadline; omit for the loader default. */
   loadTimeoutMs?: number
@@ -318,6 +318,8 @@ export interface FakeDaemonOptions {
   reconnectResendFrames?: Uint8Array[]
   /** Test-only replay negotiation probe. Receives authenticated hello; overrides unconditional resends. */
   buildReconnectFrames?: (hello: Envelope) => Uint8Array[]
+  /** Captured application frames sent after the initial authenticated handshake. */
+  buildInitialFrames?: (hello: Envelope) => Uint8Array[]
 }
 
 /** Closed set of static reasons — NEVER carries key/token/frame/plaintext bytes. */
@@ -397,7 +399,7 @@ export async function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeD
     protocol_version: 'v2',
     server_id: 'fake-daemon',
     conn_id: 'conn-1',
-    capabilities: [],
+    capabilities: ['thread'],
     ...options.helloAck
   }
 
@@ -446,7 +448,8 @@ export async function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeD
       const hello = hs.ReadMessage(raw, true) ?? EMPTY_AD
       // Faithfulness (AC3): the recovered `hello` early-data must be a well-formed envelope, exactly
       // as the real daemon parses it. A malformed hello fail-closes to handshake-read-failed.
-      decodeEnvelope(hello)
+      const initialHello = decodeEnvelope(hello)
+      const initialFrames = options.buildInitialFrames?.(initialHello) ?? []
       const msg2 = hs.WriteMessage(
         encodeEnvelope({ id: HELLO_ACK_ID, type: 'hello_ack', ts: HELLO_ACK_TS, payload: helloAck })
       )
@@ -457,6 +460,7 @@ export async function startFakeDaemon(options: FakeDaemonOptions): Promise<FakeD
       recvCipher = split[1]
       sendNoise(msg2, 'noise_resp')
       state = 'transport'
+      for (const frame of initialFrames) sendNoise(sendCipher.EncryptWithAd(EMPTY_AD, frame))
     } catch {
       hs = null // the library auto-freed the handshake state on the throw
       settle({ ok: false, reason: 'handshake-read-failed' })

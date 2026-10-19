@@ -4,6 +4,9 @@ import type { UsageLimitReading } from '../../store/usageLimitStore'
 import { TopOverlay, USAGE_PILL_DISMISS_LABEL } from './TopOverlay'
 import { USAGE_LIMIT_EXHAUSTED_COPY, USAGE_LIMIT_WARNING_COPY } from './usageLimitNotice'
 import { COMPOSER_REPAIR_BUTTON_COPY } from './composerSend'
+import { CONNECTION_BANNER_COPY, DAEMON_UPDATE_REQUIRED_COPY, COMPOSER_RECONNECT_BUTTON_COPY } from './composerSend'
+import type { ConnectionStatus } from '../../store/sessionStore'
+import { MARKDOWN_OPEN_FAILED_NOTICE } from './MarkdownReader'
 
 // #1604 — the Top overlay's pure view. The markup is a pure function of the reading, the instant, the
 // dismissed triple and the repair flag, so every arm is a static render here; the clicks live in e2e.
@@ -20,10 +23,19 @@ const render = (props: {
   reading?: UsageLimitReading | null
   dismissed?: UsageLimitReading | null
   repair?: boolean
+  markdownOpenFailed?: boolean
   sessionError?: string
   resolution?: 'remote' | 'timeout' | null
+  connectionStatus?: ConnectionStatus
+  savedMessages?: boolean
+  loadingSavedMessages?: boolean
 }): string => renderToStaticMarkup(
   <TopOverlay
+    connectionStatus={props.connectionStatus}
+    savedMessages={props.savedMessages}
+    loadingSavedMessages={props.loadingSavedMessages}
+    onReconnect={() => {}}
+    markdownOpenFailed={props.markdownOpenFailed}
     sessionError={props.sessionError}
     reading={props.reading ?? null}
     nowSeconds={NOW}
@@ -39,6 +51,89 @@ const render = (props: {
 const X_BUTTON = `<button type="button" class="top-overlay-pill__dismiss" aria-label="${USAGE_PILL_DISMISS_LABEL}">`
 const REPAIR_PILL =
   `<button type="button" class="top-overlay-pill top-overlay-pill--error">${COMPOSER_REPAIR_BUTTON_COPY}</button>`
+
+const connected: ConnectionStatus = { type: 'connected', ack: {
+  protocol_version: '1', server_id: 'host', conn_id: 'connection', capabilities: ['thread']
+} }
+
+describe('connection feedback pills', () => {
+  it.each<ConnectionStatus>([
+    { type: 'disconnected' }, { type: 'connecting' },
+    { type: 'error', error: { code: 'SECRET_CODE', message: 'SECRET_MESSAGE', retryable: true } }
+  ])('announces $type once in an Error pill without dismiss or daemon text', connectionStatus => {
+    const html = render({ connectionStatus })
+    expect(html).toContain('class="top-overlay-pill top-overlay-pill--error" role="status"')
+    expect(html).toContain(CONNECTION_BANNER_COPY)
+    expect(html.match(/role="status"/g)).toHaveLength(1)
+    expect(html).toContain('aria-live="polite" aria-atomic="true"')
+    expect(html).not.toMatch(/<button|SECRET|conversation__banner|composer-status__error/)
+  })
+
+  it('clears connection and saved feedback on connected, retaining independent loading', () => {
+    expect(render({ connectionStatus: connected, savedMessages: true })).toBe('')
+    const loading = render({ connectionStatus: connected, savedMessages: true, loadingSavedMessages: true })
+    expect(loading).toContain('Loading saved messages…')
+    expect(loading).not.toContain(CONNECTION_BANNER_COPY)
+    expect(loading).not.toContain('Showing saved messages')
+  })
+
+  it.each([false, true])('only claims saved rows when displayed: %s', savedMessages => {
+    const html = render({ connectionStatus: { type: 'disconnected' }, savedMessages, loadingSavedMessages: true })
+    expect(html.includes('Offline. Showing saved messages.')).toBe(savedMessages)
+    expect(html).toContain('Loading saved messages…')
+    expect(html.match(/role="status"/g)).toHaveLength(1)
+  })
+
+  it('keeps pairing rejection explanation and Re-pair without Reconnect', () => {
+    const html = render({ connectionStatus: { type: 'error', error: {
+      code: 'pairing-rejected', message: 'SECRET', retryable: false
+    } }, repair: true })
+    expect(html).toContain('Your pairing has expired or is no longer valid. Enter a new pairing code to reconnect.')
+    expect(html).toContain(REPAIR_PILL)
+    expect(html).not.toContain(COMPOSER_RECONNECT_BUTTON_COPY)
+    expect(html).not.toContain('SECRET')
+  })
+
+  it('names a daemon update and renders terminal Reconnect with Re-pair styling', () => {
+    const html = render({ connectionStatus: { type: 'error', error: {
+      code: 'update-required', cause: 'daemon', message: 'SECRET', retryable: false
+    } }, reading: reading(), savedMessages: true })
+    expect(html).toContain(DAEMON_UPDATE_REQUIRED_COPY)
+    expect(html).toContain(`<button type="button" class="top-overlay-pill top-overlay-pill--error">${COMPOSER_RECONNECT_BUTTON_COPY}</button>`)
+    expect(html).toContain(USAGE_LIMIT_WARNING_COPY)
+    expect(html.match(/conversation__top-overlay/g)).toHaveLength(1)
+    expect(html).not.toContain('SECRET')
+  })
+
+  it.each(['unpair', 'not-paired', 'pairing-rejected'])('does not reconnect %s', code => {
+    expect(render({ connectionStatus: { type: 'error', error: { code, message: 'SECRET', retryable: false } } }))
+      .not.toContain(COMPOSER_RECONNECT_BUTTON_COPY)
+  })
+})
+
+describe('Markdown open failure pill', () => {
+  const failurePill = '<div class="top-overlay-pill top-overlay-pill--error" role="status">' +
+    `<span class="top-overlay-pill__text">${MARKDOWN_OPEN_FAILED_NOTICE}</span></div>`
+
+  it('shows only the client-owned error copy as a polite status without a dismiss button', () => {
+    expect(render({ markdownOpenFailed: true }))
+      .toBe(`<div class="conversation__top-overlay">${failurePill}</div>`)
+    expect(render({ markdownOpenFailed: false })).toBe('')
+  })
+
+  it.each([
+    { reading: reading() },
+    { repair: true },
+    { reading: reading(), repair: true }
+  ])('keeps one failure pill alongside other notices: %j', (other) => {
+    const markup = render({ ...other, markdownOpenFailed: true })
+    expect(markup.match(/conversation__top-overlay/g)).toHaveLength(1)
+    expect(markup.split(failurePill)).toHaveLength(2)
+    if (other.reading) expect(markup).toContain(USAGE_LIMIT_WARNING_COPY)
+    if (other.repair) expect(markup).toContain(REPAIR_PILL)
+    expect(markup).not.toContain('conversation__banner')
+  })
+})
 
 describe('TopOverlay (#1604)', () => {
   // The empty overlay in the strict exact-empty form: no element at all, so it takes no space.

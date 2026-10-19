@@ -1,21 +1,20 @@
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
+import { scenarioNonce, scenarioDaemonRevision } from './fixtures/clientScenario'
+
+
 import type { Page } from '@playwright/test'
-import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/realDaemon'
+import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/clientScenario'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
-import { daemonIdentity } from './fixtures/daemonVersion'
+
 import type { StampedDaemonEvent } from '../src/shared/ipc/events'
+import { createCodexChannelProof, type ProofEvent } from './fixtures/codexChannelProof'
 
 // A real Claude turn supplies effort-capable bootstrap settings; Codex sign-in is separately linked.
 test.use({ codexCapture: true, seedPromoted: false, claudeModel: 'opus' })
 const ROUNDTRIP = 15_000
 const TURN = 120_000
-type ProofEvent = Extract<StampedDaemonEvent, { type: 'runConfigReceived' | 'modelList' |
-  'sessionSettingsUpdated' | 'conversationCreated' | 'assistantDelta' | 'turnEnd' }>
-
 async function observe(page: Page) {
-  const events: ProofEvent[] = []
-  await page.exposeFunction('recordLunaProof', (event: ProofEvent) => { events.push(event) })
+  const proof = createCodexChannelProof()
+  await page.exposeFunction('recordLunaProof', proof.record)
   await page.evaluate(() => {
     const target = window as unknown as {
       pyry: { onDaemonEvent: (listener: (event: StampedDaemonEvent) => void) => () => void }
@@ -25,19 +24,14 @@ async function observe(page: Page) {
     target.stopLunaProof = target.pyry.onDaemonEvent(event => {
       if (event.type === 'runConfigReceived' || event.type === 'modelList' ||
           event.type === 'sessionSettingsUpdated' || event.type === 'conversationCreated' ||
-          event.type === 'assistantDelta' || event.type === 'turnEnd') {
+          event.type === 'assistantDelta' || event.type === 'turnEnd' || event.type === 'threadUpdate' || event.type === 'threadReply') {
         // Test observation only; completion is awaited through the proof predicates below.
         void target.recordLunaProof(event)
       }
     })
   })
   return {
-    settings: () => events.filter((e): e is Extract<ProofEvent, { type: 'runConfigReceived' }> => e.type === 'runConfigReceived'),
-    models: () => events.filter((e): e is Extract<ProofEvent, { type: 'modelList' }> => e.type === 'modelList'),
-    acks: () => events.filter((e): e is Extract<ProofEvent, { type: 'sessionSettingsUpdated' }> => e.type === 'sessionSettingsUpdated'),
-    created: () => events.filter((e): e is Extract<ProofEvent, { type: 'conversationCreated' }> => e.type === 'conversationCreated'),
-    deltas: () => events.filter((e): e is Extract<ProofEvent, { type: 'assistantDelta' }> => e.type === 'assistantDelta'),
-    ends: () => events.filter((e): e is Extract<ProofEvent, { type: 'turnEnd' }> => e.type === 'turnEnd'),
+    ...proof,
     stop: () => page.evaluate(() => (window as unknown as { stopLunaProof: () => void }).stopLunaProof())
   }
 }
@@ -50,18 +44,19 @@ async function assistantCount(page: Page): Promise<number> {
   }).length)
 }
 
-async function turn(page: Page): Promise<void> {
+async function turn(page: Page, proof: Awaited<ReturnType<typeof observe>>): Promise<void> {
+  const completedBefore = proof.ends().length
   const before = await assistantCount(page)
-  await page.getByPlaceholder('Message…').fill(`Reply with one short word. run=${Date.now()}`)
+  await page.getByPlaceholder('Message…').fill(`Reply with one short word. run=${scenarioNonce()}`)
   await page.getByRole('button', { name: 'Send', exact: true }).click()
   await expect.poll(() => assistantCount(page), { timeout: TURN }).toBeGreaterThan(before)
   await expect(page.locator('.bubble__cursor')).toHaveCount(0, { timeout: TURN })
+  await expect.poll(() => proof.ends().length, { timeout: TURN }).toBe(completedBefore + 1)
 }
 
 test('real GPT-6 Luna channel replies with Low effort from creation', async ({ relay, daemon }, testInfo) => {
   test.setTimeout(360_000)
-  const { stdout } = await promisify(execFile)(process.env.PYRY_BIN || 'pyry', ['version'], { timeout: 10_000 })
-  const revision = daemonIdentity(stdout)
+  const revision = scenarioDaemonRevision()
   testInfo.annotations.push({ type: 'daemon-revision', description: revision })
   await testInfo.attach('daemon-revision', { body: Buffer.from(revision), contentType: 'text/plain' })
 
@@ -76,7 +71,7 @@ test('real GPT-6 Luna channel replies with Low effort from creation', async ({ r
       await seedRow.click()
       await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
       await expect.poll(() => proof.settings().length, { timeout: ROUNDTRIP }).toBeGreaterThan(0)
-      await turn(page)
+      await turn(page, proof)
       const beforeRefresh = proof.settings().length
       await seedRow.click()
       await expect.poll(() => proof.settings().length, { timeout: ROUNDTRIP }).toBeGreaterThan(beforeRefresh)
@@ -121,8 +116,8 @@ test('real GPT-6 Luna channel replies with Low effort from creation', async ({ r
       const createdBefore = proof.created().length
       const readsBeforeCreate = proof.settings().length
       const acksBeforeCreate = proof.acks().length
-      const name = `Luna live ${Date.now()}`
-      await page.getByRole('button', { name: 'Create channel', exact: true }).click({ force: true })
+      const name = `Luna live ${scenarioNonce()}`
+      await page.getByRole('button', { name: 'Create channel', exact: true }).click()
       const dialog = page.getByRole('dialog', { name: 'Create channel', exact: true })
       await dialog.getByRole('textbox', { name: 'Channel name:', exact: true }).fill(name)
       await dialog.locator('.create-channel__model').click()
@@ -149,7 +144,7 @@ test('real GPT-6 Luna channel replies with Low effort from creation', async ({ r
       await expect(page.locator('[data-thread-role="user"]')).toHaveCount(0)
       await expect(page.locator('[data-thread-role="assistant"]')).toHaveCount(0)
 
-      await turn(page)
+      await turn(page, proof)
       await expect.poll(() => proof.ends().some(end => end.serverId === seed.serverId &&
         end.conversationId === channelId && end.stopReason === 'end_turn' && end.isError !== true &&
         (!end.outcome || end.outcome === 'success') && (!end.terminalReason || end.terminalReason === 'completed') &&

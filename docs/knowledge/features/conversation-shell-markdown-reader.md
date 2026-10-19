@@ -85,19 +85,53 @@ One new file, `src/renderer/src/screens/conversation/MarkdownReader.tsx`.
   point that isn't gated on content having arrived (see § Note actions menu). The body renders
   `<AssistantMarkdown text={state.text} />` inside `.bubble__markdown` when loaded (reusing
   the reply's own markdown CSS — headings, code chrome, tables, task marks — rather than
-  restating it), and an empty `aria-busy="true"` box while loading. **No `onOpenMarkdownPath`
+  restating it), and an empty `aria-busy="true"` box while loading. Top-level blocks
+  share the reply's base 16 px (`--space-4`) gap and direct-child margin reset.
+  The shared sibling rules give H1–H6 20 px before and 12 px after when next to
+  non-heading blocks; adjacent headings retain 16 px. First/last blocks stay flush,
+  including heading-only content. See [heading spacing](assistant-markdown-renderer.md#configuration-and-usage).
+  Reader body padding remains separate. Nested list/quote rhythm stays
+  8 px; the reply's metadata/attachment margins remain 12 px outside that container.
+  **No `onOpenMarkdownPath`
   is passed** — a link inside a note renders as plain text or a plain external link exactly
   as it would in a reply with the prop absent; following a link within a note is a later
   ticket, not a gap in this one.
 - **`MARKDOWN_OPEN_FAILED_NOTICE`** — the one client-owned string, `'Could not open the
-  file.'`, shown in the thread (not the reader, which has already closed by the time it
-  renders) as `<p className="conversation__banner" role="status">`. Never the path, never the
+  file.'`, shown after the reader closes as one non-dismissible Error pill in
+  [`TopOverlay`](conversation-shell.md#what-it-does). It reuses
+  `.top-overlay-pill--error` with `role="status"` for a polite announcement and no X;
+  there is no `conversation__banner` for this failure. Never the path, never the
   failure reason — a `failed` outcome for the current key is the reducer's only route to
-  `{ type: 'closed', notice: true }`. [#1630](https://github.com/pyrycode/pyrycode-desktop/issues/1630)
+  `{ type: 'closed', notice: true }`. The next open attempt clears it immediately,
+  and switching conversations drops it, including on return.
+  [#1630](https://github.com/pyrycode/pyrycode-desktop/issues/1630)
   reuses the same string for a failed **refresh**, but rendered inside the still-open reader
   (`.markdown-reader__notice`) over the old text rather than in the thread — the two call
   sites share the string because the failure reads the same to the operator either way, not
   because they share a rendering path.
+
+## Body typography
+
+`.markdown-reader__body` supplies the same body-medium tokens as thread prose:
+Roboto 14/20 px, weight 400 and 0.25 px tracking, with On Secondary Container ink
+(`--color-on-secondary-container`). Paragraphs, list items and table cells inherit
+these values. Quotes and links inherit the same typography; quotes retain their
+4 px Outline bar, and external links retain Primary ink and an underline.
+
+Sharing `AssistantMarkdown` does not alone establish matching prose: the reader
+inherits from its own scroll body rather than a message bubble. Keep the body
+tokens aligned there instead of adding per-element reader overrides. Fenced code
+has explicit shared styling: Roboto Mono 12/20 px, a 1 px Primary Container stroke,
+6 px radius and Copy code icon. Ordinary blocks retain the shared 16 px gap,
+with the nested 8 px rhythm and flush Markdown edges described above. The fixed
+top bar and sole body scrollport follow the [pane layout](#pane-wiring).
+
+Headings inherit the [shared H1–H6 scale](assistant-markdown-renderer.md#heading-typography)
+through `.bubble__markdown`: Roboto-first, On Secondary Container ink, H1
+500 20/28 px, H2 500 18/26 px, H3 500 16/24 px, and H4–H6 700 14/20 px.
+Tracking is respectively 0, 0, 0.15 and 0.25 px. Reader-specific browser
+coverage confirms these rules without duplicate heading CSS or production
+style changes; see [heading verification](#heading-verification).
 
 ## Note actions menu
 
@@ -180,6 +214,15 @@ row and reading the clipboard back are Playwright's job —
 `e2e/markdown-reader-menu.spec.ts`, beside `e2e/markdown-reader.spec.ts`. It reads the OS
 clipboard back through main the way `e2e/message-copy.spec.ts` already does, including
 `clipboard.readHTML()` for the HTML flavour.
+
+That menu scenario also measures the loaded note's 12 px heading-to-paragraph gap
+and flush container edges at 1280×800 and 800×800 window sizes. Escaped raw HTML
+becomes bare text and therefore anonymous flex items: `el.children` omits them,
+so adjacent element rectangles spanning those items do not measure one gap. Keep
+the hostile HTML fixture and its security assertions; a final normal paragraph
+makes the last element also the last flex item for the bottom-edge check. The
+heading and first paragraph give a genuinely adjacent element pair. See the
+[counted Linux layout evidence](assistant-markdown-renderer.md#verification).
 
 ## Open in another app (#1631)
 
@@ -304,6 +347,12 @@ per-conversation `key` in `PairedShell`](paired-shell.md), so switching conversa
 remounts the screen, which drops the reducer state, clears the notice, and removes the
 listener — a late answer after that point reaches no subscriber to apply itself to.
 
+`ConversationScreen` passes `reader.state.type === 'closed' && reader.state.notice`
+through `TopOverlayControl` as `TopOverlay`'s optional boolean `markdownOpenFailed`.
+The overlay includes it in its empty-state guard, so the failure can appear alone
+or alongside usage and Re-pair feedback. It floats over the message area without
+moving the thread or composer; reader state and subscriptions still belong here.
+
 **The reader is a layer over the pane, not a replacement rendered by an early return** — that
 was the shipped shape's first cut, reworked during review (PR #1629). The thread and
 `Composer` always render, nested inside a full-pane wrapper:
@@ -317,7 +366,14 @@ The covered pane contains the full-pane thread and its fixed top/input chrome (s
 [layout contract](conversation-shell-chrome.md#layout-contract)). While the reader is open it carries
 `data-covered`, which sets `visibility: hidden` on the whole subtree — out of the tab order
 and the accessibility tree, and unable to take a pointer hit or a drop, but present in the
-layout, so **the thread's scroll position survives the round trip** rather than resetting.
+layout. This keeps thread/composer state mounted; hidden rows still lose native scroll
+anchors during resize, so mounting alone cannot preserve their offset. The
+[scroll pin's covered-position record](conversation-shell-scroll-pin.md#covered-reader-resize-preservation)
+captures the processed offset before the first covered viewport change and restores
+released readers when the original viewport width and height return. Following readers
+retain bottom pinning. Back at different dimensions keeps the current native position;
+uncovering or leaving the conversation clears the record, and each open captures anew.
+
 `MarkdownReaderView` and its only scrollport, `.markdown-reader__body`, use absolute
 `inset: 0` over the whole chat pane. The body sits at local level 0 beneath fixed
 `.markdown-reader__chrome` at level 1. Chrome includes the existing Back/title/Note actions
@@ -348,16 +404,30 @@ when needed at minimum width/125% zoom. Shared focus, Escape and outside-click h
 remain in the menu component. See [layout and input verification](development-verification-layout-and-input.md#layout-and-input)
 for the focused browser proof and retained captures.
 
-The layout scenarios in `e2e/markdown-reader-menu.spec.ts` normalize focus before
-testing preservation: after Plan version 1 loads, focus Back and settle the covered
-thread before recording its position. Otherwise the baseline can retain reply metadata
+The layout scenarios in `e2e/markdown-reader-menu.spec.ts` first prove native upward
+wheel movement and settle before opening. After Plan version 1 loads, focus Back and
+settle the covered thread before recording its position. Otherwise the baseline can retain reply metadata
 that later menu focus collapses. After pointer Back, assert the original thread position
 and draft before preparing the next click. Focus the note link to hold metadata open,
 then settle thread and link geometry before pointer delivery; hover can otherwise grow
 the row and move the link after Playwright measures it. Reopen must show Plan version 3
-with exactly one new host read and unique request IDs, then keyboard Back must close it.
+with exactly one new host read and unique request IDs. Reopening at the other native
+size, resizing away and back, then using keyboard Back must preserve that open's own
+settled offset, proving the prior record is not replayed. Phase diagnostics survive
+assertion failures before reopen through the test-wide `finally` attachment.
 See [the geometry contract](development-verification-layout-and-input.md#layout-and-input)
-and [controlled evidence and counted runs](development-verification-layout-evidence.md#reader-reopen-input-verification).
+and the [reopen input](development-verification-layout-evidence.md#reader-reopen-input-verification)
+and [resize preservation evidence](development-verification-layout-evidence.md#reader-resize-scroll-preservation).
+
+The failure checks in `e2e/markdown-reader.spec.ts` locate exactly one Error pill in
+TopOverlay, assert the fixed text, polite status and absence of a button or failure
+band, and cover usage coexistence, repeated failures, next-open clearing and
+conversation departure/return. Measure the message's origin separately from its
+height when checking notice-induced movement: hovering the Markdown link reveals
+metadata and can legitimately grow the bubble. Compare the thread and composer
+boxes as well, so that allowance cannot hide a shifted pane. Static
+`TopOverlay.test.tsx` renders cover the empty guard and coexistence with usage and
+Re-pair; interaction and geometry require the browser scenario.
 
 **Why this matters beyond visual continuity**: `Composer`'s pending-attachment set and its
 upload listener (`useAttachmentUpload`) are mount-local state. The first shipped cut's early
@@ -375,6 +445,54 @@ mount-local state itself.
 subtree, don't unmount it, unless every child's state is already lifted to a store. An early
 return is the natural first instinct and reads as correct in review until the specific
 mount-local state it drops is traced.
+
+## Body typography verification
+
+[`e2e/markdown-reader.spec.ts`](../../../e2e/markdown-reader.spec.ts)'s existing
+“a markdown link in a reply opens the note in the reader, refetched on every open,
+and back returns (#1627)” scenario measures paragraphs, list items, table headers
+and cells, quotes and external links at 1280 and 800 px window widths. It checks
+literal 14/20 px type and 0.25 px tracking as well as the Roboto family and token
+ink, preserving the quote bar, link underline, fenced code and visible copy icon.
+It measures all five adjacent ordinary-block gaps after the heading-to-paragraph
+pair; [heading verification](#heading-verification) covers heading boundaries. Shared markup alone would miss a
+wrong inherited body size, and a declared flex gap alone would miss extra margins.
+
+The [accepted Linux verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2114#issuecomment-6256632906)
+at `28aa981b` confirms `MarkdownReader.test.tsx` present and passed: 29 executed,
+29 passed, 0 failed and 0 skipped. Both reader browser specs,
+`e2e/markdown-reader.spec.ts` and `e2e/markdown-reader-menu.spec.ts`, were present
+and passed: 4 executed, 4 passed, 0 failed and 0 skipped, including the named
+round-trip regression above. The complete application run executed 500 tests:
+500 passed, 0 failed and 5 skipped. These are retained results; static unit
+renders prove markup and reducer behavior, while the browser proves computed
+typography, geometry and interaction.
+
+The verifier compared loaded synthetic reader captures from the reviewed revision
+at 1280×773 and 800×773 content sizes against Figma `552:2851` and `134:4890`,
+confirming prose typography/ink, outlined code/copy treatment and 16 px ordinary
+gaps. Retained capture references are `/tmp/verifier-2114/` and
+`/tmp/builder-2099/reader-body-{1280,800}.png`. This body change requires no
+provider/live run; macOS is outside this Linux ticket's verification scope.
+
+## Heading verification
+
+`MarkdownReader.test.tsx`'s “renders H1–H6 inside the shared Markdown wrapper
+(#2100)” pins all six semantic tags under `.bubble__markdown`. The mounted
+“reader headings share the scale, spacing and first-block clearance (#2100)”
+scenario in `e2e/markdown-reader.spec.ts` opens a reply's note link and delivers
+synthetic file text through the verified file-response path. At native window
+widths 1280 and 800 it checks literal family/size/line-height/weight/tracking
+and token ink, six 20/12 px heading/prose boundary pairs, five 16 px adjacent
+heading gaps and zero first/last Markdown insets.
+
+For each width it then refetches a first-paragraph note and compares its distance
+from the fixed chrome's bottom with the first-heading note's distance, asserting
+both scrollports are at zero and the heading clears the chrome. This proves no
+extra first-heading gap; shared markup or a declared flex gap alone cannot
+establish the measured header clearance. The reader keeps the shared heading
+rules; #2100 added tests only. See [counted Linux results, negative control and
+capture provenance](assistant-markdown-renderer-verification.md#reader-headings).
 
 ## Related
 

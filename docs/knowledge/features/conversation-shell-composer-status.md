@@ -1,17 +1,17 @@
 # Conversation shell — composer status row and error slot
 
-The status row directly above the message box: its activity/thinking display, its error chip, that chip's fold into an actionable reconnect button, and the retry/compacting/stall statuses folded into its label. Split from [Composer](conversation-shell-composer.md) 2026-09-05, once this ticket's message-box growth would have pushed the combined document over the size cap. (Through #1604 the chip's fold also produced a Re-pair button here; Re-pair now shows in the conversation's Top overlay instead — see below.)
+The status row directly above the message box holds activity/thinking and a
+single connected-only report or recovery occupant. Connection explanations,
+Reconnect and Re-pair now live in the conversation's Top overlay; #2076 retired
+the connection chip and composer Reconnect.
 
-Part of [Composer](conversation-shell-composer.md); see that document for the message box and footer row, and [Conversation shell](conversation-shell.md) for the screen overall.
-
-This page holds the row's own geometry and the five small, connected-only occupants of its trailing
-slot's precedence chain. The largest occupants live on their own pages, linked from their stub
-headings below: [Composer status row](conversation-shell-composer-status-row.md) (#796),
-[Composer error chip](conversation-shell-composer-error-chip.md) (#797), and
-[Actionable-error button](conversation-shell-composer-repair-button.md) (#963, Reconnect only since #1604).
-[The usage-limit notice](conversation-shell-composer-usage-limit-notice.md) (#1321) and Re-pair, #963's
-other arm, both moved out of this slot into the conversation's Top overlay by #1604 — their pages describe
-where they live now, and neither is an occupant of the chain below any more.
+Part of [Composer](conversation-shell-composer.md); see
+[Conversation shell](conversation-shell.md) for the screen overall. Geometry lives
+in [Composer status row](conversation-shell-composer-status-row.md), historical
+chip references in [Composer error chip](conversation-shell-composer-error-chip.md),
+and current host recovery in [connection recovery actions](conversation-shell-composer-repair-button.md).
+The [usage-limit notice](conversation-shell-composer-usage-limit-notice.md) also
+shows independently in the Top overlay.
 
 ## Composer status row (#796)
 
@@ -73,17 +73,15 @@ hand-over acceptance remain #1662's scope; no live-Claude pass is claimed here.
 
 ## Composer error chip (#797)
 
-Split out to its own page: [Composer error chip](conversation-shell-composer-error-chip.md) — the row's
-`trailing` slot filled with a red pill reading `COMPOSER_ERROR_CHIP_COPY` in the `error` connection arm
-and no other, and why it never destructures `status.error`.
+[Composer error chip](conversation-shell-composer-error-chip.md) records the
+surface's retirement by #2076. There is no connection chip in this row.
 
 ## Actionable-error button, and the row that grows to fit it (#963; Re-pair moved out by #1604)
 
-Split out to its own page: [Actionable-error button, and the row that grows to fit it](conversation-shell-composer-repair-button.md) —
-`Connection error - Reconnect` for terminal failures except `unpair` and `not-paired`, the row's growth
-from 24 to 32px to fit it, and the retired `RepairPrompt`/`RepairControl`/`.composer__repair` block this
-retires. `Pairing error - Re-pair`, #963's other arm, moved to the conversation's Top overlay in #1604; on
-a pairing rejection this slot now falls through to the ordinary connection-error chip below instead.
+Both connection recovery actions now use the Top overlay. See
+[connection recovery actions](conversation-shell-composer-repair-button.md) for
+unchanged predicates, click-time host routing and mounted evidence. Connection
+changes no longer grow the row to accommodate Reconnect.
 
 ## Stopped-turn recovery
 
@@ -107,7 +105,7 @@ slash command**, as of [#1496](https://github.com/pyrycode/pyrycode-desktop/issu
 outside `sendText` entirely; see [New session control
 action](conversation-shell-actions-menu-and-reader-cutover.md#new-session-control-action-1218-folded-to-the-menus-only-reset-row-by-1496).
 
-Recovery has priority after reconnect and connection errors, before refusal recovery and
+Recovery has first priority in the connected-only slot, before refusal recovery and
 model-settings rejection; it is visible only while connected. (Through #1604, the usage-limit notice
 also sat in this chain, below Claude stopping reports; it now shows independently, in the Top overlay,
 and no longer competes with recovery in either direction.) The
@@ -126,11 +124,12 @@ availability, slot priority and the 800px layout check.
 
 ## Refusal Switch back
 
-`ComposerErrorSlotControl` reads only the active conversation's live refusal offer.
-The latest fallback qualifies only with exact `scope: 'session'` and nonempty original
-and fallback identifiers. Local/unknown scopes and no-fallback records create no
-offer; history cannot create or revive one. The button requires a connected state
-and an addressable session id (neither `null` nor `''`).
+`ComposerErrorSlotControl` reads the active conversation's selected refusal offer
+for the bound current session. The latest fallback qualifies only with exact
+`scope: 'session'` and nonempty original and fallback identifiers. Local/unknown
+scopes and no-fallback records create no offer; an older session's history cannot
+create or revive one. The button requires a connected state and an addressable
+session id (neither `null` nor `''`).
 
 Switch back uses `changeSetting`, the same path as [ComposerModelMenu](composer-model-menu.md),
 with the original identifier unchanged. It preserves the draft and sends one
@@ -138,6 +137,18 @@ with the original identifier unchanged. It preserves the draft and sends one
 the active conversation, exact offer object, connection, session id and pending-model
 guards at click time. The button stays visible but disabled while the offer has a
 `changeId` or the settings store has a pending model write.
+
+Production offers come from admitted full items in the selected
+`threadRuntime.presentation(host, chat)`, including compact full roots beneath a
+closed parent. Switch back revalidates that presentation's host, conversation,
+session, epoch, item ID and revision at click time. Checking `threadRuntime.items`
+instead would silently reject a compact-only refusal or its newer revision while
+older complete history is retained. Headers and rendered detail bodies cannot
+create an offer, and selected compact facts carry no complete read/persistence
+evidence. Current-session task controls independently use
+[admitted full/live identities](conversation-shell-turn-status.md#session-scoped-live-presentation);
+neither control requires opening the parent. Both retained-complete variants pass
+in the [counted compact coverage](thread-runtime-compact.md#production-activation-and-visible-demand).
 
 A correlated rejection retains the offer and shows “Could not change the model —
 try again.” beside the retry button. Retry clears that feedback; confirmation retires
@@ -157,13 +168,12 @@ fixed client copy in a `role="alert"` element. It is available both with the ord
 composer and while the [questionnaire's model footer](composer-model-menu.md#availability-during-question-batches)
 is visible; rejection leaves the question answerable and rolls back the optimistic label.
 
-The single-occupant priority is reconnect button → connection-error chip → stopped-turn
-recovery → refusal Switch back (with any rejection feedback) → model rejection → Claude
-stopping report → history failure → MCP server failure → task count. Recovery and notices
-require `connected`; disconnected and connecting states hide them without clearing held reports. The
-[usage-limit notice](conversation-shell-composer-usage-limit-notice.md) and Re-pair are no longer part of
-this chain (#1604): both show in the conversation's Top overlay whatever this chain holds, and the usage
-reading shows whatever the connection state too.
+The single-occupant priority is stopped-turn recovery → refusal Switch back
+(with any rejection feedback) → model rejection → Claude stopping report → history failure → MCP server failure → task count. Recovery and notices
+require `connected`; every non-connected state hides them without clearing held reports. The
+[usage-limit notice](conversation-shell-composer-usage-limit-notice.md), connection feedback, Reconnect
+and Re-pair are outside this chain: they use the Top overlay independently. Usage remains visible
+whatever the connection state.
 `.composer-status__error--settings` retains the error treatment but uses
 `flex: 0 1 auto`, `min-width: 0` and `white-space: normal` so the sentence can wrap at the
 800px minimum window width.
@@ -202,10 +212,10 @@ when the producer reports truncation. No second text cap applies. Its shrinkable
 `ConversationScreen.tsx`) pick `agent === 'codex' ? 'Codex' : 'Claude'`; a client-owned name, the
 raw `agent` value is never rendered. `ComposerErrorSlotControl` reads its agent through
 `useConversationAgent(open?.id ?? null)` (the #1651 hook, exported from `RunConfigSections.tsx`) and
-passes it to `ComposerBannerReport`; the timeline's own banner and stopped-turn rows read the same
-`WireAgent` threaded down from `ConversationScreen`'s `openAgent` through `Timeline` and `TimelineRow`.
-Every new prop or parameter defaults to `'claude'`, so a Claude conversation, a conversation with no
-agent, and every pre-#1656 test are byte-identical to before.
+passes it to `ComposerBannerReport`. Authoritative banner and stopped-turn rows
+instead use the supplied item's recorded agent through `ThreadItemsView` and
+`TimelineRow`; missing attribution uses saved text/summary. The deleted `Timeline`
+no longer threads a current-conversation default into these rows.
 
 The next accepted typed or slash send inserts an optimistic user row and clears
 only this transient report. Empty/blocked attempts, daemon activity, trailing idle,
@@ -220,38 +230,13 @@ producer.
 
 ## History page failure and Retry
 
-A settled failure shows “Could not load older messages” with `role="status"` only
-for the displayed conversation's exact owning host while connected, behind every
-occupant in the priority above. An unowned slice, another host's equal conversation
-id, or another conversation cannot supply it. `ComposerHistoryFailure` uses the
-existing recovery layout and `button-small button-small--error`; Retry appears
-only for `retryable: true`. Daemon failure text never supplies the copy.
-
-`retryHistoryPage` rechecks the captured displayed conversation object, connected
-host, exact held failure object and retryability at activation. Navigation (even
-to a new object with the same id), disconnect or a new settlement invalidates the
-action. A local read in progress or outstanding request prevents dispatch. Pending
-and failed state retain the requested cursor and purpose (`older` or `newest`).
-Retry delegates to `requestHistoryPage`, resending that captured cursor with
-`HISTORY_PAGE_LIMIT = 200`; newest Retry sends `cursor: ''` even when retained
-backwards coverage reports `atStart: true`. Completed coverage blocks older Retry;
-legacy failures without cursor/purpose fall back to backwards coverage.
-The [existing history request path](request-history-send.md#the-one-fact-that-shapes-every-piece)
-preserves rows and successful oldest-end coverage. Starting a retry
-removes the settled message and button while pending; correlated success clears
-failure, and a new failure supplies its new retryability. No automatic retry is
-introduced. Fresh backwards demand can still ask after either classification,
-subject to current host ownership, pending/completed-walk guards and trusted
-upward input within two thread viewport heights of the top. Page arrival,
-programmatic scroll, resize and compensation create no backwards demand. See
-[opening/reconnect lifecycle](chat-history.md#received-state-admission-and-ownership).
-
-`historyRetry.test.ts` covers state and stale actions; `historyRetry.test.tsx`
-covers ownership, pending disappearance and priority through the real container.
-`e2e/history-retry.spec.ts` compares the full retry payload and fresh correlation
-id, holds the reply to prove one pending request and retained rows, then releases
-success. Immediate replies could conceal duplicate-demand bugs. It also delivers
-a nonretryable error and proves fresh upward demand remains available.
+Production Older and Retry actions use host-addressed authoritative thread queries
+and their owning query state. The legacy `retryHistoryPage`/`requestHistoryPage`
+cursor/purpose producers and exclusive tests retired with #2030; #2025 removes
+the remaining main/IPC request, reply/failure events and page decoding. See
+[thread recovery](thread-runtime.md#restore-recovery-and-cleanup) and
+[counted activation evidence](thread-runtime.md#main-request-and-recovery-retirement-validation).
+The shared recovery presentation remains available; no raw-history fallback exists.
 
 ## The usage-limit notice — moved to the Top overlay (#1321; moved by #1604)
 
@@ -341,102 +326,39 @@ spec](../../specs/architecture/1494-mcp-failure-status-row.md) for the full revi
 
 ## Background-task count pill, the slot's last occupant (#1435)
 
-The daemon's live background tasks were readable in exactly one place — the `BackgroundTaskPanel`
-behind the More actions menu — so a turn that ended with several tasks still running looked finished.
-This ticket adds the count as the trailing slot's **last** reading, appended to the end of the existing
-`??` chain: `recovery ?? refusal ?? notice ?? history ?? taskCount ?? null`, still gated inside the
-`status.type === 'connected'` arm. Every occupant documented above outranks it — since [#1494](#mcp-server-failure-notice-1494),
-that includes the MCP failure notice — and it is visible only when nothing else in the chain is.
+`ComposerTaskCount({ count, onToggle, open = false })` is the pure shared trailing
+pill. Production receives the count of active supplied task presentations from the
+[thread runtime](thread-runtime.md), matching the drawer's Running partition. Roster
+size, dropped-task counts and retained `selectLiveTaskCountFor` producer state cannot
+add tasks to this reading. Supplied inactive work remains accessible through the
+Background tasks menu even when the active count is zero.
 
-**The count was originally the raw roster size**, `roster.tasks.size + roster.droppedTasks`, read via
-`selectRosterFor(open.id)` — the same no-conditional-hook-call shape as the usage-limit read this slot used
-to hold beside it, before #1604 moved that read into `TopOverlayControl`. **Since
-[#1561](https://github.com/pyrycode/pyrycode-desktop/issues/1561) the count is the LIVE count**,
-[`backgroundTaskRosterStore`](background-task-roster-store.md)'s `selectLiveTaskCountFor(open.id)` — the
-listed tasks claude has not reported terminal on a `background_task_updated` (`status` exactly
-`completed`/`failed`/`stopped`), plus `droppedTasks`. The raw roster size kept the pill lit for a task
-that had already finished whenever the emptier roster that usually precedes the terminal update did not
-arrive first — observed live for 30+ minutes. The selector swap kept the read's shape: a fresh selector
-identity per render still costs a re-subscribe and never a loop, since `selectLiveTaskCountFor` returns a
-plain `number`, a stable primitive for `useSyncExternalStore` with no memo needed — the same property the
-old `selectRosterFor` read had via its stable held-entry-or-`null` reference. "No roster has ever arrived"
-and "observed, nothing alive" are distinct store readings the store itself keeps apart (for the panel),
-but both collapse to `count === 0` here, which is the reading this surface is entitled to make and the
-panel is not. The store, not this component, owns the arithmetic — see [Background-task roster store —
-internals § The pill's
-count](background-task-roster-store-internals.md#the-pills-count-selectlivetaskcountfor-1561) — so a later
-surface counting live background tasks cannot silently disagree with this pill about what counts as
-finished.
+The connected-only status slot keeps task count last, behind recovery/refusal,
+model/stopping/history and MCP notices. Connection recovery lives in the Top overlay. An absent occupant must
+reach the precedence chain as actual null, not an element whose view later returns
+null. `ComposerTaskCount` itself returns null at `count <= 0`; otherwise it renders
+a real button with “1 task running” or “N tasks running”. The visible text supplies
+the accessible name without a live region or task descriptions.
 
-**`ComposerTaskCount({ count, onToggle, open = false })`** is a pure, exported view in
-`ConversationScreen.tsx`, a prop rather than a store read — the same discipline `TopOverlay` follows for
-the usage pill it moved out of this file — because zustand v5's `useStore` reads `getInitialState()` under
-`renderToStaticMarkup`, so a container test can otherwise reach only one arm. Returns `null` at
-`count <= 0` (`<=` rather than `===`, since `droppedTasks` decodes through a plain `requireNumber` and a
-hostile or buggy daemon can drive the sum negative); otherwise a real
-`<button type="button" className="composer-status__tasks">` holding `'1 task running'` or
-`` `${count} tasks running` `` — a two-way conditional over two client-owned literals, no copy module
-(unlike #1321's `usageLimitNotice.ts`: one number and one word need no pinning module of their own). No
-`aria-label`, no live region — the visible text is already the accessible name, and a count that moves
-every turn would announce on each one.
+The count toggles the same `backgroundTasksOpen` boolean that the overflow-menu item
+opens and drawer Close clears. Production holds it in `PairedShell`, preserving
+visibility across conversation switches; the new thread scope supplies new task
+facts. Bare screens can use local state. While open, the pill adds
+`composer-status__tasks--open` and `aria-expanded="true"`; its Primary inset outline
+leaves the native focus ring free. See the
+[drawer contract](conversation-shell-background-tasks.md#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583).
 
-**[#1634](https://github.com/pyrycode/pyrycode-desktop/issues/1634) made the pill a toggle, not only an
-opener**, once the [background-task panel](conversation-shell-background-tasks.md) became a non-modal
-drawer that stays open across a conversation switch. `ConversationScreen` wires `onToggle` to
-`setPanelOpen(!panelOpen)`, where `setPanelOpen` is `PairedShell`'s lifted state when present (see
-[Background-task panel § Open state lifted](conversation-shell-background-tasks.md#background-task-panel-581-cap-and-cut-display-since-582-latest-patch-since-583)).
-The new `open` prop, defaulted to `false`, adds a `composer-status__tasks--open` class — an inset 1px
-`--color-primary` box-shadow, the design's Primary outline, chosen over the CSS `outline` property so the
-UA focus ring stays free — and an `aria-expanded="true"` attribute only while the drawer is open; at
-`open = false` both are absent, so the closed markup stays byte-identical to what every pre-#1634 test
-site already asserted — the five existing `ComposerTaskCount` test sites needed only the `onOpen` →
-`onToggle` rename, nothing else. The overflow menu's `Background tasks` item is unchanged: it still only
-opens, via the same `setPanelOpen`, and never toggles closed.
+`.composer-status__tasks` keeps neutral Pill tokens, body-small regular text and a
+shrinkable ellipsis chain (`flex: 0 1 auto; min-width: 0`). Its 16px line and 4px
+vertical padding yield the 24px resting row. Static captures need the caller's
+`.conversation` wrapper to inherit the application font; bare markup cannot prove
+typography. A JSX comment in an expression prop must use ordinary `/* … */` syntax,
+not the child-only `{/* … */}` form.
 
-**The count is a plain `number` all the way to the DOM**, which is the whole trust boundary: the roster
-also holds untrusted, model-influenced task `description` and `latestUpdate.patch`, and this slice reads
-neither. `ComposerErrorSlotControl` checks `taskCount === 0` before constructing the element (an absent
-occupant must reach the `??` chain as actual `null`, never as a non-null element whose component renders
-nothing — the standing rule #1321 also states, restated here because this is the chain's new tail).
-
-**`.composer-status__tasks`** takes the neutral Pill treatment `.composer__attachment-name` already
-implements (`--space-2`/`--space-1` padding, `--radius-xs`, `--text-body-small-*` at regular weight,
-`--color-primary-container`/`--color-on-primary-container` — read by token name, never the Figma export's
-light-scheme hex fallback). No `height` — 16px of line plus 4px twice already sums to the row's 24px rest
-height. Unlike the two error occupants' `flex: 0 0 auto`, this element ships `flex: 0 1 auto; min-width: 0`
-with an ellipsis chain — the #1321 rework leg's layout-hazard lesson applied in advance rather than
-re-learned. It costs little (the widest reachable string is ~37 characters, since JS `Number`→`String` is
-bounded around 24 digits and fits the 640px pane unshrunk) but means this occupant yields to the row before
-the row yields to the window, the way the unshrinkable usage-limit notice did not the first time.
-
-**Lessons learned (from the PR's own retrospective):**
-
-- **A `{/* … */}` comment is a syntax error in a JSX *expression* slot**, not merely unsupported style.
-  `trailing={…}` and `statusArea={(sendText) => (…)}` are expression positions, not children, so the JSX
-  comment form fails to parse there while a plain `/* … */` works. `tsc --noEmit` reported unrelated type
-  errors first; esbuild was the tool that actually named it.
-- **A static capture inherits nothing.** A first screenshot rendered the pill in the UA serif because the
-  fixture omitted `.conversation`, the ancestor that resolves `--font-sans` — it would have passed a glance
-  and every markup assertion while proving nothing about typography. Include any caller wrapper that
-  supplies inherited fonts, per [the visual-review recipe](visual-review.md).
-- `backgroundTaskRosterStore` is keyed by conversation id **alone**, with no server origin, so two paired
-  servers issuing the same conversation id would share an entry — pre-existing, not this ticket's to fix.
-  `BackgroundTaskPanel` has the identical exposure and shows task *descriptions* where this pill shows only
-  a number, so this ticket strictly reduces what's reachable rather than widening it.
-- **A pill still reading the same count after an ineffective frame does not prove the frame was applied
-  (#1561).** A `status: ''` frame sent to check that the store leaves the count alone reads identically to
-  the frame never having arrived, since the assertion is "count unchanged" either way. The #1561 e2e spec
-  proves the frame was applied by relying on a later, effective `stopped` frame for the *same* task: frames
-  arrive on one ordered channel, so the pill reaching zero afterward proves the earlier no-op frame was
-  processed and not merely unsent or dropped.
-
-Tested in `ConversationScreen.test.tsx` (vitest only — nothing under `e2e/` sent roster frames until
-[#1634](https://github.com/pyrycode/pyrycode-desktop/issues/1634)'s `background-task-drawer.spec.ts`): the
-count copy and its singular/plural split, the exact-empty absence at zero and at "never observed", the
-markup carrying `composer-status__tasks` and never `composer-status__error`, the open/closed modifier and
-`aria-expanded` pair (#1634 AC2), and the full `ComposerErrorSlot` precedence matrix with the pill yielding
-to every occupant above it in both directions. The e2e spec drives `background_task_roster` frames for two
-conversations on one host and covers the toggle and its outline, typing and sending with the drawer open,
-Escape against the options overlay and against a running turn, and the drawer surviving a conversation
-switch — see [Background-task panel](conversation-shell-background-tasks.md). See
-[#1435](https://github.com/pyrycode/pyrycode-desktop/issues/1435).
+`ConversationScreen.test.tsx` retains static count copy, singular/plural, zero and
+open-state assertions; `threadTaskPresentation.test.tsx` checks supplied activity
+and scoped task identity. Mounted `e2e/background-task-drawer.spec.ts`,
+`e2e/background-task-stop.spec.ts` and `e2e/thread-items.spec.ts` retain menu/count
+open state, task controls and keyboard/close behavior. Static renders execute no
+handlers or effects. Retained roster producer tests remain separate until #2024;
+they do not establish a roster-backed drawer or count.

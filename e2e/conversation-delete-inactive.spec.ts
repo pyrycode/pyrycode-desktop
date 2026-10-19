@@ -37,8 +37,9 @@ test('a held deletion of A removes its retained thread while B stays open', asyn
         } })
         // Capture the actual mounted useSyncExternalStore getter, without modifying app state.
         const hasText = (snapshot: unknown, text: string): boolean => {
-          if (typeof snapshot !== 'object' || snapshot === null || !('items' in snapshot) || !Array.isArray(snapshot.items)) return false
-          return snapshot.items.some(item => item?.kind === 'userText' && item.text === text)
+          if (typeof snapshot !== 'object' || snapshot === null || !('pending' in snapshot) || !Array.isArray(snapshot.pending)) return false
+          return snapshot.pending.some(item => item?.kind === 'user_message' && item.content?.text === text) ||
+            snapshot.pending.some(item => item?.item?.kind === 'userText' && item.item.text === text)
         }
         ;(window as ProofWindow).retainedProof = {
           capture: text => {
@@ -53,13 +54,13 @@ test('a held deletion of A removes its retained thread while B stays open', asyn
             if (root) visit(root)
             return getters.has(text)
           },
-          present: text => { const get = getters.get(text); return get !== undefined && get() !== null }
+          present: text => { const get = getters.get(text); return get !== undefined && hasText(get(), text) }
         }
       })
       await page.reload()
     }
   })
-  const rows = page.locator('.bubble[data-thread-role="user"]')
+  const rows = page.locator('[data-thread-role="user"]')
   const send = async (text: string): Promise<void> => {
     await page.getByPlaceholder('Message…').fill(text)
     await page.getByRole('button', { name: 'Send', exact: true }).click()

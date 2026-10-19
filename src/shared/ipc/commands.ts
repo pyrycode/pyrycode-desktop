@@ -30,6 +30,7 @@ import type {
   ChangeWorkspacePayload,
   SetSystemPromptPayload,
   SetConversationMutedPayload,
+  SetConversationPinnedPayload,
   CreateWorkspaceFolderPayload,
   RenameWorkspacePayload,
   SetSessionSettingsPayload,
@@ -41,7 +42,6 @@ import type {
   MCPTogglePayload,
   StopBackgroundTaskPayload,
   RequestSystemPromptPayload,
-  RequestHistoryPayload,
   InterruptPayload,
   NewSessionPayload,
   SwitchAgentPayload,
@@ -274,14 +274,6 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * neighbour above: that verb answers an unnamed request with a zero-valued reply, so a bare send there
  * was silently useless rather than impossible; here an unnamed request has nothing to ask about at all.
  * It has NO renderer sender in the slice that declares it — #1166 adds the trigger.
- * And `requestHistory` (#1222), which reuses the wire RequestHistoryPayload (a `conversation_id`, an
- * opaque `cursor` and a `limit`) to ask for one backward step of a scroll-back walk over the daemon's
- * on-disk log. Payload-REQUIRED, like the two above: a request with no conversation to name has
- * nothing to ask about. It is the FIRST member carrying a value this app did not mint — the `cursor`
- * is daemon-minted, round-tripping out through the window and back, and it stays opaque the whole way:
- * never parsed, never rewritten, and never treated as a secret or a capability (it is deliberately
- * unsigned; authorization is pairing, at the Noise handshake). It has NO renderer sender in the slice
- * that declares it — #1224 adds the trigger.
  * And `requestSystemPrompt` (#1230), which reuses the wire RequestSystemPromptPayload (a single
  * REQUIRED `conversation_id` string — a routing id, not a secret) to ask what system prompt a
  * conversation holds and whether the running session was started with a different one. Payload-REQUIRED
@@ -346,7 +338,8 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * matching case to isRendererCommand in lockstep, or the new member is silently dropped at
  * the boundary.
  */
-export type RendererCommand =
+export type RendererCommand = (
+  | { type: 'cancelThreadQuery'; serverId: string; requestId: string }
   | { type: 'queryThread'; serverId: string; requestId: string; query: ThreadQuery }
   | { type: 'requestHostSystemPrompt'; serverId: string; requestId: string }
   | { type: 'setHostSystemPrompt'; serverId: string; requestId: string; payload: SetHostSystemPromptPayload }
@@ -358,15 +351,14 @@ export type RendererCommand =
   | { type: 'requestMcpStatus'; payload: MCPStatusRequestPayload }
   | { type: 'reconnectMcpServer'; payload: MCPReconnectPayload }
   | { type: 'toggleMcpServer'; payload: MCPTogglePayload }
-  | { type: 'stopBackgroundTask'; payload: StopBackgroundTaskPayload }
-  | { type: 'requestHistory'; payload: RequestHistoryPayload }
+  | { type: 'stopBackgroundTask'; payload: StopBackgroundTaskPayload; serverId?: string }
   | { type: 'requestSystemPrompt'; payload: RequestSystemPromptPayload }
   | { type: 'requestConversations'; serverId?: string }
   | { type: 'requestRecentWorkspaces'; serverId?: string }
-  | { type: 'answerModal'; payload: AnswerModalCommandPayload }
-  | { type: 'cancelModal'; payload: ModalCancelPayload }
-  | { type: 'answerQuestions'; payload: AnswerQuestionsCommandPayload }
-  | { type: 'refuseQuestions'; payload: RefuseQuestionsCommandPayload }
+  | { type: 'answerModal'; payload: AnswerModalCommandPayload; serverId?: string }
+  | { type: 'cancelModal'; payload: ModalCancelPayload; serverId?: string }
+  | { type: 'answerQuestions'; payload: AnswerQuestionsCommandPayload; serverId?: string }
+  | { type: 'refuseQuestions'; payload: RefuseQuestionsCommandPayload; serverId?: string }
   | { type: 'createConversation'; payload: CreateConversationPayload; serverId?: string }
   | { type: 'promoteConversation'; payload: PromoteConversationPayload }
   | { type: 'archiveConversation'; payload: ArchiveConversationPayload }
@@ -378,17 +370,19 @@ export type RendererCommand =
   // Routed by conversation (#1595). The client-only attemptId is required and correlates exactly one
   // content-free conversationMuteResult; it never reaches the wire.
   | { type: 'setConversationMuted'; payload: SetConversationMutedPayload; attemptId: string }
+  | { type: 'setConversationPinned'; serverId: string; payload: SetConversationPinnedPayload }
   | { type: 'markConversationRead'; serverId: string; payload: { conversation_id: string; up_to: number } }
   | { type: 'createWorkspaceFolder'; payload: CreateWorkspaceFolderPayload; serverId?: string }
   | { type: 'renameWorkspace'; payload: RenameWorkspacePayload; serverId?: string; attemptId?: string }
   | { type: 'setSessionSettings'; payload: SetSessionSettingsPayload; changeId: string }
-  | { type: 'dequeueMessage'; payload: DequeueMessagePayload }
-  | { type: 'sendQueuedNow'; payload: SendQueuedNowPayload }
+  | { type: 'dequeueMessage'; payload: DequeueMessagePayload; serverId?: string }
+  | { type: 'sendQueuedNow'; payload: SendQueuedNowPayload; serverId?: string }
   | { type: 'interrupt'; payload: InterruptCommandPayload }
   | { type: 'newSession'; payload: NewSessionCommandPayload }
   | { type: 'switchAgent'; payload: SwitchAgentPayload }
   | { type: 'notify'; payload: NotifyPayload }
   | { type: 'setBadgeCount'; payload: BadgeCountPayload }
+) & { serverId?: string }
 
 /**
  * Wrap already-assembled send-message fields into a well-formed command. Pure: it does NOT
@@ -517,7 +511,13 @@ export function interruptCommand(fields: InterruptCommandPayload): RendererComma
  */
 export function isRendererCommand(value: unknown): value is RendererCommand {
   if (typeof value !== 'object' || value === null || !('type' in value)) return false
+  // Conversation/session coordinates are optional for legacy callers, but never an unchecked hint.
+  if ('payload' in value && typeof value.payload === 'object' && value.payload !== null &&
+      ('conversation_id' in value.payload || 'session_id' in value.payload) && !hasValidThreadHost(value)) return false
   switch (value.type) {
+    case 'cancelThreadQuery':
+      return 'serverId' in value && typeof value.serverId === 'string' && value.serverId.length > 0 && value.serverId.length <= 1024 &&
+        'requestId' in value && typeof value.requestId === 'string' && value.requestId.length > 0 && value.requestId.length <= 1024
     case 'queryThread': {
       const text = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 1024
       const number = (v: unknown): boolean => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
@@ -526,7 +526,29 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       const q = value.query
       if (!('type' in q) || !('payload' in q) || typeof q.payload !== 'object' || q.payload === null || Array.isArray(q.payload)) return false
       const p = q.payload
-      return 'conversation_id' in p && text(p.conversation_id) && (!('limit' in p) || number(p.limit)) &&
+      if (q.type === 'thread_read_children') {
+        if (!('conversation_id' in p) || !text(p.conversation_id) || !('epoch' in p) || !text(p.epoch) ||
+            !('item_id' in p) || typeof p.item_id !== 'number' || !number(p.item_id) || p.item_id === 0 ||
+            !('expected_rev' in p) || typeof p.expected_rev !== 'number' || !number(p.expected_rev) || p.expected_rev === 0 ||
+            ('limit' in p && !number(p.limit)) ||
+            Object.keys(p).some(k => !['conversation_id', 'epoch', 'item_id', 'expected_rev', 'limit', 'cursor'].includes(k))) return false
+        if (!('cursor' in p)) return true
+        const c = p.cursor
+        return typeof c === 'object' && c !== null && !Array.isArray(c) &&
+          'conversation_id' in c && c.conversation_id === p.conversation_id && 'epoch' in c && c.epoch === p.epoch &&
+          'item_id' in c && c.item_id === p.item_id && 'rev' in c && c.rev === p.expected_rev &&
+          'version' in c && number(c.version) && 'order' in c && number(c.order) &&
+          'id' in c && typeof c.id === 'number' && number(c.id) && c.id > 0 && Object.keys(c).length === 7
+      }
+      if (q.type === 'thread_read_tool_body') return 'conversation_id' in p && text(p.conversation_id) &&
+        'epoch' in p && text(p.epoch) && 'item_id' in p && number(p.item_id) && typeof p.item_id === 'number' && p.item_id > 0 &&
+        'expected_rev' in p && number(p.expected_rev) && typeof p.expected_rev === 'number' && p.expected_rev > 0 &&
+        Object.keys(p).every(k => ['conversation_id', 'epoch', 'item_id', 'expected_rev'].includes(k))
+      return (!('projection' in p) || p.projection === 'compact-v1') &&
+        (!('projection' in p) || q.type !== 'thread_page' || ('epoch' in p && text(p.epoch))) &&
+        Object.keys(p).every(k => (q.type === 'thread_catch_up' ? ['conversation_id', 'epoch', 'version', 'limit', 'projection'] :
+          ['conversation_id', 'before_order', 'limit', 'projection', 'epoch']).includes(k)) &&
+        'conversation_id' in p && text(p.conversation_id) && (!('limit' in p) || number(p.limit)) &&
         (q.type === 'thread_catch_up' ? 'epoch' in p && typeof p.epoch === 'string' && p.epoch.length <= 1024 && 'version' in p && number(p.version) :
           q.type === 'thread_page' && 'before_order' in p && number(p.before_order))
     }
@@ -561,11 +583,7 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
     case 'toggleMcpServer':
       return 'payload' in value && isMCPTogglePayload(value.payload)
     case 'stopBackgroundTask':
-      return 'payload' in value && isStopBackgroundTaskPayload(value.payload)
-    case 'requestHistory':
-      // Payload-required (#1222) — the neighbour's idiom verbatim, including why the
-      // explicitly-`undefined` case is refused by the payload guard and not by the `in` check.
-      return 'payload' in value && isRequestHistoryPayload(value.payload)
+      return hasValidThreadHost(value) && 'payload' in value && isStopBackgroundTaskPayload(value.payload)
     case 'requestHostSystemPrompt':
     case 'setHostSystemPrompt':
       return 'serverId' in value && 'requestId' in value && typeof value.serverId === 'string' && value.serverId.length > 0 && value.serverId.length <= 1024 &&
@@ -583,13 +601,13 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       // Bare member (#380): no payload to validate, so the optional server id (#1120) is the whole check.
       return hasValidServerId(value)
     case 'answerModal':
-      return 'payload' in value && isAnswerModalPayload(value.payload)
+      return hasValidThreadHost(value) && 'payload' in value && isAnswerModalPayload(value.payload)
     case 'cancelModal':
-      return 'payload' in value && isCancelModalPayload(value.payload)
+      return hasValidThreadHost(value) && 'payload' in value && isCancelModalPayload(value.payload)
     case 'answerQuestions':
-      return 'payload' in value && isAnswerQuestionsPayload(value.payload)
+      return hasValidThreadHost(value) && 'payload' in value && isAnswerQuestionsPayload(value.payload)
     case 'refuseQuestions':
-      return 'payload' in value && isRefuseQuestionsPayload(value.payload)
+      return hasValidThreadHost(value) && 'payload' in value && isRefuseQuestionsPayload(value.payload)
     case 'createConversation':
       return (
         'payload' in value && isCreateConversationPayload(value.payload) && hasValidServerId(value)
@@ -622,6 +640,10 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       return 'payload' in value && isSetConversationMutedPayload(value.payload) &&
         'attemptId' in value && typeof value.attemptId === 'string' &&
         value.attemptId.length > 0 && value.attemptId.length <= 128
+    case 'setConversationPinned':
+      return 'serverId' in value && typeof value.serverId === 'string' &&
+        value.serverId.length > 0 && value.serverId.length <= 1024 &&
+        'payload' in value && isSetConversationPinnedPayload(value.payload)
     case 'createWorkspaceFolder':
       return (
         'payload' in value && isCreateWorkspaceFolderPayload(value.payload) && hasValidServerId(value)
@@ -643,9 +665,9 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
         typeof value.changeId === 'string'
       )
     case 'dequeueMessage':
-      return 'payload' in value && isDequeueMessagePayload(value.payload)
+      return hasValidThreadHost(value) && 'payload' in value && isDequeueMessagePayload(value.payload)
     case 'sendQueuedNow':
-      return 'payload' in value && isSendQueuedNowPayload(value.payload)
+      return hasValidThreadHost(value) && 'payload' in value && isSendQueuedNowPayload(value.payload)
     case 'interrupt':
       // The newSession arm's shape (#1092) — a required payload, refused BY isInterruptPayload rather
       // than by the `in` check, for the reason the requestModelList arm records. NO serverId arm any
@@ -697,6 +719,11 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
 function hasValidServerId(value: object): boolean {
   if (!('serverId' in value)) return true
   return value.serverId === undefined || typeof value.serverId === 'string'
+}
+
+function hasValidThreadHost(value: object): boolean {
+  if (!('serverId' in value) || value.serverId === undefined) return true
+  return typeof value.serverId === 'string' && value.serverId.length > 0 && value.serverId.length <= 1024
 }
 
 function isSendMessagePayload(value: unknown): value is SendMessagePayload {
@@ -1180,41 +1207,12 @@ function isSetConversationMutedPayload(value: unknown): value is SetConversation
   return value.muted === true || value.muted === false
 }
 
-/** The untrusted renderer→main boundary guard for the requestHistory payload (#1222). The guard above
- *  scaled from one field to the three the daemon publishes, all three present-and-typed, so a missing
- *  key, a literal `null` and a mistyped value are each rejected. All three are checked because all
- *  three are ALWAYS on the wire — the daemon declares no `omitempty` — so an absent one here is a
- *  caller bug rather than a shorthand.
- *
- *  CHECKS TYPE, NOT EMPTINESS, and here that is load-bearing on two fields rather than one. `''` is not
- *  merely tolerated for `cursor` — it is the NORMAL OPENING VALUE of every walk ("start at the
- *  newest"), so a non-empty clause would refuse the first ask of every scroll-back. For
- *  `conversation_id` it is the siblings' rule unchanged: an id the daemon cannot resolve draws
- *  `conversation.not_found`, which is the daemon's call rather than a bound this client duplicates.
- *  `newSession`'s emptiness clause is the one NOT to copy — that verb reads an empty id as "whichever
- *  conversation the daemon's process-wide cursor points at", and this one has no such fallback.
- *
- *  `limit` is checked for TYPE ONLY — no range, no integrality. A negative one is a documented reject
- *  (`history.invalid_page_size`) that `buildRequestHistory` normalises away before the wire anyway, and
- *  an upper bound here would be a second ceiling to keep in agreement with the daemon's own clamp.
- *
- *  The cursor is the one value on this channel this app did not mint — daemon-minted, round-tripping
- *  back out — and it is OPAQUE: never parsed here or anywhere, never a log line, path, attribute or
- *  cache key, and never treated as proving anything (it is deliberately unsigned; authorization is
- *  pairing). Past this guard the three reach exactly two sinks: `conversationRouter.route`, a read-only
- *  `Map` lookup on the id, and `buildRequestHistory`, which rebuilds a fresh three-key literal.
- *  Structural minimum: an extra field is not rejected here and cannot reach the wire, because that
- *  rebuild bounds the frame. Pure; never throws. */
-function isRequestHistoryPayload(value: unknown): value is RequestHistoryPayload {
-  if (typeof value !== 'object' || value === null) return false
-  return (
-    'conversation_id' in value &&
-    typeof value.conversation_id === 'string' &&
-    'cursor' in value &&
-    typeof value.cursor === 'string' &&
-    'limit' in value &&
-    typeof value.limit === 'number'
-  )
+function isSetConversationPinnedPayload(value: unknown): value is SetConversationPinnedPayload {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const keys = Reflect.ownKeys(value)
+  return keys.length === 2 && keys.includes('conversation_id') && keys.includes('pinned') &&
+    'conversation_id' in value && typeof value.conversation_id === 'string' && value.conversation_id.length > 0 &&
+    'pinned' in value && (value.pinned === true || value.pinned === false)
 }
 
 /** The untrusted renderer→main boundary guard for the newSession payload (#1217). The

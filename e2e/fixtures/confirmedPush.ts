@@ -12,7 +12,8 @@
 // "not delivered". At most two sends: a context that is lost twice with nothing arriving fails at
 // about four seconds rather than waiting out the test timeout.
 //
-// The cause of the context loss is undiagnosed, as it was for #1502.
+// The context loss observed under Playwright's navigation message is V8's `Promise was collected` (see
+// mainProcessRead.ts). It can arrive after the push already ran, which is why a blind resend is unsafe.
 
 import { isTransientContextLoss } from './mainProcessRead'
 

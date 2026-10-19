@@ -119,7 +119,9 @@ to the conversation its request named and emits `historyPageReceived`/`historyRe
 four exhaustive renderer bridges (`daemonEventBridge`/`timelineBridge`/`modalBridge`/`questionBridge`)
 intentionally null both arms. The independent `historyPageBridge.ts` consumes both:
 received pages update rows and coverage, while failures settle request state for
-[user-demand paging and explicit Retry](request-history-send.md#the-one-fact-that-shapes-every-piece). Architect (builder)
+[then-supported user-demand paging and explicit Retry](request-history-send.md).
+This exclusive page/rejection machinery and reply IPC retired in #2025; the
+paragraph above records its original design, not current parser behavior. Architect (builder)
 self-review PASS, no MUST FIX findings.
 
 [#1230](https://github.com/pyrycode/pyrycode-desktop/issues/1230) added a twenty-seventh kind,

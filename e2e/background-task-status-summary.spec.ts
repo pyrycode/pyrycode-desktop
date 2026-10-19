@@ -3,6 +3,9 @@ import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
 import { encodeEnvelope, decodeEnvelope } from '../src/main/transport/codec'
 import type { BackgroundTask, ConversationSummary, EnvelopeType } from '../src/shared/wire/types'
 
+// Scripted history is published as thread catch-up/pages by the shared fake daemon.
+test.use({ scriptedHistory: true })
+
 // #1639: a finished background task's tag names how it ended and its row shows the summary claude sent
 // with the terminal status. The store and panel unit tests prove the mapping and the escaping; this spec
 // is the proof that `status` and `summary` survive the whole path — the real transport, the translator

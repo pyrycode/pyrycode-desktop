@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { Timeline } from './ConversationScreen'
+import { TimelineRow } from './ConversationScreen'
 import { compactionBoundaryTitle } from './compactionBoundaryViewModel'
 
 const item = { kind: 'compactionBoundary' as const, failed: false, manual: false }
@@ -25,7 +25,7 @@ describe('compaction labels', () => {
       .toBe('Compaction failed')
   })
   it('reuses equal decorative rules and marks a failed row for the error color', () => {
-    const html = renderToStaticMarkup(<Timeline items={[item, { ...item, failed: true }]} />)
+    const html = renderToStaticMarkup(<><TimelineRow inProgress={false} item={item} /><TimelineRow inProgress={false} item={{ ...item, failed: true }} /></>)
     expect(html.match(/class="session-delimiter__rule" aria-hidden="true"/g)).toHaveLength(4)
     expect(html).toContain('compaction-delimiter--failed')
     expect(html).toContain('Conversation compacted')

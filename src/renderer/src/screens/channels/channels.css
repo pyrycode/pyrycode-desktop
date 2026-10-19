@@ -48,6 +48,47 @@
   display: none;
 }
 
+.channel-list__pinned {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* Global rows align with the heading and use the group gap, rather than host-tree margins. */
+.channel-list__pinned > .channel-list__row[data-pinned='true'] { margin: 0; }
+
+.channel-list__pinned-heading {
+  color: var(--color-on-surface-variant);
+  font-size: var(--text-label-large-size);
+  line-height: var(--text-label-large-line);
+  letter-spacing: var(--text-label-large-tracking);
+  font-weight: var(--text-label-large-weight);
+}
+
+.channel-list__pinned-host { color: var(--color-on-surface-variant); }
+.channel-list__pinned-rule {
+  height: 1px;
+  background: var(--color-inverse-primary);
+  margin-top: calc(var(--space-3) - var(--space-1));
+}
+.channel-list__pinned + .channel-list__host { margin-top: var(--space-3); }
+.channel-list__row[data-host-down='true'] { opacity: 0.6; }
+.channel-list__row[data-host-down='true'] .channel-list__title,
+.channel-list__row[data-host-down='true'] .channel-list__pinned-host {
+  color: var(--color-error);
+}
+.channel-list__row[data-host-down='true'] > .conversation-status-dot {
+  background: var(--color-error);
+  box-shadow: none;
+  animation: none;
+  opacity: 1;
+}
+.channel-list__row[data-host-down='true'] > .conversation-status-dot--idle {
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--color-error);
+  opacity: 0.5;
+}
+
 /* The toolbar pairing entry is visible at rest and aligned to the trailing content edge. */
 .channel-list__pair {
   flex: 0 0 auto;
@@ -1046,6 +1087,34 @@
    A margin on each row rather than a padding on a list wrapper because there is no list wrapper: rows are
    flat siblings of the header, host and workspace rows (#703/#704), the ancestry 28 e2e specs click
    through. The adjacent-row rule below sets margin-top alone and leaves this longhand as it is. */
+.channel-list__app-status {
+  margin-left: var(--space-8);
+  color: var(--color-on-surface);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+}
+.channel-list__app-retry {
+  margin-left: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-primary);
+  font: inherit;
+  letter-spacing: var(--text-body-small-tracking);
+  cursor: pointer;
+}
+.channel-list__app-retry:hover { background: var(--color-state-hover); }
+.channel-list__app-retry:focus-visible {
+  outline: 1px solid var(--color-primary);
+  outline-offset: var(--space-1);
+}
+.channel-list__app-state {
+  margin-left: var(--space-2);
+  color: var(--color-on-surface);
+  font-size: var(--text-body-small-size);
+  line-height: var(--text-body-small-line);
+}
 .channel-list__row {
   display: flex;
   align-items: center;
@@ -1324,6 +1393,33 @@
   opacity: 0;
 }
 
+.channel-list__row:has(> .channel-list__pin) > .channel-list__row-open {
+  padding-right: calc(2 * var(--space-7));
+}
+
+/* Pin/unpin share the pen's hit area, one glyph slot to its left, and stay visible at rest. */
+.channel-list__pin {
+  position: absolute;
+  right: var(--space-7);
+  top: calc(50% - var(--space-3));
+  width: var(--space-7);
+  height: var(--space-6);
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-primary);
+  cursor: pointer;
+  opacity: 1;
+}
+.channel-list__pin:disabled { cursor: default; }
+.channel-list__pin > svg { display: block; }
+.channel-list__pin:enabled:hover .channel-list__control-name,
+.channel-list__pin:focus-visible .channel-list__control-name { display: block; }
+.channel-list__pin:focus-visible { outline: 1px solid var(--color-outline); }
+
 .channel-list__rename:focus-visible {
   outline: 1px solid var(--color-outline);
   opacity: 1;
@@ -1383,10 +1479,11 @@
   display: block;
 }
 
-/* The state layer follows the glyph, preserving the larger hit box and fixed name pill. */
+/* Keep the pin's enabled guard outside :is() so existing controls retain their size overrides. */
 :is(.channel-list__host-edit, .channel-list__workspace-edit, .channel-list__rename,
   .channel-list__chat-edit, .channel-list__host-add, .channel-list__workspace-create,
-  .channel-list__section-create, .channel-list__save):hover::before {
+  .channel-list__section-create, .channel-list__save):hover::before,
+.channel-list__pin:enabled:hover::before {
   content: '';
   position: absolute;
   left: 50%;
@@ -1412,8 +1509,13 @@
 
 :is(.channel-list__host-edit, .channel-list__workspace-edit, .channel-list__rename,
   .channel-list__chat-edit, .channel-list__host-add, .channel-list__workspace-create,
-  .channel-list__section-create, .channel-list__save) > svg {
+  .channel-list__section-create, .channel-list__save, .channel-list__pin) > svg {
   position: relative;
+}
+
+/* Adjacent hit areas retain the design's 20px glyph pitch: pin art sits at its box's right edge. */
+.channel-list__pin:enabled:hover::before {
+  left: calc(100% - var(--space-3) / 2);
 }
 
 /* #1172 — THE NAME PILL both trailing controls show on hover or keyboard focus (Figma Pill 347:6617).

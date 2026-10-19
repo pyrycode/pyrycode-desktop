@@ -173,7 +173,7 @@ async function scrollAndSettle(page: Page, input: () => Promise<void>): Promise<
  * arrived and the layout is final before anything is measured.
  */
 async function primeOverflowingThread(page: Page): Promise<void> {
-  const assistantBubbles = page.locator('.bubble[data-thread-role="assistant"]')
+  const assistantBubbles = page.locator('[data-thread-role="assistant"]')
 
   await page.getByPlaceholder('Message…').fill(PRIMER_TEXT)
   await page.getByRole('button', { name: 'Send' }).click()

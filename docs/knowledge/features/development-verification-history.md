@@ -30,8 +30,9 @@ This is fake transport; no live-Claude run was required or performed.
 
 For repeated pages that change only receipt metadata, restored rows and enabled
 Send cannot prove reply settlement, and thread focus creates no history demand.
-Observe the host/conversation/cursor-specific `historyPageReceived` before polling
-the real protected save. Retain immediate fake replies, the 500 × 200 saturated
+Observe the host/conversation/cursor-specific `historyPageReceived`, then poll a
+small observation of successful real protected replacement before reading the
+whole record once for exact equality. Retain immediate fake replies, the 500 × 200 saturated
 receipts, eviction of `page-0` for `repeat`, unchanged oldest-end coverage, one
 assistant with its original identity, later live content with the next allocated
 key, and whole-snapshot equality after a third fresh Electron launch. See the
@@ -67,6 +68,144 @@ was present, executed and passed in gate 6 on 2026-10-10 at
 10 executed/passed, 0 failed/skipped, every retry 0. No production behavior changed;
 no visual or live-Claude check applied to this fake-transport synchronization fix.
 
+The [later recovered gate excerpt](https://github.com/pyrycode/pyrycode-desktop/issues/1978#issuecomment-6186764616)
+at `3d527863366852cdfa49d945daa192d16df380ce` identifies second-launch repeated-page
+snapshot equality timing out with the old seed: 395 executed, 394 passed, 1 failed,
+3 skipped; named rerun 1 executed/passed, 0 failed/skipped. That excerpt alone
+does not establish delayed versus skipped replacement. The separate
+[controlled diagnosis](https://github.com/pyrycode/pyrycode-desktop/issues/1978#issuecomment-6188161084),
+with [accounting corrected by review](https://github.com/pyrycode/pyrycode-desktop/pull/1997#issuecomment-6188310409),
+recorded 32 unchanged historical executions, 16 passed, 16 failed, 0 skipped/retried:
+15 later-live saved-text failures and one repeated-page equality failure.
+Instrumented runs recorded 16 executed, 11 passed, 5 failed, 0 skipped/retried.
+Their traces establish an old large read racing a later successful two-item save;
+a diagnostic read then retained keys `[-8, 42]`, next key `43`, 500 receipts and
+cursor `repeat`. This proves an observation race in those later-live failures,
+without proving the original occurrence's timing or a product persistence defect.
+The earlier receipt barrier remained intact.
+
+Poll small successful-save counts separately from typed receipt, then compare the
+complete record; repeatedly transferring 100,000 receipt ids can spend the deadline
+returning a stale snapshot. The corrected held-save control recorded 1 executed,
+0 passed, 1 intentionally failed, 0 skipped/retried: receipt passed while successful
+counts stayed `[1]` and storage retained only the assistant. Releasing the actual
+write saved both rows. This defeats a receipt-only substitute for protected-save
+completion. See the [implemented observation contract](chat-history-testing.md#browser-persistence-and-lifecycle).
+
+At implementation `b6059c79033045f1822941a218664a0674fed75e`, the named saturation
+test passed 20 consecutive executions, followed by the complete recording spec:
+20 executed/passed, then 10 executed/passed; both 0 failed/skipped/retried, no skip
+reasons. Eight-worker repaired contention recorded 16 executed/passed,
+0 failed/skipped/retried. Reports under `/tmp/builder-1978/` are
+`final-named-20.json`, `final-spec.json`, `final-contention.json` and
+`held-save-control-final.json`, each with matching `.stderr` and `-results/` artifacts.
+The [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1997#issuecomment-6188310409)
+and supplied dispatcher per-test report confirm the named test was present,
+executed and passed in gate 6 at `f7866f3e7331b5ae99fa3412ba3ecb1131eb2baa`
+on 2026-10-15: 405 executed/passed, 0 failed, 3 skipped, zero retries. Skips were
+two macOS-only badge cases and macOS last-window reopening. No production change
+or live-Claude proof was required. The [plan](../../specs/architecture/1978-saturated-history-save-observation.md)
+records commands and separates the recovered excerpt from instrumented evidence.
+
+### Certified checkpoint inspection verification
+
+The restore-overlap case in [`thread-activation.spec.ts`](../../../e2e/thread-activation.spec.ts),
+`restore overlapping live content retains complete progress across an interrupted catch-up and epoch replacement`,
+separates terminal receipt/admission, in-memory completion and protected write acknowledgement
+from the final full saved read. The [acknowledgement-first inspection contract](e2e-harness-context-recovery.md#certified-checkpoint-inspection)
+prevents an expensive pre-write read from consuming the assertion budget. This changes
+scenario synchronization only; production certification, storage, protocol and API behavior
+are unchanged.
+
+The [accepted verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2133#issuecomment-6262520577)
+records Linux x64 evidence on 2026-10-19, implementation `ed0ea8f7`, reviewed head
+`ba208a6d1f01d201b6a615a950568328b501023b`. In the traced original ten-run comparison,
+all ten cases received the correlated terminal, committed the batch in memory and
+acknowledged the exact protected 20→25 completion write, including the six failed
+checkpoint assertions. A timed sample's initial full read returned 20 after 2318 ms;
+commitment followed one millisecond later, write acknowledgement four milliseconds after
+commitment, and a second 2355 ms read returned 25. Thus those failures demonstrate
+inspection ordering/contention rather than lost certification or a failed protected write.
+
+The expensive-reader regression fails the extracted original polling sequence because
+it admits a full read before acknowledgement, then passes with the repaired ordering.
+Its six helper cases also retain pending/unavailable inspection, actual stale/missing
+full-read results and fatal inspection errors. A passing unchanged rerun alone would
+not establish this repair.
+
+Retained builder reports under `/tmp/builder-2122/`:
+
+| Check | Executed / passed / failed / skipped | Report |
+| --- | --- | --- |
+| Traced original named case, ten repetitions | 10 / 4 / 6 / 0 | `traced-native-before.json` |
+| Timed original ordering, diagnostic only | 3 / 3 / 0 / 0 | `timed-before.json` |
+| Deterministic original polling sequence | 1 / 0 / 1 / 0 | `controlled-before-clean.log` |
+| Repaired deterministic regression | 1 / 1 / 0 / 0 | `controlled-after.log` |
+| Final checkpoint-helper and held-read units | 20 / 20 / 0 / 0 | `focused-final.log` |
+| Existing runtime/coordinator/item-store/writer/held-read units | 111 / 111 / 0 / 0 | `owner-baseline.log` |
+| Repaired named case, ten repetitions | 10 / 10 / 0 / 0 | `after-ten.json` |
+| Complete thread-activation spec, sequential native preparation | 20 / 20 / 0 / 0 | `spec-sequential-final.json` |
+
+Both ten-run comparisons used the retained gate configuration, with unchanged
+`clipboard`/`parallel` projects and the named case in `parallel`:
+
+```bash
+npx playwright test e2e/thread-activation.spec.ts --grep 'restore overlapping live content retains complete progress across an interrupted catch-up and epoch replacement$' --repeat-each 10 --workers 3 --retries 0 --reporter=json
+npx playwright test e2e/thread-activation.spec.ts --workers 3 --retries 0 --reporter=json
+```
+
+The repaired ten-run report has three configured/actual concurrent workers (slots 0/1/2);
+ten worker process indices reflect repeat scheduling. The complete spec has three
+configured/one actual worker because the file remains serial. The named case is present
+and passed in both, with no retries, skips, flaky results or top-level errors. Matching
+`.stderr` files and setup/launch attachments remain with the reports. The ten-run report
+has twenty clean launch exits and ten held-read setups, each one installation, one
+inspection and zero context losses; the complete spec has twenty-six clean exits and
+one identical setup, without teardown failures.
+
+Every repaired trace records generation 2, wire request 7, correlated terminal version 25,
+in-memory batch commitment, acknowledged exact completion `{ fromVersion: 20, version: 25 }`,
+then full protected read checkpoint 25. The mounted case preserves the newer live revision,
+one overlapping item and saved-only row; bounded opening shows 200 shown items plus the active
+dependency and excludes the older row. Catch-up starts at 20; the full durable read must
+return 25 before reconnect, and both interrupted version-30 replies reconnect from 25.
+Replacement epoch content commits before late retired-content exclusions, with no legacy
+history/replay request. All host/conversation, request, epoch, generation, revision and
+completion-certificate fences remain intact.
+
+The completed dispatcher application run, `npx playwright test --reporter=json`, records
+**506 executed, 505 passed, 1 failed, 5 skipped**, three configured/actual workers, zero
+retries. The named overlap case is present and passed on its first attempt, with the exact
+write/read trace, confirmed held-read setup and two clean launch exits. The supplied gate
+report also explicitly confirms passing captured-client cases
+`daemon-built thread streams, places an agent, reconnects, resets and reopens saved items`
+and `a real daemon lazily fills a served gap after more than 200 entries written while Electron is closed`.
+These are replay results, not fresh live-daemon/provider evidence. The supplied unit gate
+records **9,664 executed/passed, 0 failed, 3 skipped**.
+
+The accepted verdict is PASS under the dispatcher's accepted-flake policy: the unrelated
+native-writer failure is tracked in [#2125](https://github.com/pyrycode/pyrycode-desktop/issues/2125),
+and its dispatcher rerun records **3 executed/passed, 0 failed/skipped**, including that
+failed test. The original complete run remains failed; no overall verifier gate pass is
+recorded in the supplied gate report. Reports are `verifier-gate_#2122_7.log` and
+`2026-10-19T07-55-51-485Z_verifier-gate-rerun_#2122.log` under the agents logs directory.
+
+Earlier invalid native-preparation attempts remain failures: `baseline.json` executed zero
+because sandbox Xvfb socket creation failed; `baseline-native.json` failed ten launches
+before Electron installation completed; `traced-before.json` failed ten initial storage
+predicates before SQLite preparation. `spec-final.json` recorded **20 executed, 13 passed,
+7 failed, 0 skipped** when Node ABI rebuilding overlapped Electron. Acceptance uses the
+later sequentially prepared complete spec, not reclassification of those failures.
+Complete Node preparation before `npm run rebuild:electron` and Electron execution;
+the [native storage prerequisite](development-verification.md#replay-native-storage-prerequisite)
+applies independently of inspection ordering.
+
+The [plan](../../specs/architecture/2122-certified-checkpoint-overlap.md#validation-evidence)
+retains exact revision/command correspondence, preparation/build logs and earlier attempts.
+These are recorded results, not documentation-stage executions. Production-path targeted
+replay was conditional on production changes and was not required; no live-provider run
+or visual change was required or claimed. macOS is outside this Linux ticket's scope.
+
 ### Known-gap recovery verification
 
 `historyGaps.test.ts` exercises admission, one-entry/multi-page and older holes,
@@ -97,7 +236,7 @@ restored walk intact and fresh input uses that cursor. This is a fresh renderer
 over protected storage; full Electron exit is established by the live proof below.
 Both fresh-input sites establish focused, settled geometry and marker
 intersection with the reading area between measured top/input chrome before one ArrowUp, while setup
-adds no requests. See [the local readiness contract](chat-history-testing.md#demand-and-snapshot-contracts).
+adds no requests. See [the local readiness contract](chat-history-testing-contracts.md#demand-and-snapshot-contracts).
 
 The [controlled cause observation](https://github.com/pyrycode/pyrycode-desktop/issues/1932#issuecomment-6102627361)
 records the original failure at `c4420495fe` in `verifier-gate_#1904_6.log`:
@@ -207,7 +346,7 @@ Its local `asks` reader uses the shared `readMainProcess` helper in a five-secon
 availability poll. Only the recognized inspection-context error yields
 `NOT_YET_AVAILABLE`; the sentinel satisfies no assertion and every caller receives
 a successful cursor-array read. Listener installation, posts, keys, geometry and
-renderer recovery are unchanged. See [the observation contract](chat-history-testing.md#demand-and-snapshot-contracts)
+renderer recovery are unchanged. See [the observation contract](chat-history-testing-contracts.md#demand-and-snapshot-contracts)
 and [read-only recovery](e2e-harness-context-recovery.md#tolerating-a-transient-inspection-context-loss-on-reads).
 
 The [fresh diagnosis](https://github.com/pyrycode/pyrycode-desktop/issues/1947#issuecomment-6165420879)

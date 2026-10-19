@@ -113,6 +113,6 @@ test('the thinking label tracks the running token estimate and drops it at turn 
   // reverts to the bare copy. A POSITIVE read on a live row, not an absence check against an unmounted
   // one; see the header for why that distinction is the whole detector.
   daemon.pushFrame(turnEndFrame())
-  await expect(label).toHaveText('Thinking…', { timeout: ROUNDTRIP_TIMEOUT_MS })
-  await expect(label).toBeVisible()
+  // The authoritative daemon finishes the turn and its live phase becomes idle.
+  await expect(label).toHaveCount(0)
 })

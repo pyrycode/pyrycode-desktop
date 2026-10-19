@@ -391,6 +391,7 @@ export type EnvelopeType =
   // `in_reply_to` and carrying the new `is_muted`, pushed uncorrelated to every other connection;
   // refused with a correlated non-retryable `error`.
   | 'set_conversation_muted'
+  | 'set_conversation_pinned'
   | 'create_workspace_folder'
   | 'workspace_folder_created'
   // The client's ASK that a workspace be renamed (#1289) — the outbound half of the contract whose
@@ -547,6 +548,8 @@ export interface Envelope {
   /** Producing session: omission, explicit no-session null, or a nonempty ID. */
   session_id?: string | null
   session_state_cleared?: boolean
+  /** Explicit conversation route, independent of the producing session. */
+  conversation_id?: string
 }
 
 export type WireRole = 'user' | 'assistant'
@@ -3313,6 +3316,8 @@ export interface ConversationSummary {
   last_used_at: string
   /** Archive instant from daemon PR #2700; optional for legacy snapshots and fixtures. */
   archived_at?: string | null
+  /** Host-stored pin instant; absent on legacy saved summaries. */
+  pinned_at?: string | null
   workspace_label: string | null
 }
 
@@ -3565,6 +3570,12 @@ export interface SetSystemPromptPayload {
 export interface SetConversationMutedPayload {
   conversation_id: string
   muted: boolean
+}
+
+/** Core #3538: both fields are required, including a present false when unpinning. */
+export interface SetConversationPinnedPayload {
+  conversation_id: string
+  pinned: boolean
 }
 
 /**

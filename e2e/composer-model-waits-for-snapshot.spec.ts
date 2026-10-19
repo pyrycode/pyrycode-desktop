@@ -138,7 +138,7 @@ function capturingFake(captured: Envelope[]): (inbound: Uint8Array) => Uint8Arra
   return (inbound) => {
     const env = decodeEnvelope(inbound)
     captured.push(env)
-    return env.type === 'list_conversations' ? [seedConversationsFrame()] : []
+    return env.type === 'list_conversations' ? [seedConversationsFrame({ ...SEEDED_ROW, current_session_id: SESSION_ID })] : []
   }
 }
 

@@ -138,10 +138,11 @@ export function ReportedContextData(): null {
     // Subscribe on mount; the returned off handle is the effect cleanup, so a StrictMode double-mount
     // nets exactly one live listener (the announcedModelBridge idiom). Each reading reaches the
     // app-singleton store through its one event-driven mutation.
-    return subscribeReportedContext(window.pyry.onDaemonEvent, (reading) =>
+    return subscribeReportedContext(onCurrentSessionEvent, (reading) =>
       reportedContextStore.getState().setReportedContext(reading)
     )
   }, [])
 
   return null
 }
+import { onCurrentSessionEvent } from './threadRuntime'

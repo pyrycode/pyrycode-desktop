@@ -64,6 +64,42 @@ function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0
 }
 
+// Match Archive's RFC3339/calendar rules, without its last-use fallback for invalid stamps.
+const PIN_RFC3339 = /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])[tT](?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:[zZ]|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/
+function pinInstant(iso: string | null | undefined): { time: number; fraction: string } | null {
+  if (typeof iso !== 'string') return null
+  const match = PIN_RFC3339.exec(iso)
+  if (match === null) return null
+  const year = Number(match[1]), month = Number(match[2]), day = Number(match[3])
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
+  const days = month === 2 ? (leap ? 29 : 28) : ([4, 6, 9, 11].includes(month) ? 30 : 31)
+  const time = Date.parse(iso)
+  if (day > days || !Number.isFinite(time)) return null
+  const fraction = /\.(\d+)(?:Z|[+-]\d{2}:\d{2})$/i.exec(iso)?.[1]?.slice(3).replace(/0+$/, '') ?? ''
+  return { time, fraction }
+}
+
+/** Global pins only claim saved hosts; all other active-sidebar ordering remains unchanged. */
+export function partitionSidebar<T extends ConversationSummary & { readonly serverId?: string | null }>(
+  rows: readonly T[], serverIds: readonly string[]
+): { pinned: readonly T[]; channels: readonly T[]; discussions: readonly T[] } {
+  const { channels, discussions } = partitionActive(rows)
+  const hosts = new Set(serverIds)
+  const pinned = channels.filter(row => typeof row.serverId === 'string' && hosts.has(row.serverId) && row.pinned_at != null)
+  const selected = new Set(pinned)
+  // Parse once per row instead of once per comparison, retaining only transient derived values.
+  const instants = new Map(pinned.map(row => [row, pinInstant(row.pinned_at)]))
+  pinned.sort((left, right) => {
+    const a = instants.get(left), b = instants.get(right)
+    if (a != null && b != null) {
+      const order = a.time - b.time || compareText(a.fraction, b.fraction)
+      if (order !== 0) return order
+    } else if (a != null || b != null) return a == null ? 1 : -1
+    return compareText(left.serverId ?? '', right.serverId ?? '') || compareText(left.id, right.id)
+  })
+  return { pinned, channels: channels.filter(row => !selected.has(row)), discussions }
+}
+
 function activeSortKey(label: string): string {
   return label.normalize('NFKD').replace(/\p{Mn}/gu, '').toLowerCase()
 }

@@ -21,6 +21,8 @@ import type { ThreadQuery } from '../shared/wire/thread'
 // (messageFor), the ack/plaintext bytes, or the numeric close code (that is #127's relay leg). Every
 // failure surfaces as a non-connected DaemonEvent; nothing throws out of the module.
 import { createThreadUpdateReceiver } from './transport/threadUpdates'
+import { createHostedResources } from './transport/hostedResources'
+import { createHostedApps } from './transport/hostedApps'
 import type { MessageLifecycle } from './messageLifecycle'
 import { notifySend } from './transport/sendObservation'
 import type { SendOutcome } from './transport/sendObservation'
@@ -43,11 +45,11 @@ import { buildRequestMcpStatus } from './transport/requestMcpStatusEnvelope'
 import { buildMcpReconnect } from './transport/mcpReconnectEnvelope'
 import { buildMcpToggle } from './transport/mcpToggleEnvelope'
 import { buildStopBackgroundTask } from './transport/stopBackgroundTaskEnvelope'
-import { encodeEnvelope } from './transport/codec'
+import { encodeEnvelope, parseJsonObject } from './transport/codec'
 import { buildRequestSystemPrompt } from './transport/requestSystemPromptEnvelope'
 import { buildSetSystemPrompt } from './transport/setSystemPromptEnvelope'
 import { buildSetConversationMuted } from './transport/setConversationMutedEnvelope'
-import { buildRequestHistory } from './transport/requestHistoryEnvelope'
+import { buildSetConversationPinned } from './transport/setConversationPinnedEnvelope'
 import { buildSwitchAgent } from './transport/switchAgentEnvelope'
 import { buildNewSession } from './transport/newSessionEnvelope'
 import { buildListConversations } from './transport/listConversationsEnvelope'
@@ -93,7 +95,6 @@ import {
 import { base64StdDecode } from './transport/codec'
 import { emitDaemonEvent, bindServerOrigin, type DaemonEventSink } from './emitDaemonEvent'
 import type { AttachmentRetrievalFailure } from '../shared/ipc/attachmentRetrieval'
-import type { HistoryRequestFailure } from '../shared/ipc/events'
 import type { DiagnosticLog } from './diagnosticLog'
 import type { DeviceKeypairStore } from './deviceKeypair'
 import type { PairedServerRecord, PairedServerStore } from './pairedServerStore'
@@ -115,6 +116,7 @@ import {
   type RenameWorkspacePayload,
   type SetSystemPromptPayload,
   type SetConversationMutedPayload,
+  type SetConversationPinnedPayload,
   MAX_SYSTEM_PROMPT_BYTES,
   type RequestAttachmentPayload,
   type ReadWorkspaceFilePayload,
@@ -126,8 +128,7 @@ import {
   type QuestionAnswerPayload,
   type QuestionRefusedPayload,
   type AttachmentChunkPayload,
-  type SwitchAgentPayload,
-  type RequestHistoryPayload
+  type SwitchAgentPayload
 } from '../shared/wire/types'
 
 /** Each X25519 static key is exactly 32 bytes — the length a decoded server key must have. */
@@ -285,7 +286,10 @@ interface PendingRetrieval {
  * record-reload.
  */
 export interface DaemonConnection {
+  hostedResources: ReturnType<typeof createHostedResources>
+  hostedApps: ReturnType<typeof createHostedApps>
   queryThread(query: ThreadQuery, requestId: string): void
+  cancelThreadQuery?(requestId: string): void
   requestHostSystemPrompt(requestId: string): void
   setHostSystemPrompt(systemPrompt: string, requestId: string): void
   /** Idempotent. Emits `connecting`, then sources the inputs and constructs the driver. */
@@ -341,26 +345,12 @@ export interface DaemonConnection {
    * unavailable. No retry. */
   stopBackgroundTask(conversationId: string, taskId: string): void
   /**
-   * Ask the daemon for one backward step of a scroll-back walk over a conversation's on-disk history
-   * (#1222). Takes the whole PAYLOAD rather than a scalar — unlike its two neighbours above, this verb
-   * carries three fields, and the builder rebuilds a fresh literal from them so nothing
-   * renderer-supplied reaches the wire uninspected.
-   *
-   * IT IS THE ONLY REQUEST METHOD THAT RECORDS WHAT IT ASKED. The `history_page` reply names no
-   * conversation, so this connection keeps the envelope id it just spent against the conversation the
-   * request named, and matches the reply back by `Envelope.in_reply_to` — the `requestSessionSettings`
-   * arrangement, and for the same reason. Answered by one `history_page` → `historyPageReceived`, or by
-   * one `error` → `historyRequestFailed`; nothing here retries either, including the one retryable
-   * refusal. Inert no-op when not connected, like send.
-   */
-  requestHistory(payload: RequestHistoryPayload): void
-  /**
    * Ask the daemon what system prompt one conversation holds, and whether the running session was
    * started with a different one (#1230). Takes the conversation id as a SCALAR, like
-   * `requestModelList` and unlike `requestHistory`, and the id is REQUIRED: an unnamed request has
+   * `requestModelList`, and the id is REQUIRED: an unnamed request has
    * nothing to ask about.
    *
-   * IT RECORDS WHAT IT ASKED, like `requestHistory` and `requestSessionSettings`. The `system_prompt`
+   * IT RECORDS WHAT IT ASKED, like `requestSessionSettings`. The `system_prompt`
    * reply names no conversation — the omission is what makes an unhosted conversation's answer
    * byte-identical to a hosted-but-quiet one, so the verb cannot be used as a membership probe — so
    * this connection keeps the envelope id it just spent against the conversation the request named and
@@ -593,6 +583,8 @@ export interface DaemonConnection {
    * nothing and is cleared on the next dial. The attempt id never reaches the wire. Never throws.
    */
   setConversationMuted(payload: SetConversationMutedPayload, attemptId: string): void
+  /** One authenticated write; authoritative conversationUpdated/re-list owns placement. */
+  setConversationPinned(payload: SetConversationPinnedPayload): void
   /**
    * Encrypt a payload-carrying `set_session_settings` control envelope onto the live session — asks the
    * daemon to change one session's model / reasoning effort / YOLO (pyrycode #844/#845). Honors the
@@ -748,6 +740,8 @@ function messageFor(code: string): string {
       return 'Your pairing has expired or is no longer valid. Enter a new pairing code to reconnect.'
     case 'update-required':
       return 'This app is too old for this host. Update Pyrycode to reconnect.'
+    case 'daemon-update-required':
+      return 'The Pyrycode daemon on this host needs an update. Update pyry on the host to reconnect.'
     case 'not-paired':
       return 'No paired pyrybox — pair a device to connect.'
     case 'malformed-hello-ack':
@@ -791,13 +785,29 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // one — is the only binding by that name in the factory, and the unbound sink can be reached only
   // by naming `deps.sink` again, which nothing below does.
   const sink = bindServerOrigin(deps.sink, deps.serverId)
+  let authenticatedDeviceId: string | undefined
+  const acknowledgeThreadItem = (conversationId: string, item: import('../shared/wire/thread').ThreadItem) => {
+    const content = item.content
+    if (item.kind !== 'user_message' || typeof content !== 'object' || content === null ||
+        !('device_id' in content) || content.device_id !== authenticatedDeviceId ||
+        !('message_id' in content) || typeof content.message_id !== 'string') return
+    deps.messageLifecycle?.acknowledge(deps.serverId, conversationId, [content.message_id])
+  }
   const threadReceiver = createThreadUpdateReceiver(event => {
+    if (event.kind === 'thread-compact-update') {
+      const { payload, type, ...correlation } = event.envelope
+      emitDaemonEvent(sink, { type: 'threadCompactUpdate', conversationId: event.update.payload.conversation_id,
+        update: event.update, correlation })
+      return
+    }
     if (event.kind === 'thread-query-failed') {
       emitDaemonEvent(sink, { type: 'threadQueryFailed', conversationId: event.conversationId,
         requestId: event.requestId, inReplyTo: event.inReplyTo, reason: event.reason })
       return
     }
     if (event.kind === 'thread-reply') {
+      if (event.reply.type === 'thread_items') for (const item of event.reply.payload.items)
+        acknowledgeThreadItem(event.reply.payload.conversation_id, item)
       const { payload, type, ...correlation } = event.envelope
       emitDaemonEvent(sink, { type: 'threadReply', conversationId: event.reply.payload.conversation_id,
         requestId: event.requestId, reply: event.reply, correlation })
@@ -807,6 +817,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       emitDaemonEvent(sink, { type: 'threadRepairNeeded', conversationId: event.conversationId, reason: event.reason })
       return
     }
+    if (event.update.type === 'thread_item_added') acknowledgeThreadItem(event.update.payload.conversation_id, event.update.payload.item)
     const { payload, type, ...correlation } = event.envelope
     emitDaemonEvent(sink, { type: 'threadUpdate', conversationId: event.update.payload.conversation_id,
       update: event.update, correlation, daemonTs: correlation.ts, historyEntryId: correlation.history_entry_id })
@@ -832,6 +843,12 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   let stopped = false
   let driver: NoiseRelayDriver | null = null
   let authenticated = false
+  let bodyCapable = false
+  let compactCapable = false
+  // A daemon whose accepted handshake lacks `thread` (#1908). Its driver is parked rather than stopped:
+  // every outbound method sees no driver and stays inert, inbound frames are dropped, and the parked
+  // driver's own supervisor keeps re-dialling after a drop, so a daemon update clears the state.
+  let parkedDriver: NoiseRelayDriver | null = null
   let deliveryFailed = false
   let drainingMessages = false
   const heldMessages: { payload: SendMessagePayload; size: number; observe?: (outcome: SendOutcome) => void }[] = []
@@ -897,14 +914,25 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // pre-createDriver guard checks both.
   let generation = 0
   // Main-memory pairing lifetime, independent of redials and the registry's retained connection.
-  let replayPairing: PairedServerRecord | null = null
-  let replayCursor: number | undefined
+  let sendPairing: PairedServerRecord | null = null
   // The `hello` consumed envelope id 1 in bootstrap (:153); app envelopes continue from 2. A
   // module-local, single-writer counter — `send` has no `await`, so it runs to completion with no
   // check-then-act race. It advances only on a successful build, so a dropped over-cap send does
   // not consume an id (harmless either way: the daemon uses `id` for in_reply_to correlation, not
   // sequencing).
   let nextEnvelopeId = 2
+  const hostedDeps = { nextId: () => nextEnvelopeId++, now,
+    connected: () => driver !== null && authenticated && !stopped && deps.serverId !== null,
+    send: (bytes: Uint8Array, observe: (outcome: SendOutcome) => void) => {
+      if (driver === null || !authenticated || stopped) observe({ type: 'dropped', reason: 'send-refused' })
+      else driver.sendMessage(bytes, observe)
+    }, log: deps.diagnosticLog }
+  const hostedResources = createHostedResources(hostedDeps)
+  const hostedApps = createHostedApps({ ...hostedDeps, resources: hostedResources })
+  function resetHosted(supported?: boolean): void {
+    hostedResources.reset(supported)
+    hostedApps.reset(supported)
+  }
   // The single per-connection debug-bundle reassembly slot (#116). The desktop has at most ONE
   // bundle request in flight (daemon-global bundle, one UI action), so a lone slot keyed by
   // liveness — replaced on each requestDebugBundle — is the whole state model: no in_reply_to map.
@@ -948,7 +976,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // deleted in onDriverEvent, and cleared on each dial(). THE SUCCESS REPLY DOES NOT CONSUME AN ENTRY
   // (pendingCreateFolders again): `conversation_created` is also an unsolicited broadcast, so the entry
   // lives until a correlated error or the next dial. Nothing bounds the set, deliberately, on
-  // pendingHistoryRequests' argument — an entry costs one number, only this client's own sends add one,
+  // pendingConfigRequests' argument — an entry costs one number, only this client's own sends add one,
   // every match deletes one and every dial clears all, so a daemon withholding replies cannot grow it
   // faster than the operator creates chats. The consequence is that a late error for an already-created
   // conversation still emits a rejection; the consumer gates on its own in-flight state, the way #396's
@@ -987,30 +1015,6 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       if (conversation === conversationId) pendingConfigRequests.delete(id)
     }
   }
-  // envelopeId → the conversation id that request_history named, for a history page's attribution
-  // (#1222). THE SAME PROBLEM pendingConfigRequests solves, on a second reply that names no
-  // conversation of its own and cannot grow one (correlation rides `in_reply_to` and nothing in a page
-  // is echoed from the request), so this map is again the ONLY place that fact exists.
-  //
-  // A MAP for pendingConfigRequests' reasons exactly: a value to carry per entry, a lookup by one key
-  // as the whole query, and a key this client MINTED (nextEnvelopeId) rather than a daemon-supplied
-  // string — so no prototype setter is reachable through it under any inbound frame, and a later
-  // widening that keys this by anything daemon-supplied must keep the Map.
-  //
-  // It differs from that sibling in ONE way and it is worth stating: a run-config read is one ask at a
-  // time in practice, where a walk is a SEQUENCE — #1224 may have an ask outstanding while the operator
-  // keeps scrolling. Nothing here bounds the map's size, deliberately: an entry costs one number and
-  // one string, entries are deleted on every match, and every one is cleared on dial(), so the only way
-  // to accumulate them is for this client to send asks a daemon never answers — a rate this client
-  // controls, not a remote one.
-  //
-  // Set after a SUCCESSFUL send in requestHistory, matched by the reply's Envelope.in_reply_to and
-  // deleted in onDriverEvent, and cleared on each dial(). The ordering is load-bearing for the reason
-  // pendingConfigRequests states: a build or send that throws advances no envelope id, so an entry left
-  // under an unspent id would answer whichever request re-mints it — here handing a page of one
-  // conversation's history to another. Single-writer — every mutation runs to completion inside a
-  // synchronous requestHistory / onDriverEvent body, no await between a read and a write.
-  const pendingHistoryRequests = new Map<number, string>()
   // Host-wide read/write waits are independent and expire without retry.
   type HostPromptPending = { requestId: string; timer: ReturnType<typeof setTimeout> }
   const pendingHostPromptReads = new Map<number, HostPromptPending>()
@@ -1052,7 +1056,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // reason pendingConfigRequests states: a build or send that throws advances no envelope id, so an
   // entry left under an unspent id would answer whichever request re-mints it — here handing one
   // conversation's system prompt to another. Nothing bounds the map's size, deliberately, on
-  // pendingHistoryRequests' argument: an entry costs one number and one string, every match deletes
+  // pendingConfigRequests' argument: an entry costs one number and one string, every match deletes
   // one, every dial clears all, so the only way to accumulate is for this client to send asks a daemon
   // never answers — a rate this client controls, not a remote one. Single-writer — every mutation runs
   // to completion inside a synchronous requestSystemPrompt / onDriverEvent body, no await between a
@@ -1082,7 +1086,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   // pendingConfigRequests states: a build or send that throws advances no envelope id, so an entry
   // left under an unspent id would settle whichever request re-mints it — here reporting one
   // conversation's write as another's. Nothing bounds the map's size, deliberately, on
-  // pendingHistoryRequests' argument: an entry costs one number and one string, every settle deletes
+  // pendingConfigRequests' argument: an entry costs one number and one string, every settle deletes
   // one, every dial clears all, so the only way to accumulate is for this client to send writes a
   // daemon never answers — a rate this client controls, not a remote one. Single-writer — every
   // mutation runs to completion inside a synchronous setSystemPrompt / onDriverEvent body, no await
@@ -1138,7 +1142,9 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
 
   // `minClientVersion` is the classifier's already-validated MAJOR.MINOR.PATCH (#1613), placed on the
   // event only for `update-required`, and never logged.
-  function emitFailed(code: string, message = messageFor(code), minClientVersion?: string): void {
+  function emitFailed(code: string, message = messageFor(code), minClientVersion?: string,
+    cause?: 'daemon'): void {
+    resetHosted()
     abandonHostPrompts()
     authenticated = false
     deliveryFailed = true
@@ -1150,7 +1156,10 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
     const version = code === 'update-required' && minClientVersion !== undefined
       ? { min_client_version: minClientVersion } : {}
-    emitDaemonEvent(sink, { type: 'failed', error: { code, message, retryable: false, ...version } })
+    // The daemon-too-old cause keeps supervision, so it is the one retryable failure.
+    const daemon = code === 'update-required' && cause === 'daemon'
+    emitDaemonEvent(sink, { type: 'failed', error: { code, message, retryable: daemon, ...version },
+      ...(daemon ? { cause } : {}) })
     // The single failure choke point (all five classifications) shadows onto the log — the static
     // `code` only, never the `message` param (which interpolates the numeric close code, #127's leg).
     deps.diagnosticLog?.event({ event: 'daemon-failed', code })
@@ -1265,11 +1274,24 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     return undefined
   }
 
+  /** A sealed pairing rejection or app-too-old error: the two errors that end a connection. */
+  function isConnectionFatalError(plaintext: Uint8Array): boolean {
+    try {
+      if (parseJsonObject(plaintext).type !== 'error') return false
+      const error = parseInboundMessage(plaintext)
+      return error?.kind === 'daemon-error' &&
+        (error.pairingReject === 'pairing-rejected' || error.updateRequired !== undefined)
+    } catch { return false }
+  }
+
   // The single choke point: RelaySessionEvent → DaemonEvent. Nothing else emits.
   function onDriverEvent(event: RelaySessionEvent): void {
+    if (stopped) return
     switch (event.type) {
       case 'handshake-complete': {
+        resetHosted()
         threadReceiver.reset()
+        bodyCapable = false
         let ack: HelloAckPayload
         try {
           ack = parseHelloAck(event.helloAck)
@@ -1280,7 +1302,26 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
           return
         }
         pairingRejected = false
+        // The parked driver re-dialled on its own; take it back for this handshake's outcome.
+        if (driver === null && parkedDriver !== null) { driver = parkedDriver; parkedDriver = null }
+        if (!ack.capabilities.includes('thread')) {
+          // The app requires the daemon-built thread (#1908): a host without it gets the update-required
+          // failure with the daemon cause, decided here on the accepted handshake and for this host only.
+          // No `connected` is emitted, so the window requests nothing from it.
+          hostedResources.reset(false)
+          hostedApps.reset(false)
+          parkedDriver = driver
+          driver = null
+          emitFailed('update-required', messageFor('daemon-update-required'), undefined, 'daemon')
+          // Messages held for this host are refused now, never delivered after a later daemon update.
+          failHeldMessages(true)
+          return
+        }
         authenticated = true
+        bodyCapable = ack.server_id === deps.serverId && ['interactive', 'thread', 'thread_expansion'].every(c => ack.capabilities.includes(c))
+        compactCapable = bodyCapable && ack.capabilities.includes('thread_compact')
+        hostedResources.reset(ack.capabilities.includes('hosted_apps_v1'))
+        hostedApps.reset(ack.server_id === deps.serverId && ack.capabilities.includes('hosted_apps_v1'))
         deliveryFailed = false
         emitDaemonEvent(sink, { type: 'connected', ack })
         drainMessages()
@@ -1290,27 +1331,28 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         return
       }
       case 'message': {
+        // An outdated daemon's frames reach nothing: no rows, prompts or replies (#1908). A
+        // connection-fatal error still takes precedence and ends this host's state as it always has.
+        if (parkedDriver !== null && !isConnectionFatalError(event.plaintext)) return
+        try {
+          const envelope = parseJsonObject(event.plaintext)
+          // Connection-fatal errors retain precedence even when they name a hosted request.
+          // Correlated malformed errors must still reach hosted validation.
+          const fatal = isConnectionFatalError(event.plaintext)
+          if (!fatal && (hostedApps.receive(event.plaintext, envelope) || hostedResources.receive(event.plaintext, envelope))) return
+        } catch { /* Invalid UTF-8/JSON has no identifiable hosted operation. */ }
         // Decode the decrypted app-envelope at the transport boundary, then map its narrowed result
         // onto the IPC layer — the consumer's only job (transport/ stays IPC-free).
         let inbound: InboundDaemonMessage | null
-        let liveStateMetadata: { envelopeSessionId?: string | null; inReplyTo?: number } = {}
+        let liveStateMetadata: { envelopeConversationId?: string; envelopeSessionId?: string | null; inReplyTo?: number } = {}
         try {
           inbound = parseInboundMessage(event.plaintext, deps.diagnosticLog, (envelope) => {
             if (sessionStateFamily(envelope.type) !== null) {
               liveStateMetadata = {
+                ...('conversation_id' in envelope ? { envelopeConversationId: envelope.conversation_id } : {}),
                 ...('session_id' in envelope ? { envelopeSessionId: envelope.session_id } : {}),
                 ...('in_reply_to' in envelope ? { inReplyTo: envelope.in_reply_to } : {})
               }
-            }
-            if (envelope.session_state_cleared === true) return
-            if (envelope.type === 'resync') {
-              replayCursor = undefined
-              deps.diagnosticLog?.event({ event: 'replay-cursor-reset', code: 'resync' })
-            } else if (
-              envelope.event_id !== undefined && Number.isSafeInteger(envelope.event_id) &&
-              envelope.event_id > 0 && (replayCursor === undefined || envelope.event_id > replayCursor)
-            ) {
-              replayCursor = envelope.event_id
             }
           })
         } catch {
@@ -1335,12 +1377,17 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         // optional chaining, or the settled reassembler's own inert guard — preserving the prior
         // drop behaviour and keeping an unrelated `error` harmless when no bundle is streaming).
         switch (inbound.kind) {
-          case 'session-state-cleared':
+          case 'session-state-cleared': {
+            const reply = inbound.correlation.in_reply_to
+            const conversationId = reply === undefined ? undefined : inbound.family === 'session_settings'
+              ? pendingConfigRequests.get(reply) : inbound.family === 'mcp_status' ? pendingMcpStatusRequests.get(reply) : undefined
             emitDaemonEvent(sink, { type: 'sessionStateCleared', family: inbound.family,
+              ...(conversationId === undefined ? {} : { conversationId }),
               correlation: inbound.correlation, daemonTs: inbound.correlation.ts })
             return
+          }
           case 'thread-frame':
-            if (authenticated && !stopped) threadReceiver.receive(inbound.envelope)
+            if (authenticated && !stopped) threadReceiver.receive(inbound.envelope, event.plaintext)
             return
           case 'message':
             emitDaemonEvent(sink, { type: 'messageReceived', message: inbound.message, daemonTs: inbound.ts })
@@ -1361,7 +1408,6 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               failBundleStream()
               failAttachmentTransfers()
               failAttachmentRetrievals()
-              abandonHistoryRequests()
               emitFailed('pairing-rejected')
               return
             }
@@ -1376,10 +1422,10 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               failBundleStream()
               failAttachmentTransfers()
               failAttachmentRetrievals()
-              abandonHistoryRequests()
               generation++
-              const halted = driver
+              const halted = driver ?? parkedDriver
               driver = null
+              parkedDriver = null
               halted?.stop()
               emitFailed('update-required', undefined, inbound.updateRequired.minClientVersion)
               return
@@ -1470,35 +1516,6 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
                 rejected.fail(inbound.outcome)
                 return
               }
-              // History-request rejection correlation (#1222), the fourth member of the same
-              // unique-per-request-envelope-id tier. Order among them is immaterial for the reason the
-              // siblings state — an envelope id is minted once, so at most one store can hold it — and
-              // a match consumes the frame ENTIRELY, skipping both the reassembler.fail and the
-              // modal-FIFO shift below exactly as they do.
-              //
-              // A CORRELATED REFUSAL ALWAYS SETTLES THE ASK, including one whose code is outside the
-              // verb's five published rejects. That case is real rather than defensive: an entry too
-              // large for any page draws `message.too_long` from the daemon's own transport, and a walk
-              // that dropped it would stall with no terminal and no cursor to step past the entry.
-              // `'unclassified'` is where those land.
-              //
-              // What crosses is the CLIENT-OWNED reason narrowed at the decode boundary plus the
-              // conversation id this app itself named — never the daemon's `code` string, never its
-              // static message, and never the numeric in_reply_to the match was made on. `retryable` is
-              // computed HERE, at the single emit, so the walk driver cannot re-derive it wrong.
-              const failedHistory = pendingHistoryRequests.get(inReplyTo)
-              if (failedHistory !== undefined) {
-                pendingHistoryRequests.delete(inReplyTo)
-                const reason: HistoryRequestFailure = inbound.historyReject ?? 'unclassified'
-                deps.diagnosticLog?.event({ event: 'history-request-failed', code: reason })
-                emitDaemonEvent(sink, {
-                  type: 'historyRequestFailed',
-                  conversationId: failedHistory,
-                  reason,
-                  retryable: reason === 'history-unavailable'
-                })
-                return
-              }
               // System-prompt WRITE rejection correlation (#1249), the fifth member of the same
               // unique-per-request-envelope-id tier. Order among them is immaterial for the reason
               // the siblings state — an envelope id is minted once, so at most one store can hold it
@@ -1516,7 +1533,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               // conversation id this app itself named — never the daemon's `code` string, never its
               // static message, and never the numeric in_reply_to the match was made on. No
               // `retryable` flag: BOTH published conditions are non-retryable, so a carried flag would
-              // be a constant, and the reasoning that makes historyRequestFailed carry one — exactly
+              // be a constant, and the request-specific correlation contract — exactly
               // one retryable member in its set — does not transfer.
               //
               // It reads the SAME map the ack arm does, which is what makes "exactly one outcome per
@@ -1747,54 +1764,6 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
               conversationId,
               systemPrompt: inbound.systemPrompt.system_prompt,
               sessionPromptStatus: inbound.systemPrompt.session_prompt_status
-            })
-            return
-          }
-          case 'history-page': {
-            // CORRELATION-GATED, fail-closed, in the shape the session-settings arm above uses and for
-            // the identical reason: the reply names no conversation, so the one it describes is the one
-            // this client asked about under the envelope id it answers. An absent in_reply_to
-            // short-circuits BEFORE the lookup; a page matching no outstanding entry — a stale reply
-            // from a connection whose ids were cleared, a duplicate of one already matched, or a
-            // hostile daemon forging a page for a request this client never sent — is ignored entirely,
-            // with no coercion and no partial event. Both branches are SILENT: the only values a
-            // diagnostic could carry are the conversation id and the wire routing id.
-            //
-            // The drop is deliberately total rather than "emit without the id". A page this client
-            // cannot attribute is exactly the input the window must not accept: it would have to guess
-            // a conversation, and a guess writes someone else's transcript into the open one.
-            const inReplyTo = inbound.inReplyTo
-            if (inReplyTo === undefined) return
-            const conversationId = pendingHistoryRequests.get(inReplyTo)
-            if (conversationId === undefined) return
-            pendingHistoryRequests.delete(inReplyTo)
-            deps.diagnosticLog?.event({ event: 'history-page-received' })
-            // A fresh literal with named fields, never a spread of inbound.historyPage — so a future
-            // decoder that grew a field cannot smuggle it across. snake→camel for `at_start` per this
-            // channel's convention; `entries` and `cursor` keep their names and their values.
-            //
-            // Both are carried AS SENT: nothing normalises a short or empty page into an end-of-log
-            // flag, because `atStart` is the only termination signal and a page filling exactly at the
-            // log's first entry reports it false. Nor is either inferred from how many entries
-            // survived the decode: an EMPTY `entries` here can mean an empty page OR a page every
-            // entry of which was skipped (#1227), and both must still settle the ask.
-            //
-            // `entries` is the TYPED array by reference — since #1227 the transport decodes each stored
-            // payload against the live-lane parser for its type, so nothing untyped crosses from here.
-            // This assignment is also the drift guard between `DecodedHistoryEvent` and its
-            // `HistoryTimelineEvent` mirror: the two are declared in separate modules (transport is
-            // IPC-free by construction), and an arm that stopped matching is a compile error at this
-            // one site. `conversationId` is the map's value, never a field of the payload (there is
-            // none) — and no entry carries a payload's daemon-asserted `conversation_id` either, so
-            // this stays the page's ONLY routing key. The numeric in_reply_to it was resolved from is
-            // NOT placed on the event: the window receives the id it supplied, not the wire routing id.
-            emitDaemonEvent(sink, {
-              type: 'historyPageReceived',
-              conversationId,
-              entries: inbound.historyPage.entries,
-              servedIds: inbound.historyPage.servedIds,
-              cursor: inbound.historyPage.cursor,
-              atStart: inbound.historyPage.at_start
             })
             return
           }
@@ -2978,6 +2947,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         emitDaemonEvent(sink, { type: 'relayLinkChanged', status: 'connected' })
         return
       case 'relay-link-down': {
+        resetHosted()
         threadReceiver.reset()
         abandonHostPrompts()
         pendingSwitchAgents.clear()
@@ -2990,7 +2960,6 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         failBundleStream()
         failAttachmentTransfers()
         failAttachmentRetrievals()
-        abandonHistoryRequests()
         // The relay socket dropped with a retryable close (#328). This is the single classification
         // choke point (untrusted WS close code → closed RelayLinkStatus category): 4404 is the
         // relay's "reachable, no daemon registered" close → 'daemon-absent'; every other retryable
@@ -3004,6 +2973,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         return
       }
       case 'terminal':
+        resetHosted()
         threadReceiver.reset()
         abandonHostPrompts()
         // A stream interrupted by a socket drop resolves the consumer (no hang, no lingering bytes).
@@ -3011,7 +2981,6 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         failBundleStream()
         failAttachmentTransfers()
         failAttachmentRetrievals()
-        abandonHistoryRequests()
         // A clean local stop() drives terminal{1000,'stopped'}; suppress it (the window is
         // tearing down on quit). Every other fatal close is an authoritative drop the user sees.
         // The supervisor's `reason` string is deliberately NOT forwarded (conservative).
@@ -3025,12 +2994,12 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         emitFailed('connection-closed', `The connection to pyrybox was closed (code ${event.code}).`)
         return
       case 'error':
+        resetHosted()
         threadReceiver.reset()
         // Same teardown net for a connection-level driver error mid-stream.
         failBundleStream()
         failAttachmentTransfers()
         failAttachmentRetrievals()
-        abandonHistoryRequests()
         // The driver's reason is a static enum string — safe to surface as the category code.
         emitFailed(event.reason)
         return
@@ -3051,21 +3020,20 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     if (stopped || gen !== generation) return null
     if (record === null) {
       failHeldMessages(true)
-      replayPairing = null
-      replayCursor = undefined
+      sendPairing = null
       return null
     }
     const pair = await deviceKeypair.ensure()
     if (stopped || gen !== generation) return null
+    authenticatedDeviceId = Buffer.from(pair.publicKey).toString('hex')
     const remoteStaticPublicKey = decodeServerKey(record.server_static_pubkey)
     if (
-      replayPairing === null || replayPairing.server !== record.server ||
-      replayPairing.relay !== record.relay || replayPairing.token !== record.token ||
-      replayPairing.server_static_pubkey !== record.server_static_pubkey
+      sendPairing === null || sendPairing.server !== record.server ||
+      sendPairing.relay !== record.relay || sendPairing.token !== record.token ||
+      sendPairing.server_static_pubkey !== record.server_static_pubkey
     ) {
-      if (replayPairing !== null) failHeldMessages(true)
-      replayCursor = undefined
-      replayPairing = {
+      if (sendPairing !== null) failHeldMessages(true)
+      sendPairing = {
         server: record.server, relay: record.relay, token: record.token,
         server_static_pubkey: record.server_static_pubkey
       }
@@ -3076,7 +3044,6 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       deviceName,
       clientVersion,
       token: record.token,
-      lastEventId: replayCursor,
       // Advertise `interactive` (#179): the daemon opens the v2 structured stream (turn state,
       // deltas, tool use/result, thinking, modal prompts) and accepts the interactive control verbs
       // — the mounted render pipeline (timeline + modal bridges) draws them. `interactive` is the
@@ -3085,7 +3052,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // Advertise `multi_agent` too (#1657): without it the daemon withholds Codex conversations,
       // their frames and Codex model rows, all of which the window now decodes per agent (#1649).
       // Advertise `stop_background_task` (#1770), detection only: the echo says the daemon takes the verb.
-      capabilities: [CAPABILITY_INTERACTIVE, CAPABILITY_MULTI_AGENT, CAPABILITY_STOP_BACKGROUND_TASK]
+      capabilities: [CAPABILITY_INTERACTIVE, 'thread', 'thread_expansion', 'thread_compact', CAPABILITY_MULTI_AGENT, CAPABILITY_STOP_BACKGROUND_TASK, 'hosted_apps_v1']
     })
     return {
       connection: {
@@ -3173,7 +3140,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     try {
       if (!isRendererCommand({ type: 'sendMessage', payload })) throw new Error('Invalid message')
       const bytes = buildSendMessage({ id: nextEnvelopeId, ts: now(), payload })
-      if (stopped || heldMessages.length >= 128 || heldMessageBytes + bytes.byteLength > 1024 * 1024) {
+      if (stopped || parkedDriver !== null || heldMessages.length >= 128 || heldMessageBytes + bytes.byteLength > 1024 * 1024) {
         notifySend(observe, { type: 'dropped', reason: 'send-refused' })
         delivery(payload, 'not-sent')
         return
@@ -3372,26 +3339,24 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
-  function failHistoryRequest(conversationId: string, code: string): void {
-    deps.diagnosticLog?.event({ event: 'history-request-failed', code })
-    emitDaemonEvent(sink, { type: 'historyRequestFailed', conversationId,
-      reason: 'unclassified', retryable: true })
-  }
-
-  function abandonHistoryRequests(): void {
-    const pending = [...pendingHistoryRequests.values()]
-    pendingHistoryRequests.clear()
-    for (const conversationId of pending) failHistoryRequest(conversationId, 'interrupted')
-  }
-
   function queryThread(query: ThreadQuery, requestId: string): void {
     const id = nextEnvelopeId++
-    threadReceiver.register(id, requestId, query)
+    if (!threadReceiver.register(id, requestId, query)) return
     if (driver === null || !authenticated || stopped) { threadReceiver.fail(id, 'unavailable'); return }
+    if ('projection' in query.payload && (!compactCapable ||
+        !isRendererCommand({ type: 'queryThread', serverId: deps.serverId, requestId, query }))) { threadReceiver.fail(id, 'unavailable'); return }
+    if ((query.type === 'thread_read_tool_body' || query.type === 'thread_read_children') && (!bodyCapable ||
+        !isRendererCommand({ type: 'queryThread', serverId: deps.serverId, requestId, query }))) {
+      threadReceiver.fail(id, 'unavailable'); return
+    }
     const p = query.payload
     const payload = { conversation_id: p.conversation_id,
-      ...(query.type === 'thread_catch_up' ? { epoch: query.payload.epoch, version: query.payload.version } : { before_order: query.payload.before_order }),
-      ...(p.limit === undefined ? {} : { limit: p.limit }) }
+      ...('projection' in p ? { projection: p.projection } : {}),
+      ...(query.type === 'thread_page' && query.payload.projection ? { epoch: query.payload.epoch } : {}),
+      ...(query.type === 'thread_read_tool_body' || query.type === 'thread_read_children' ? { epoch: query.payload.epoch, item_id: query.payload.item_id, expected_rev: query.payload.expected_rev } :
+        query.type === 'thread_catch_up' ? { epoch: query.payload.epoch, version: query.payload.version } : { before_order: query.payload.before_order }),
+      ...('limit' in p && p.limit !== undefined ? { limit: query.type === 'thread_read_children' ? Math.min(p.limit || 50, 256) : p.limit } : {}),
+      ...(query.type === 'thread_read_children' && query.payload.cursor ? { cursor: query.payload.cursor } : {}) }
     try {
       const bytes = encodeEnvelope({ id, type: query.type, ts: now(), payload })
       driver.sendMessage(bytes, outcome => {
@@ -3399,25 +3364,6 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       })
       deps.diagnosticLog?.event({ event: 'thread-query-sent', code: query.type })
     } catch { threadReceiver.fail(id, 'send-failed') }
-  }
-
-  function requestHistory(payload: RequestHistoryPayload): void {
-    if (driver === null || !authenticated) {
-      failHistoryRequest(payload.conversation_id, 'unavailable')
-      return
-    }
-    if ([...pendingHistoryRequests.values()].includes(payload.conversation_id)) return
-    try {
-      const envelopeId = nextEnvelopeId
-      const bytes = buildRequestHistory({ id: envelopeId, ts: now(),
-        conversationId: payload.conversation_id, cursor: payload.cursor, limit: payload.limit })
-      nextEnvelopeId += 1
-      driver.sendMessage(bytes)
-      pendingHistoryRequests.set(envelopeId, payload.conversation_id)
-      deps.diagnosticLog?.event({ event: 'history-request-sent' })
-    } catch {
-      failHistoryRequest(payload.conversation_id, 'build-or-send-failed')
-    }
   }
 
   function sendHostPrompt(operation: 'read' | 'write', requestId: string, systemPrompt = ''): void {
@@ -3912,6 +3858,21 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     }
   }
 
+  function setConversationPinned(payload: SetConversationPinnedPayload): void {
+    if (driver === null || !authenticated) {
+      deps.diagnosticLog?.event({ event: 'conversation-pin-refused', code: 'not-connected' })
+      return
+    }
+    try {
+      const bytes = buildSetConversationPinned({ id: nextEnvelopeId++, ts: now(),
+        payload: { conversation_id: payload.conversation_id, pinned: payload.pinned } })
+      driver.sendMessage(bytes)
+      deps.diagnosticLog?.event({ event: 'conversation-pin-sent' })
+    } catch {
+      deps.diagnosticLog?.event({ event: 'conversation-pin-failed', code: 'local-send' })
+    }
+  }
+
   function setConversationMuted(payload: SetConversationMutedPayload, attemptId: string): void {
     if (driver === null) {
       conversationMuteResult(attemptId, 'rejected')
@@ -4370,6 +4331,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
 
   // The single fresh-connect path both start() and reconnect() funnel through.
   function dial(): void {
+    resetHosted()
     threadReceiver.reset()
     abandonHostPrompts()
     authenticated = false
@@ -4382,7 +4344,9 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // this is a no-op.
     driver?.stop()
     driver = null
-    // Each hello still uses id 1. Keep app IDs monotonic across dials so delayed history
+    parkedDriver?.stop()
+    parkedDriver = null
+    // Each hello still uses id 1. Keep app IDs monotonic across dials so delayed
     // replies cannot match a successor query after the old pending state is released.
     // Reset the modal-answer correlation window (#248): a fresh connection starts with no outstanding
     // answer, so a stale answer from a dead session can never correlate an `error` on the reconnected
@@ -4407,7 +4371,6 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     // connection's first request would inherit the dead one's conversation. The pendingSettings.clear()
     // rationale, applied to the read leg.
     pendingConfigRequests.clear()
-    abandonHistoryRequests()
     // Reset the system-prompt request correlation map (#1230): the pendingConfigRequests rationale
     // applied to the prompt read, and the consequence of skipping it is the worst of the three — a
     // reply inheriting a dead connection's conversation would report one conversation's stored prompt
@@ -4461,6 +4424,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     stop(): void {
       if (stopped) return
       stopped = true
+      resetHosted()
+      hostedApps.dispose()
       threadReceiver.reset()
       authenticated = false
       failHeldMessages(true)
@@ -4469,7 +4434,10 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // Idempotent driver teardown. If the bootstrap has not yet constructed the driver, the
       // `stopped` guard above (step 7) prevents it from ever being constructed.
       driver?.stop()
+      parkedDriver?.stop()
     },
+    hostedResources,
+    hostedApps,
     send,
     requestSessionSettings,
     requestModelList,
@@ -4482,7 +4450,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     setHostSystemPrompt,
     requestSystemPrompt,
     queryThread,
-    requestHistory,
+    cancelThreadQuery: requestId => threadReceiver.cancel(requestId),
     requestConversations,
     requestRecentWorkspaces,
     createConversation,
@@ -4502,6 +4470,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     setSystemPrompt,
     markConversationRead,
     setConversationMuted,
+    setConversationPinned,
     setSessionSettings,
     answerModal,
     cancelModal,

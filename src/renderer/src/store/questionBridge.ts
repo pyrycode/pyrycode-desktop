@@ -100,6 +100,7 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
     case 'threadReply':
     case 'threadQueryFailed':
     case 'threadUpdate':
+    case 'threadCompactUpdate':
     case 'threadRepairNeeded':
       return null // The daemon-built thread consumer owns these additive events.
     case 'questionShown': {
@@ -195,8 +196,6 @@ export function translateQuestionEvent(event: DaemonEvent): QuestionBatchEvent |
     case 'modalAnswerRejected':
     case 'slashCommandList':
     case 'modelList':
-    case 'historyPageReceived':
-    case 'historyRequestFailed':
     case 'thinkingProgress':
     case 'toolProgress':
     case 'rateLimited':
@@ -396,10 +395,11 @@ export function useQuestionBridge(): void {
   useEffect(
     () =>
       subscribeQuestionBatches(
-        window.pyry.onDaemonEvent,
+        onLegacyContentEvent,
         (event) => questionBatchStore.getState().dispatch(event),
         (event) => questionPicksStore.getState().dispatch(event)
       ),
     []
   )
 }
+import { onLegacyContentEvent } from './threadRuntime'

@@ -1,44 +1,84 @@
 import { useEffect } from 'react'
+import { threadRuntime } from './threadRuntime'
 import type { StoreApi } from 'zustand/vanilla'
-import { parseChatHistorySnapshot, type ChatHistorySnapshot, type ChatHistoryRequest, type ChatHistoryResult } from '@shared/chatHistory'
+import { parseChatHistorySnapshot, parseChatHistoryRequest, type ChatHistorySnapshot, type ChatHistoryRequest, type ChatHistoryResult } from '@shared/chatHistory'
 import type { StampedDaemonEvent } from '@shared/ipc/events'
 import type { RendererDiagnosticEvent } from '@shared/ipc/diagnostics'
 import { conversationListStore, type ConversationListStore } from './conversationListStore'
-import { conversationTimelineStore, type ConversationTimelineStore } from './conversationTimelineStore'
 import { subscribeChatHistoryRemoval } from './chatHistoryRemoval'
-import type { ThreadItem } from './threadTimeline'
 import type { ThreadItemStore } from './threadItemStore'
 
 type ConversationRemoval = Extract<ChatHistoryRequest, { operation: 'removeConversation' }>
-type TimelineSnapshot = Extract<ChatHistorySnapshot, { kind: 'timeline' }>
+type Snapshot = Extract<ChatHistorySnapshot, { kind: 'list' }>
+type Mutation = Extract<ChatHistoryRequest, { operation: 'mutateThread' }>
+type QueuedMutation = { serverId: string; head: MutationNode; tail: MutationNode }
+type MutationNode = { request: Mutation; steps: Generator<Mutation>; started?: boolean; ready?: IteratorResult<Mutation>; next?: MutationNode }
 type Receipt = { type: string; serverId: string | null | undefined }
 
-/** #1621: an offered file is live-only (the wire cannot resupply it), so it is never saved. */
-function isDurable(item: ThreadItem): item is Exclude<ThreadItem, { kind: 'attachmentOffer' }> {
-  return item.kind !== 'attachmentOffer'
+function combine(previous: Mutation, next: Mutation): Mutation | undefined {
+  const a = previous.change, b = next.change
+  const units = (c: Mutation['change']) => c.items.length + (c.priorProgress?.length ?? 0) + 1
+  // Owner barriers, removals, range boundaries and repeated identities retain exact serial semantics.
+  if (a.acceptEpoch || b.acceptEpoch || a.resetId !== undefined || b.resetId !== undefined ||
+    a.removeIds.length || b.removeIds.length || a.ranges.length || b.ranges.length || units(a) + units(b) > 32) return
+  const ids = new Set(a.items.map(item => item.id))
+  if (b.items.some(item => ids.has(item.id))) return
+  return { ...next, change: { ...b, items: [...a.items, ...b.items], priorProgress: [...a.priorProgress ?? [],
+    { metadata: a.metadata, ...(a.completion === undefined ? {} : { completion: a.completion }),
+      ...(a.availability === undefined ? {} : { availability: a.availability }) }, ...b.priorProgress ?? []] } }
 }
-type Observation = { owner: string | null; coverage: TimelineSnapshot['coverage'] }
+
+// The final progress observation counts too. Every submitted request is independently valid.
+function* mutationSteps(request: Mutation): Generator<Mutation> {
+  const c = request.change
+  const units = c.items.length + c.removeIds.length + c.ranges.length + (c.priorProgress?.length ?? 0) + 1
+  const parts = Math.ceil(c.items.length / 31) + Math.ceil(c.removeIds.length / 31) +
+    Math.ceil(c.ranges.length / 31) + Math.ceil((c.priorProgress?.length ?? 0) / 32) + 1
+  const id = units > 32 ? crypto.randomUUID() : undefined
+  let part = 0
+  for (const next of dataSteps(request)) yield id === undefined ? next : {
+    ...next, change: { ...next.change, persistence: { id, part: part++, parts } }
+  }
+}
+function* dataSteps(request: Mutation): Generator<Mutation> {
+  const c = request.change, prior = c.priorProgress ?? []
+  if (c.items.length + c.removeIds.length + c.ranges.length + prior.length + 1 <= 32) {
+    yield request
+    return
+  }
+  const neutral = { hostId: c.metadata.hostId, conversationId: c.metadata.conversationId,
+    epoch: c.metadata.epoch, version: c.metadata.version, checkpoint: 0, uncommittedVersion: 0, repair: null }
+  const base = { acceptEpoch: c.acceptEpoch, ...(c.resetId === undefined ? {} : { resetId: c.resetId }),
+    metadata: neutral, items: [], removeIds: [], ranges: [] }
+  for (let i = 0; i < c.removeIds.length; i += 31)
+    yield { ...request, change: { ...base, removeIds: c.removeIds.slice(i, i + 31) } }
+  for (let i = 0; i < c.items.length; i += 31)
+    yield { ...request, change: { ...base, items: c.items.slice(i, i + 31) } }
+  for (let i = 0; i < c.ranges.length; i += 31)
+    yield { ...request, change: { ...base, ranges: c.ranges.slice(i, i + 31) } }
+  for (let i = 0; i < prior.length; i += 32) {
+    const observations = prior.slice(i, i + 32), last = observations.pop()
+    if (last) yield { ...request, change: { ...base, ...last, priorProgress: observations } }
+  }
+  yield { ...request, change: { ...base, metadata: c.metadata,
+    ...(c.completion === undefined ? {} : { completion: c.completion }),
+    ...(c.availability === undefined ? {} : { availability: c.availability }) } }
+}
 
 /** Receipts are synchronous; snapshots and their supplying host are detached before scheduling. */
 export function createChatHistoryWriter(deps: {
-  threads?: Pick<StoreApi<ThreadItemStore>, 'getState' | 'subscribe'>
+  threads: Pick<StoreApi<ThreadItemStore>, 'getState' | 'subscribe'>
   lists: Pick<StoreApi<ConversationListStore>, 'getState' | 'subscribe'>
-  timelines: Pick<StoreApi<ConversationTimelineStore>, 'getState' | 'subscribe'>
-  subscribeTimelineWrites?: (listener: (state: ConversationTimelineStore, previous: ConversationTimelineStore,
-    origin?: string | null) => void) => () => void
-  flushTimeline?: () => void
   subscribeEvents?: (listener: (event: StampedDaemonEvent) => void) => () => void
   receipt: () => Receipt | null
   write: (request: ChatHistoryRequest) => Promise<ChatHistoryResult>
   log: (event: RendererDiagnosticEvent) => void
   schedule: (run: () => void) => () => void
 }) {
-  const pending = new Map<string, ChatHistorySnapshot | ConversationRemoval>()
+  const pending = new Map<string, Snapshot | ConversationRemoval | QueuedMutation>()
   const seen = new Map<string, string>()
   const saved = new Map<string, string>()
-  const observations = new Map<string, Observation>()
   const deleted = new Map<string, Set<string>>()
-  const localEchoes = new WeakSet<object>()
   const paused = new Map<string, number>()
   const generations = new Map<string, number>()
   const removals = new Set<Promise<void>>()
@@ -46,25 +86,16 @@ export function createChatHistoryWriter(deps: {
   let cancel: (() => void) | undefined
   let running: Promise<void> | undefined
   const report = (code: string) => deps.log({ event: 'history-writer-result', code })
-  const keyFor = (s: ChatHistorySnapshot) => JSON.stringify([s.serverId, s.kind,
-    s.kind !== 'list' ? s.conversationId : null])
+  const keyFor = (s: Snapshot) => JSON.stringify([s.serverId, s.kind, null])
   const hasReady = () => [...pending.values()].some(snapshot => !paused.has(snapshot.serverId))
-  function forgetComparison(id: string): void {
-    const owner = observations.get(id)?.owner
-    if (typeof owner !== 'string') return
-    const key = JSON.stringify([owner, 'timeline', id])
-    seen.delete(key)
-    saved.delete(key)
-  }
-
-  function capture(value: ChatHistorySnapshot): void {
+  function capture(value: Snapshot): void {
     const removed = deleted.get(value.serverId)
-    if (value.kind !== 'list' && removed?.has(value.conversationId)) return
     if (value.kind === 'list' && removed !== undefined) {
       value = { ...value, conversations: value.conversations.filter(row => !removed.has(row.id)) }
     }
     let snapshot: ChatHistorySnapshot
     try { snapshot = parseChatHistorySnapshot(value) } catch { report('invalid-snapshot'); return }
+    if (snapshot.kind !== 'list') return
     const key = keyFor(snapshot)
     const encoded = JSON.stringify(snapshot)
     if (seen.get(key) === encoded) return
@@ -73,42 +104,81 @@ export function createChatHistoryWriter(deps: {
     if (cancel === undefined && running === undefined) cancel = deps.schedule(() => { void flush() })
   }
 
+  function captureChange(host: string, id: string, slice: ThreadItemStore['hosts'] extends ReadonlyMap<string, ReadonlyMap<string, infer S>> ? S : never): void {
+    if (!slice.owned || deleted.get(host)?.has(id)) return
+    // Owned changes are immutable detached store values. Validation is bounded at submission.
+    const request: Mutation = { operation: 'mutateThread', serverId: host, conversationId: id, change: slice.owned }
+    const node: MutationNode = { request, steps: mutationSteps(request) }
+    const key = JSON.stringify([host, 'daemon-items', id]), prior = pending.get(key)
+    if (prior && 'head' in prior && prior.tail.request.change.metadata.epoch === request.change.metadata.epoch &&
+      (request.change.resetId === undefined || prior.tail.request.change.resetId === request.change.resetId)) {
+      const combined = prior.tail.started ? undefined : combine(prior.tail.request, request)
+      if (combined) { prior.tail.request = combined; prior.tail.steps = mutationSteps(combined) }
+      else { prior.tail.next = node; prior.tail = node }
+    } else pending.set(key, { serverId: host, head: node, tail: node })
+    if (cancel === undefined && running === undefined) cancel = deps.schedule(() => { void flush() })
+  }
+
   async function drain(): Promise<void> {
+    const failed = new Set<string>()
     while (pending.size > 0) {
-      const next = [...pending].find(([, snapshot]) => !paused.has(snapshot.serverId))
-      if (next === undefined) break
-      const [key, snapshot] = next
+      const entries = pending.entries()
+      let next = entries.next()
+      while (!next.done && (failed.has(next.value[0]) || paused.has(next.value[1].serverId))) next = entries.next()
+      if (next.done) break
+      const [key, snapshot] = next.value
       const generation = generations.get(snapshot.serverId)
+      if ('head' in snapshot) {
+        const node = snapshot.head
+        node.started = true
+        node.ready ??= node.steps.next()
+        if (node.ready.done) {
+          if (node.next) snapshot.head = node.next
+          else pending.delete(key)
+          continue
+        }
+        let ok = false
+        let request: ChatHistoryRequest
+        try { request = parseChatHistoryRequest(node.ready.value) }
+        catch { report('invalid-snapshot'); failed.add(key); continue }
+        try {
+          const result = await deps.write(request)
+          ok = result.status === 'ok'
+          report(result.status === 'error' ? result.code : result.status)
+        } catch { report('ipc-failed') }
+        if (pending.get(key) === snapshot && generation === generations.get(snapshot.serverId)) {
+          if (ok) node.ready = undefined
+        }
+        if (!ok) failed.add(key)
+        // Yield a task even when elapsed renderer time is paused during a close flush.
+        await new Promise<void>(resolve => {
+          const { port1, port2 } = new MessageChannel()
+          port1.onmessage = () => { port1.close(); port2.close(); resolve() }
+          port2.postMessage(null)
+        })
+        continue
+      }
       pending.delete(key)
       if ('operation' in snapshot) {
         try {
           const result = await deps.write(snapshot)
           report(result.status === 'ok' ? 'conversation-removed' : result.status === 'error' ? result.code : 'remove-failed')
         } catch { report('ipc-failed') }
-        for (const comparisonKey of [key, JSON.stringify([snapshot.serverId, 'list', null])]) {
+        for (const comparisonKey of [JSON.stringify([snapshot.serverId, 'daemon-items', snapshot.conversationId]),
+          JSON.stringify([snapshot.serverId, 'list', null])]) {
           seen.delete(comparisonKey)
           saved.delete(comparisonKey)
         }
         continue
       }
       const encoded = JSON.stringify(snapshot)
-      const request: ChatHistoryRequest = snapshot.kind === 'list'
-        ? { operation: 'replaceList', serverId: snapshot.serverId, snapshot }
-        : snapshot.kind === 'daemon-items'
-          ? { operation: 'replaceThread', serverId: snapshot.serverId, conversationId: snapshot.conversationId, snapshot }
-        : { operation: 'replaceTimeline', serverId: snapshot.serverId, conversationId: snapshot.conversationId, snapshot }
+      const request: ChatHistoryRequest = { operation: 'replaceList', serverId: snapshot.serverId, snapshot }
       if (saved.get(key) !== encoded) {
         try {
           const result = await deps.write(request)
           if (result.status === 'ok' && generation === generations.get(snapshot.serverId)) saved.set(key, encoded)
           report(result.status === 'error' ? result.code : result.status)
         } catch { report('ipc-failed') }
-      }
-      // Deduplication follows held state; evicted content survives only as long as its write needs it.
-      if (generation === generations.get(snapshot.serverId) && snapshot.kind === 'timeline' &&
-          observations.get(snapshot.conversationId)?.owner !== snapshot.serverId && !pending.has(key)) {
-        seen.delete(key)
-        saved.delete(key)
       }
     }
   }
@@ -117,7 +187,6 @@ export function createChatHistoryWriter(deps: {
     cancel = undefined
     if (running === undefined) running = drain().finally(() => {
       running = undefined
-      if (hasReady()) return flush()
     })
     return running
   }
@@ -129,100 +198,10 @@ export function createChatHistoryWriter(deps: {
     if (conversations === undefined || conversations === previous.byServer.get(receipt.serverId)) return
     capture({ version: 1, kind: 'list', serverId: receipt.serverId, conversations: [...conversations] })
   })
-  const offTimelines = (deps.subscribeTimelineWrites ?? deps.timelines.subscribe)((state: ConversationTimelineStore,
-    previous: ConversationTimelineStore, origin?: string | null) => {
-    for (const id of previous.timelines.keys()) {
-      if (!state.timelines.has(id)) {
-        forgetComparison(id)
-        observations.delete(id)
-      }
-    }
-    for (const [id, slice] of state.timelines) {
-      const before = previous.timelines.get(id)
-      if (slice === before) continue
-      if (slice.localRead === 'loading') {
-        forgetComparison(id)
-        observations.delete(id)
-        continue
-      }
-      if (slice.restored !== undefined && slice.restored !== before?.restored && slice.localRead === 'loaded') {
-        forgetComparison(id)
-        observations.set(id, { owner: slice.restored.serverId, coverage: slice.restored.coverage })
-        continue
-      }
-      const items = slice.timeline.items
-      const previousItems = before?.timeline.items ?? []
-      const changed = items !== previousItems
-      // An explicit null is an accepted unstamped delivery, never a later receipt's authority.
-      const receipt = origin === undefined ? deps.receipt() : { type: 'assistantDelta', serverId: origin }
-      const tail = items[items.length - 1]
-      const echo = receipt === null && slice.timeline.localSendPending !== null && tail?.kind === 'userText' &&
-        tail.messageId !== undefined && items.length === previousItems.length + 1 &&
-        previousItems.every((item, index) => item === items[index])
-      // removeUserEcho removes one row; restored arrays cannot confer local echo identity.
-      const droppedIndex = receipt === null && previousItems.length === items.length + 1
-        ? previousItems.findIndex((item, index) => item !== items[index]) : -1
-      const dropped = previousItems[droppedIndex]
-      const droppedEcho = dropped?.kind === 'userText' && dropped.messageId !== undefined &&
-        dropped.messageId !== '' && localEchoes.has(dropped) &&
-        slice.history === before?.history && slice.prependedRows === before?.prependedRows &&
-        items.every((item, index) => item === previousItems[index < droppedIndex ? index : index + 1])
-      const evidenceOnly = receipt === null && !changed && observations.get(id)?.owner === slice.serverId &&
-        typeof slice.serverId === 'string' && (slice.gaps !== before?.gaps || slice.newestCursor !== before?.newestCursor)
-      if (receipt === null && !echo && !droppedEcho && !evidenceOnly) {
-        // A direct restoration is not a receipt. Its existing rows have no observed supplying host.
-        if (changed && items.length > 0) {
-          forgetComparison(id)
-          observations.set(id, { owner: null, coverage: { status: 'unknown' } })
-        }
-        continue
-      }
-      if (!changed && slice.history === before?.history && slice.served === before?.served && slice.display === before?.display && slice.gaps === before?.gaps && slice.newestCursor === before?.newestCursor) continue
-      if (items.length === 0 && slice.history?.status !== 'loaded' && !droppedEcho && !evidenceOnly) continue
-      const claims = [...deps.lists.getState().byServer].filter(([, rows]) => rows.some((row) => row.id === id))
-      // receivedSlice clears rows and coverage only when replacing an explicitly stamped host.
-      // Stamping previously unowned content retains it and cannot release an unknown observation.
-      const replacedHost = receipt !== null && typeof receipt.serverId === 'string' &&
-        before?.serverId !== undefined && before.serverId !== receipt.serverId && slice.serverId === receipt.serverId
-      if (replacedHost) {
-        forgetComparison(id)
-        observations.delete(id)
-      }
-      const held = observations.get(id)
-      const supplied = receipt === null
-        ? ((droppedEcho || evidenceOnly) ? held?.owner : claims.length === 1 ? claims[0][0] : null) : receipt.serverId
-      const owner = typeof supplied === 'string' &&
-        (receipt !== null || claims.every(([host]) => host === supplied)) &&
-        (held === undefined ? previousItems.length === 0 || replacedHost : held.owner === supplied) ? supplied : null
-      if (owner === null) forgetComparison(id)
-      const coverage: TimelineSnapshot['coverage'] = slice.history?.status === 'loaded'
-        ? slice.coverage ?? { status: 'received', cursor: slice.history.cursor, atStart: slice.history.atStart }
-        : held?.coverage ?? { status: 'unknown' }
-      observations.set(id, { owner, coverage })
-      if (owner === null) { report('unknown-ownership'); continue }
-      if (echo) localEchoes.add(tail)
-      const durableKeys = new Set((slice.timeline.rowKeys ?? []).filter((_, index) => isDurable(items[index])))
-      capture({ version: 1, kind: 'timeline', serverId: owner, conversationId: id,
-        items: items.filter(isDurable), prependedRows: slice.prependedRows, coverage,
-        served: slice.served, gaps: slice.gaps, newestCursor: slice.newestCursor,
-        display: slice.display?.filter(d => d.rowKey === undefined || durableKeys.has(d.rowKey)),
-        rowIdentity: {
-          rowKeys: (slice.timeline.rowKeys ?? items.map((_, index) => index - slice.prependedRows))
-            .filter((_, index) => isDurable(items[index])),
-          nextRowKey: slice.timeline.nextRowKey ?? items.length - slice.prependedRows
-        } })
-    }
-  })
-  const offThreads = deps.threads?.subscribe((state, previous) => {
-    for (const [host, conversations] of previous.hosts) {
-      for (const id of conversations.keys()) if (!state.hosts.get(host)?.has(id)) {
-        const key = JSON.stringify([host, 'daemon-items', id])
-        pending.delete(key); seen.delete(key); saved.delete(key)
-      }
-    }
+  const offThreads = deps.threads.subscribe((state, previous) => {
     for (const [host, conversations] of state.hosts) for (const [id, slice] of conversations) {
-      if (slice.snapshot === previous.hosts.get(host)?.get(id)?.snapshot || slice.snapshot === slice.restored) continue
-      capture({ version: 1, kind: 'daemon-items', serverId: host, conversationId: id, thread: slice.snapshot })
+      if (slice.owned === previous.hosts.get(host)?.get(id)?.owned || slice.snapshot === slice.restored) continue
+      captureChange(host, id, slice)
     }
   })
   const offEvents = deps.subscribeEvents?.(event => {
@@ -232,13 +211,12 @@ export function createChatHistoryWriter(deps: {
     const ids = deleted.get(serverId) ?? new Set<string>()
     ids.add(id)
     deleted.set(serverId, ids)
-    const key = JSON.stringify([serverId, 'timeline', id])
-    // Replace buffered timeline content with a removal in the same serial drain.
-    pending.delete(key)
+    const key = JSON.stringify([serverId, 'removeConversation', id])
+    // Replace buffered item content with a removal in the same serial drain.
     pending.delete(JSON.stringify([serverId, 'daemon-items', id]))
-    deps.threads?.getState().deleteConversation(serverId, id)
+    deps.threads.getState().deleteConversation(serverId, id)
     for (const snapshot of pending.values()) {
-      if (!('operation' in snapshot) && snapshot.serverId === serverId && snapshot.kind === 'list') capture(snapshot)
+      if ('kind' in snapshot && snapshot.serverId === serverId && snapshot.kind === 'list') capture(snapshot)
     }
     pending.set(key, { operation: 'removeConversation', serverId, conversationId: id })
     if (cancel === undefined && running === undefined) cancel = deps.schedule(() => { void flush() })
@@ -260,18 +238,7 @@ export function createChatHistoryWriter(deps: {
             saved.delete(key)
           }
         }
-        // The latest list can omit retained timelines. Drop actual host-owned slices so
-        // a new receipt after re-pair cannot inherit erased rows or unknown ownership.
-        for (const [id, slice] of deps.timelines.getState().timelines) {
-          if (slice.serverId === serverId) {
-            deps.timelines.getState().clearTimelineFor(id)
-            observations.delete(id)
-          }
-        }
-        for (const [id, observation] of observations) {
-          if (observation.owner === serverId) observations.set(id, { owner: null, coverage: { status: 'unknown' } })
-        }
-        deps.threads?.getState().removeHost(serverId)
+        deps.threads.getState().removeHost(serverId)
         report('host-removed')
       }
       const remaining = (paused.get(serverId) ?? 1) - 1
@@ -284,19 +251,15 @@ export function createChatHistoryWriter(deps: {
   })
   deps.log({ event: 'history-writer-started' })
   return { flush, stop: () => {
-    // Window close can precede the next frame; capture accepted deliveries before detaching.
-    if (!stopped) deps.flushTimeline?.()
     stopped = true
-    offLists(); offTimelines(); offThreads?.(); offRemoval(); offEvents?.()
+    offLists(); offThreads(); offRemoval(); offEvents?.()
     return Promise.all([...removals]).then(flush)
   } }
 }
 
 export function useChatHistoryWriter(): void {
   useEffect(() => {
-    const writer = createChatHistoryWriter({ lists: conversationListStore, timelines: conversationTimelineStore,
-      subscribeTimelineWrites: conversationTimelineStore.subscribeTimelineWrites,
-      flushTimeline: conversationTimelineStore.flushTimeline,
+    const writer = createChatHistoryWriter({ threads: threadRuntime.items, lists: conversationListStore,
       subscribeEvents: window.pyry.onDaemonEvent,
       receipt: window.pyry.chatHistoryReceipt, write: window.pyry.chatHistory, log: window.pyry.sendDiagnostic,
       schedule: (run) => { const timer = setTimeout(run, 200); return () => clearTimeout(timer) } })

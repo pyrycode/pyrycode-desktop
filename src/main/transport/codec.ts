@@ -140,6 +140,17 @@ export function decodeEnvelope(bytes: Uint8Array): Envelope {
     }
     envelope.history_entry_id = obj.history_entry_id
   }
+  if ('conversation_id' in obj) {
+    if (typeof obj.conversation_id !== 'string' || obj.conversation_id === '') {
+      throw new WireDecodeError('invalid envelope conversation route')
+    }
+    const payload = obj.payload
+    if (payload !== null && typeof payload === 'object' && !Array.isArray(payload) &&
+        'conversation_id' in payload && payload.conversation_id !== obj.conversation_id) {
+      throw new WireDecodeError('conflicting conversation route')
+    }
+    envelope.conversation_id = obj.conversation_id
+  }
   if ('session_id' in obj) {
     if (obj.session_id !== null && (typeof obj.session_id !== 'string' || obj.session_id === '')) {
       throw new WireDecodeError('invalid envelope session tag')
@@ -212,9 +223,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * Shared decode front-half: untrusted bytes → JSON object. Decodes UTF-8 with `fatal: true` so
  * invalid byte sequences throw (not silently replaced with U+FFFD), catches every JSON.parse
  * throw (SyntaxError and RangeError from deep nesting), and requires an object at the top level.
- * Every failure becomes a category-only WireDecodeError.
+ * Every failure becomes a category-only WireDecodeError. The result supplies routing hints only;
+ * consumers must validate the original bytes before accepting an envelope or its payload.
  */
-function parseJsonObject(bytes: Uint8Array): Record<string, unknown> {
+export function parseJsonObject(bytes: Uint8Array): Record<string, unknown> {
   let text: string
   try {
     text = utf8Decoder.decode(bytes)

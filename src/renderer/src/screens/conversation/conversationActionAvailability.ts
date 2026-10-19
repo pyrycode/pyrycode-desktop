@@ -1,21 +1,50 @@
 import { conversationListStore, useConversationListStore, selectConversations } from '../../store/conversationListStore'
 import { sessionStore, useSessionStore } from '../../store/sessionStore'
 import { serverIdForOpenConversation } from './unpairAction'
-import { activeConversationStore } from '../../store/activeConversationStore'
+import { activeConversationStore, useActiveConversationStore } from '../../store/activeConversationStore'
+import type { RendererCommand } from '@shared/ipc/commands'
+import { sessionIdStore } from '../../store/sessionIdStore'
+
+/** Capture matching selected coordinates at dispatch; explicit background/prompt owners win. */
+export function sendConversationCommand(command: RendererCommand, owningHost?: string | null): void {
+  if (owningHost === null) return
+  if (owningHost !== undefined && command.serverId === undefined) {
+    window.pyry.sendCommand({ ...command, serverId: owningHost }); return
+  }
+  const active = activeConversationStore.getState().activeConversation
+  if (command.serverId === undefined && active && 'serverId' in active && typeof active.serverId === 'string' &&
+      'payload' in command && (('conversation_id' in command.payload && command.payload.conversation_id === active.id) ||
+        (command.type === 'setSessionSettings' && command.payload.session_id === sessionIdStore.getState().sessionId))) {
+    window.pyry.sendCommand({ ...command, serverId: active.serverId })
+  } else window.pyry.sendCommand(command)
+}
 
 export function useConversationActionAvailability(conversationId: string | null, hostId?: string): boolean {
-  const serverId = useConversationListStore(s => hostId ?? serverIdForOpenConversation(selectConversations(s), conversationId))
+  const selectedHost = useConversationHost(conversationId)
+  const serverId = hostId ?? selectedHost
   return useSessionStore(s => serverId !== null && s.statuses.get(serverId)?.type === 'connected')
 }
 
 // Resolve again immediately before dispatch, before any optimistic state changes.
 export function connectedConversationHostNow(conversationId: string | null, hostId?: string): string | null {
-  const serverId = hostId ?? serverIdForOpenConversation(selectConversations(conversationListStore.getState()), conversationId)
+  const serverId = hostId ?? conversationHostNow(conversationId)
   const connected = serverId !== null && sessionStore.getState().statuses.get(serverId)?.type === 'connected'
   if (typeof window !== 'undefined') {
     window.pyry?.sendDiagnostic?.({ event: 'conversation-action-availability', code: connected ? 'connected' : 'unavailable' })
   }
   return connected ? serverId : null
+}
+
+/** Selected coordinates take precedence over ambiguous flattened list ownership, including offline. */
+export function conversationHostNow(conversationId: string | null): string | null {
+  const active = activeConversationStore.getState().activeConversation
+  return active?.id === conversationId && 'serverId' in active && typeof active.serverId === 'string'
+    ? active.serverId : serverIdForOpenConversation(selectConversations(conversationListStore.getState()), conversationId)
+}
+export function useConversationHost(conversationId: string | null): string | null {
+  const selectedHost = useActiveConversationStore(s => s.activeConversation?.id === conversationId &&
+    'serverId' in s.activeConversation && typeof s.activeConversation.serverId === 'string' ? s.activeConversation.serverId : undefined)
+  return useConversationListStore(s => selectedHost ?? serverIdForOpenConversation(selectConversations(s), conversationId))
 }
 
 /** Complete connected creation initialization after the authoritative list arrives, never on reconnect. */

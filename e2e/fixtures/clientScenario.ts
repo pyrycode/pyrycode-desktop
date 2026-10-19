@@ -216,7 +216,10 @@ const replay = base.extend<ReplayFixtures>({
       await exchange.whenConnectionComplete()
       await relay.whenServerFramesForwarded(exchange.serverFrameCount())
     }
-    try { await use() } finally { delete clientAppLifecycle.opened; delete clientAppLifecycle.closing }
+    try { await use() } finally {
+      delete clientAppLifecycle.opened
+      delete clientAppLifecycle.closing
+    }
   }, { auto: true }],
   page: async ({ daemon }, use) => { void daemon; await withIsolatedElectronApp(({ page }) => use(page)) }
 })

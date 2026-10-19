@@ -62,7 +62,8 @@ export function createThreadRuntime(deps: {
     local?: { generation: symbol; cancel: () => void } } | undefined
   const bodies = createThreadBodies({ send: deps.send, log: deps.log, scope(host, chat) {
     const slice = items.getState().hosts.get(host)?.get(chat)
-    return slice ? { epoch: slice.snapshot.epoch, generation: slice.generation, selected: selected?.host === host && selected.chat === chat } : undefined
+    return slice ? { epoch: slice.snapshot.epoch, generation: slice.generation, selection: selected?.generation,
+      selected: selected?.host === host && selected.chat === chat } : undefined
   } })
   function localState(host: string, chat: string, value: ThreadQueryState): void {
     state.setState(s => ({ localQueries: new Map(s.localQueries).set(key(host, chat), value) }))
@@ -207,6 +208,9 @@ export function createThreadRuntime(deps: {
   const offRemoval = subscribeChatHistoryRemoval(host => removed => { if (removed) removeHost(host) })
   return {
     items, sends, refusals, taskStops, state, live, isThread, bodies,
+    children: { demand(request: Omit<Parameters<typeof bodies.demand>[0], 'kind'>, listener?: Parameters<typeof bodies.demand>[1]) {
+      return bodies.demand({ ...request, kind: 'children' }, listener)
+    } },
     acceptsLifecycle(event: StampedDaemonEvent): boolean {
       if (this.acceptsSession(event)) return true
       if (!selected || event.serverId !== selected.host) return false

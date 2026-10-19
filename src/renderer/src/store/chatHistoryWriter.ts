@@ -12,8 +12,21 @@ type ConversationRemoval = Extract<ChatHistoryRequest, { operation: 'removeConve
 type Snapshot = Extract<ChatHistorySnapshot, { kind: 'list' }>
 type Mutation = Extract<ChatHistoryRequest, { operation: 'mutateThread' }>
 type QueuedMutation = { serverId: string; head: MutationNode; tail: MutationNode }
-type MutationNode = { request: Mutation; steps: Generator<Mutation>; ready?: IteratorResult<Mutation>; next?: MutationNode }
+type MutationNode = { request: Mutation; steps: Generator<Mutation>; started?: boolean; ready?: IteratorResult<Mutation>; next?: MutationNode }
 type Receipt = { type: string; serverId: string | null | undefined }
+
+function combine(previous: Mutation, next: Mutation): Mutation | undefined {
+  const a = previous.change, b = next.change
+  const units = (c: Mutation['change']) => c.items.length + (c.priorProgress?.length ?? 0) + 1
+  // Owner barriers, removals, range boundaries and repeated identities retain exact serial semantics.
+  if (a.acceptEpoch || b.acceptEpoch || a.resetId !== undefined || b.resetId !== undefined ||
+    a.removeIds.length || b.removeIds.length || a.ranges.length || b.ranges.length || units(a) + units(b) > 32) return
+  const ids = new Set(a.items.map(item => item.id))
+  if (b.items.some(item => ids.has(item.id))) return
+  return { ...next, change: { ...b, items: [...a.items, ...b.items], priorProgress: [...a.priorProgress ?? [],
+    { metadata: a.metadata, ...(a.completion === undefined ? {} : { completion: a.completion }),
+      ...(a.availability === undefined ? {} : { availability: a.availability }) }, ...b.priorProgress ?? []] } }
+}
 
 // The final progress observation counts too. Every submitted request is independently valid.
 function* mutationSteps(request: Mutation): Generator<Mutation> {
@@ -88,8 +101,9 @@ export function createChatHistoryWriter(deps: {
     const key = JSON.stringify([host, 'daemon-items', id]), prior = pending.get(key)
     if (prior && 'head' in prior && prior.tail.request.change.metadata.epoch === request.change.metadata.epoch &&
       (request.change.resetId === undefined || prior.tail.request.change.resetId === request.change.resetId)) {
-      prior.tail.next = node
-      prior.tail = node
+      const combined = prior.tail.started ? undefined : combine(prior.tail.request, request)
+      if (combined) { prior.tail.request = combined; prior.tail.steps = mutationSteps(combined) }
+      else { prior.tail.next = node; prior.tail = node }
     } else pending.set(key, { serverId: host, head: node, tail: node })
     if (cancel === undefined && running === undefined) cancel = deps.schedule(() => { void flush() })
   }
@@ -105,6 +119,7 @@ export function createChatHistoryWriter(deps: {
       const generation = generations.get(snapshot.serverId)
       if ('head' in snapshot) {
         const node = snapshot.head
+        node.started = true
         node.ready ??= node.steps.next()
         if (node.ready.done) {
           if (node.next) snapshot.head = node.next

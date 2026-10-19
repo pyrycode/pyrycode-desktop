@@ -77,3 +77,18 @@ None. Queueing original observations is simpler than rebuilding a coalesced inde
 ## Revisions
 
 2026-10-19: Native execution showed that Playwright's Electron loader forces `password-store=basic` and `use-mock-keychain`, independently of the application's test-backend flag. The native-only `productionSecrets` launch option also requires a pre-readiness fixture hook removing those mock-protection switches. It preserves sandbox/process isolation settings and asserts the selected real backend at runtime. The failed ordinary launch remains retained under `/tmp/builder-2088/native-run2*`; it establishes no storage/input pass.
+
+2026-10-19: The history replay twice exhausted its coverage deadline with a queue of one transaction per scalar receipt. Add bounded tail coalescing before a node starts: only distinct item identities and metadata, combined counted work at most 32; owner/reset barriers, removals, ranges and repeated identities stay serial. Capture performs at most 32 units, never scans the queue. Started/failed cursors remain immutable. The controlled regression first observed 60 submissions for 60 distinct queued items; it requires fewer than ten while preserving all items, ordered observations and the same 32-unit bound.
+
+## Validation evidence
+
+Linux x64, native scenario source committed in `57248c27f66974f038c96f5e10f8082c05f61e1b`; #2079 renderer admission changes were not consumed.
+
+- `/tmp/builder-2088/pre-verify-final.log`: five checks passed after merging main `5afde437b5e9`, including security review, typecheck and the writer unit file. `/tmp/builder-2088/build-final.log`: production build passed.
+- `/tmp/builder-2088/unit-confirmed.log`: both affected files executed/passed 50 cases, failed/skipped 0 (23 writer, 27 protected cache), including the final single-large-mutation interruption and retry-cursor assertions. Node preparation completed before these tests; Electron preparation follows them before replay.
+- `/tmp/builder-2088/native-run4.json` and `native-run4.log`: native storage/input case executed/passed 1, failed/skipped 0, retries 0. Electron 33.4.11 / embedded Node 20.18.3 / ABI 130, production `gnome_libsecret`; both Playwright mock-protection switches absent.
+- One admission of 8333 generated items, 8333 durably persisted through 271 submissions, producer stopped. Drain including final certification: 46894 ms. Keyboard commits: 139, 19, 137 ms. Durable counts around those inputs: 62→124, 124→186, 186→279, all unfinished. Main heartbeat: 1044 samples, maximum gap 123 ms; renderer: 2327 samples, maximum gap 28.6 ms, including the final tail. Exact items, relationships, placement/arrival and progress survived normal close and a fresh protected owner. Both processes exited 0, no signals or teardown failures.
+- `/tmp/builder-2088/packaged.log`, `packaged/runtime.stdout`, `packaged/runtime.stderr`: packaged production-protection check executed/passed 1, failed/skipped 0; same Electron/Node/backend, adapter 12.4.1, packaged/ASAR/native-unpacked true, stage complete. Retained replacement, owned update and exact protected reopen checks passed.
+- Failed captures remain separate: `native.log` failed collection (zero executed); `native-run2.json` failed before admission because Playwright forced mock protection; `native-run3.json` failed the initial version-zero fixture barrier before admission. The final fixture explicitly supplies and durably observes a version-one initial thread. Earlier failed unit/pre-verify logs remain in the same scratch directory; they are not counted as passes.
+
+macOS is outside this Linux ticket's verification scope. No provider credentials or live daemon run was required.

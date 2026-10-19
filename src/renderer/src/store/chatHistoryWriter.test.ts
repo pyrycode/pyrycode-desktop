@@ -45,6 +45,20 @@ const threadRequests = (h: ReturnType<typeof harness>) => h.save.mock.calls
   .map(([request]) => request).filter(request => request.operation === 'mutateThread')
 
 describe('chat history recording', () => {
+  it('coalesces distinct queued items within the same counted budget', async () => {
+    const h = harness()
+    h.delta('seed'); await h.writer.flush(); h.save.mockClear()
+    for (let id = 2; id <= 61; id++) h.threads.getState().applyUpdate('a', { type: 'thread_item_added', payload: {
+      conversation_id: 'chat', epoch: 'e', version: id,
+      item: { id, rev: 1, kind: 'assistant_message', shown: true, active: false, status: 'finished', summary: '', content: {} }
+    } })
+    await h.writer.stop()
+    const requests = threadRequests(h)
+    expect(requests.length).toBeLessThan(10)
+    expect(requests.flatMap(r => r.change.items.map(i => i.id))).toEqual(Array.from({ length: 60 }, (_, n) => n + 2))
+    for (const { change: c } of requests)
+      expect(c.items.length + (c.priorProgress?.length ?? 0) + 1).toBeLessThanOrEqual(32)
+  })
   it('bounds every owned work category, yields between submissions and retries only unsaved cursors', async () => {
     let failAt = 3
     const h = harness(async () => h.save.mock.calls.length === failAt
@@ -69,7 +83,7 @@ describe('chat history recording', () => {
     await h.writer.stop()
     clearInterval(timer)
     const requests = threadRequests(h)
-    expect(requests[2]).toEqual(failed)
+    expect(requests[3]).toEqual(failed)
     for (const { change: c } of requests) expect(c.items.length + c.removeIds.length + c.ranges.length +
       (c.priorProgress?.length ?? 0) + 1).toBeLessThanOrEqual(32)
     expect(new Set(requests.flatMap(r => r.change.items.map(i => i.id))).size).toBe(75)
@@ -79,7 +93,7 @@ describe('chat history recording', () => {
       .filter(p => p.metadata.checkpoint === 100)).toHaveLength(68)
     expect(beats).toBeGreaterThan(5)
   })
-  it.each(['reset', 'delete', 'unpair'] as const)('fences a held bounded cursor after %s with the same chat on another host', async action => {
+  it.each(['reset', 'epoch', 'delete', 'unpair', 'failed-unpair'] as const)('fences a held bounded cursor after %s with the same chat on another host', async action => {
     let release: (result: ChatHistoryResult) => void = () => {}
     let hold = false
     const h = harness(() => hold ? new Promise(resolve => { release = resolve }) : Promise.resolve({ status: 'ok' }))
@@ -98,15 +112,17 @@ describe('chat history recording', () => {
     await vi.waitFor(() => expect(hold).toBe(true))
     const boundary = h.save.mock.calls.length
     if (action === 'reset') { h.threads.getState().acceptEpoch('a', 'chat', 'e', true); h.delta('replacement') }
+    if (action === 'epoch') h.threads.getState().acceptEpoch('a', 'chat', 'replacement')
     if (action === 'delete') h.event({ type: 'conversationDeleted', serverId: 'a', id: 'chat' })
     if (action === 'unpair') beginChatHistoryRemoval('a')(true)
+    if (action === 'failed-unpair') beginChatHistoryRemoval('a')(false)
     release({ status: 'error', code: 'write-failed' })
     await flushing
     h.delta(' survives', 'chat', 'b')
     await h.writer.stop()
     const after = h.save.mock.calls.slice(boundary).map(([r]) => r)
     expect(after.filter(r => r.operation === 'mutateThread' && r.serverId === 'a')
-      .flatMap(r => r.operation === 'mutateThread' ? r.change.items : []).some(i => i.id >= 100)).toBe(false)
+      .flatMap(r => r.operation === 'mutateThread' ? r.change.items : []).some(i => i.id >= 100)).toBe(action === 'failed-unpair')
     expect(threadRequests(h).at(-1)).toMatchObject({ serverId: 'b', change: { items: [{ content: { text: 'other host survives' } }] } })
   })
   it('submits owned changes and retains failed work for a later explicit retry', async () => {

@@ -28,3 +28,21 @@ Original reports inspected under `/work/Projects/pyrycode-desktop-agents/logs/`:
 Retrieved #2097 verifier bundle `e2451e355ab8a52f290ad3f94cb2f56572da97ef00acfc204b371437681519e1` to `/tmp/builder-2112/failure-2097/`; its full-report pointer SHA-256 is `cdf992e4f41befaa379d1ac802b84a00e0810d75a4100da0285c30f19a18711e`. #2112 refinement bundle is retained under `/tmp/builder-2112/prior-evidence/`.
 
 The merged repair replaces value-based `app.evaluate` at the shared launcher with synchronous `Runtime.evaluate` receipts (`awaitPromise: false`). Operation identities and app-owned outcomes preserve observations and prevent duplicate mutation effects after lost acknowledgements. Native input and renderer assertions remain Playwright-owned.
+
+## Validation evidence — 2026-10-19
+Linux x86_64, Node 25.8.0, Electron 33.4.11, Playwright 1.61.1. Tested revision `5522fdc8914cd3c6cf4636fb768db824b2557100`, containing final merged main `4f5684078da7befcc83cf73b5c9bf6a928cb5360`. Subsequent commit adds evidence only. No production, fixture, spec or configuration changed. All four cases retain every original assertion, request/cursor check, native input and presentation setting.
+
+| Check | Executed / passed / failed / skipped | Configured / actual workers | Retained report under `/tmp/builder-2112/` |
+| --- | --- | --- | --- |
+| Named case, command above, ten repetitions | 10 / 10 / 0 / 0 | 3 / 3 | `history-ten.json` |
+| `PW_WORKERS=3 npx playwright test e2e/history-on-open.spec.ts --retries=0 --reporter=json --output=/tmp/builder-2112/history-all-results` | 4 / 4 / 0 / 0 | 3 / 1 (one sequential file) | `history-all.json` |
+| Existing inspection fault tests through pre-verify | 10 / 10 / 0 / 0 | Unit tier | `unit-evidence/unit-fytu3spm/0.json`, `dispatcher.xml` |
+| `npm test -- e2e/fixtures/electronLaunch.test.ts --reporter=json --outputFile=/tmp/builder-2112/electron-launch-unit.json` | 6 / 6 / 0 / 0 | Unit tier | `electron-launch-unit.json` |
+
+The repetition command additionally used `--output=/tmp/builder-2112/history-ten-results`. Both browser reports have zero configured retries, every result at retry 0, zero flaky results/report errors and empty matching `.stderr` files. All 14 launch-fate attachments show running at outcome, exit 0, null signal and no teardown failures. `summary.json` retains per-case identities and counts. The complete spec includes the named case, outstanding-page exclusion, reconnect cursor retention and mounted newest-content/no-cascade case.
+
+Report SHA-256: `history-ten.json` = `b06e6b167ca5e18b1590dcb40fd50800f28c996774f7c3ce31ac813c9b5de724`; `history-all.json` = `865ae2ed6b1da03f452b02614d07213725bef709ee38b2a4003c5bc74ccfd65b`. Unchanged named spec SHA-256 = `26efca9e29a6e0dc7c7b12afe3120e99c268d4dc37f7313754905b5a937e133f`.
+
+Pre-verify: all 5 checks passed, none skipped (`pre-verify.log`). `npm run build` and `npm run check:docs` passed (`build.log`, `docs-check.log`). Approved install passed (`install-approved.log`) after a sandbox esbuild spawn `EPERM` (`install.log`); this was setup failure, not a test failure. Node preparation completed before Electron native preparation (`electron-preparation.log`), which completed before browser launches; no build ran during either browser check.
+
+Dispatcher/verifier handoff: the complete configured application gate remains pending. Confirm the named case is present and passes there without retry; the focused evidence does not establish that later-stage result. macOS/Windows and provider/daemon live checks are outside this Linux test-inspection ticket's verification scope. The shared repair meets builder-owned acceptance without further code changes; the upstream inspection trigger remains unknown.

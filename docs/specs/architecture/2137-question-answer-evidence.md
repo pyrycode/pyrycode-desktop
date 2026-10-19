@@ -72,9 +72,9 @@ The same required named scenario passed fresh capture: 1 executed/passed, 0 fail
 The earlier close-ordering replay failures remain failed and are tracked in #2141 (Backlog, priority:low). This ticket changes no shared capture/replay infrastructure, outgoing matcher or production code. Only the final target recording is replaced; no test is skipped.
 
 ## Documentation handoff
-- Pending documentation stage, from the verifier: update the recorded-test inventory and verification knowledge with the two-question, post-surface confirmation proof, including snapshot exclusion baselines and original-turn terminal identity once repaired.
-- Pending documentation stage, from the verifier: carry forward the counted Linux live/capture/replay evidence and distinct daemon revisions; preserve the separate failed-capture/replay history and #2141 follow-up.
-- Pending documentation stage, from the latest verifier: include pre-submission exclusion baselines alongside snapshot exclusions in the recorded-test inventory and verification knowledge.
+- Satisfied: the [recorded-test inventory](../../client-replay-migration.md#question-answer-proof), [recorded-test reference](../../recorded-tests.md#replay-contract) and [verification knowledge](../../knowledge/features/development-verification-evidence-that-cannot-pass-too-early.md#question-answer-interpretation-and-freshness) describe the two-question, post-surface confirmation proof, snapshot exclusion baselines and original-turn terminal identity.
+- Satisfied: the [Linux acceptance record](../../knowledge/features/development-verification-live-test-diagnosis.md#question-answer-linux-acceptance), linked from the inventory, carries counted live/capture/replay evidence, distinct daemon revisions/checksums/capabilities, separate failed-capture/replay history and the #2141 follow-up.
+- Satisfied: the inventory and verification knowledge above include continuous pre-submission exclusions, including the interval after arming, alongside snapshot exclusions and fresh-append controls.
 
 ## Rework validation
 - Final implementation: `22d44e116479d459d1cc4319ffa4fc2ff3a74908`, Linux, after the final merge of `origin/main` (`3fbfcfdb5944`). Pre-verify passed all five checks, including 41 executed/passed controls, 0 failed/skipped (`/tmp/builder-2137/rework-pre-verify-accepted.log`). Client-test typecheck passed (`/tmp/builder-2137/rework-client-typecheck-accepted.log`).

@@ -24,7 +24,7 @@ const batch = { conversation_id: 'c', epoch: 'e', version: 8, items: [item], fin
 const windowDone = { ...batch, items: [], final: true, lower_order: 0, upper_order: 10, continuation: 0, older_exists: false }
 const frame = (type: string, payload: unknown, in_reply_to: number, extra = {}) =>
   encodeEnvelope({ id: 99, type, ts: 'stamp', payload, in_reply_to, session_id: 's', ...extra })
-async function connected(serverId = 'a', expansion = false) {
+async function connected(serverId = 'a', expansion = false, compact = false) {
   const configs: NoiseRelayDriverConfig[] = [], events: StampedDaemonEvent[] = [], sent: Uint8Array[] = []
   const observations: Function[] = []
   let drop = false, throws = false
@@ -41,7 +41,7 @@ async function connected(serverId = 'a', expansion = false) {
     } } }
   })
   connection.start(); await vi.waitFor(() => expect(configs).toHaveLength(1))
-  const ack = encodeEnvelope({ id: 1, type: 'hello_ack', ts: 'stamp', payload: { protocol_version: 'v2', server_id: serverId, conn_id: 'conn', capabilities: expansion ? ['thread', 'interactive', 'thread_expansion'] : ['thread'] } })
+  const ack = encodeEnvelope({ id: 1, type: 'hello_ack', ts: 'stamp', payload: { protocol_version: 'v2', server_id: serverId, conn_id: 'conn', capabilities: compact ? ['thread', 'interactive', 'thread_expansion', 'thread_compact'] : expansion ? ['thread', 'interactive', 'thread_expansion'] : ['thread'] } })
   configs[0].onEvent({ type: 'handshake-complete', helloAck: ack })
   const emit = (bytes: Uint8Array) => configs.at(-1)!.onEvent({ type: 'message', plaintext: bytes })
   const ask = (q: ThreadQuery = query, requestId = 'request') => { connection.queryThread(q, requestId); return decodeEnvelope(sent.at(-1)!).id }
@@ -70,6 +70,323 @@ const childCursor = (id = 3, order = 0) => ({ ...childRoute, id, order })
 const childReads = (h: { sent: Uint8Array[] }) => h.sent.map(decodeEnvelope).filter(e => e.type === 'thread_read_children')
 const childPage = (children = [child(2)]) => ({ ...childRoute, children, final: false })
 const childEnd = (more = false) => ({ ...childRoute, children: [], final: true, more, ...(more ? { cursor: childCursor(2) } : {}) })
+const compactScope = { projection: 'compact-v1' as const, conversation_id: 'c', epoch: 'e', version: 8 }
+const root = (id = 1, subtree_version = 8) => ({ ...child(id, 5), parent: 0, rev: 8, kind: 'tool_call', subtree_version })
+async function compactRuntime() {
+  const h = await connected('a', true, true)
+  routePreloadQueries(host => host === 'a' ? h.connection : null)
+  const read = vi.fn(async () => ({ status: 'missing' as const }))
+  const r = createThreadRuntime({ send: api.sendCommand, read, log: () => {} })
+  const off = api.onDaemonEvent(r.event)
+  h.events.filter(e => e.type === 'connected').forEach(r.event)
+  await r.open('a', 'c', { projection: 'compact-v1' }).done
+  const requests = () => h.sent.map(decodeEnvelope)
+  const last = () => requests().at(-1)!.id
+  const data = (id = last(), headers = [root()]) => h.emit(frame('thread_items', { ...compactScope, items: [], headers, final: false }, id))
+  const done = (id = last(), extra = {}) => h.emit(frame('thread_items', { ...compactScope, items: [], final: true,
+    lower_order: 5, upper_order: 10, continuation: 5, older_exists: true, ...extra }, id))
+  const update = (version: number, header?: ReturnType<typeof root>, from_version = version - 1) =>
+    h.emit(frame('thread_compact_update', { ...compactScope, version, from_version, progress: !header, ...(header ? { header } : {}) }, 0))
+  return { ...h, r, read, requests, last, data, done, update, snapshot: () => r.compact.snapshot('a', 'c'),
+    close() { r.dispose(); off(); h.connection.stop() } }
+}
+it('compact frames certify roots separately, sort mixed ties, page with epoch and consume hidden progress', async () => {
+  const h = await compactRuntime(), id = h.last()
+  expect(h.requests().at(-1)).toMatchObject({ type: 'thread_catch_up', payload: { projection: 'compact-v1', version: 0, epoch: '' } })
+  h.emit(frame('thread_items', { ...compactScope, final: false, items: [{ ...item, id: 3, order: 5 }], headers: [root(2), root(1)] }, id))
+  expect(h.snapshot()?.rows.map(row => row.id)).toEqual([1, 2, 3])
+  expect(h.snapshot()?.checkpoint).toBe(0)
+  expect(h.r.items.getState().snapshot('a', 'c')).toBeNull()
+  h.done(id)
+  expect(h.snapshot()).toMatchObject({ checkpoint: 8, ranges: [{ start: 5, end: 10 }] })
+  h.update(10, root(1, 10), 8); h.update(10, root(2, 10), 8); h.update(11)
+  expect(h.snapshot()).toMatchObject({ checkpoint: 8, consumed: 11 })
+  expect(h.snapshot()?.rows.slice(0, 2)).toMatchObject([{ subtree_version: 10 }, { subtree_version: 10 }])
+  h.r.query('older', 'a')
+  expect(h.requests().at(-1)).toMatchObject({ type: 'thread_page', payload: { projection: 'compact-v1', epoch: 'e', before_order: 5 } })
+  h.done(h.last(), { version: 11, lower_order: 0, upper_order: 5, continuation: 0, older_exists: false })
+  expect(h.snapshot()?.ranges).toEqual([{ start: 0, end: 10 }])
+  expect(h.snapshot()?.checkpoint).toBe(8)
+  expect(h.read).not.toHaveBeenCalled(); h.close()
+})
+it.each(['tool_call', 'children'] as const)('same-rev freshness invalidates pending %s, fences late result and refreshes demanded first page', async kind => {
+  const h = await compactRuntime(); h.data(); h.done()
+  const lease = h.r.bodies.demand({ ...bodyRequest, kind })
+  const old = h.last()
+  if (kind === 'children') h.emit(frame('thread_children', { ...childPage(), version: 8 }, old))
+  else h.emit(frame('thread_tool_body', bodyData, old))
+  h.update(9, root(1, 9))
+  await Promise.resolve()
+  if (kind === 'children') h.emit(frame('thread_children', childEnd(), old))
+  else h.emit(frame('thread_tool_body', bodyDone, old))
+  const fresh = h.last(); expect(fresh).not.toBe(old)
+  expect(h.requests().at(-1)?.payload).not.toHaveProperty('cursor')
+  expect(lease.getState().stale).toBe(true)
+  if (kind === 'children') h.emit(frame('thread_children', { ...childEnd(), version: 9 }, fresh))
+  else { h.emit(frame('thread_tool_body', { ...bodyData, version: 9, content: { output: 'fresh' } }, fresh)); h.emit(frame('thread_tool_body', { ...bodyDone, version: 9 }, fresh)) }
+  expect(lease.getState()).toMatchObject({ type: 'ready', stale: false })
+  h.update(10, root(1, 10))
+  await Promise.resolve()
+  h.emit(frame('error', { code: 'thread.query_failed', message: 'private' }, h.last()))
+  expect(lease.getState()).toMatchObject({ type: 'failed', stale: true })
+  if (kind === 'tool_call') expect(lease.getState().content).toEqual({ output: 'fresh' })
+  const count = h.requests().length; h.update(11, root(1, 11)); expect(h.requests()).toHaveLength(count)
+  lease.retry(); expect(h.requests()).toHaveLength(count + 1)
+  h.close()
+})
+it.each(['projection', 'epoch', 'summary', 'root-parent', 'full-tool', 'scope', 'headers-on-marker'])('compact malformed %s fails without certifying coverage', async mode => {
+  const h = await compactRuntime(), id = h.last()
+  const p: any = { ...compactScope, items: [], headers: [root()], final: false }
+  if (mode === 'projection') p.projection = 'future'
+  if (mode === 'epoch') p.epoch = ''
+  if (mode === 'summary') p.headers[0].headline = 'private\npeer text'
+  if (mode === 'root-parent') p.headers[0].parent = 2
+  if (mode === 'full-tool') { p.headers = []; p.items = [{ ...item, kind: 'tool_call', order: 1 }] }
+  if (mode === 'scope') p.conversation_id = 'other'
+  if (mode === 'headers-on-marker') Object.assign(p, { final: true, lower_order: 0, upper_order: 10, continuation: 0, older_exists: false })
+  h.emit(frame('thread_items', p, id))
+  expect(h.events.at(-1)).toMatchObject({ type: 'threadQueryFailed' })
+  expect(h.snapshot()?.checkpoint).toBe(0)
+  expect(h.snapshot()?.failed).toBeDefined()
+  const count = h.requests().length
+  h.update(10, root(2, 10), 8)
+  expect(h.requests()).toHaveLength(count)
+  h.close()
+})
+it('compact assembly final holds facts but only the separate query marker certifies coverage', async () => {
+  const h = await compactRuntime(), id = h.last()
+  const p = { ...compactScope, items: [{ ...item, id: 2, order: 5, content: { text: 'é'.repeat(40000) } }], final: false }
+  const raw = JSON.stringify(p), update_id = createHash('sha256').update('thread_items').update('\0').update(raw).digest('hex')
+  const chunks = [raw.slice(0, 10000), raw.slice(10000)]
+  let offset = 0
+  chunks.forEach((data, index) => {
+    h.emit(frame('thread_items', { ...compactScope, item_id: 2, rev: 8, data,
+      continuation: { update_id, index, offset, total_bytes: Buffer.byteLength(raw), final: index === 1 } }, id))
+    offset += Buffer.byteLength(data)
+  })
+  expect(h.snapshot()).toMatchObject({ checkpoint: 0, rows: [{ id: 2 }] })
+  h.done(id); expect(h.snapshot()?.checkpoint).toBe(8); h.close()
+})
+it.each([false, true])('compact live assembly validates projection scope (mismatch=%s)', async mismatch => {
+  const h = await compactRuntime(); h.data(); h.done()
+  const payload = { ...compactScope, version: 9, from_version: 8, progress: false,
+    item: { ...item, id: 2, order: 6, content: { text: 'é'.repeat(40000) } } }
+  const raw = JSON.stringify(payload), update_id = createHash('sha256').update('thread_compact_update').update('\0').update(raw).digest('hex')
+  const chunks = [raw.slice(0, 10000), raw.slice(10000)]
+  let offset = 0
+  chunks.forEach((data, index) => {
+    const { item, ...scope } = payload
+    h.emit(frame('thread_compact_update', { ...scope, ...(mismatch && index === 1 ? { projection: 'unknown' } : {}), item_id: 2, rev: 8, data,
+      continuation: { update_id, index, offset, total_bytes: Buffer.byteLength(raw), final: index === 1 } }, 0))
+    offset += Buffer.byteLength(data)
+  })
+  expect(h.snapshot()?.rows.map(row => row.id)).toEqual(mismatch ? [1] : [1, 2])
+  expect(h.snapshot()?.checkpoint).toBe(8)
+  expect(h.snapshot()?.consumed).toBe(mismatch ? 8 : 9)
+  if (mismatch) expect(h.requests().at(-1)).toMatchObject({ type: 'thread_catch_up', payload: { version: 8 } })
+  h.close()
+})
+it.each(['replacement', 'e'])('compact catch-up uses certified checkpoint after reconnect and %s reset replaces only compact scope', async epoch => {
+  const h = await compactRuntime()
+  h.r.items.getState().acceptEpoch('a', 'c', 'complete-epoch')
+  h.r.items.getState().beginBatch('a', 'c', 'complete-epoch')?.commit({ fromVersion: 0, version: 77, ranges: [] })
+  const complete = h.r.items.getState().snapshot('a', 'c')
+  h.data(); h.done(); h.update(9)
+  h.r.event({ type: 'disconnected', serverId: 'a', reason: 'test' })
+  const before = h.requests().length
+  await h.r.open('a', 'c', { projection: 'compact-v1' }).done
+  expect(h.requests()).toHaveLength(before)
+  expect(h.snapshot()).toMatchObject({ checkpoint: 8, consumed: 9, rows: [{ id: 1 }] })
+  h.r.event(h.events.find(e => e.type === 'connected')!)
+  expect(h.requests().at(-1)).toMatchObject({ payload: { version: 8, epoch: 'e', projection: 'compact-v1' } })
+  const id = h.last()
+  h.emit(frame('thread_items', { ...compactScope, version: 10, items: [], final: true, from_version: 8 }, id))
+  expect(h.snapshot()?.checkpoint).toBe(10)
+  h.r.event({ type: 'disconnected', serverId: 'a', reason: 'test' })
+  h.r.event(h.events.find(e => e.type === 'connected')!)
+  h.emit(frame('thread_reset', { ...compactScope, epoch, version: 97 }, h.last()))
+  expect(h.requests().at(-1)).toMatchObject({ payload: { version: 0, epoch } })
+  expect(h.snapshot()).toMatchObject({ checkpoint: 0, rows: [] })
+  h.emit(frame('thread_items', { ...compactScope, version: 100, items: [{ ...item, id: 4, order: 1 }], final: false }, id))
+  expect(h.snapshot()?.rows).toEqual([])
+  expect(h.r.items.getState().snapshot('a', 'c')).toBe(complete)
+  h.close()
+})
+it('compact gap recovery and query/live cancellation keep replacements newer than a delayed query', async () => {
+  const h = await compactRuntime(); h.data(); h.done()
+  h.update(12, root(1, 12), 10)
+  expect(h.requests().at(-1)).toMatchObject({ payload: { version: 8 } })
+  const repair = h.last()
+  h.emit(frame('thread_items', { ...compactScope, version: 12, items: [], headers: [root(1, 8)], final: false }, repair))
+  expect(h.snapshot()?.rows[0]).toMatchObject({ subtree_version: 12 })
+  h.update(13, root(2, 13), 12)
+  h.emit(frame('error', { code: 'thread.query_failed', message: 'private' }, repair))
+  expect(h.snapshot()).toMatchObject({ checkpoint: 8, failed: 'daemon-error' })
+  const count = h.requests().length
+  h.update(14); expect(h.requests()).toHaveLength(count)
+  h.r.query('retry', 'a'); expect(h.requests().at(-1)).toMatchObject({ payload: { version: 8 } })
+  h.emit(frame('thread_items', { ...compactScope, version: 14, items: [], final: true, from_version: 8 }, h.last()))
+  expect(h.snapshot()).toMatchObject({ checkpoint: 14, consumed: 14, repairThrough: undefined })
+  h.close()
+})
+it('freshness restarts invalidated child enumeration without its consumed-version cursor and leaves next pages explicit', async () => {
+  const h = await compactRuntime(); h.data(); h.done()
+  const lease = h.r.children.demand(childRequest)
+  h.emit(frame('thread_children', { ...childPage(), version: 8 }, h.last()))
+  h.emit(frame('thread_children', { ...childEnd(true), version: 8, cursor: { ...childCursor(2), version: 8 } }, h.last()))
+  expect(lease.getState()).toMatchObject({ page: { more: true, complete: false } })
+  const count = h.requests().length; await Promise.resolve(); expect(h.requests()).toHaveLength(count)
+  lease.continue({ ...childCursor(2), version: 8 }); const old = h.last()
+  h.update(9, root(1, 9)); h.update(10, root(1, 10), 8); await Promise.resolve()
+  h.emit(frame('thread_children', { ...childEnd(), version: 8 }, old))
+  expect(h.requests().at(-1)?.payload).not.toHaveProperty('cursor')
+  expect(h.requests()).toHaveLength(count + 2)
+  h.emit(frame('thread_children', { ...childEnd(), version: 10 }, h.last()))
+  expect(lease.getState()).toMatchObject({ type: 'ready', page: { children: [], complete: true } })
+  lease.release(); h.update(11, root(1, 11)); await Promise.resolve()
+  expect(h.requests()).toHaveLength(count + 2)
+  h.close()
+})
+it('newer admitted revision refreshes an active body and refuses an obsolete demand', async () => {
+  const h = await compactRuntime(); h.data(); h.done()
+  const lease = h.r.bodies.demand(bodyRequest), old = h.last()
+  h.update(9, { ...root(1, 9), rev: 9 }); await Promise.resolve()
+  h.emit(frame('thread_tool_body', bodyData, old)); h.emit(frame('thread_tool_body', bodyDone, old))
+  expect(h.requests().at(-1)?.payload).toMatchObject({ expected_rev: 9 })
+  const fresh = h.last()
+  h.emit(frame('thread_tool_body', { ...bodyData, rev: 9, version: 9, content: { output: 'new revision' } }, fresh))
+  h.emit(frame('thread_tool_body', { ...bodyDone, rev: 9, version: 9 }, fresh))
+  expect(lease.getState()).toMatchObject({ type: 'ready', content: { output: 'new revision' }, stale: false })
+  const before = h.requests().length
+  expect(h.r.bodies.demand(bodyRequest).getState()).toMatchObject({ type: 'failed', reason: 'invalid' })
+  expect(h.requests()).toHaveLength(before)
+  expect(lease.getState().stale).toBe(false); h.close()
+})
+it('colliding host identities and navigation hold the connection slot and fence retired root/detail replies', async () => {
+  const h = await compactRuntime(); h.data(); h.done()
+  const lease = h.r.bodies.demand(bodyRequest), old = h.last()
+  const b = await connected('b', true, true)
+  routePreloadQueries(host => host === 'a' ? h.connection : host === 'b' ? b.connection : null)
+  await h.r.open('b', 'c', { projection: 'compact-v1' }).done
+  const id = decodeEnvelope(b.sent.at(-1)!).id
+  b.emit(frame('thread_items', { ...compactScope, items: [], headers: [root(2)], final: false }, id))
+  b.emit(frame('thread_items', { ...compactScope, items: [], final: true, lower_order: 0, upper_order: 10, continuation: 0, older_exists: false }, id))
+  expect(h.r.compact.snapshot('b', 'c')?.rows.map(row => row.id)).toEqual([2])
+  expect(lease.getState()).toMatchObject({ type: 'missing', reason: 'retired' })
+  await h.r.open('a', 'other', { projection: 'compact-v1' }).done
+  // The original a body is still Core's unfinished query until its terminal arrives.
+  expect(h.last()).toBe(old)
+  h.emit(frame('thread_tool_body', bodyData, old)); h.emit(frame('thread_tool_body', bodyDone, old))
+  expect(h.requests().at(-1)).toMatchObject({ type: 'thread_catch_up', payload: { conversation_id: 'other', version: 0 } })
+  expect(h.r.compact.snapshot('b', 'c')?.rows.map(row => row.id)).toEqual([2])
+  h.r.event({ type: 'conversationDeleted', serverId: 'a', id: 'c' })
+  expect(h.snapshot()).toBeUndefined()
+  const other = h.last()
+  h.emit(frame('thread_items', { ...compactScope, conversation_id: 'other', items: [], headers: [root(4)], final: false }, other))
+  h.emit(frame('thread_items', { ...compactScope, conversation_id: 'other', items: [], final: true,
+    lower_order: 0, upper_order: 10, continuation: 0, older_exists: false }, other))
+  expect(h.r.compact.snapshot('a', 'other')).toMatchObject({ checkpoint: 8, rows: [{ id: 4 }] })
+  h.update(12, root(1, 12), 8)
+  expect(h.snapshot()).toBeUndefined()
+  h.close(); b.connection.stop()
+})
+it('offline compact reopen retains only session data and stale detail without disk reads', async () => {
+  const h = await compactRuntime(); h.data(); h.done()
+  const lease = h.r.bodies.demand(bodyRequest)
+  h.emit(frame('thread_tool_body', bodyData, h.last())); h.emit(frame('thread_tool_body', bodyDone, h.last()))
+  expect(lease.getState()).toMatchObject({ type: 'ready', stale: false })
+  h.r.event({ type: 'disconnected', serverId: 'a', reason: 'test' })
+  await h.r.open('a', 'c', { projection: 'compact-v1' }).done
+  const count = h.requests().length
+  expect(h.r.bodies.demand(bodyRequest).getState()).toMatchObject({ type: 'ready', stale: true, content: bodyData.content })
+  expect(h.r.bodies.demand({ ...bodyRequest, itemId: 99 }).getState()).toMatchObject({ type: 'missing', reason: 'offline' })
+  expect(h.requests()).toHaveLength(count); expect(h.read).not.toHaveBeenCalled()
+  h.close()
+})
+it('advertisement leaves normal opening complete, and unsupported or unknown projection refuses', async () => {
+  const h = await connected('a', true, true)
+  routePreloadQueries(() => h.connection)
+  const r = createThreadRuntime({ send: api.sendCommand, read: async () => ({ status: 'missing' }), log: () => {} })
+  const off = api.onDaemonEvent(r.event); h.events.filter(e => e.type === 'connected').forEach(r.event)
+  await r.open('a', 'c').done
+  expect(decodeEnvelope(h.sent.at(-1)!).payload).not.toHaveProperty('projection')
+  expect(isRendererCommand({ type: 'queryThread', serverId: 'a', requestId: 'q', query: { ...query, payload: { ...query.payload, projection: 'unknown' } } })).toBe(false)
+  expect(isRendererCommand({ type: 'queryThread', serverId: 'a', requestId: 'q', query: { type: 'thread_page', payload: { conversation_id: 'c', before_order: 0, projection: 'compact-v1' } } })).toBe(false)
+  r.dispose(); off(); h.connection.stop()
+  const legacy = await connected('a', true)
+  legacy.connection.queryThread({ ...query, payload: { ...query.payload, projection: 'compact-v1' } }, 'unsupported')
+  expect(legacy.sent).toHaveLength(0)
+  expect(legacy.replies().at(-1)).toMatchObject({ type: 'threadQueryFailed', reason: 'unavailable' }); legacy.connection.stop()
+})
+it('a detail capture older than admitted ancestor freshness fails and requires retry', async () => {
+  const h = await compactRuntime(); h.data(); h.done()
+  const lease = h.r.bodies.demand(bodyRequest)
+  h.emit(frame('thread_tool_body', { ...bodyData, version: 7 }, h.last()))
+  expect(lease.getState()).toMatchObject({ type: 'failed', reason: 'metadata' })
+  const before = h.requests().length
+  h.emit(frame('thread_tool_body', { ...bodyDone, version: 7 }, h.last()))
+  expect(h.requests()).toHaveLength(before)
+  lease.retry(); expect(h.requests()).toHaveLength(before + 1)
+  h.emit(frame('thread_tool_body', bodyData, h.last())); h.emit(frame('thread_tool_body', bodyDone, h.last()))
+  expect(lease.getState()).toMatchObject({ type: 'ready', stale: false }); h.close()
+})
+it('missing ancestor freshness invalidates known detail and unknown is distinct from zero', async () => {
+  const h = await compactRuntime(); h.data(); h.done()
+  const lease = h.r.bodies.demand(bodyRequest)
+  h.emit(frame('thread_tool_body', bodyData, h.last())); h.emit(frame('thread_tool_body', bodyDone, h.last()))
+  const { subtree_version, ...unknown } = root()
+  h.update(9, unknown as ReturnType<typeof root>)
+  await Promise.resolve()
+  expect(h.snapshot()?.rows[0]).not.toHaveProperty('subtree_version')
+  expect(lease.getState().stale).toBe(true)
+  const old = h.last()
+  h.update(10, { ...unknown, rev: 9 } as ReturnType<typeof root>); await Promise.resolve()
+  h.emit(frame('thread_tool_body', { ...bodyData, version: 9 }, old))
+  h.emit(frame('thread_tool_body', { ...bodyDone, version: 9 }, old))
+  expect(lease.getState().stale).toBe(true)
+  expect(h.requests().at(-1)?.payload).toMatchObject({ expected_rev: 9 })
+  h.close()
+})
+it.each(['delete', 'unpair', 'dispose'] as const)('compact %s retires pending queries and ignores delayed frames', async mode => {
+  const h = await compactRuntime(), id = h.last()
+  h.data(id)
+  if (mode === 'delete') h.r.event({ type: 'conversationDeleted', serverId: 'a', id: 'c' })
+  if (mode === 'unpair') beginChatHistoryRemoval('a')(true)
+  if (mode === 'dispose') h.r.dispose()
+  expect(h.snapshot()).toBeUndefined()
+  h.done(id); h.update(9, root(1, 9))
+  expect(h.snapshot()).toBeUndefined()
+  h.close()
+})
+it('admitted child revisions replace queued obsolete body demands before wire dispatch', async () => {
+  const h = await compactRuntime(); h.data(); h.done()
+  const children = h.r.children.demand(childRequest), first = h.last()
+  const body = h.r.bodies.demand({ ...bodyRequest, itemId: 2, revision: 1 })
+  h.emit(frame('thread_children', { ...childPage([{ ...child(2), rev: 9 }]), version: 8 }, first))
+  await Promise.resolve()
+  h.emit(frame('thread_children', { ...childEnd(), version: 8 }, first))
+  expect(children.getState()).toMatchObject({ type: 'ready', page: { children: [{ id: 2, rev: 9 }] } })
+  const reads = h.requests().filter(q => q.type === 'thread_read_tool_body')
+  expect(reads).toHaveLength(1)
+  expect(reads[0].payload).toMatchObject({ item_id: 2, expected_rev: 9 })
+  h.emit(frame('thread_tool_body', { ...bodyData, item_id: 2, rev: 9 }, reads[0].id))
+  h.emit(frame('thread_tool_body', { ...bodyDone, item_id: 2, rev: 9 }, reads[0].id))
+  expect(body.getState()).toMatchObject({ type: 'ready', stale: false })
+  h.close()
+})
+it('projection switches initialize at zero even with independently held complete checkpoints', async () => {
+  const h = await compactRuntime(); h.data(); h.done()
+  h.r.items.getState().acceptEpoch('a', 'c', 'complete')
+  h.r.items.getState().beginBatch('a', 'c', 'complete')?.commit({ fromVersion: 0, version: 77, ranges: [] })
+  await h.r.open('a', 'c').done
+  expect(h.requests().at(-1)).toMatchObject({ payload: { version: 0 } })
+  expect(h.requests().at(-1)?.payload).not.toHaveProperty('projection')
+  h.emit(frame('thread_items', { ...windowDone, epoch: 'complete', version: 77 }, h.last()))
+  await h.r.open('a', 'c', { projection: 'compact-v1' }).done
+  expect(h.requests().at(-1)).toMatchObject({ payload: { projection: 'compact-v1', version: 0 } })
+  expect(h.snapshot()).toMatchObject({ checkpoint: 0, ranges: [] })
+  h.close()
+})
 it('marker-only empty success is cached, and unknown optional facts remain absent', async () => {
   const h = await bodyRuntime(), lease = h.r.children.demand(childRequest)
   h.emit(frame('thread_children', childEnd(), childReads(h)[0].id))

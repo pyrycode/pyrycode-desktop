@@ -17,6 +17,7 @@ import { replySuggestionStore } from './replySuggestionStore'
 import { createThreadTaskStops } from '../screens/conversation/threadTaskPresentation'
 import { createThreadRefusalActions, threadComposerReports } from '../screens/conversation/threadComposerReports'
 import { createThreadBodies } from './threadBodies'
+import { createThreadCompact } from './threadCompact'
 
 const key = (host: string, chat: string) => JSON.stringify([host, chat])
 const MAX_HELD_APPENDS = 256
@@ -59,8 +60,18 @@ export function createThreadRuntime(deps: {
   let disposed = false
   let held: StampedDaemonEvent[] = [], frameHandle: number | undefined
   let selected: { host: string; chat: string; generation: symbol; cancel?: () => void; configurationRefreshSession?: string;
+    projection?: 'compact-v1'; initialize?: boolean;
     local?: { generation: symbol; cancel: () => void } } | undefined
-  const bodies = createThreadBodies({ send: deps.send, log: deps.log, scope(host, chat) {
+  const compact = createThreadCompact({ send: deps.send, log: deps.log,
+    failure: event => handle(event),
+    invalidate: (host, chat, row) => bodies.invalidate(host, chat, row), changed: () => bodies.reconcile() })
+  const bodies = createThreadBodies({ send: compact.send, log: deps.log, scope(host, chat) {
+    if (selected?.projection && selected.host === host && selected.chat === chat) {
+      const s = compact.snapshot(host, chat)
+      return s ? { epoch: s.epoch, generation: s.generation, selection: selected.generation, selected: true,
+        minimumVersion: s.rows.reduce((version, row) => typeof row.subtree_version === 'number' ? Math.max(version, row.subtree_version) : version, s.consumed),
+        revision: (id: number) => s.rows.find(row => row.id === id)?.rev } : undefined
+    }
     const slice = items.getState().hosts.get(host)?.get(chat)
     return slice ? { epoch: slice.snapshot.epoch, generation: slice.generation, selection: selected?.generation,
       selected: selected?.host === host && selected.chat === chat } : undefined
@@ -76,6 +87,7 @@ export function createThreadRuntime(deps: {
   function demandLocal(type: 'older' | 'retry', host: string): boolean {
     const target = selected
     if (disposed || !target || target.host !== host) return false
+    if (target.projection) return compact.query(type, host)
     const slice = items.getState().hosts.get(host)?.get(target.chat)
     const status = state.getState().localQueries.get(key(host, target.chat))
     if (target.local || state.getState().restoring.has(key(host, target.chat))) return false
@@ -120,7 +132,7 @@ export function createThreadRuntime(deps: {
     lives.set(id, store)
     return store
   }
-  const query = createThreadQueryCoordinator({ store: items, sendCommand: deps.send,
+  const query = createThreadQueryCoordinator({ store: items, sendCommand: compact.send,
     requestId: () => crypto.randomUUID(), log: { event: deps.log },
     onState(host, chat, value) {
       state.setState(s => ({ queries: new Map(s.queries).set(key(host, chat), value) }))
@@ -130,8 +142,10 @@ export function createThreadRuntime(deps: {
     } })
   function sync(): void {
     if (!selected) return
+    if (selected.projection) return
     const { host, chat } = selected
     query.input({ type: 'sync', serverId: host, conversationId: chat, connected: isLinked(host),
+      initialize: selected.initialize,
       restorePending: state.getState().restoring.has(key(host, chat)) })
   }
   async function restore(target: NonNullable<typeof selected>): Promise<void> {
@@ -174,6 +188,7 @@ export function createThreadRuntime(deps: {
   }
   function remove(host: string, chat: string): void {
     bodies.retire(host, chat, true)
+    compact.retire(host, chat, true)
     if (selected?.host === host && selected.chat === chat) { cancelLocal(); selected.cancel?.(); selected = undefined; query.cancelHost(host) }
     items.getState().deleteConversation(host, chat); sends.getState().deleteConversation(host, chat); refusals.getState().remove(host, chat); taskStops.getState().remove(host, chat)
     lives.get(key(host, chat))?.getState().dispatch({ type: 'dispose' }); lives.delete(key(host, chat))
@@ -188,6 +203,7 @@ export function createThreadRuntime(deps: {
   }
   function removeHost(host: string): void {
     bodies.retire(host, undefined, true)
+    compact.retire(host, undefined, true)
     if (selected?.host === host) { cancelLocal(); selected.cancel?.(); selected = undefined }
     query.cancelHost(host)
     const prefix = '[' + JSON.stringify(host) + ','
@@ -207,7 +223,7 @@ export function createThreadRuntime(deps: {
   }
   const offRemoval = subscribeChatHistoryRemoval(host => removed => { if (removed) removeHost(host) })
   return {
-    items, sends, refusals, taskStops, state, live, isThread, bodies,
+    items, sends, refusals, taskStops, state, live, isThread, bodies, compact,
     children: { demand(request: Omit<Parameters<typeof bodies.demand>[0], 'kind'>, listener?: Parameters<typeof bodies.demand>[1]) {
       return bodies.demand({ ...request, kind: 'children' }, listener)
     } },
@@ -235,16 +251,20 @@ export function createThreadRuntime(deps: {
       if (isLinked(host)) live(host, row.id).getState().dispatch({ type: 'summary', serverId: host, summary: row })
       observeReports(host, row.id)
     },
-    open(host: string, chat: string) {
+    open(host: string, chat: string, options?: { projection: 'compact-v1' }) {
       if (selected) bodies.retire(selected.host, selected.chat)
+      compact.close()
       cancelLocal()
       selected?.cancel?.()
       if (selected) query.input({ type: 'sync', serverId: selected.host, conversationId: null, connected: isLinked(selected.host) })
-      const target: NonNullable<typeof selected> = { host, chat, generation: Symbol() }
+      const target: NonNullable<typeof selected> = { host, chat, generation: Symbol(), ...(options ?? {}) }
       selected = target
-      return { done: restore(target), cancel() {
+      if (target.projection) compact.open(host, chat)
+      else target.initialize = compact.complete(host, chat)
+      return { done: target.projection ? Promise.resolve() : restore(target), cancel() {
         if (selected !== target) return
         bodies.retire(host, chat)
+        compact.close()
         cancelLocal()
         target.cancel?.(); selected = undefined
         query.input({ type: 'sync', serverId: host, conversationId: null, connected: isLinked(host) })
@@ -268,6 +288,7 @@ export function createThreadRuntime(deps: {
     },
     suspend() {
       bodies.suspend()
+      compact.suspend()
       flush()
       cancelLocal()
       selected?.cancel?.(); selected = undefined
@@ -280,6 +301,7 @@ export function createThreadRuntime(deps: {
     },
     dispose() {
       bodies.dispose()
+      compact.dispose()
       cancelLocal()
       disposed = true
       if (frameHandle !== undefined) deps.frame?.cancel(frameHandle)
@@ -297,6 +319,7 @@ export function createThreadRuntime(deps: {
   }
   function handle(event: StampedDaemonEvent): void {
     if (disposed || event.serverId === null) return
+    if (compact.event(event)) return
     if (bodies.event(event)) return
     refusals.getState().event(event); taskStops.getState().event(event)
     const host = event.serverId

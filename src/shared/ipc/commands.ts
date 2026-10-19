@@ -544,7 +544,11 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
         'epoch' in p && text(p.epoch) && 'item_id' in p && number(p.item_id) && typeof p.item_id === 'number' && p.item_id > 0 &&
         'expected_rev' in p && number(p.expected_rev) && typeof p.expected_rev === 'number' && p.expected_rev > 0 &&
         Object.keys(p).every(k => ['conversation_id', 'epoch', 'item_id', 'expected_rev'].includes(k))
-      return 'conversation_id' in p && text(p.conversation_id) && (!('limit' in p) || number(p.limit)) &&
+      return (!('projection' in p) || p.projection === 'compact-v1') &&
+        (!('projection' in p) || q.type !== 'thread_page' || ('epoch' in p && text(p.epoch))) &&
+        Object.keys(p).every(k => (q.type === 'thread_catch_up' ? ['conversation_id', 'epoch', 'version', 'limit', 'projection'] :
+          ['conversation_id', 'before_order', 'limit', 'projection', 'epoch']).includes(k)) &&
+        'conversation_id' in p && text(p.conversation_id) && (!('limit' in p) || number(p.limit)) &&
         (q.type === 'thread_catch_up' ? 'epoch' in p && typeof p.epoch === 'string' && p.epoch.length <= 1024 && 'version' in p && number(p.version) :
           q.type === 'thread_page' && 'before_order' in p && number(p.before_order))
     }

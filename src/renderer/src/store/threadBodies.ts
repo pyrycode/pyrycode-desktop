@@ -14,17 +14,18 @@ type ChildAdmission = { failure?: { reason: string } }
 type Entry = { request: Request; generation: symbol | undefined; leases: Set<Lease>; state: ThreadBodyState;
   connection?: symbol; requestId?: string; staged?: Record<string, unknown>; bytes: number;
   timer?: ReturnType<typeof setTimeout>; queued: boolean; cursor?: ThreadChildCursor; replacing?: boolean;
-  admission?: ChildAdmission; acknowledgedFailure?: ChildAdmission['failure'] }
+  admission?: ChildAdmission; acknowledgedFailure?: ChildAdmission['failure']; minimumVersion?: number }
 const missing = (reason: string): ThreadBodyState => ({ type: 'missing', reason, stale: true })
 
 /** Session-only bodies. This writer never receives a canonical store mutation capability. */
 export function createThreadBodies(deps: {
   send: (command: RendererCommand) => void
-  scope: (host: string, chat: string) => { epoch: string; generation: symbol | undefined; selected: boolean; selection?: symbol } | undefined
+  scope: (host: string, chat: string) => { epoch: string; generation: symbol | undefined; selected: boolean; selection?: symbol;
+    revision?: (id: number) => number | undefined; minimumVersion?: number } | undefined
   log: (event: { event: string; code: string }) => void
 }, limits = { active: 4, queued: 28, entries: 64, bytes: 16 * 1024 * 1024, leases: 128 }) {
   const entries = new Map<string, Entry>(), connections = new Map<string, { token: symbol; supported: boolean }>()
-  let leaseCount = 0, disposed = false, retiring = 0
+  let leaseCount = 0, disposed = false, retiring = 0, refreshScheduled = false
   const key = (r: Request, includeLimit = true) => JSON.stringify([r.serverId, r.conversationId, r.epoch, r.itemId, r.revision, r.kind,
     ...(includeLimit && r.kind === 'children' ? [Math.min(r.limit || 50, 256)] : [])])
   const retained = (e: Entry) => e.state.content
@@ -78,6 +79,7 @@ export function createThreadBodies(deps: {
       const c = connections.get(e.request.serverId)
       if (!c?.supported || !e.leases.size || !admit(e)) continue
       e.queued = false; e.connection = c.token; e.requestId = crypto.randomUUID()
+      e.minimumVersion = deps.scope(e.request.serverId, e.request.conversationId)?.minimumVersion
       e.timer = setTimeout(() => fail(e, 'expired'), 30000)
       deps.log({ event: 'thread-body', code: 'requested' })
       try { deps.send({ type: 'queryThread', serverId: e.request.serverId, requestId: e.requestId, query: queryFor(e.request, e.cursor) }) }
@@ -131,6 +133,35 @@ export function createThreadBodies(deps: {
     } finally { retiring-- }
     trim(); pump()
   }
+  function invalidate(host: string, chat: string, row: { id: number; rev: number }, revisionOnly = false): void {
+    retiring++
+    try {
+      for (const [id, e] of [...entries]) {
+        if (e.request.serverId !== host || e.request.conversationId !== chat ||
+            revisionOnly && (e.request.itemId !== row.id || e.request.revision >= row.rev)) continue
+        // Without descendant inventory, ancestor freshness conservatively invalidates this scope.
+        cancel(e)
+        if (e.request.itemId === row.id && row.rev > e.request.revision) {
+          e.request = { ...e.request, revision: row.rev }; entries.delete(id); entries.set(key(e.request), e)
+        }
+        e.cursor = undefined; e.replacing = true
+        if (e.state.type !== 'failed') {
+          const content = retained(e)
+          e.state = content ? { type: 'ready', content, stale: true, ...page(e) } : missing('invalidated')
+          measure(e)
+          if (e.leases.size) e.queued = true
+        }
+        notify(e)
+      }
+    } finally { retiring-- }
+    if (refreshScheduled) return
+    refreshScheduled = true
+    queueMicrotask(() => {
+      refreshScheduled = false
+      if (disposed) return
+      for (const e of entries.values()) if (e.queued) { e.queued = false; start(e) }
+    })
+  }
   return {
     demand(request: Request, listener?: (state: ThreadBodyState) => void) {
       const scope = deps.scope(request.serverId, request.conversationId)
@@ -138,7 +169,9 @@ export function createThreadBodies(deps: {
       const valid = isRendererCommand({ type: 'queryThread', serverId: request.serverId, requestId: 'admission', query: queryFor(request) }) &&
         (request.kind === 'tool_call' || request.kind === 'agent' || request.kind === 'children') &&
         (request.limit === undefined || (Number.isSafeInteger(request.limit) && request.limit >= 0))
-      const rejected = disposed || retiring > 0 || !valid || !scope?.selected || scope.epoch !== request.epoch ? 'invalid' : leaseCount >= limits.leases ? 'limit' : undefined
+      const currentRevision = scope?.revision?.(request.itemId)
+      const rejected = disposed || retiring > 0 || !valid || !scope?.selected || scope.epoch !== request.epoch ||
+        currentRevision !== undefined && request.revision < currentRevision ? 'invalid' : leaseCount >= limits.leases ? 'limit' : undefined
       if (rejected) {
         deps.log({ event: 'thread-body', code: rejected })
         return { getState: (): ThreadBodyState => rejected === 'invalid'
@@ -209,6 +242,7 @@ export function createThreadBodies(deps: {
       }
     },
     retire,
+    invalidate,
     reconcile() {
       for (const e of entries.values()) {
         const scope = deps.scope(e.request.serverId, e.request.conversationId)
@@ -233,10 +267,13 @@ export function createThreadBodies(deps: {
       if (event.conversationId !== e.request.conversationId || e.connection !== connections.get(host)?.token) return true
       if (event.type === 'threadQueryFailed') { fail(e, event.reason); return true }
       const reply = event.reply
+      if (e.minimumVersion !== undefined && reply.payload.version < e.minimumVersion) { fail(e, 'metadata'); return true }
       if (reply.type === 'thread_children') {
         const p = reply.payload
         if (e.request.kind !== 'children' || p.conversation_id !== e.request.conversationId || p.epoch !== e.request.epoch ||
             p.item_id !== e.request.itemId || p.rev !== e.request.revision) { fail(e, 'metadata'); return true }
+        if (deps.scope(host, e.request.conversationId)?.minimumVersion !== undefined)
+          for (const child of p.children) invalidate(host, e.request.conversationId, child, true)
         const children = e.replacing ? [] : e.state.page?.children ?? []
         const identities = new Set(children.map(c => c.id))
         if (p.children.some(c => identities.has(c.id))) { fail(e, 'metadata'); return true }

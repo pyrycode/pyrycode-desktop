@@ -794,6 +794,12 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     deps.messageLifecycle?.acknowledge(deps.serverId, conversationId, [content.message_id])
   }
   const threadReceiver = createThreadUpdateReceiver(event => {
+    if (event.kind === 'thread-compact-update') {
+      const { payload, type, ...correlation } = event.envelope
+      emitDaemonEvent(sink, { type: 'threadCompactUpdate', conversationId: event.update.payload.conversation_id,
+        update: event.update, correlation })
+      return
+    }
     if (event.kind === 'thread-query-failed') {
       emitDaemonEvent(sink, { type: 'threadQueryFailed', conversationId: event.conversationId,
         requestId: event.requestId, inReplyTo: event.inReplyTo, reason: event.reason })
@@ -838,6 +844,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   let driver: NoiseRelayDriver | null = null
   let authenticated = false
   let bodyCapable = false
+  let compactCapable = false
   // A daemon whose accepted handshake lacks `thread` (#1908). Its driver is parked rather than stopped:
   // every outbound method sees no driver and stays inert, inbound frames are dropped, and the parked
   // driver's own supervisor keeps re-dialling after a drop, so a daemon update clears the state.
@@ -1312,6 +1319,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
         }
         authenticated = true
         bodyCapable = ack.server_id === deps.serverId && ['interactive', 'thread', 'thread_expansion'].every(c => ack.capabilities.includes(c))
+        compactCapable = bodyCapable && ack.capabilities.includes('thread_compact')
         hostedResources.reset(ack.capabilities.includes('hosted_apps_v1'))
         hostedApps.reset(ack.server_id === deps.serverId && ack.capabilities.includes('hosted_apps_v1'))
         deliveryFailed = false
@@ -3044,7 +3052,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // Advertise `multi_agent` too (#1657): without it the daemon withholds Codex conversations,
       // their frames and Codex model rows, all of which the window now decodes per agent (#1649).
       // Advertise `stop_background_task` (#1770), detection only: the echo says the daemon takes the verb.
-      capabilities: [CAPABILITY_INTERACTIVE, 'thread', 'thread_expansion', CAPABILITY_MULTI_AGENT, CAPABILITY_STOP_BACKGROUND_TASK, 'hosted_apps_v1']
+      capabilities: [CAPABILITY_INTERACTIVE, 'thread', 'thread_expansion', 'thread_compact', CAPABILITY_MULTI_AGENT, CAPABILITY_STOP_BACKGROUND_TASK, 'hosted_apps_v1']
     })
     return {
       connection: {
@@ -3335,12 +3343,16 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     const id = nextEnvelopeId++
     if (!threadReceiver.register(id, requestId, query)) return
     if (driver === null || !authenticated || stopped) { threadReceiver.fail(id, 'unavailable'); return }
+    if ('projection' in query.payload && (!compactCapable ||
+        !isRendererCommand({ type: 'queryThread', serverId: deps.serverId, requestId, query }))) { threadReceiver.fail(id, 'unavailable'); return }
     if ((query.type === 'thread_read_tool_body' || query.type === 'thread_read_children') && (!bodyCapable ||
         !isRendererCommand({ type: 'queryThread', serverId: deps.serverId, requestId, query }))) {
       threadReceiver.fail(id, 'unavailable'); return
     }
     const p = query.payload
     const payload = { conversation_id: p.conversation_id,
+      ...('projection' in p ? { projection: p.projection } : {}),
+      ...(query.type === 'thread_page' && query.payload.projection ? { epoch: query.payload.epoch } : {}),
       ...(query.type === 'thread_read_tool_body' || query.type === 'thread_read_children' ? { epoch: query.payload.epoch, item_id: query.payload.item_id, expected_rev: query.payload.expected_rev } :
         query.type === 'thread_catch_up' ? { epoch: query.payload.epoch, version: query.payload.version } : { before_order: query.payload.before_order }),
       ...('limit' in p && p.limit !== undefined ? { limit: query.type === 'thread_read_children' ? Math.min(p.limit || 50, 256) : p.limit } : {}),

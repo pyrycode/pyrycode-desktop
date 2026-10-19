@@ -1,4 +1,4 @@
-import type { ThreadReply, ThreadQueryFailure } from '../wire/thread'
+import type { ThreadReply, ThreadQueryFailure, ThreadCompactUpdate } from '../wire/thread'
 // The typed event pipe from the background process to the renderer window: one sealed
 // discriminated union plus the channel it travels on, imported by both process sides. This
 // is the event-pipe half of the background↔window bridge (#18); the command half is #17.
@@ -263,6 +263,7 @@ type BaseDaemonEvent =
   | { type: 'threadQueryFailed'; conversationId: string; requestId: string; inReplyTo: number; reason: ThreadQueryFailure }
   | { type: 'sessionStateCleared'; family: SessionStateFamily; conversationId?: string; correlation: Omit<Envelope, 'payload' | 'type'> }
   | { type: 'threadUpdate'; conversationId: string; update: ThreadUpdate; correlation: Omit<Envelope, 'payload' | 'type'> }
+  | { type: 'threadCompactUpdate'; conversationId: string; update: ThreadCompactUpdate; correlation: Omit<Envelope, 'payload' | 'type'> }
   | { type: 'threadRepairNeeded'; conversationId: string; reason: ThreadRepairReason }
   | { type: 'messageDelivery'; conversationId: string; messageId: string; status: 'waiting' | 'not-sent' | 'written' }
   | { type: 'replySuggestion'; conversationId: string; sessionId: string; revision: number; suggestedReply: string | null }

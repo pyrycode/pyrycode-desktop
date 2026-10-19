@@ -60,3 +60,37 @@ Unknown profile, build failure, replay failure and restoration failure yield non
 ## Documentation handoff
 - Pending documentation stage: `docs/recorded-tests.md`, “Replay contract”: explicit compatibility invocation, build isolation/restoration, executed revision/profile/bundle hashes/input checksum separately from capture provenance; current-source complete route versus default automatic projection, with no fresh provider or physical transport proof.
 - Pending documentation stage: `docs/client-replay-migration.md`, replay evidence description: retain the same complete-route/default-policy distinction.
+
+## Linux validation evidence — 2026-10-19
+Implementation source `29a98019b9f5fc6cc4c853d9c03d07bca673671d`; strengthened negative-control source `d1dd91c6619b5babc307b86b29444efa3f285a1d` differs only by three test lines explicitly asserting the compact projection. Final profile runs built clean source at the latter revision. Main `f2428d2ab281` was merged before pre-verify/build. All browser invocations below used the executable guard, retries zero and zero forbidden launches; there were no fresh live runs. macOS is outside scope.
+
+| Check | Executed / passed / failed / skipped | Evidence under `/tmp/builder-2149/` |
+| --- | --- | --- |
+| Profile, existing guard and strict exchange units | 22 / 22 / 0 / 0 | `final-unit-controls.log` |
+| Pre-verify (including seven affected units) | 5 checks passed; 7 / 7 / 0 / 0 | `pre-verify.log` |
+| Normal build and docs guard | Passed | `final-normal-build.log`, `docs-check.log` |
+| Normal compact-demand plus profile controls | 6 / 6 / 0 / 0 | `final-normal-controls.json`, `.log` |
+| Strengthened normal profile controls | 2 / 2 / 0 / 0 | `final-normal-pinned.json`, `.log` |
+| Compatibility controls plus original shared question scenario, committed input | 3 / 3 / 0 / 0 | `final-compatibility-pinned.json`, `.log` |
+| Complete normal committed-recording suite | 29 / 29 / 0 / 1 | `final-committed-recordings.json`, `.log` |
+
+The full recorded suite completed all 29 exchanges: 773 matched requests, 3,216 emitted frames, zero remaining requests. The skipped test is the unchanged `real claude picks up a saved channel system prompt at Reset session` fixme. Normal wrong-profile controls deliberately observe a sticky strict rejection: zero matched queries, one emitted seed frame, three remaining queries; that expected negative-control result is not replay acceptance.
+
+Compatibility's synthetic query contract matched three complete queries, emitted eight frames and had zero remaining queries after initial opening, creation and same-ID reconnect. Its original shared question run matched 29 requests, emitted 136 frames and had zero remaining requests. This run used the unchanged **committed** input SHA-256 `6de35feed0dcf02764da0765a4af03234314ff691a29cc975bf82c3e8d498d6b`, capture Desktop `5788a683ab580647008eaf2b292631607c407ab8`, daemon `58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`; it does not establish the separate retained-input criterion.
+
+Executed main bundle SHA-256 was identical in both profiles: `14964f03eb41095b9ee91af5f78d8a422a44c760386a9c8e498c33ff1865b69f`. It contains no recorder marker. Normal renderer SHA-256: `0cb34a92046d7c8137c8706a62ab9606d439e579023515615724335a78f6ea1b`; compatibility renderer: `6a805af00d6ad979a615b7fc660d69ed81bfcd2ed5b81c4650f87e66098e02a9`. Each run's `replayExecutedBuild` log includes build-time revision/dirty/profile and hashes for all JavaScript, HTML, CSS and metadata outputs. Replay attachments identify input checksums and capture provenance separately. Successful compatibility and both initial failed fixture attempts restored normal output; the final metadata names `normal` and clean `d1dd91c6`.
+
+Report SHA-256 values:
+- `final-compatibility-pinned.json`: `303c1fc593ed5cd265d8208c722be83f81ed169073ab0919678bd62e807791ac`.
+- `final-normal-pinned.json`: `e666dbb81155de0cf9caf67b1b4d1c081667d3276c719c67f80b0eeb45b06f58`.
+- `final-normal-controls.json`: `4136fc239fa499a29792db5d571808177170d5ea924e29d6b0bd7ccddf6b13a7`.
+- `final-committed-recordings.json`: `82e96b5c23c34dbae8b0655955bb3b28329a4905ade62e798ca794fcd25f8e25`.
+
+Earlier failures remain failures: `profile-complete.json` and `profile-complete-2.json` each report 2 executed / 1 passed / 1 failed / 0 skipped due to the invalid synthetic combined data/final fixture. The complete query itself matched. The corrected fixture first passed in `profile-complete-3.json`. The initial missing-Electron launch executed zero tests; `npm rebuild electron` installed the existing dependency before the counted successful runs. No earlier result is replaced by later success.
+
+## Required retained-input hold
+The exact bytes at `pyrybox:/tmp/builder-2137/capture-3/claude-question-answer.json`, expected SHA-256 `24bbe5dff65241a77dda96cbd262c9185925d88f6168439a1679b576b984dac1`, are unavailable in this container. Existing #2137/#2141 bundles and the newest #2141 recovery bundle `b4b86810c47a7d1b3325d77c224b7c0058ce01463788479bcec6777e28e1fbc4` contain references/logs but no retained bytes. No substitute capture was used for this criterion. Its source remains Desktop `ef097bfc29324437d067d65360558b8e77be8f40`, daemon `664305939d73e5a146457503081d8232fcca5407`.
+
+After supported provisioning, verify the exact checksum and run the ticket's original retained selection with the additional explicit `--profile complete-thread` argument to `scripts/run-offline-replay.mjs`; use the same exact scenario title, unchanged original assertions, retries zero and the guard. Also retain its default-profile mismatch. Required evidence remains: original complete query accepted and recorded prefix through close index 47 delivered. The retained full scenario has not run here; neither prefix nor full completion is claimed. Preserve any subsequent #2141 close-ordering failure as failed. #2141 still owns its later combined 1 executed/passed, 0 failed/skipped and zero-remaining acceptance; no reverse blocker was added.
+
+Implementation and independent Linux checks are ready for recovery. This hold prevents opening the PR and returning completed; it is missing access, not a refinement gap or a dependency on #2141. Documentation handoff above remains pending for its own later stage. Final written work remains below 400 added lines, with two production selection consumers and no new application types or state.

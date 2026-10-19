@@ -48,6 +48,16 @@ in the dispatcher gate at `1f994132db599066efd744a9df57a542195133e0` on 2026-10-
 279 executed, 279 passed, 0 failed and 4 skipped. This is fake-transport evidence; no live-Claude
 result is claimed.
 
+For ack-only sends, daemon receipt alone cannot prove the response was parsed.
+[`composer-reset-send.spec.ts`](../../../e2e/composer-reset-send.spec.ts) uses
+`threadMode: 'native'` to prevent synthetic user echoes from settling reset rows.
+It waits for the initial native row before typing, then for each command's receipt
+and an increment of the content-free `inbound-unmodeled`/`ack` diagnostic. A later
+native assistant marker on the same encrypted stream establishes renderer progress
+before checking that Sending and reset rows are absent. An ordinary-send control
+must remain pending after ack alone until its matching authoritative user item
+arrives. See the [named regression and counted Linux evidence](composer-send-limits.md#ack-only-reset-regression).
+
 A streaming assistant row includes cursor and metadata text, so an exact-text locator
 can miss a visible delivery marker. Target the assistant role wrapper with `hasText`
 for the positive barrier, then assert duplicate absence. In

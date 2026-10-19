@@ -42,6 +42,56 @@ describe('submitMessage', () => {
     expect(sendCommand).toHaveBeenCalledWith(sendMessageCommand({ conversation_id: 'chat', message_id: 'm', text: 'text', attachment_ids: ['file'] }, 'host'))
     expect(rollback).not.toHaveBeenCalled()
   })
+
+  it.each(['/clear', '/reset', '  /clear  ', '\n/reset\t', '/clear args', '/reset\nargs',
+    '/clear\u00a0args', '/reset\u2003args', '/clear\u2028args', '/reset\u3000args',
+    '/clear\u0085args', '/reset\u202fargs'])
+  ('sends ack-only reset %j without retaining any local feedback or row', text => {
+    const own = pending(), rollback = vi.fn()
+    const attachments = [{ attachmentId: 'file', filename: 'local.pdf' }]
+    const state = () => own.threadSend.store.getState().select('host', 'chat')
+    const sendCommand = vi.fn(() => state())
+    expect(submitMessage(text, 'chat', { ...own, sendCommand, newMessageId: () => 'reset',
+      takeAttachments: () => ({ attachments, rollback }) })).toBe(true)
+    expect(sendCommand).toHaveBeenCalledWith(sendMessageCommand({ conversation_id: 'chat',
+      message_id: 'reset', text: text.trim(), attachment_ids: ['file'] }, 'host'))
+    expect(sendCommand.mock.results[0].value).toMatchObject({ pending: [], localSendPending: null })
+    own.threadSend.store.getState().feedback('host', 'chat', {
+      type: 'messageDelivery', messageId: 'reset', status: 'written'
+    })
+    expect(state().pending).toEqual([])
+    expect(state().localSendPending).toBeNull()
+    expect(rollback).not.toHaveBeenCalled()
+  })
+
+  it.each(['ordinary text', '/clear-cache', '/resetfoo', '/Clear', '/RESET', '/compact',
+    'text /clear', '/clear\u200bargs', '/reset/args'])
+  ('retains normal settlement for %j', text => {
+    const own = pending()
+    expect(submitMessage(text, 'chat', { ...own, sendCommand: vi.fn(), newMessageId: () => 'm' })).toBe(true)
+    expect(own.threadSend.store.getState().select('host', 'chat')).toMatchObject({
+      pending: [{ messageId: 'm', item: { text } }], localSendPending: { messageId: 'm', queued: false }
+    })
+  })
+
+  it.each(['/clear', '/reset'])('keeps %s draft recoverable and rolls attachments back on bridge failure', text => {
+    const own = pending(), rollback = vi.fn()
+    expect(submitMessage(text, 'chat', { ...own, newMessageId: () => 'm',
+      sendCommand: () => { throw Error('bridge') },
+      takeAttachments: () => ({ attachments: [{ attachmentId: 'file', filename: 'local.pdf' }], rollback })
+    })).toBe(false)
+    expect(rollback).toHaveBeenCalledOnce()
+    expect(own.threadSend.store.getState().select('host', 'chat')).toMatchObject({ pending: [], localSendPending: null })
+  })
+
+  it('repeated resets leave existing pending work unchanged', () => {
+    const own = pending(), sendCommand = vi.fn()
+    const send = (text: string) => submitMessage(text, 'chat', { ...own, sendCommand, newMessageId: () => text })
+    send('ordinary')
+    const before = own.threadSend.store.getState().select('host', 'chat')
+    for (const command of ['/clear', '/reset', '/clear', '/reset']) expect(send(command)).toBe(true)
+    expect(own.threadSend.store.getState().select('host', 'chat')).toEqual(before)
+  })
 })
 
 describe('shouldSubmitOnKeyDown', () => {

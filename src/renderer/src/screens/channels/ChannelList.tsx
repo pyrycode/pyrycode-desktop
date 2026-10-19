@@ -2189,7 +2189,7 @@ function renderBody(
     <Row
       key={row.id}
       row={row}
-      isOpen={(!pane || pane.type === 'closed') && row.id === openConversationId}
+      isOpen={(!pane || pane.type === 'closed') && row.serverId === openServerId && row.id === openConversationId}
       onOpen={() => onOpen(row)}
       pin={{ pinned: false, disabled: typeof row.serverId !== 'string' || statuses.get(row.serverId)?.type !== 'connected',
         onActivate: () => onSetPinned(row, true) }}
@@ -2202,7 +2202,7 @@ function renderBody(
     <Row
       key={row.id}
       row={row}
-      isOpen={(!pane || pane.type === 'closed') && row.id === openConversationId}
+      isOpen={(!pane || pane.type === 'closed') && row.serverId === openServerId && row.id === openConversationId}
       onOpen={() => onOpen(row)}
       onSaveAsChannel={typeof row.serverId === 'string' && statuses.get(row.serverId)?.type === 'connected'
         ? () => onSaveAsChannel(row)

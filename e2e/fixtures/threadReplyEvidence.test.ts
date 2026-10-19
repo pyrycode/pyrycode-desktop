@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest'
 import type { StampedDaemonEvent } from '../../src/shared/ipc/events'
 import type { ThreadItem, ThreadUpdate } from '../../src/shared/wire/thread'
-import { createThreadReplyEvidence, savedRepliesMatch } from './threadReplyEvidence'
+import { createThreadReplyEvidence, renderedRepliesMatch, savedRepliesMatch } from './threadReplyEvidence'
 
 const route = { conversation_id: 'chat', epoch: 'epoch', version: 1 }
 const item = (id: number, kind: string, content: object, extra: Partial<ThreadItem> = {}): ThreadItem => ({
@@ -107,4 +107,21 @@ it('accepts revisions and one ordered same-revision suffix without changing iden
   expect(proof.reply()).toMatchObject({ id: 3, text: 'Hello world' })
   add({ ...assistant(), rev: 1 })
   expect(proof.reply()?.text).toBe('Hello world')
+})
+
+it('requires both native rendered identities when distinct replies have identical text', () => {
+  const replies = [{ id: 3, text: 'An ordinary answer.' }, { id: 8, text: 'An ordinary answer.' }]
+  const rows = replies.map(reply => ({ id: String(reply.id), text: reply.text }))
+  expect(renderedRepliesMatch(rows, replies)).toBe(true)
+  expect(renderedRepliesMatch(rows.slice(0, 1), replies)).toBe(false)
+  expect(renderedRepliesMatch(rows.slice(1), replies)).toBe(false)
+  expect(renderedRepliesMatch([rows[0], rows[0]], replies)).toBe(false)
+  expect(renderedRepliesMatch([rows[0], { ...rows[1], id: null }], replies)).toBe(false)
+  expect(renderedRepliesMatch([rows[0], { ...rows[1], id: '80' }], replies)).toBe(false)
+  expect(renderedRepliesMatch([rows[0], { ...rows[1], text: 'Changed answer.' }], replies)).toBe(false)
+})
+
+it('compares settled rendered body text while ignoring layout whitespace', () => {
+  expect(renderedRepliesMatch([{ id: '3', text: 'An ordinary\nanswer. ' }],
+    [{ id: 3, text: 'An ordinary answer.' }])).toBe(true)
 })

@@ -92,6 +92,13 @@ export function createThreadReplyEvidence(options: { host: string; conversation:
   return proof
 }
 
+export function renderedRepliesMatch(
+  rows: { id: string | null; text: string }[], replies: Pick<RecordedReply, 'id' | 'text'>[]
+): boolean {
+  return replies.every(reply => rows.some(row => row.id === String(reply.id) &&
+    row.text.replace(/\s/g, '') === reply.text.replace(/\s/g, '')))
+}
+
 export function savedRepliesMatch(
   saved: Pick<ThreadSnapshot, 'hostId' | 'conversationId' | 'epoch' | 'items'> | null, replies: RecordedReply[]
 ): boolean {

@@ -6,7 +6,7 @@ import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 import { confirmCreateChat } from './fixtures/confirmCreateChat'
 
 import { watchPhaseReconnect, readPhaseReconnect } from './fixtures/phaseReconnectEvidence'
-import { createThreadReplyEvidence, savedRepliesMatch, type RecordedReply } from './fixtures/threadReplyEvidence'
+import { createThreadReplyEvidence, renderedRepliesMatch, savedRepliesMatch, type RecordedReply } from './fixtures/threadReplyEvidence'
 
 type ProofWindow = typeof window & { threadReplyEvidence: ReturnType<typeof createThreadReplyEvidence> }
 async function savedThread(page: Page, host: string, conversation: string) {
@@ -26,13 +26,15 @@ async function actualReply(page: Page): Promise<RecordedReply> {
 }
 async function renderedReplies(page: Page, replies: RecordedReply[], timeout = 45_000) {
   // Compare assistant body text only; markdown formatting and row chrome are not reply content.
-  for (const reply of replies) await expect.poll(() => page.locator('[data-thread-role="assistant"] .bubble__markdown').evaluateAll(
-    (rows, expected) => rows.some(row => {
+  const expected = replies.map(reply => ({ id: reply.id, text: markdownPlainText(reply.text) }))
+  await expect.poll(async () => {
+    const rows = await page.locator('[data-thread-role="assistant"] .bubble__markdown').evaluateAll(rows => rows.map(row => {
       const body = row.cloneNode(true) as HTMLElement
       body.querySelectorAll('.code-block__header, .code-block__copy, .task-mark').forEach(node => node.remove())
-      return body.textContent?.replace(/\s/g, '') === expected.replace(/\s/g, '')
-    }), markdownPlainText(reply.text)
-  ), { timeout }).toBe(true)
+      return { id: row.closest('[data-read-row]')?.getAttribute('data-read-row') ?? null, text: body.textContent ?? '' }
+    }))
+    return renderedRepliesMatch(rows, expected)
+  }, { timeout }).toBe(true)
 }
 
 test.use({ interactiveRunner: 'stream-json', claudeModel: 'sonnet', requiredCapabilities: ['interactive', 'thread'] })

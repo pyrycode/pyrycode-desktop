@@ -43,6 +43,8 @@ None. Prefer one self-contained collector plus pure saved comparison over changi
 ## Revisions
 2026-10-19: Focused replay/live both exposed Playwright's TSX transformation rejecting React server rendering of the imported view. Rendered-body checks instead use the existing `markdownPlainText` parser, remove code/task chrome from cloned body nodes and normalize layout whitespace. Saved/native comparisons still require exact original text. Reports `replay.log`, `live.log` and `live-stderr.log` under `/tmp/builder-2138/` preserve these failed checks.
 
+2026-10-19 rework: Verifier finding 1 identified that equal reply text let one rendered body satisfy two recorded replies. Snapshot each assistant body's nearest `data-read-row` ID with its normalized body text, and require every recorded reply's exact numeric ID and parsed text in the same poll through `renderedRepliesMatch`. The open conversation supplies the host/conversation/epoch scope; the row supplies the item ID. Deterministic coverage requires two identically worded replies to have both identified rows, rejecting either missing row, an unowned body, a substituted ID and changed content. Existing collector, saved-history, title and lifecycle contracts stay intact. This is the same reply-identity invariant, approximately 60 additional written lines, no production changes or new exported types, one consumer, and no remote file overlaps.
+
 ## Validation evidence
 Linux x64, 2026-10-19, implementation `1c83393ee95977f16c14a0689c557d95dda47cf6`, after merging main `3fbfcfdb5944`. macOS is outside this ticket's verification scope.
 

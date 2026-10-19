@@ -358,14 +358,20 @@ row itself falls back to, read by the container from `useHostLabelStore` and pas
 open chat), and the row's React key is `JSON.stringify([serverId, id])`, the two-part key `groupByServer`
 anticipates for exactly this duplicate-ID case.
 
-**Selection is both-identities, not conversation-id-alone — [verifier finding
-1](../../specs/architecture/2084-global-pinned-channels.md#revisions) on the first pass.** A pinned
-row reads `isOpen` from `serverId === openServerId && row.id === openConversationId` (and no hosted
-pane open); `openServerId` is a narrow read of the active conversation's own stamped host
-(`useActiveConversationStore`), not a derived guess. Comparing only `row.id` would mark both of two
-hosts' rows current whenever they share a conversation ID, which the duplicate-ID case above
-guarantees can happen. Opening a pinned row calls the same `onOpen` every other row uses; host
-attribution and the Edit channel dialog's target follow the clicked row, not the open chat.
+Host-tree Channels and Chats, like Pinned, select only when `row.serverId === openServerId`
+and `row.id === openConversationId`, with the hosted pane absent or explicitly closed.
+`openServerId` comes from the active conversation's stamped host. `Row` exposes selection as
+`aria-current="true"`, which controls the `--color-on-primary` fill. An ID-only comparison
+also selects another host's tree row when opening a pin. Pins reuse `onOpen`; Edit targets the clicked row.
+
+`pinnedChannels.test.tsx` selects each host in shared-ID channel/channel, chat/chat and
+pinned-B/tree-A layouts, asserting one current row and its title. Missing/wrong identities
+and an open hosted pane select none. Static markup cannot prove clicks or paint.
+[`e2e/sidebar-selection.spec.ts`](../../../e2e/sidebar-selection.spec.ts) clicks A/B/A/B in each
+layout, asserts exclusive current state page-wide and checks resting fill after moving the
+pointer away. [Recorded Linux verifier evidence](https://github.com/pyrycode/pyrycode-desktop/pull/2118#issuecomment-6258207166):
+**3 executed, 3 passed, 0 failed, 0 skipped**; all three failed before the fix. This is
+fake-transport evidence; provider live behavior was outside acceptance and macOS outside scope.
 
 **Offline appearance is scoped to pinned rows only, by a data attribute, not a shared class.**
 `Row` sets `data-pinned` and `data-host-down` on its wrapper; `channels.css` scopes

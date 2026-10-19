@@ -211,6 +211,62 @@ it('a later in-flight sibling failure invalidates a replacement enumeration ackn
     expect(first.getState()).toMatchObject({ type: 'ready', page: { children: [], complete: true } })
   } finally { h.close() }
 })
+it('queued child continuation rechecks a later sibling failure before dispatch', async () => {
+  const h = await bodyRuntime(), before = h.r.items.getState().snapshot('a', 'c')
+  try {
+    const first = h.r.children.demand(childRequest)
+    const sibling = h.r.children.demand({ ...childRequest, limit: 1 })
+    const fail = (id: number) => h.emit(frame('error', { code: 'thread.query_failed', message: 'private' }, id))
+    const original = childReads(h)[0].id, siblingId = childReads(h)[1].id
+    fail(original); expect(first.getState().type).toBe('failed')
+    first.retry()
+    const retried = childReads(h)[2].id
+    expect(childReads(h)[2].payload).not.toHaveProperty('cursor')
+    h.emit(frame('thread_children', childPage(), retried))
+    h.emit(frame('thread_children', childEnd(true), retried))
+    expect(first.getState()).toMatchObject({ type: 'ready', page: { children: [child(2)], more: true } })
+    const bodies = [10, 11, 12].map(itemId => h.r.bodies.demand({ ...bodyRequest, itemId }))
+    expect(h.reads()).toHaveLength(3)
+    bodies.forEach(lease => expect(lease.getState().type).toBe('loading'))
+    // B plus three body reads occupy every active slot; A can only queue here.
+    first.continue(childCursor(2)); first.continue(childCursor(2))
+    expect(first.getState()).toMatchObject({ type: 'loading', page: { children: [child(2)], complete: false } })
+    expect(childReads(h)).toHaveLength(3)
+    fail(siblingId)
+    expect(sibling.getState()).toMatchObject({ type: 'failed', reason: 'daemon-error' })
+    expect(childReads(h)).toHaveLength(3)
+    expect(first.getState()).toMatchObject({ type: 'failed', reason: 'daemon-error', stale: true,
+      page: { children: [child(2)], complete: false } })
+    first.continue(childCursor(2))
+    expect(h.r.children.demand(childRequest).getState().type).toBe('failed')
+    expect(childReads(h)).toHaveLength(3)
+    first.retry()
+    expect(childReads(h)).toHaveLength(4)
+    const replacement = childReads(h)[3].id
+    expect(childReads(h)[3].payload).toEqual({ conversation_id: 'c', epoch: 'e', item_id: 1, expected_rev: 8, limit: 2 })
+    h.emit(frame('thread_children', childPage([child(99)]), original))
+    h.emit(frame('thread_children', childEnd(), retried))
+    h.emit(frame('thread_children', childEnd(), siblingId))
+    expect(first.getState()).toMatchObject({ type: 'loading', page: { children: [child(2)], complete: false } })
+    h.emit(frame('thread_children', childPage([child(4)]), replacement))
+    h.emit(frame('thread_children', { ...childEnd(true), cursor: childCursor(4) }, replacement))
+    expect(first.getState()).toMatchObject({ type: 'ready', page: { children: [child(4)], more: true } })
+    const cursor = first.getState().page!.cursor!
+    expect(cursor).toEqual(childCursor(4)); expect(Object.keys(cursor)).toHaveLength(7)
+    first.continue(cursor); first.continue(cursor)
+    expect(childReads(h)).toHaveLength(5)
+    expect(childReads(h)[4].payload).toEqual({ ...childReads(h)[3].payload, cursor })
+    const next = childReads(h)[4].id
+    h.emit(frame('thread_children', childPage([child(5)]), next))
+    h.emit(frame('thread_children', childEnd(), next))
+    expect(first.getState()).toMatchObject({ type: 'ready', stale: false,
+      page: { children: [child(4), child(5)], complete: true, more: false } })
+    first.continue(cursor); expect(childReads(h)).toHaveLength(5)
+    expect(h.reads()).toHaveLength(3)
+    expect(h.r.items.getState().snapshot('a', 'c')).toBe(before)
+    expect(h.sent.map(decodeEnvelope).filter(e => e.type === 'mark_conversation_read')).toHaveLength(0)
+  } finally { h.close() }
+})
 it('two hosts with colliding child identities stay isolated through connection and preload', async () => {
   const a = await connected('a', true), b = await connected('b', true)
   routePreloadQueries(host => host === 'a' ? a.connection : b.connection)

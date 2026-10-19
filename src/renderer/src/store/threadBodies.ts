@@ -64,13 +64,19 @@ export function createThreadBodies(deps: {
       notify(e)
     }
   }
+  function admit(e: Entry): boolean {
+    const failure = e.admission?.failure
+    if (!failure || failure === e.acknowledgedFailure) return true
+    // Refusing admission must not revoke another enumeration's explicit retry.
+    fail(e, failure.reason, false); return false
+  }
   function pump(): void {
     if (disposed || retiring > 0) return
     for (const e of entries.values()) {
       if (!e.queued) continue
       if ([...entries.values()].filter(x => x.requestId).length >= limits.active) break
       const c = connections.get(e.request.serverId)
-      if (!c?.supported || !e.leases.size) continue
+      if (!c?.supported || !e.leases.size || !admit(e)) continue
       e.queued = false; e.connection = c.token; e.requestId = crypto.randomUUID()
       e.timer = setTimeout(() => fail(e, 'expired'), 30000)
       deps.log({ event: 'thread-body', code: 'requested' })
@@ -79,12 +85,7 @@ export function createThreadBodies(deps: {
     }
   }
   function start(e: Entry): void {
-    if (disposed || retiring > 0 || !e.leases.size) return
-    const failure = e.admission?.failure
-    if (failure && failure !== e.acknowledgedFailure) {
-      // Refusing admission must not revoke another enumeration's explicit retry.
-      fail(e, failure.reason, false); return
-    }
+    if (disposed || retiring > 0 || !e.leases.size || !admit(e)) return
     const c = connections.get(e.request.serverId), content = retained(e)
     if (!c) { e.state = content ? { type: 'ready', content, stale: true, ...page(e) } : missing('offline'); measure(e); trim(); return }
     if (!c.supported) {

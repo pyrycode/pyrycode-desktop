@@ -103,3 +103,9 @@ Source: `52924914` (production writer and final regression fixtures).
 - `native-final.json` / `native-final.log`: final candidate executed/passed 1, failed/skipped/retries 0. Real `gnome_libsecret`, Electron 33.4.11 / Node 20.18.3 / ABI 130. One admission, 8333 persisted items, 271 bounded submissions; full drain 43000 ms. Keyboard commits 167/142/142 ms, bracketed by durable counts 62→124, 124→186, 186→217, all unfinished. Main 979 heartbeats / maximum gap 109 ms; renderer 2110 / 22.4 ms. Exact fresh-owner reopen passed; both app exits 0, no signals or teardown failures. The earlier packaged proof uses unchanged main/storage/protection code.
 
 Final written scope remains below 800 lines, with no new exported type or consumer signature change. One independently useful history-persistence repair and its verification floor remain together.
+
+### Rework — lifecycle request assertions
+
+2026-10-19: Verifier finding 2 identified five stale flattened-write assertions in `src/renderer/src/store/daemonItemCache.test.ts`. Assert the complete ordered sequence of owner admission and item/progress requests, with exact host, conversation, epoch, version and item identities. Keep the deletion, epoch supersession, stale callback, failed unpair and post-stop assertions. No production behavior changes for this finding; the existing security review still applies.
+
+Verifier finding 1 remains under assessment: daemon progress has no independent persistence obligation at an already covered version. A durable storage obligation must not manufacture a daemon completion certificate or discharge genuine repair/unfinished work. An internal IPC extension requires resolution of the ticket's unchanged-contract requirement before implementation.

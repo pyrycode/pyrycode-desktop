@@ -7,6 +7,7 @@ export interface FakeDaemonSetupAttempt {
   outcome: 'opened' | 'retry-reset' | 'failed'
   failureClass: string | null
   responder: 'http-parser' | 'websocket-upgrade' | 'opened' | 'unobserved'
+  listenerMatchesDial: boolean
   parserObserved: boolean
   upgradeObserved: boolean
   upgradeRejected: boolean
@@ -55,6 +56,7 @@ export async function startFakeDaemonForTest(options: FakeDaemonOptions, capture
       const connectionObserved = after.connections > before.connections
       capture.record({
         attempt: attempt + 1, outcome, failureClass,
+        listenerMatchesDial: after.listenerMatchesDial,
         responder: parserObserved ? 'http-parser' : upgradeRejected ? 'websocket-upgrade'
           : connectionObserved ? 'opened' : 'unobserved',
         parserObserved, upgradeObserved, upgradeRejected,

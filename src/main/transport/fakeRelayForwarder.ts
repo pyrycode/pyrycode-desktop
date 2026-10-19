@@ -25,6 +25,7 @@ const PARSER_CODES = [
 
 /** Content-free, per-forwarder counters. Reading returns an independent snapshot. */
 export interface FakeRelaySetupDiagnostics {
+  listenerMatchesDial: boolean
   parserErrors: number
   parserClass: typeof PARSER_CODES[number] | 'none' | 'other'
   upgradeRequests: number
@@ -132,6 +133,7 @@ const DEFAULT_READY_TIMEOUT_MS = 1000
  */
 export function startFakeRelayForwarder(): Promise<FakeRelayForwarder> {
   const diagnostics: FakeRelaySetupDiagnostics = {
+    listenerMatchesDial: false,
     parserErrors: 0, parserClass: 'none', upgradeRequests: 0, upgradeRejections: 0,
     connections: 0, methodValid: false, upgradeValid: false, keyValid: false, versionValid: false
   }
@@ -338,6 +340,7 @@ export function startFakeRelayForwarder(): Promise<FakeRelayForwarder> {
         reject(new Error('fake relay: server address unavailable'))
         return
       }
+      diagnostics.listenerMatchesDial = address.address === '127.0.0.1' && address.family === 'IPv4'
       resolve({
         url: `ws://127.0.0.1:${address.port}`,
         setupDiagnostics: () => ({ ...diagnostics }),

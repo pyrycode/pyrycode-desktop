@@ -117,3 +117,5 @@ Errors remain the existing replacement Error with no cause. Parser codes are all
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-19
+
+2026-10-19 implementation clarification: the occurrence regressions retire the wildcard negative-control owner after closing its competing responder, then construct a fresh explicit IPv4 owner for the encrypted exchange. This checks fresh successful setup on the repaired path on every OS; Darwin recreates its actual wildcard shadowing, while other platforms use an IPv6-only negative control without adding skipped cases. All three cases assert failed socket close and Noise free before the fresh setup. The new ownership regression was observed failing against the restored legacy `http.listen(0)` (`legacy-bind-red.log`: 1 executed/failed; the other 15 cases were deselected), and the restored exact bind passed all affected tests (`ownership-green.log`: 60 executed/passed, 0 failed/skipped).

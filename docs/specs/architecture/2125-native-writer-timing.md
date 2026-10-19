@@ -130,3 +130,51 @@ in the five consecutive final runs; scheduling is not claimed to cure external l
 No shared fixture or product changes. Open scheduling question resolved by this
 measured correction; final repeated native evidence and complete dispatcher gate
 remain required before acceptance.
+
+## Validation evidence
+
+The identical three-spec selection after ordering, at `adc274e938cbe810ab3ed0431a2544557eed99bf`,
+is retained in `/tmp/builder-2125/ordered.json` and `.stderr`: 25 executed/passed,
+zero failed/skipped/retries. Three configured workers, two actual (only two other
+spec files remain after the native prerequisite). Native actual drain 46,404.8 ms,
+runner 46,486.0 ms, keyboard 153.4/18.0/96.9 ms, renderer gap 33.9 ms,
+main gap 146.8 ms. The first competitor starts 886 ms after the native test finishes.
+This contrasts with `contended.json`'s three simultaneous actual workers and failed
+main heartbeat; ordering removes that overlap without changing production storage.
+
+`/tmp/builder-2125/collection.json` records all 519 ordinary configured cases,
+with the native scenario collected exactly once in `native-writer`. Clipboard keeps
+one worker; ordinary parallel specs retain the global worker allocation afterward.
+
+Five consecutive exact native Linux executions on `adc274e938cbe810ab3ed0431a2544557eed99bf`,
+each with three configured / one actual worker and retries zero, each executed/passed
+1, failed/skipped 0. Runtime: Linux x64, Electron 33.4.11, embedded Node 20.18.3,
+ABI 130, real `gnome_libsecret`; all production-backend assertions passed.
+Each admits/persists exactly 8,333 items in 271 submissions, reports no writer or
+diagnostic errors, brackets all three inputs with advancing unfinished durable counts,
+explicitly flushes, compares the entire fresh protected-owner reopen exactly, and
+records both app exits 0 with no signals/teardown failures.
+
+All artifacts below are under `/tmp/builder-2125/`; each JSON has a corresponding
+`.stderr` and `-results` directory. Heartbeat entries give sample count / max gap.
+
+| Report | Actual drain ms | Runner ms | Keyboard x/y/z ms | Renderer beats/gap ms | Main beats/gap ms |
+| --- | ---: | ---: | --- | --- | --- |
+| `final-1.json` | 44443.7 | 44488.5 | 131.2 / 129.4 / 33.5 | 2223 / 31.9 | 960 / 166.4 |
+| `final-2.json` | 49975.8 | 50063.4 | 135.1 / 117.4 / 21.1 | 2499 / 38.7 | 1065 / 168.0 |
+| `final-3.json` | 55347.6 | 55437.0 | 172.2 / 203.1 / 189.6 | 2766 / 51.3 | 1106 / 175.1 |
+| `final-4.json` | 54828.4 | 54907.8 | 163.1 / 188.1 / 220.7 | 2739 / 49.9 | 1111 / 278.8 |
+| `final-5.json` | 48970.3 | 49031.0 | 22.3 / 144.2 / 77.5 | 2449 / 26.8 | 1064 / 377.2 |
+
+Timing regressions: seven executed/passed, zero failed/skipped. The initial red
+run could not import the not-yet-written helper; the completed helper then passes
+the on-time/late-observed, overdue and missing/invalid completion cases. The native
+`alone.json` failure independently proves actual overdue completion is rejected and
+diagnostics survive the failing assertion. That failure remains failed.
+
+Dispatcher handoff: the complete configured application gate is pending, not replaced
+by the 25-case comparison or focused runs. Verifier must review its counted native
+scenario passing without retry. macOS is outside this ticket's verification scope.
+Final scope remains one reliability behaviour, no production files, one exported
+test helper, no consumer migrations, four acceptance criteria and two timing rejects;
+total written work remains below 350 lines and every sizing ceiling.

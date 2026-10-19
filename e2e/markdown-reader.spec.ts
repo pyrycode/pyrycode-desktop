@@ -143,7 +143,9 @@ test('reader headings share the scale, spacing and first-block clearance (#2100)
       await expect(heading).toHaveCSS('font-size', size)
       await expect(heading).toHaveCSS('line-height', line)
       await expect(heading).toHaveCSS('font-weight', weight)
-      await expect(heading).toHaveCSS('letter-spacing', tracking)
+      const actualTracking = await heading.evaluate(element => getComputedStyle(element).letterSpacing)
+      // Blink serializes zero tracking as `normal`, as in the shared heading checks.
+      expect(actualTracking === 'normal' ? '0px' : actualTracking).toBe(tracking)
       await expect(heading).toHaveCSS('color', ink)
     }
     const geometry = await markdown.evaluate(element => {

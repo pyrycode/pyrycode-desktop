@@ -81,12 +81,16 @@ the controlled reproduction and counted automatic, explicit and terminal evidenc
 Bulk fixture feeds need a positive commit barrier too. Send completion and animation
 frames can finish while replies are still reaching the renderer; a tail-only deadline
 can reject an intact but slow feed before the geometry assertions begin.
-[`thread-scroll-work.spec.ts`](../../../e2e/thread-scroll-work.spec.ts) checks all 100
-ordered Markdown texts within a local 15-second limit, then checks cursor absence
-before mutating rows. Keep readiness outside measured hook work. Its
-[bounded-anchor verification](conversation-shell-scroll-pin.md#bounded-anchor-and-growth-verification)
-records the controlled late-completion evidence and deadline rationale; passing
-unthrottled baseline repetitions alone did not establish the cause.
+[`thread-scroll-work.spec.ts`](../../../e2e/thread-scroll-work.spec.ts) checks all
+32/400 ordered Markdown texts within a local 60-second initial-history limit,
+then checks cursor absence before adding Growing. The separate 100-row gap/hidden-run
+case retains its local 15-second limit. Keep readiness outside measured hook work. Its
+[bounded-anchor verification](conversation-shell-scroll-work-verification.md#bounded-anchor-and-growth-verification)
+records the controlled late-completion evidence and deadline rationale. Row 255
+can be an interim commit after main has forwarded the entire burst; inspector reads
+can queue behind renderer processing. Receipt/application/commit timelines distinguish
+this from lost delivery or recovery failure; passing unthrottled repetitions alone
+does not establish the cause.
 
 The footer needs a session-settings snapshot before its controls can render.
 Check the current refresh trigger. A lone idle event does not produce a transition

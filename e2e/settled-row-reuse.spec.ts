@@ -48,7 +48,7 @@ test('settled rows skip deltas and unrelated group toggles while the active repl
   tool('parent', undefined, 'Agent')
   tool('child', 'parent')
   await expect(row('parent').locator('.tool-row__count').last()).toHaveText('1 tool')
-  await expect(row('child')).toBeHidden()
+  await expect(row('child')).toHaveCount(0)
   // A message separates the unrelated tool from the grouped block, avoiding run folding.
   daemon.pushFrame(delta('another settled reply', 'separator'))
   await expect(assistants.last()).toContainText('another settled reply')
@@ -62,7 +62,7 @@ test('settled rows skip deltas and unrelated group toggles while the active repl
   await expect(active).toHaveText('active')
   const initial = await counts()
   expect(initial('TimelineRow')).toBeGreaterThanOrEqual(8)
-  expect(initial('ToolRow')).toBeGreaterThanOrEqual(3)
+  expect(initial('ToolRow')).toBeGreaterThanOrEqual(2)
   expect(initial('AssistantMarkdown')).toBeGreaterThanOrEqual(5)
   expect(initial('StreamingAssistantMarkdown')).toBeGreaterThan(0)
   expect(initial('parseMarkdown')).toBeGreaterThan(0)
@@ -87,24 +87,24 @@ test('settled rows skip deltas and unrelated group toggles while the active repl
     expect(calls('MessageActions')).toBe(1)
   }
 
-  const toggle = async (id: string, expanded: boolean) => {
+  const toggle = async (id: string, expanded: boolean, expectedToolCalls = 1) => {
     await row(id).locator('.tool-row__chip').click()
     await expect(row(id).locator('.tool-row__chip')).toHaveAttribute('aria-expanded', String(expanded))
     const calls = await counts()
-    expect(calls('ToolRow')).toBe(1)
+    expect(calls('ToolRow')).toBe(expectedToolCalls)
     expect(calls('TimelineRow')).toBe(0)
     expect(calls('AssistantMarkdown')).toBe(0)
     expect(calls('StreamingAssistantMarkdown')).toBe(0)
     expect(calls('parseMarkdown')).toBe(0)
     expect(calls('MessageActions')).toBe(0)
   }
-  await toggle('parent', true)
+  await toggle('parent', true, 2) // The parent renders and its child mounts.
   await expect(row('child')).toBeVisible()
   await toggle('child', true)
   await expect(row('child').locator('.tool-row__result')).toHaveText('result of child')
   await toggle('parent', false)
-  await expect(row('child')).toBeHidden()
-  await toggle('parent', true)
+  await expect(row('child')).toHaveCount(0)
+  await toggle('parent', true, 2)
   await expect(row('child').locator('.tool-row__result')).toBeVisible()
   expect(await page.evaluate(() => {
     const nodes = Reflect.get(window, 'reuseNodes') as Element[]

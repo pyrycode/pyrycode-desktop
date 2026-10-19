@@ -299,6 +299,16 @@ async function boxOf(locator: Locator, what: string): Promise<Box> {
   return box
 }
 
+async function openCommittedRun(page: Page, count: number, status: 'Done' | 'Failed' | 'Running'): Promise<void> {
+  const run = page.locator('.tool-run button')
+  await expect(run).toContainText(`Using tools: ${count}`, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(run.getByRole('img', { name: status, exact: true })).toBeVisible()
+  await expect(run).toHaveAttribute('aria-expanded', 'false')
+  await expect(page.locator('.tool-row:not(.tool-run__row)')).toHaveCount(0)
+  await run.click()
+  await expect(run).toHaveAttribute('aria-expanded', 'true')
+}
+
 test('tool row: the header pins its trailing group flush while the headline ellipsises', async ({
   launchPairedApp
 }) => {
@@ -385,8 +395,8 @@ test('tool row: the header pins its trailing group flush while the headline elli
   // which is exactly what the split exists to prevent — and what the long row above cannot detect.
   daemon.pushFrame(splitToolUseFrame(SHORT_TOOL_USE_ID, SHORT_HEADLINE))
   daemon.pushFrame(splitToolResultFrame(SHORT_TOOL_USE_ID))
+  await openCommittedRun(page, 2, 'Done')
   await expect(shortRow).toHaveClass(/tool-row--resolved/, { timeout: ROUNDTRIP_TIMEOUT_MS })
-  await page.locator('.tool-run button').click()
   await expect(shortRow.locator('.tool-row__chevron')).toHaveCount(1)
   // The headline genuinely fits — so the group below is flush because it was PLACED there, not because
   // its sibling's content pushed it there.
@@ -486,8 +496,8 @@ test('tool row: a described shell call starts at the hard left, an undescribed o
   daemon.pushFrame(routedToolResultFrame(UNDESCRIBED_TOOL_USE_ID))
   daemon.pushFrame(routedToolResultFrame(PATH_TOOL_USE_ID))
 
+  await openCommittedRun(page, 3, 'Done')
   await expect(pathRow).toHaveClass(/tool-row--resolved/, { timeout: ROUNDTRIP_TIMEOUT_MS })
-  await page.locator('.tool-run button').click()
   await expect(rows).toHaveCount(3)
 
   // --- AC1. The described call draws its description alone, and that run starts at the header's HARD
@@ -623,8 +633,8 @@ test('tool row: the result count draws before the chevron and lines up down the 
   daemon.pushFrame(countedToolResultFrame(COUNT_PATH_ID, PATH_COUNT))
   daemon.pushFrame(countedToolResultFrame(COUNT_HOSTILE_ID, HOSTILE_COUNT))
 
+  await openCommittedRun(page, 4, 'Done')
   await expect(hostileRow).toHaveClass(/tool-row--resolved/, { timeout: ROUNDTRIP_TIMEOUT_MS })
-  await page.locator('.tool-run button').click()
   await expect(rows).toHaveCount(4)
 
   // --- The carry, end to end: the count the wire sent is the count the row draws. The three header
@@ -855,8 +865,8 @@ test('tool row: an expanded row is one box with its body inside the border', asy
   daemon.pushFrame(routedToolResultFrame(BOX_PLAIN_ID))
   daemon.pushFrame(failedToolResultFrame(BOX_SHELL_ID))
 
+  await openCommittedRun(page, 2, 'Failed')
   await expect(shellRow).toHaveClass(/tool-row--error/, { timeout: ROUNDTRIP_TIMEOUT_MS })
-  await page.locator('.tool-run button').click()
   await expect(rows).toHaveCount(2)
 
   await plainRow.locator('.tool-row__chip--toggle').click()
@@ -1059,8 +1069,8 @@ test('tool row: the expanded body draws boxed field values and a bare result', a
   daemon.pushFrame(routedToolResultFrame(BODY_PLAIN_ID))
   daemon.pushFrame(failedToolResultFrame(BODY_SHELL_ID))
 
+  await openCommittedRun(page, 2, 'Failed')
   await expect(shellRow).toHaveClass(/tool-row--error/, { timeout: ROUNDTRIP_TIMEOUT_MS })
-  await page.locator('.tool-run button').click()
   await expect(rows).toHaveCount(2)
 
   await plainRow.locator('.tool-row__chip--toggle').click()
@@ -1364,9 +1374,10 @@ test('tool row: consecutive rows join into one stack with a single border at eac
 
   const failedRow = rows.nth(2)
   const trailingRow = rows.nth(3)
-  // The LAST result to arrive is the settle signal — every earlier frame is already applied by then.
+  await expect(page.locator('.tool-run button')).toContainText('1 failed')
+  await openCommittedRun(page, 4, 'Running')
+  // Inspect the last result only after the run's members mount.
   await expect(trailingRow).toHaveClass(/tool-row--resolved/, { timeout: ROUNDTRIP_TIMEOUT_MS })
-  await page.locator('.tool-run button').click()
   await expect(failedRow).toHaveClass(/tool-row--error/)
   await expect(rows).toHaveCount(4)
 
@@ -1459,7 +1470,7 @@ test('tool row: consecutive rows join into one stack with a single border at eac
   await failedRow.locator('.tool-row__chip').click()
   await expect(failedRow.locator('.tool-row__result')).toHaveCount(0)
   await expect(rows.getByRole('img', { name: 'Failed' })).toHaveCount(1)
-  await page.screenshot({ path: '/tmp/builder-1748/failed-stack.png', animations: 'disabled' })
+  await page.screenshot({ path: '/tmp/builder-2127/rework-failed-stack.png', animations: 'disabled' })
 
   // --- AC5. Expanding a row INSIDE the run does not break the stack: the body stays inside its own border
   // (#1102's test proves the containment; what this proves is that the row still joins on both sides after

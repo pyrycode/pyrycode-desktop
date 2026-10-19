@@ -86,17 +86,17 @@ it('requires the actual captured transport close after all preceding daemon fram
 
 it('settles only the current connection without needing a future request', async () => {
   const replay = new RecordedExchange(fixture())
-  const pending = replay.settleConnection()
+  const pending = replay.whenConnectionComplete()
   const frames = replay.reply(encodeEnvelope(message(2, 'list_conversations')))
   expect(frames).toHaveLength(1)
   await pending
   expect(replay.stats().remainingRequests).toBe(1)
   expect(() => replay.assertComplete()).toThrow('incomplete')
   replay.reconnect()
-  const next = replay.settleConnection()
+  const next = replay.whenConnectionComplete()
   replay.reply(encodeEnvelope(message(2, 'list_conversations')))
   await next
-  await replay.settleConnection()
+  await replay.whenConnectionComplete()
   replay.assertComplete()
 })
 
@@ -104,13 +104,13 @@ it('bounds a persistent missing prefix, keeps failure sticky and removes the dea
   vi.useFakeTimers()
   try {
     const replay = new RecordedExchange(fixture())
-    const pending = replay.settleConnection()
+    const pending = replay.whenConnectionComplete()
     const failure = expect(pending).rejects.toThrow('connection prefix incomplete')
     await vi.advanceTimersByTimeAsync(5_000)
     await failure
     expect(vi.getTimerCount()).toBe(0)
     expect(() => replay.reply(encodeEnvelope(message(2, 'list_conversations')))).toThrow('connection prefix incomplete')
-    await expect(replay.settleConnection()).rejects.toThrow('connection prefix incomplete')
+    await expect(replay.whenConnectionComplete()).rejects.toThrow('connection prefix incomplete')
     expect(() => replay.assertComplete()).toThrow('connection prefix incomplete')
   } finally { vi.useRealTimers() }
 })
@@ -122,7 +122,7 @@ it('rejects unreleased test-side actions without waiting or releasing their fram
     capture.barriers = [{ before: 1, name: 'release-tool' }]
     const replay = new RecordedExchange(capture)
     replay.reply(encodeEnvelope(message(2, 'list_conversations')))
-    await expect(replay.settleConnection()).rejects.toThrow('connection has unreleased checkpoint')
+    await expect(replay.whenConnectionComplete()).rejects.toThrow('retirement requires an unreleased checkpoint')
     expect(replay.stats().emittedFrames).toBe(0)
     expect(vi.getTimerCount()).toBe(0)
   } finally { vi.useRealTimers() }
@@ -132,7 +132,7 @@ it('propagates a concurrent mismatch unchanged and clears all settlement waiters
   vi.useFakeTimers()
   try {
     const replay = new RecordedExchange(fixture())
-    const waits = [replay.settleConnection(), replay.settleConnection()]
+    const waits = [replay.whenConnectionComplete(), replay.whenConnectionComplete()]
     const outcomes = Promise.all(waits.map(wait => wait.catch(error => error)))
     let failure: unknown
     try { replay.reconnect() } catch (error) { failure = error }
@@ -147,8 +147,27 @@ it('does not require a checkpoint belonging to the independent next connection',
   capture.barriers = [{ before: 2, name: 'next-profile-action' }]
   const replay = new RecordedExchange(capture)
   replay.reply(encodeEnvelope(message(2, 'list_conversations')))
-  await replay.settleConnection()
+  await replay.whenConnectionComplete()
   expect(() => replay.reconnect()).toThrow('connection mismatch')
+})
+
+it('rejects when natural progress reaches a checkpoint without making its rejection sticky', async () => {
+  vi.useFakeTimers()
+  const capture = fixture()
+  capture.barriers = [{ before: 1, name: 'release-tool' }]
+  const replay = new RecordedExchange(capture)
+  let rejected = false
+  const outcome = replay.whenConnectionComplete().catch(error => { rejected = true; return error })
+  await Promise.resolve()
+  expect(rejected).toBe(false)
+  expect(replay.reply(encodeEnvelope(message(2, 'list_conversations')))).toEqual([])
+  expect(await outcome).toEqual(new Error('Recorded exchange retirement requires an unreleased checkpoint'))
+  expect(vi.getTimerCount()).toBe(0)
+  expect(replay.stats().emittedFrames).toBe(0)
+  // Only the test-side action may release its frames, never the retirement waiter.
+  expect(replay.checkpoint('release-tool')).toHaveLength(1)
+  await replay.whenConnectionComplete()
+  expect(vi.getTimerCount()).toBe(0)
 })
 
 it('keeps a retiring connection alive until its own trailing request and replies settle', async () => {

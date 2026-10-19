@@ -4,6 +4,22 @@ import { parseChatHistoryRequest, parseChatHistorySnapshot, threadHistoryCodec }
 const summary = { id: 'chat', name: null, is_promoted: false, is_archived: true, cwd: '/display', last_message_ts: '', last_used_at: 'date', workspace_label: null }
 
 describe('chat history records and requests', () => {
+  it('admits detached bounded persistence parts and rejects malformed identities, sequences and oversized work', () => {
+    const persistence = { id: '12345678-1234-4234-8234-123456789abc', part: 0, parts: 3 }
+    const change = { metadata: { hostId: 'h', conversationId: 'c', epoch: 'e', version: 100, checkpoint: 100, repair: null },
+      acceptEpoch: false, items: [], removeIds: [], ranges: [], persistence }
+    const parse = (patch: object) => parseChatHistoryRequest({ operation: 'mutateThread', serverId: 'h', conversationId: 'c', change: { ...change, ...patch } })
+    expect(parse({})).toMatchObject({ change: { persistence } })
+    const parsed = parse({})
+    persistence.part = 1
+    expect(parsed).toMatchObject({ change: { persistence: { part: 0 } } })
+    for (const p of [null, {}, { ...persistence, id: 'scope' }, { ...persistence, part: -1 },
+      { ...persistence, part: 3 }, { ...persistence, parts: 1 }, { ...persistence, parts: 100001 },
+      { ...persistence, extra: true }, { ...persistence, part: 0.5 }]) expect(() => parse({ persistence: p })).toThrow()
+    expect(() => parse({ removeIds: Array.from({ length: 32 }, (_, i) => i) })).toThrow()
+    expect(() => parse({ priorProgress: Array.from({ length: 32 }, () => ({ metadata: change.metadata })) })).toThrow()
+    expect(parse({ removeIds: Array.from({ length: 31 }, (_, i) => i) })).toMatchObject({ change: { persistence } })
+  })
   it('admits bounded opaque recovery only on before-page requests and detached partial pages', () => {
     const request = { operation: 'beforeThreadPage', serverId: 'host', conversationId: 'chat', limit: 20, continuation: 'YQ', recovery: 'Yg' }
     expect(parseChatHistoryRequest(request)).toEqual(request)

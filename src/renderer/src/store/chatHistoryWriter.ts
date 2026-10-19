@@ -30,6 +30,17 @@ function combine(previous: Mutation, next: Mutation): Mutation | undefined {
 
 // The final progress observation counts too. Every submitted request is independently valid.
 function* mutationSteps(request: Mutation): Generator<Mutation> {
+  const c = request.change
+  const units = c.items.length + c.removeIds.length + c.ranges.length + (c.priorProgress?.length ?? 0) + 1
+  const parts = Math.ceil(c.items.length / 31) + Math.ceil(c.removeIds.length / 31) +
+    Math.ceil(c.ranges.length / 31) + Math.ceil((c.priorProgress?.length ?? 0) / 32) + 1
+  const id = units > 32 ? crypto.randomUUID() : undefined
+  let part = 0
+  for (const next of dataSteps(request)) yield id === undefined ? next : {
+    ...next, change: { ...next.change, persistence: { id, part: part++, parts } }
+  }
+}
+function* dataSteps(request: Mutation): Generator<Mutation> {
   const c = request.change, prior = c.priorProgress ?? []
   if (c.items.length + c.removeIds.length + c.ranges.length + prior.length + 1 <= 32) {
     yield request

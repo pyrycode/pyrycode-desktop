@@ -74,8 +74,106 @@ async function cache(intercept?: (request: ChatHistoryRequest, execute: () => Pr
   const writer = createChatHistoryWriter({ threads: source, lists: createConversationListStore(),
     receipt: () => null, log: () => {},
     write: request => intercept ? intercept(request, () => storage.execute(request)) : storage.execute(request), schedule: () => () => {} })
-  return { fresh, source, api, writer }
+  return { fresh, source, api, writer, storage }
 }
+
+it.each([[100, false], [100, true], [50, false], [50, true]] as const)(
+  'covered checkpoint save stays unreadable until exact retry: version=%s certificate=%s', async (version, certificate) => {
+    let itemWrites = 0, failing = true
+    const requests: ChatHistoryRequest[] = []
+    const { fresh, storage, source, api, writer } = await cache(async (request, execute) => {
+      requests.push(request)
+      if (request.operation === 'mutateThread' && request.change.items.length && ++itemWrites === 2 && failing)
+        return { status: 'error', code: 'write-failed' }
+      return execute()
+    })
+    api.acceptEpoch('a', 'c', 'e'); await writer.flush()
+    const held = source.getState().hosts.get('a')!.get('c')!
+    const metadata = { hostId: 'a', conversationId: 'c', epoch: 'e', version: 100, checkpoint: 100,
+      uncommittedVersion: 0, repair: null, olderAvailable: false }
+    const items = Array.from({ length: 100 }, (_, id) => ({ id, rev: 1, kind: 'assistant_message',
+      order: id, shown: true, active: false, status: 'finished', summary: '', content: { text: `fixture ${id}` } }))
+    await storage.execute({ operation: 'mutateThread', serverId: 'a', conversationId: 'c', change: {
+      metadata, acceptEpoch: false, items: items.slice(98), removeIds: [], ranges: [] } })
+    const page = await storage.execute({ operation: 'newestThreadPage', serverId: 'a', conversationId: 'c', limit: 1 })
+    if (page.status !== 'page' || !page.page.continuation) throw Error('missing seed page')
+    const incoming = { ...metadata, version, checkpoint: version }
+    source.setState({ hosts: new Map([['a', new Map([['c', { ...held, owned: {
+      metadata: incoming, items, ranges: [{ start: 0, end: 100 }], removeIds: [], acceptEpoch: false,
+      ...(certificate ? { completion: { fromVersion: 0, version } } : {})
+    } }]])]]) })
+    await writer.flush()
+    const interrupted = fresh()
+    for (const operation of ['readThread', 'openThreadPage', 'newestThreadPage', 'beforeThreadPage'] as const) {
+      expect(await interrupted.execute({ operation, serverId: 'a', conversationId: 'c',
+        ...(operation === 'readThread' ? {} : { limit: 1 }),
+        ...(operation === 'beforeThreadPage' ? { continuation: page.page.continuation } : {}) }))
+        .toEqual({ status: 'error', code: 'unreadable' })
+    }
+    expect(await interrupted.execute({ operation: 'mutateThread', serverId: 'a', conversationId: 'c', change: {
+      metadata, acceptEpoch: false, items: [], ranges: [], removeIds: [] } }))
+      .toEqual({ status: 'error', code: 'write-failed' })
+    const failedRequest = requests.at(-1)
+    failing = false
+    await writer.flush()
+    expect(requests).toContainEqual(failedRequest)
+    expect(await fresh().execute({ operation: 'readThread', serverId: 'a', conversationId: 'c' }))
+      .toEqual({ status: 'stored', snapshot: { version: 1, kind: 'daemon-items', serverId: 'a', conversationId: 'c',
+        thread: { ...metadata, items, ranges: [{ start: 0, end: 100 }], arrivalOrder: [98, 99, ...items.slice(0, 98).map(i => i.id)] } } })
+    await writer.stop()
+  })
+
+it('stop leaves repeatedly failed admitted work protected without spinning or manufacturing completion', async () => {
+  let failures = 0
+  const { fresh, source, api, writer } = await cache(async (request, execute) => {
+    if (request.operation === 'mutateThread' && request.change.persistence?.part === 1) {
+      failures++; return { status: 'error', code: 'write-failed' }
+    }
+    return execute()
+  })
+  api.acceptEpoch('a', 'c', 'e'); await writer.flush()
+  const held = source.getState().hosts.get('a')!.get('c')!
+  source.setState({ hosts: new Map([['a', new Map([['c', { ...held, owned: {
+    metadata: { ...held.owned!.metadata, version: 100, checkpoint: 100 }, acceptEpoch: false,
+    items: Array.from({ length: 100 }, (_, id) => ({ id, rev: 1, kind: 'future' })), ranges: [], removeIds: []
+  } }]])]]) })
+  await writer.flush(); expect(failures).toBe(1)
+  await writer.stop(); expect(failures).toBe(2)
+  api.requireRepair('a', 'c', 'e', 101)
+  await new Promise(resolve => setTimeout(resolve, 10))
+  expect(failures).toBe(2)
+  expect(await fresh().execute({ operation: 'readThread', serverId: 'a', conversationId: 'c' }))
+    .toEqual({ status: 'error', code: 'unreadable' })
+})
+
+it.each(['prefix', 'final'] as const)('lost %s acknowledgement retries without resurrecting obligations', async lost => {
+  let lose = true
+  const { fresh, source, api, writer } = await cache(async (request, execute) => {
+    const result = await execute()
+    if (request.operation === 'mutateThread' && request.change.persistence && lose &&
+      request.change.persistence.part === (lost === 'prefix' ? 1 : request.change.persistence.parts - 1)) {
+      lose = false; throw Error('lost acknowledgement')
+    }
+    return result
+  })
+  api.acceptEpoch('a', 'c', 'e'); await writer.flush()
+  const held = source.getState().hosts.get('a')!.get('c')!
+  const metadata = { hostId: 'a', conversationId: 'c', epoch: 'e', version: 100, checkpoint: 100,
+    uncommittedVersion: 0, repair: null }
+  const items = Array.from({ length: 100 }, (_, id) => ({ id, rev: 1, kind: 'future' }))
+  const change = { metadata, items, ranges: [], removeIds: [], acceptEpoch: false }
+  const admit = (owned: typeof change) => source.setState({ hosts: new Map([['a', new Map([['c', { ...held, owned }]])]]) })
+  admit(change); await writer.flush()
+  expect(lose).toBe(false)
+  expect((await fresh().execute({ operation: 'readThread', serverId: 'a', conversationId: 'c' })).status)
+    .toBe(lost === 'prefix' ? 'error' : 'stored')
+  admit({ ...change, items: [{ id: 100, rev: 1, kind: 'future' }] })
+  await writer.stop()
+  expect(await fresh().execute({ operation: 'readThread', serverId: 'a', conversationId: 'c' }))
+    .toEqual({ status: 'stored', snapshot: { version: 1, kind: 'daemon-items', serverId: 'a', conversationId: 'c',
+      thread: { ...metadata, items: [...items, { id: 100, rev: 1, kind: 'future' }], ranges: [],
+        arrivalOrder: [...items.map(i => i.id), 100] } } })
+})
 
 it('bounded data prefixes reopen unfinished and retry to the exact separately admitted state', async () => {
   const results: unknown[] = []
@@ -103,11 +201,7 @@ it('bounded data prefixes reopen unfinished and retry to the exact separately ad
     await writer.flush()
     if (fail) {
       const partial = await fresh().execute({ operation: 'readThread', serverId: 'a', conversationId: 'c' })
-      expect(partial).toMatchObject({ status: 'stored', snapshot: { thread: { checkpoint: 0, version: 100 } } })
-      if (partial.status === 'stored' && partial.snapshot.kind === 'daemon-items') {
-        expect(partial.snapshot.thread.items.length).toBeGreaterThan(0)
-        expect(partial.snapshot.thread.items.length).toBeLessThan(100)
-      }
+      expect(partial).toEqual({ status: 'error', code: 'unreadable' })
       failing = false
       await writer.flush()
     }

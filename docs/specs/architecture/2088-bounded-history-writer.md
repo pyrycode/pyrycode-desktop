@@ -147,3 +147,7 @@ Documentation pending: `docs/knowledge/features/chat-history-api.md`, **Owned au
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-19
+
+## Revisions — schema admission (2026-10-19)
+
+The receipt journal is a versioned database schema-8 addition, admitted by `historyDatabase.open` and created atomically by the first split mutation. This adds one production file read/touched (`src/main/historyDatabase.ts` → `open`); snapshot format version 1 stays unchanged. Older executables reject schema 8 instead of silently ignoring pending persistence state. Opening conversion of a different retained scope preserves schema 8; `protects ordered save parts and exact acknowledgements independently of daemon fences` covers this alongside host isolation and duplicate acknowledgements.

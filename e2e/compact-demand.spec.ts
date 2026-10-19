@@ -211,7 +211,7 @@ test('compact Retry, retained complete evidence and late navigation replies rema
       const compact = request.payload.projection === 'compact-v1'
       if (compact && !failed) { failed = true; return [frame('error', { code: 'thread.query_failed', message: 'Unavailable' }, request.id)] }
       return [frame('thread_items', { ...route, conversation_id: request.payload.conversation_id, version: compact ? 20 : 10,
-        ...(compact ? { projection: 'compact-v1', headers: [header(5, 0, 'agent')] } : {}),
+        ...(compact ? { projection: 'compact-v1', headers: [{ ...header(5, 0, 'agent'), subtree_version: 20 }] } : {}),
         items: [full(1, request.payload.conversation_id !== SEEDED_ROW.id ? 'Other compact' : compact ? 'Compact replacement' : 'Complete retained')], final: false }, request.id),
       frame('thread_items', { ...route, conversation_id: request.payload.conversation_id, version: compact ? 20 : 10, ...(compact ? { projection: 'compact-v1' } : {}), items: [], final: true,
         ...(Number(request.payload.version) > 0 ? { from_version: request.payload.version }
@@ -256,7 +256,7 @@ test('compact Retry, retained complete evidence and late navigation replies rema
   await page.getByText('Other discussion', { exact: true }).click()
   await expect(page.getByText('Loading…', { exact: true })).toHaveCount(0)
   daemon.pushFrame(frame('thread_children', { ...route, version: 20, item_id: 5, rev: 1,
-    children: [header(100, 5)], final: false }, held!.id))
+    children: [{ ...header(100, 5), subtree_version: 20 }], final: false }, held!.id))
   daemon.pushFrame(frame('thread_children', { ...route, version: 20, item_id: 5, rev: 1, children: [], final: true, more: false }, held!.id))
   await expect(page.getByText('Other compact', { exact: true })).toBeVisible()
   await page.getByText(SEEDED_ROW.name!, { exact: true }).first().click()

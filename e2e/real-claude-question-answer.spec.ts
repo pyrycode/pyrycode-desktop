@@ -128,7 +128,7 @@ test('real claude changes model during a question and resumes with the original 
     const chosen = labels[labels.length - 1]
     expect(chosen.length).toBeGreaterThan(0)
     await cards.nth(0).locator(OPTION_LABEL).last().click()
-    const other = cards.nth(1).getByPlaceholder('Other. Type something.')
+    const other = cards.nth(1).getByRole('textbox', { name: 'Other. Type something.', exact: true })
     await other.fill(confirmation)
     await expect(trailing).toHaveText('Continue')
     await expect(trailing).toBeEnabled()

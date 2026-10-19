@@ -111,6 +111,13 @@ describe('original question answer evidence', () => {
     s.emit('thread_item_changed', { item_id: 9, base_rev: 1, rev: 2, changes: { status: 'done' } })
     expect(s.proof.complete()).toBe(false)
   })
+  it('does not reject a correct witness because a snapshot-only user item later changes', () => {
+    const s = setup(); s.arm()
+    s.emit('thread_item_changed', { item_id: 20, base_rev: 1, rev: 8,
+      changes: { status: 'done', content: { text: 'unrelated user message' } } })
+    s.finish()
+    expect(s.proof.complete()).toBe(true)
+  })
   it('accepts fresh append text once and rejects prefix replacement or epoch reuse', () => {
     for (const fault of ['none', 'prefix', 'epoch']) {
       const s = setup(); s.reply('Before.'); s.arm(); s.submit(); s.dismiss()

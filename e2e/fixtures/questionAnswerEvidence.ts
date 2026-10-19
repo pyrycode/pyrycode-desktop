@@ -55,7 +55,9 @@ export function createQuestionAnswerEvidence(subscribe = false) {
       const paired = update.type === 'thread_text_append' && p.rev === p.base_rev &&
         previousCompanion?.id === update.payload.item_id && previousCompanion.rev === p.rev && previousCompanion.version === p.version
       if (old && old.rev >= p.rev && !paired) return
-      if (!old || old.rev !== p.base_rev) { invalid = true; failure = 'revision'; return }
+      // Unknown items (for example a user row supplied only by catch-up) cannot contribute evidence.
+      if (!old) return
+      if (old.rev !== p.base_rev) { invalid = true; failure = 'revision'; return }
       if (update.type === 'thread_item_changed') {
         item = { ...old, ...update.payload.changes, rev: p.rev }
         companion = { id: old.id, rev: p.rev, version: p.version }

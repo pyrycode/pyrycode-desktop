@@ -123,10 +123,10 @@ test('real claude changes model during a question and resumes with the original 
     expect(await page.evaluate(() => (window as unknown as EvidenceWindow).questionAnswerEvidence.identity())).toEqual(original)
     await expect(panel).toBeVisible()
 
-    const labels = (await cards.nth(0).locator(OPTION_LABEL).allTextContents()).map(label => label.trim())
+    const labels = await cards.nth(0).locator(OPTION_LABEL).allTextContents()
     expect(labels.length).toBeGreaterThanOrEqual(2)
     const chosen = labels[labels.length - 1]
-    expect(chosen.length).toBeGreaterThan(0)
+    expect(chosen.trim().length).toBeGreaterThan(0)
     await cards.nth(0).locator(OPTION_LABEL).last().click()
     const other = cards.nth(1).getByRole('textbox', { name: 'Other. Type something.', exact: true })
     await other.fill(confirmation)
@@ -142,6 +142,7 @@ test('real claude changes model during a question and resumes with the original 
       .toEqual({ armed: true, submitted: true, dismissed: true, witnessed: true, completed: true, invalid: false, failure: '' })
     await expect(page.locator('[data-thread-role="assistant"]').filter({ hasText: confirmation })).toHaveCount(1)
     await expect(page.locator(CURSOR_SELECTOR)).toHaveCount(0, { timeout: TURN_TIMEOUT_MS })
+    await page.evaluate(() => (window as unknown as EvidenceWindow).questionAnswerEvidence.stop())
 
     // system/init announces the changed resolved model on the ensuing user turn, after original completion.
     const announcementCount = await page.evaluate(() => (window as unknown as EvidenceWindow).questionModelEvidence.announced.length)

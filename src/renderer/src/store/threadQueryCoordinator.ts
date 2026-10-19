@@ -101,7 +101,7 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
     if (host === null) return
     if (!p || p.requestId !== event.requestId || p.scope.id !== event.conversationId) return
     if (event.type === 'threadQueryFailed') { fail(host, h, p, event.reason); return }
-    if (event.reply.payload.projection !== undefined) return
+    if ('projection' in event.reply.payload) return
     if (event.reply.type === 'thread_tool_body' || event.reply.type === 'thread_children') return
     const reply = event.reply, value = reply.payload
     if (value.conversation_id !== p.scope.id) return

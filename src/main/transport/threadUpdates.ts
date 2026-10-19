@@ -151,7 +151,7 @@ function metadata(type: string, p: Part, envelope: Envelope): string {
 }
 function matches(update: ThreadUpdate | ThreadReply | ThreadCompactUpdate, p: Part): boolean {
   const u = update.payload
-  if (u.projection !== p.projection) return false
+  if (('projection' in u ? u.projection : undefined) !== p.projection) return false
   if (update.type === 'thread_compact_update') {
     const row = update.payload.item ?? update.payload.header
     return row?.id === p.item_id && row.rev === p.rev && u.conversation_id === p.conversation_id && u.epoch === p.epoch &&
@@ -200,7 +200,7 @@ export function createThreadUpdateReceiver(deliver: (event: ThreadDelivery) => v
     const p = update.payload
     if (p.conversation_id !== q.query.payload.conversation_id) { fail(id, 'metadata'); return }
     const projection = 'projection' in q.query.payload ? q.query.payload.projection : undefined
-    if (projection !== p.projection || (envelope.conversation_id !== undefined && envelope.conversation_id !== p.conversation_id) ||
+    if (projection !== ('projection' in p ? p.projection : undefined) || (envelope.conversation_id !== undefined && envelope.conversation_id !== p.conversation_id) ||
         (q.query.type === 'thread_page' && projection && q.query.payload.epoch !== p.epoch)) { fail(id, 'metadata'); return }
     if (update.type === 'thread_children') {
       const v = update.payload, request = q.query

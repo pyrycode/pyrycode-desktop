@@ -131,7 +131,7 @@ export function createThreadCompact(deps: {
     if (e.type !== 'threadReply' && e.type !== 'threadQueryFailed') return false
     settle(e)
     const p = pendings.get(host)
-    const compactReply = e.type === 'threadReply' && e.reply.payload.projection === 'compact-v1'
+    const compactReply = e.type === 'threadReply' && 'projection' in e.reply.payload && e.reply.payload.projection === 'compact-v1'
     if (!p || e.requestId !== p.requestId || e.conversationId !== p.query.payload.conversation_id) { pump(host); return compactReply }
     const chat = e.conversationId, s = snapshot(host, chat)
     if (e.type === 'threadQueryFailed') {

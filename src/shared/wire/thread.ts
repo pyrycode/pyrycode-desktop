@@ -18,7 +18,8 @@ export interface ThreadItem {
   parent?: number
   subtype?: string
 }
-type Routing = { conversation_id: string; epoch: string; version: number; projection?: 'compact-v1' }
+type Routing = { conversation_id: string; epoch: string; version: number }
+type ProjectionRouting = Routing & { projection?: 'compact-v1' }
 export type ThreadCompactUpdate = { type: 'thread_compact_update'; payload: Routing & {
   projection: 'compact-v1'; from_version: number; progress: boolean; item?: ThreadItem; header?: ThreadSummary } }
 type Revision = { item_id: number; base_rev: number; rev: number }
@@ -46,8 +47,8 @@ export type ThreadReply =
       ({ final: false } | { final: true; more: boolean; cursor?: ThreadChildCursor }) }
   | { type: 'thread_tool_body'; payload: Routing & { item_id: number; rev: number; kind: 'tool_call' | 'agent' } &
       ({ content: Record<string, unknown>; final: false } | { final: true }) }
-  | { type: 'thread_items'; payload: Routing & { items: ThreadItem[]; headers?: ThreadSummary[]; final: false } }
-  | { type: 'thread_items'; payload: Routing & { items: []; final: true } &
+  | { type: 'thread_items'; payload: ProjectionRouting & { items: ThreadItem[]; headers?: ThreadSummary[]; final: false } }
+  | { type: 'thread_items'; payload: ProjectionRouting & { items: []; final: true } &
       ({ from_version: number } | { lower_order: number; upper_order: number; continuation: number; older_exists: boolean }) }
-  | { type: 'thread_reset'; payload: Routing }
+  | { type: 'thread_reset'; payload: ProjectionRouting }
 export type ThreadQueryFailure = ThreadRepairReason | 'unavailable' | 'send-failed' | 'interrupted' | 'daemon-error'

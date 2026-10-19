@@ -207,6 +207,9 @@ export function createThreadRuntime(deps: {
   const offRemoval = subscribeChatHistoryRemoval(host => removed => { if (removed) removeHost(host) })
   return {
     items, sends, refusals, taskStops, state, live, isThread, bodies,
+    children: { demand(request: Omit<Parameters<typeof bodies.demand>[0], 'kind'>, listener?: Parameters<typeof bodies.demand>[1]) {
+      return bodies.demand({ ...request, kind: 'children' }, listener)
+    } },
     acceptsLifecycle(event: StampedDaemonEvent): boolean {
       if (this.acceptsSession(event)) return true
       if (!selected || event.serverId !== selected.host) return false

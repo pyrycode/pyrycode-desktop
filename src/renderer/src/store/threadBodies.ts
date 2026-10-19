@@ -1,15 +1,18 @@
 import type { RendererCommand } from '../../../shared/ipc/commands'
 import { isRendererCommand } from '../../../shared/ipc/commands'
 import type { StampedDaemonEvent } from '../../../shared/ipc/events'
+import type { ThreadChildCursor, ThreadSummary, ThreadQuery } from '../../../shared/wire/thread'
 
-type Request = { serverId: string; conversationId: string; epoch: string; itemId: number; revision: number; kind: 'tool_call' | 'agent' }
-export type ThreadBodyState =
+type Request = { serverId: string; conversationId: string; epoch: string; itemId: number; revision: number; kind: 'tool_call' | 'agent' | 'children'; limit?: number }
+type ChildPage = { children: ThreadSummary[]; version: number; complete: boolean; more?: boolean; cursor?: ThreadChildCursor;
+  completedCursors?: ThreadChildCursor[] }
+export type ThreadBodyState = (
   | { type: 'ready'; content: Record<string, unknown>; stale: boolean }
-  | { type: 'missing' | 'loading' | 'failed'; reason: string; content?: Record<string, unknown>; stale: true }
+  | { type: 'missing' | 'loading' | 'failed'; reason: string; content?: Record<string, unknown>; stale: true }) & { page?: ChildPage }
 type Lease = { active: boolean; listener?: (state: ThreadBodyState) => void }
 type Entry = { request: Request; generation: symbol | undefined; leases: Set<Lease>; state: ThreadBodyState;
   connection?: symbol; requestId?: string; staged?: Record<string, unknown>; bytes: number;
-  timer?: ReturnType<typeof setTimeout>; queued: boolean }
+  timer?: ReturnType<typeof setTimeout>; queued: boolean; cursor?: ThreadChildCursor; replacing?: boolean }
 const missing = (reason: string): ThreadBodyState => ({ type: 'missing', reason, stale: true })
 
 /** Session-only bodies. This writer never receives a canonical store mutation capability. */
@@ -20,8 +23,18 @@ export function createThreadBodies(deps: {
 }, limits = { active: 4, queued: 28, entries: 64, bytes: 16 * 1024 * 1024, leases: 128 }) {
   const entries = new Map<string, Entry>(), connections = new Map<string, { token: symbol; supported: boolean }>()
   let leaseCount = 0, disposed = false, retiring = 0
-  const key = (r: Request) => JSON.stringify([r.serverId, r.conversationId, r.epoch, r.itemId, r.revision, r.kind])
+  const key = (r: Request) => JSON.stringify([r.serverId, r.conversationId, r.epoch, r.itemId, r.revision, r.kind,
+    ...(r.kind === 'children' ? [Math.min(r.limit || 50, 256)] : [])])
   const retained = (e: Entry) => e.state.content
+  const page = (e: Entry) => e.state.page ? { page: { ...e.state.page, complete: false } } : {}
+  const measure = (e: Entry) => {
+    if (e.request.kind === 'children') e.bytes = e.state.page ? new TextEncoder().encode(JSON.stringify({
+      ...e.state.page, ...(e.cursor && e.cursor !== e.state.page.cursor ? { requestedCursor: e.cursor } : {}) })).length : 0
+  }
+  const queryFor = (r: Request, cursor?: ThreadChildCursor): ThreadQuery => ({
+    type: r.kind === 'children' ? 'thread_read_children' : 'thread_read_tool_body',
+    payload: { conversation_id: r.conversationId, epoch: r.epoch, item_id: r.itemId, expected_rev: r.revision,
+      ...(r.kind === 'children' ? { limit: Math.min(r.limit || 50, 256), ...(cursor ? { cursor } : {}) } : {}) } })
   const notify = (e: Entry) => { for (const lease of [...e.leases]) if (lease.active) lease.listener?.(e.state) }
   function cancel(e: Entry): void {
     const id = e.requestId
@@ -33,7 +46,8 @@ export function createThreadBodies(deps: {
   }
   function fail(e: Entry, reason: string): void {
     const content = retained(e)
-    cancel(e); e.state = { type: 'failed', reason, stale: true, ...(content ? { content } : {}) }
+    cancel(e); e.state = { type: 'failed', reason, stale: true, ...(content ? { content } : {}), ...page(e) }
+    measure(e); trim()
     deps.log({ event: 'thread-body', code: reason }); notify(e); pump()
   }
   function trim(): void {
@@ -41,7 +55,7 @@ export function createThreadBodies(deps: {
     for (const e of entries.values()) {
       if (bytes <= limits.bytes) break
       if (!e.bytes || e.requestId || e.queued) continue
-      bytes -= e.bytes; e.bytes = 0; e.connection = undefined
+      bytes -= e.bytes; e.bytes = 0; e.connection = undefined; e.cursor = undefined
       // Content is disposable; failed admission still requires an explicit retry.
       e.state = e.state.type === 'failed' ? { type: 'failed', reason: e.state.reason, stale: true } : missing('evicted')
       notify(e)
@@ -57,30 +71,31 @@ export function createThreadBodies(deps: {
       e.queued = false; e.connection = c.token; e.requestId = crypto.randomUUID()
       e.timer = setTimeout(() => fail(e, 'expired'), 30000)
       deps.log({ event: 'thread-body', code: 'requested' })
-      try { deps.send({ type: 'queryThread', serverId: e.request.serverId, requestId: e.requestId,
-        query: { type: 'thread_read_tool_body', payload: { conversation_id: e.request.conversationId,
-          epoch: e.request.epoch, item_id: e.request.itemId, expected_rev: e.request.revision } } }) }
+      try { deps.send({ type: 'queryThread', serverId: e.request.serverId, requestId: e.requestId, query: queryFor(e.request, e.cursor) }) }
       catch { fail(e, 'send-failed') }
     }
   }
   function start(e: Entry): void {
     if (disposed || retiring > 0 || !e.leases.size) return
     const c = connections.get(e.request.serverId), content = retained(e)
-    if (!c) { e.state = content ? { type: 'ready', content, stale: true } : missing('offline'); return }
+    if (!c) { e.state = content ? { type: 'ready', content, stale: true, ...page(e) } : missing('offline'); measure(e); trim(); return }
     if (!c.supported) {
-      e.state = { type: 'failed', reason: 'unsupported', stale: true, ...(content ? { content } : {}) }
+      e.state = { type: 'failed', reason: 'unsupported', stale: true, ...(content ? { content } : {}), ...page(e) }
+      measure(e); trim()
       deps.log({ event: 'thread-body', code: 'unsupported' }); return
     }
     const outstanding = [...entries.values()].filter(x => x.requestId || x.queued).length
     if (outstanding >= limits.active + limits.queued) { fail(e, 'limit'); return }
-    e.state = { type: 'loading', reason: 'demand', stale: true, ...(content ? { content } : {}) }; e.queued = true
-    pump()
+    e.state = { type: 'loading', reason: 'demand', stale: true, ...(content ? { content } : {}), ...page(e) }; e.queued = true
+    measure(e)
+    trim(); pump()
   }
-  function retire(host?: string, chat?: string, clear = false): void {
+  function retire(host?: string, chat?: string, clear = false, superseding?: Request): void {
     retiring++
     try {
       const affected = [...entries].filter(([, e]) => (host === undefined || e.request.serverId === host) &&
-        (chat === undefined || e.request.conversationId === chat))
+        (chat === undefined || e.request.conversationId === chat) && (!superseding ||
+          (e.request.kind === superseding.kind && e.request.itemId === superseding.itemId && e.request.revision !== superseding.revision)))
       const listeners: Array<(state: ThreadBodyState) => void> = []
       // Revoke every affected lease before cancellation or notifications can call back into this writer.
       for (const [, e] of affected) {
@@ -96,26 +111,29 @@ export function createThreadBodies(deps: {
         cancel(e)
         if (clear) e.state = missing('retired')
         else if (e.state.type !== 'failed') e.state = content ? { type: 'ready', content,
-          stale: e.state.stale || e.connection !== connections.get(e.request.serverId)?.token } : missing('retired')
+          stale: e.state.stale || e.connection !== connections.get(e.request.serverId)?.token,
+          ...(e.state.page ? { page: e.connection === connections.get(e.request.serverId)?.token && !e.state.stale ? e.state.page : { ...e.state.page, complete: false } } : {}) } : missing('retired')
+        measure(e)
         if (clear) entries.delete(id)
       }
       for (const listener of listeners) listener(missing('retired'))
     } finally { retiring-- }
-    pump()
+    trim(); pump()
   }
   return {
     demand(request: Request, listener?: (state: ThreadBodyState) => void) {
       const scope = deps.scope(request.serverId, request.conversationId)
-      const valid = isRendererCommand({ type: 'queryThread', serverId: request.serverId, requestId: 'admission', query: {
-        type: 'thread_read_tool_body', payload: { conversation_id: request.conversationId, epoch: request.epoch,
-          item_id: request.itemId, expected_rev: request.revision } } }) && (request.kind === 'tool_call' || request.kind === 'agent')
+      const valid = isRendererCommand({ type: 'queryThread', serverId: request.serverId, requestId: 'admission', query: queryFor(request) }) &&
+        (request.kind === 'tool_call' || request.kind === 'agent' || request.kind === 'children') &&
+        (request.limit === undefined || (Number.isSafeInteger(request.limit) && request.limit >= 0))
       const rejected = disposed || retiring > 0 || !valid || !scope?.selected || scope.epoch !== request.epoch ? 'invalid' : leaseCount >= limits.leases ? 'limit' : undefined
       if (rejected) {
         deps.log({ event: 'thread-body', code: rejected })
         return { getState: (): ThreadBodyState => rejected === 'invalid'
-          ? { type: 'failed', reason: rejected, stale: true } : missing(rejected), release() {}, retry() {} }
+          ? { type: 'failed', reason: rejected, stale: true } : missing(rejected), release() {}, retry() {}, continue(_cursor: ThreadChildCursor) {} }
       }
       const id = key(request)
+      retire(request.serverId, request.conversationId, true, request)
       let e = entries.get(id)
       if (e && e.generation !== scope?.generation) { retire(request.serverId, request.conversationId, true); e = undefined }
       if (!e) {
@@ -123,7 +141,7 @@ export function createThreadBodies(deps: {
           const victim = [...entries].find(([, value]) => value.state.type !== 'failed' && !value.leases.size && !value.requestId && !value.queued)
           if (!victim) {
             deps.log({ event: 'thread-body', code: 'limit' })
-            return { getState: () => missing('limit'), release() {}, retry() {} }
+            return { getState: () => missing('limit'), release() {}, retry() {}, continue(_cursor: ThreadChildCursor) {} }
           }
           victim[1].state = missing('evicted'); victim[1].bytes = 0
           entries.delete(victim[0])
@@ -136,7 +154,9 @@ export function createThreadBodies(deps: {
       const entry = e, lease: Lease = { active: true, listener }
       entry.leases.add(lease); leaseCount++
       if (!entry.requestId && !entry.queued && entry.state.type !== 'failed' &&
-          (entry.state.type !== 'ready' || entry.state.stale || entry.connection !== connections.get(request.serverId)?.token)) start(entry)
+          (entry.state.type !== 'ready' || entry.state.stale || entry.connection !== connections.get(request.serverId)?.token)) {
+        entry.cursor = undefined; entry.replacing = true; start(entry)
+      }
       listener?.(entry.state)
       return {
         getState: (): ThreadBodyState => lease.active ? entry.state : missing('retired'),
@@ -145,11 +165,25 @@ export function createThreadBodies(deps: {
           lease.active = false; lease.listener = undefined; entry.leases.delete(lease); leaseCount--
           if (!entry.leases.size && (entry.requestId || entry.queued)) {
             const content = retained(entry); cancel(entry)
-            entry.state = content ? { type: 'ready', content, stale: true } : missing('released')
+            entry.state = content ? { type: 'ready', content, stale: true, ...page(entry) } : missing('released')
+            measure(entry); trim()
             pump()
           }
         },
-        retry() { if (!disposed && retiring === 0 && lease.active && entry.state.type === 'failed') { start(entry); notify(entry) } }
+        retry() { if (!disposed && retiring === 0 && lease.active && entry.state.type === 'failed') {
+          entry.cursor = undefined; entry.replacing = true; start(entry); notify(entry)
+        } },
+        continue(cursor: ThreadChildCursor) {
+          if (disposed || retiring > 0 || !lease.active || request.kind !== 'children' || entry.state.type === 'failed') return
+          if (typeof cursor !== 'object' || cursor === null || Array.isArray(cursor) || !isRendererCommand({ type: 'queryThread', serverId: request.serverId, requestId: 'continuation',
+            query: queryFor(request, cursor) })) { fail(entry, 'metadata'); return }
+          const same = (a: ThreadChildCursor | undefined) => a && Object.keys(a).every(k =>
+            k in cursor && Reflect.get(a, k) === Reflect.get(cursor, k)) && Object.keys(cursor).length === 7
+          if (entry.state.page?.completedCursors?.some(same)) return
+          if (entry.requestId || entry.queued) { if (!same(entry.cursor)) fail(entry, 'metadata'); return }
+          if (entry.state.stale || !entry.state.page?.more || !same(entry.state.page.cursor)) { fail(entry, 'metadata'); return }
+          entry.cursor = entry.state.page.cursor; entry.replacing = false; start(entry); notify(entry)
+        }
       }
     },
     retire,
@@ -173,10 +207,29 @@ export function createThreadBodies(deps: {
       }
       if (event.type !== 'threadQueryFailed' && event.type !== 'threadReply') return false
       const e = [...entries.values()].find(e => e.request.serverId === host && e.requestId === event.requestId)
-      if (!e) return event.type === 'threadReply' && event.reply.type === 'thread_tool_body'
+      if (!e) return event.type === 'threadReply' && (event.reply.type === 'thread_tool_body' || event.reply.type === 'thread_children')
       if (event.conversationId !== e.request.conversationId || e.connection !== connections.get(host)?.token) return true
       if (event.type === 'threadQueryFailed') { fail(e, event.reason); return true }
       const reply = event.reply
+      if (reply.type === 'thread_children') {
+        const p = reply.payload
+        if (e.request.kind !== 'children' || p.conversation_id !== e.request.conversationId || p.epoch !== e.request.epoch ||
+            p.item_id !== e.request.itemId || p.rev !== e.request.revision) { fail(e, 'metadata'); return true }
+        const children = e.replacing ? [] : e.state.page?.children ?? []
+        const completedCursors = e.replacing ? [] : e.state.page?.completedCursors ?? []
+        const completed = p.final && e.cursor ? [...completedCursors, e.cursor] : completedCursors
+        const next: ChildPage = { children: [...children, ...p.children], version: p.version, complete: p.final && !p.more,
+          ...(completed.length ? { completedCursors: completed } : {}),
+          ...(p.final ? { more: p.more, ...(p.cursor ? { cursor: p.cursor } : {}) } : {}) }
+        e.replacing = false
+        if (p.final) e.cursor = undefined
+        e.state = p.final ? { type: 'ready', content: {}, stale: false, page: next } :
+          { type: 'loading', reason: 'demand', content: {}, stale: true, page: next }
+        measure(e)
+        if (p.final) { clearTimeout(e.timer); e.timer = undefined; e.requestId = undefined }
+        if ([...entries.values()].reduce((n, x) => n + x.bytes, 0) > limits.bytes && !p.final) { fail(e, 'limit'); return true }
+        trim(); deps.log({ event: 'thread-children', code: p.final ? 'ready' : 'received' }); notify(e); pump(); return true
+      }
       if (reply.type !== 'thread_tool_body') { fail(e, 'metadata'); return true }
       const p = reply.payload
       if (p.conversation_id !== e.request.conversationId || p.epoch !== e.request.epoch || p.item_id !== e.request.itemId ||

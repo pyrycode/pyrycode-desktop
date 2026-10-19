@@ -61,6 +61,262 @@ const bodyRequest = { serverId: 'a', conversationId: 'c', epoch: 'e', itemId: 1,
 const bodyQuery = { type: 'thread_read_tool_body' as const, payload: { conversation_id: 'c', epoch: 'e', item_id: 1, expected_rev: 8 } }
 const bodyData = { conversation_id: 'c', epoch: 'e', version: 8, item_id: 1, rev: 8, kind: 'tool_call', content: { input: '', output: '' }, final: false }
 const bodyDone = { conversation_id: 'c', epoch: 'e', version: 8, item_id: 1, rev: 8, kind: 'tool_call', final: true }
+const childRequest = { serverId: 'a', conversationId: 'c', epoch: 'e', itemId: 1, revision: 8, limit: 2 }
+const child = (id = 2, order = 0) => ({ id, order, rev: 1, parent: 1, kind: 'future', status: 'future',
+  active: false, shown: false, headline: '', detail_omitted: true, public_child_count: 0,
+  has_public_children: false, subtree_version: 0, error_summary: '' })
+const childRoute = { conversation_id: 'c', epoch: 'e', version: 0, item_id: 1, rev: 8 }
+const childCursor = (id = 3, order = 0) => ({ ...childRoute, id, order })
+const childReads = (h: { sent: Uint8Array[] }) => h.sent.map(decodeEnvelope).filter(e => e.type === 'thread_read_children')
+const childPage = (children = [child(2)]) => ({ ...childRoute, children, final: false })
+const childEnd = (more = false) => ({ ...childRoute, children: [], final: true, more, ...(more ? { cursor: childCursor(2) } : {}) })
+it('marker-only empty success is cached, and unknown optional facts remain absent', async () => {
+  const h = await bodyRuntime(), lease = h.r.children.demand(childRequest)
+  h.emit(frame('thread_children', childEnd(), childReads(h)[0].id))
+  expect(lease.getState()).toMatchObject({ type: 'ready', page: { children: [], complete: true } })
+  lease.release(); expect(h.r.children.demand(childRequest).getState().type).toBe('ready')
+  expect(childReads(h)).toHaveLength(1); h.close()
+  const other = await bodyRuntime(), next = other.r.children.demand(childRequest)
+  const { public_child_count, has_public_children, subtree_version, error_summary, ...unknown } = child()
+  other.emit(frame('thread_children', childPage([unknown as ReturnType<typeof child>]), childReads(other)[0].id))
+  other.emit(frame('thread_children', childEnd(), childReads(other)[0].id))
+  expect(next.getState().page?.children).toEqual([unknown]); other.close()
+})
+it('failed continuation retains incomplete summaries and retry starts a replacement first page', async () => {
+  const h = await bodyRuntime(), lease = h.r.children.demand(childRequest)
+  h.emit(frame('thread_children', childPage(), childReads(h)[0].id))
+  h.emit(frame('thread_children', childEnd(true), childReads(h)[0].id))
+  lease.continue(childCursor(2))
+  const failed = childReads(h)[1].id
+  h.emit(frame('error', { code: 'thread.query_failed', message: 'private peer text' }, failed))
+  expect(lease.getState()).toMatchObject({ type: 'failed', page: { children: [child(2)], complete: false }, stale: true })
+  expect(h.r.children.demand(childRequest).getState().type).toBe('failed')
+  expect(childReads(h)).toHaveLength(2)
+  lease.retry(); expect(childReads(h)[2].payload).not.toHaveProperty('cursor')
+  h.emit(frame('thread_children', childEnd(), failed))
+  expect(lease.getState().type).toBe('loading')
+  h.emit(frame('thread_children', childEnd(), childReads(h)[2].id))
+  expect(lease.getState()).toMatchObject({ type: 'ready', page: { children: [], complete: true } })
+  h.close()
+})
+it('two hosts with colliding child identities stay isolated through connection and preload', async () => {
+  const a = await connected('a', true), b = await connected('b', true)
+  routePreloadQueries(host => host === 'a' ? a.connection : b.connection)
+  const r = createThreadRuntime({ send: api.sendCommand, read: async () => ({ status: 'missing' }), log: () => {} })
+  const off = api.onDaemonEvent(r.event)
+  for (const h of [a, b]) {
+    h.events.filter(e => e.type === 'connected').forEach(r.event); await r.open(h === a ? 'a' : 'b', 'c').done
+    const id = decodeEnvelope(h.sent.at(-1)!).id
+    h.emit(frame('thread_items', batch, id)); h.emit(frame('thread_items', windowDone, id))
+  }
+  const target = r.children.demand({ ...childRequest, serverId: 'b' }), id = childReads(b)[0].id
+  a.ask({ type: 'thread_read_children', payload: { conversation_id: 'c', epoch: 'e', item_id: 1, expected_rev: 8 } }, 'foreign')
+  a.emit(frame('thread_children', childPage([child(99)]), childReads(a)[0].id))
+  a.emit(frame('thread_children', childEnd(), childReads(a)[0].id))
+  expect(a.replies().at(-1)).toMatchObject({ type: 'threadReply', reply: { type: 'thread_children' } })
+  expect(target.getState().type).toBe('loading')
+  b.emit(frame('thread_children', childPage(), id)); b.emit(frame('thread_children', childEnd(), id))
+  expect(target.getState().page?.children).toEqual([child(2)])
+  r.dispose(); off(); a.connection.stop(); b.connection.stop()
+})
+it('mixed body/child saturation leaves complete queries progressing without prefetch', async () => {
+  const h = await bodyRuntime(true, true)
+  for (let i = 0; i < 32; i++) {
+    if (i % 2) h.r.children.demand({ ...childRequest, itemId: i + 1 })
+    else h.r.bodies.demand({ ...bodyRequest, itemId: i + 1 })
+  }
+  expect(h.reads().length + childReads(h).length).toBe(4)
+  expect(h.r.children.demand({ ...childRequest, itemId: 33 }).getState()).toMatchObject({ type: 'failed', reason: 'limit' })
+  h.r.query('older', 'a')
+  const query = h.sent.map(decodeEnvelope).find(e => e.type === 'thread_page')!
+  expect(query).toBeDefined()
+  h.emit(frame('thread_items', { ...windowDone, upper_order: 5 }, query.id))
+  expect(h.replies().at(-1)).toMatchObject({ type: 'threadReply', requestId: expect.any(String) })
+  expect(h.reads().length + childReads(h).length).toBe(4); h.close()
+})
+it('child cached success is stale offline and reconnect waits for explicit demand', async () => {
+  const h = await bodyRuntime(), lease = h.r.children.demand(childRequest)
+  h.emit(frame('thread_children', childPage(), childReads(h)[0].id)); h.emit(frame('thread_children', childEnd(), childReads(h)[0].id))
+  lease.release(); h.configs[0].onEvent({ type: 'relay-link-down', code: 1006 })
+  const offline = h.r.children.demand(childRequest)
+  expect(offline.getState()).toMatchObject({ type: 'ready', stale: true, page: { children: [child(2)], complete: false } })
+  expect(h.r.children.demand({ ...childRequest, itemId: 8 }).getState()).toMatchObject({ type: 'missing', reason: 'offline' })
+  expect(childReads(h)).toHaveLength(1)
+  h.configs[0].onEvent({ type: 'handshake-complete', helloAck: h.ack })
+  expect(h.events.at(-1)).toMatchObject({ type: 'connected' }); expect(childReads(h)).toHaveLength(1)
+  const fresh = h.r.children.demand(childRequest)
+  expect(childReads(h)).toHaveLength(2)
+  expect(childReads(h)[1].payload).not.toHaveProperty('cursor')
+  expect(fresh.getState()).toMatchObject({ type: 'loading', stale: true }); h.close()
+})
+it('new explicitly demanded parent revision retires old leases and late replies', async () => {
+  const h = await bodyRuntime(), old = h.r.children.demand(childRequest), id = childReads(h)[0].id
+  const fresh = h.r.children.demand({ ...childRequest, revision: 9 })
+  expect(old.getState().type).toBe('missing')
+  h.emit(frame('thread_children', childPage(), id)); h.emit(frame('thread_children', childEnd(), id))
+  expect(fresh.getState().type).toBe('loading')
+  h.emit(frame('thread_children', { ...childEnd(), rev: 9 }, childReads(h)[1].id))
+  expect(fresh.getState().type).toBe('ready'); h.close()
+})
+it.each(['conversation_id', 'epoch', 'item_id', 'rev', 'version', 'order', 'id'])('main rejects missing cursor field %s before sending', async field => {
+  const h = await connected('a', true), cursor = childCursor()
+  delete (cursor as Record<string, unknown>)[field]
+  const query = { type: 'thread_read_children', payload: { conversation_id: 'c', epoch: 'e', item_id: 1, expected_rev: 8, cursor } }
+  expect(isRendererCommand({ type: 'queryThread', serverId: 'a', requestId: 'invalid', query })).toBe(false)
+  h.connection.queryThread(query as ThreadQuery, 'invalid')
+  expect(h.replies().at(-1)).toMatchObject({ type: 'threadQueryFailed', reason: 'unavailable' })
+  expect(childReads(h)).toHaveLength(0); h.connection.stop()
+})
+it('invalid continuation fails admission without losing partial pages or silently refetching', async () => {
+  const h = await bodyRuntime(), lease = h.r.children.demand(childRequest)
+  h.emit(frame('thread_children', childPage(), childReads(h)[0].id)); h.emit(frame('thread_children', childEnd(true), childReads(h)[0].id))
+  lease.continue({ ...childCursor(2), version: 1 })
+  expect(lease.getState()).toMatchObject({ type: 'failed', page: { children: [child(2)], complete: false } })
+  expect(h.r.children.demand(childRequest).getState().type).toBe('failed')
+  expect(childReads(h)).toHaveLength(1); lease.retry()
+  expect(childReads(h)[1].payload).not.toHaveProperty('cursor'); h.close()
+})
+it('received child record eviction reopens successes and never readmits a failed continuation', async () => {
+  const h = await bodyRuntime(), first = h.r.children.demand(childRequest)
+  h.emit(frame('thread_children', childPage(), childReads(h)[0].id)); h.emit(frame('thread_children', childEnd(true), childReads(h)[0].id))
+  first.continue(childCursor(2)); h.emit(frame('error', { code: 'thread.query_failed', message: '' }, childReads(h)[1].id))
+  expect(first.getState().type).toBe('failed'); first.release()
+  for (let itemId = 2; itemId <= 65; itemId++) {
+    const next = h.r.children.demand({ ...childRequest, itemId }), id = childReads(h).at(-1)!.id
+    h.emit(frame('thread_children', { ...childEnd(), item_id: itemId }, id))
+    expect(next.getState().type).toBe('ready'); next.release()
+  }
+  const count = childReads(h).length
+  expect(h.r.children.demand(childRequest).getState().type).toBe('failed')
+  expect(childReads(h)).toHaveLength(count)
+  expect(h.r.children.demand({ ...childRequest, itemId: 2 }).getState().type).toBe('loading')
+  expect(childReads(h)).toHaveLength(count + 1); h.close()
+})
+it('last child release cancels once and late data cannot complete replacement leases', async () => {
+  const h = await bodyRuntime(), a = h.r.children.demand(childRequest), b = h.r.children.demand(childRequest), id = childReads(h)[0].id
+  a.release(); expect(h.replies().filter(e => e.type === 'threadQueryFailed')).toHaveLength(0)
+  b.release(); b.release()
+  expect(h.replies().filter(e => e.type === 'threadQueryFailed')).toHaveLength(1)
+  const fresh = h.r.children.demand(childRequest)
+  h.emit(frame('thread_children', childPage(), id)); h.emit(frame('thread_children', childEnd(), id))
+  expect(fresh.getState()).toMatchObject({ type: 'loading' }); expect(fresh.getState().page).toBeUndefined()
+  h.emit(frame('thread_children', childEnd(), childReads(h)[1].id))
+  expect(fresh.getState().type).toBe('ready'); h.close()
+})
+it('disconnect and reconnect preserve child failure admission with retained partial summaries', async () => {
+  const h = await bodyRuntime(), lease = h.r.children.demand(childRequest), id = childReads(h)[0].id
+  h.emit(frame('thread_children', childPage(), id)); h.emit(frame('error', { code: 'thread.query_failed', message: '' }, id))
+  expect(lease.getState().type).toBe('failed')
+  h.configs[0].onEvent({ type: 'relay-link-down', code: 1006 })
+  expect(h.r.children.demand(childRequest).getState()).toMatchObject({ type: 'failed', page: { children: [child(2)], complete: false } })
+  h.configs[0].onEvent({ type: 'handshake-complete', helloAck: h.ack })
+  const reopened = h.r.children.demand(childRequest)
+  expect(reopened.getState().type).toBe('failed'); expect(childReads(h)).toHaveLength(1)
+  reopened.retry(); expect(childReads(h)).toHaveLength(2); h.close()
+})
+it.each([
+  ['missing required', { order: undefined }], ['unsafe ID', { id: Number.MAX_SAFE_INTEGER + 1 }],
+  ['null count', { public_child_count: null }], ['count inconsistency', { has_public_children: true }],
+  ['body', { content: {} }], ['descendants', { children: [] }], ['false omitted', { detail_omitted: false }],
+  ['wrong parent', { parent: 2 }], ['multiline headline', { headline: 'a\nb' }],
+  ['long headline', { headline: 'é'.repeat(201) }], ['long error', { error_summary: '😀'.repeat(201) }],
+  ['null optional', { subtree_version: null }], ['empty attribution', { agent: '' }], ['false no-child', { no_child: false }]
+])('malformed summary fails closed: %s', async (_name, change) => {
+  const h = await bodyRuntime(), before = h.r.items.getState().snapshot('a', 'c'), lease = h.r.children.demand(childRequest)
+  h.emit(frame('thread_children', { ...childPage(), children: [{ ...child(), ...change }] }, childReads(h)[0].id))
+  expect(lease.getState().type).toBe('failed')
+  expect(h.r.items.getState().snapshot('a', 'c')).toBe(before); expect(childReads(h)).toHaveLength(1); h.close()
+})
+it.each([
+  ['descending ties', { children: [child(3), child(2)] }], ['duplicate tuple', { children: [child(2), child(2)] }],
+  ['over row limit', { children: [child(2), child(3), child(4)] }], ['data more', { more: false }],
+  ['fragment', { continuation: { index: 0 }, data: 'x' }], ['wrong epoch', { epoch: 'other' }],
+  ['wrong rev', { rev: 9 }], ['wrong conversation', { conversation_id: 'other' }]
+])('malformed page fails closed: %s', async (_name, change) => {
+  const h = await bodyRuntime(), lease = h.r.children.demand(childRequest)
+  h.emit(frame('thread_children', { ...childPage(), ...change }, childReads(h)[0].id))
+  expect(lease.getState().type).toBe('failed'); expect(childReads(h)).toHaveLength(1); h.close()
+})
+it.each([
+  ['capture', { version: 1 }, {}], ['routing presence', {}, { conversation_id: 'c' }],
+  ['session', {}, { session_id: 'changed' }], ['scope', {}, { conversation_id: 'other' }],
+  ['missing more', { more: undefined }, {}], ['cursor on exhausted', { cursor: childCursor(2) }, {}],
+  ['wrong last ID', { more: true, cursor: childCursor(3) }, {}],
+  ['missing cursor', { more: true }, {}], ['wrong cursor version', { more: true, cursor: { ...childCursor(2), version: 1 } }, {}],
+  ['null cursor', { more: true, cursor: null }, {}], ['missing cursor order', { more: true, cursor: { ...childCursor(2), order: undefined } }, {}]
+])('invalid marker retains partial content: %s', async (_name, change, envelope) => {
+  const h = await bodyRuntime(), lease = h.r.children.demand(childRequest), id = childReads(h)[0].id
+  h.emit(frame('thread_children', childPage(), id))
+  expect(lease.getState().page?.children).toHaveLength(1)
+  h.emit(frame('thread_children', { ...childEnd(), ...change }, id, envelope))
+  expect(lease.getState()).toMatchObject({ type: 'failed', page: { children: [child(2)], complete: false } }); h.close()
+})
+it.each(['version', 'tuple', 'second-data', 'aggregate-bytes'])('child reply boundary rejects %s', async mode => {
+  const h = await bodyRuntime(), lease = h.r.children.demand({ ...childRequest, limit: 256 }), id = childReads(h)[0].id
+  if (mode === 'aggregate-bytes') {
+    // Each summary stays valid; two envelopes together exceed the page budget.
+    const rows = Array.from({ length: 128 }, (_, i) => ({ ...child(i + 2), headline: 'é'.repeat(30) }))
+    const data = { ...childPage(), children: rows }
+    const session_id = 's'.repeat(65000 - frame('thread_children', data, id).length)
+    h.emit(frame('thread_children', data, id, { session_id }))
+    expect(lease.getState().type).toBe('loading')
+    h.emit(frame('thread_children', childEnd(), id, { session_id }))
+  } else {
+    h.emit(frame('thread_children', childPage(), id)); h.emit(frame('thread_children', childEnd(true), id))
+    lease.continue(childCursor(2)); const next = childReads(h)[1].id
+    h.emit(frame('thread_children', { ...childPage(), children: [child(mode === 'tuple' ? 2 : 3)], version: mode === 'version' ? 1 : 0 }, next))
+    if (mode === 'second-data') h.emit(frame('thread_children', childPage([child(4)]), next))
+  }
+  expect(lease.getState().type).toBe('failed'); h.close()
+})
+it.each([undefined, 0, 999])('child limit normalizes %s and capability gates preserve complete reads', async limit => {
+  const h = await bodyRuntime(), lease = h.r.children.demand({ ...childRequest, limit })
+  expect(childReads(h)[0].payload).toMatchObject({ limit: limit === 999 ? 256 : 50 })
+  lease.release(); h.close()
+  const unsupported = await bodyRuntime(false), denied = unsupported.r.children.demand(childRequest)
+  expect(denied.getState()).toMatchObject({ type: 'failed', reason: 'unsupported' })
+  expect(childReads(unsupported)).toHaveLength(0)
+  expect(unsupported.r.items.getState().snapshot('a', 'c')?.items).toHaveLength(1); unsupported.close()
+})
+it.each(['release', 'navigation', 'disconnect', 'reset', 'delete', 'unpair', 'dispose'])('child retirement fences reused identity after %s', async mode => {
+  const h = await bodyRuntime(), lease = h.r.children.demand(childRequest), id = childReads(h)[0].id
+  const mark = vi.fn(); h.r.children.demand(childRequest, mark)
+  if (mode === 'release') { lease.release(); h.r.bodies.retire('a', 'c') }
+  if (mode === 'navigation') await h.r.open('a', 'other').done
+  if (mode === 'disconnect') h.configs[0].onEvent({ type: 'relay-link-down', code: 1006 })
+  if (mode === 'reset') h.r.items.getState().acceptEpoch('a', 'c', 'replacement')
+  if (mode === 'delete') h.emit(frame('conversation_deleted', { id: 'c' }, 0))
+  if (mode === 'unpair') { const finish = beginChatHistoryRemoval('a'); finish(true) }
+  if (mode === 'dispose') h.r.dispose()
+  expect(lease.getState().type).toBe('missing')
+  const count = mark.mock.calls.length
+  h.emit(frame('thread_children', childPage(), id)); h.emit(frame('thread_children', childEnd(), id))
+  expect(mark.mock.calls).toHaveLength(count); expect(childReads(h)).toHaveLength(1); h.close()
+})
+it('child pages traverse production frames and preload, preserve zero ties and continue only on demand', async () => {
+  const h = await bodyRuntime(), before = h.r.items.getState().snapshot('a', 'c')
+  const a = h.r.children.demand(childRequest), b = h.r.children.demand(childRequest)
+  expect(childReads(h)).toHaveLength(1)
+  const id = childReads(h)[0].id
+  h.emit(frame('thread_children', { ...childRoute, children: [child(2), child(3)], final: false }, id))
+  expect(a.getState()).toMatchObject({ type: 'loading', page: { children: [child(2), child(3)], complete: false } })
+  h.emit(frame('thread_children', { ...childRoute, children: [], final: true, more: true, cursor: childCursor() }, id))
+  expect(a.getState()).toMatchObject({ type: 'ready', page: { more: true, complete: false, cursor: childCursor() } })
+  expect(childReads(h)).toHaveLength(1); expect(h.reads()).toHaveLength(0)
+  a.release(); b.continue(childCursor()); b.continue(childCursor())
+  expect(childReads(h)).toHaveLength(2)
+  expect(childReads(h)[1].payload).toMatchObject({ cursor: childCursor(), limit: 2 })
+  h.emit(frame('thread_children', { ...childRoute, children: [child(4)], final: false }, childReads(h)[1].id))
+  h.emit(frame('thread_children', { ...childRoute, children: [], final: true, more: false }, childReads(h)[1].id))
+  expect(b.getState()).toMatchObject({ type: 'ready', page: { children: [child(2), child(3), child(4)], complete: true } })
+  b.continue(childCursor())
+  expect(b.getState().type).toBe('ready'); expect(childReads(h)).toHaveLength(2)
+  b.release(); expect(h.r.children.demand(childRequest).getState().type).toBe('ready')
+  expect(childReads(h)).toHaveLength(2)
+  expect(h.r.items.getState().snapshot('a', 'c')).toBe(before)
+  expect(h.sent.map(decodeEnvelope).filter(e => e.type === 'mark_conversation_read')).toHaveLength(0)
+  h.close()
+})
 function bodyParts(id: number, payload: unknown = bodyData, itemId = 1) {
   const json = JSON.stringify(payload), update_id = createHash('sha256').update('thread_tool_body').update('\0').update(json).digest('hex')
   let offset = 0
@@ -71,7 +327,7 @@ function bodyParts(id: number, payload: unknown = bodyData, itemId = 1) {
       continuation: { update_id, index, offset: start, total_bytes: Buffer.byteLength(json), final: offset === Buffer.byteLength(json) } }, id)
   })
 }
-async function bodyRuntime(expansion = true) {
+async function bodyRuntime(expansion = true, older = false) {
   const h = await connected('a', expansion)
   routePreloadQueries(host => host === 'a' ? h.connection : null)
   const r = createThreadRuntime({ send: api.sendCommand, read: async () => ({ status: 'missing' }), log: () => {} })
@@ -80,7 +336,7 @@ async function bodyRuntime(expansion = true) {
   await r.open('a', 'c').done
   const initial = decodeEnvelope(h.sent.at(-1)!).id
   h.emit(frame('thread_items', { ...batch, items: [{ ...item, kind: 'tool_call', content: { original: true } }] }, initial))
-  h.emit(frame('thread_items', windowDone, initial))
+  h.emit(frame('thread_items', older ? { ...windowDone, lower_order: 5, continuation: 5, older_exists: true } : windowDone, initial))
   const reads = () => h.sent.map(decodeEnvelope).filter(e => e.type === 'thread_read_tool_body')
   return { ...h, r, reads, close() { r.dispose(); off(); h.connection.stop() } }
 }

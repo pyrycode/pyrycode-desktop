@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { DiagnosticLog } from '../diagnosticLog'
 import type { Envelope } from '../../shared/wire/types'
-import type { ThreadItem, ThreadUpdate, ThreadRepairReason, ThreadQuery, ThreadReply, ThreadQueryFailure } from '../../shared/wire/thread'
+import type { ThreadItem, ThreadUpdate, ThreadRepairReason, ThreadQuery, ThreadReply, ThreadQueryFailure, ThreadSummary, ThreadChildCursor } from '../../shared/wire/thread'
 
 export type ThreadDelivery =
   | { kind: 'thread-reply'; reply: ThreadReply; requestId: string; envelope: Envelope }
@@ -23,10 +23,45 @@ function fullItem(p: unknown): p is ThreadItem {
     ['session', 'agent', 'turn', 'subtype'].every(k => !own(p, k) || typeof p[k] === 'string') &&
     (!own(p, 'no_child') || typeof p.no_child === 'boolean')
 }
+function summary(p: unknown): p is ThreadSummary {
+  const text = (v: unknown) => typeof v === 'string' && [...v].length <= 200 && !/[\p{Cc}\p{Zl}\p{Zp}]/u.test(v)
+  return record(p) && ['id', 'order', 'rev', 'parent'].every(k => number(p[k])) && p.id !== 0 && p.rev !== 0 &&
+    typeof p.kind === 'string' && typeof p.status === 'string' && typeof p.active === 'boolean' &&
+    typeof p.shown === 'boolean' && p.detail_omitted === true && text(p.headline) &&
+    (!own(p, 'error_summary') || text(p.error_summary)) &&
+    (!own(p, 'ended_order') || (number(p.ended_order) && p.ended_order > 0)) &&
+    ['session', 'agent', 'turn', 'subtype'].every(k => !own(p, k) || (typeof p[k] === 'string' && p[k] !== '')) &&
+    (!own(p, 'no_child') || p.no_child === true) &&
+    ['public_child_count', 'subtree_version'].every(k => !own(p, k) || number(p[k])) &&
+    (!own(p, 'has_public_children') || typeof p.has_public_children === 'boolean') &&
+    (!own(p, 'public_child_count') || p.has_public_children === (Number(p.public_child_count) > 0)) &&
+    Object.keys(p).every(k => ['id', 'order', 'rev', 'parent', 'kind', 'status', 'active', 'shown', 'headline',
+      'detail_omitted', 'ended_order', 'session', 'agent', 'turn', 'subtype', 'no_child', 'error_summary',
+      'public_child_count', 'has_public_children', 'subtree_version'].includes(k))
+}
+function cursor(p: unknown): p is ThreadChildCursor {
+  return record(p) && routing(p) && typeof p.epoch === 'string' && p.epoch !== '' &&
+    ['item_id', 'rev', 'order', 'id'].every(k => number(p[k])) && p.item_id !== 0 && p.rev !== 0 && p.id !== 0 && Object.keys(p).length === 7
+}
+const after = (a: { order: number; id: number }, b: { order: number; id: number }) => a.order > b.order || (a.order === b.order && a.id > b.id)
 function logical(type: string, p: unknown): ThreadUpdate | ThreadReply | null {
   if (!record(p) || !routing(p)) return null
   const { conversation_id, epoch, version } = p
   if (typeof conversation_id !== 'string' || typeof epoch !== 'string' || !number(version)) return null
+  if (type === 'thread_children') {
+    if (!epoch || !number(p.item_id) || p.item_id === 0 || !number(p.rev) || p.rev === 0 || !Array.isArray(p.children) ||
+        !p.children.every(summary) || own(p, 'continuation') || p.children.length > 256 ||
+        Object.keys(p).some(k => !['conversation_id', 'epoch', 'version', 'item_id', 'rev', 'children', 'final', 'more', 'cursor'].includes(k)) ||
+        !p.children.every((v, i, list) => v.parent === p.item_id && (i === 0 || after(v, list[i - 1])))) return null
+    const route = { conversation_id, epoch, version, item_id: p.item_id, rev: p.rev, children: p.children }
+    if (p.final === false && !own(p, 'more') && !own(p, 'cursor')) return { type, payload: { ...route, final: false } }
+    if (p.final !== true || p.children.length || typeof p.more !== 'boolean') return null
+    if (!p.more && !own(p, 'cursor')) return { type, payload: { ...route, final: true, more: false } }
+    if (p.more && cursor(p.cursor) && p.cursor.conversation_id === conversation_id && p.cursor.epoch === epoch &&
+        p.cursor.item_id === p.item_id && p.cursor.rev === p.rev && p.cursor.version === version)
+      return { type, payload: { ...route, final: true, more: true, cursor: p.cursor } }
+    return null
+  }
   if (type === 'thread_tool_body') {
     if (own(p, 'continuation') || own(p, 'base_rev') || !epoch || !number(p.item_id) || p.item_id === 0 || !number(p.rev) || p.rev === 0 ||
         (p.kind !== 'tool_call' && p.kind !== 'agent')) return null
@@ -88,7 +123,7 @@ function metadata(type: string, p: Part, envelope: Envelope): string {
 }
 function matches(update: ThreadUpdate | ThreadReply, p: Part): boolean {
   const u = update.payload
-  if (update.type === 'thread_reset') return false
+  if (update.type === 'thread_reset' || update.type === 'thread_children') return false
   if (update.type === 'thread_tool_body') return !update.payload.final && u.conversation_id === p.conversation_id &&
     u.epoch === p.epoch && u.version === p.version && update.payload.item_id === p.item_id && update.payload.rev === p.rev
   if (update.type === 'thread_items') return update.payload.final === false && update.payload.items.length === 1 &&
@@ -105,7 +140,7 @@ export function createThreadUpdateReceiver(deliver: (event: ThreadDelivery) => v
   const pending = new Map<string, Assembly>()
   let buffered = 0
   const queries = new Map<number, { requestId: string; query: ThreadQuery; captured?: { epoch: string; version: number };
-    body?: string; timer?: ReturnType<typeof setTimeout> }>()
+    body?: string; child?: { capture: string; last?: ThreadSummary }; bytes?: number; timer?: ReturnType<typeof setTimeout> }>()
   function fail(id: number, reason: ThreadQueryFailure): boolean {
     const q = queries.get(id)
     if (!q) return false
@@ -117,14 +152,30 @@ export function createThreadUpdateReceiver(deliver: (event: ThreadDelivery) => v
     return true
   }
   function publish(update: ThreadUpdate | ThreadReply, envelope: Envelope): void {
-    if (update.type !== 'thread_items' && update.type !== 'thread_reset' && update.type !== 'thread_tool_body') {
+    if (update.type !== 'thread_items' && update.type !== 'thread_reset' && update.type !== 'thread_tool_body' && update.type !== 'thread_children') {
       deliver({ kind: 'thread-update', update, envelope }); return
     }
     const id = envelope.in_reply_to, q = id === undefined ? undefined : queries.get(id)
     if (id === undefined || !q) return
     const p = update.payload
     if (p.conversation_id !== q.query.payload.conversation_id) { fail(id, 'metadata'); return }
-    if (update.type === 'thread_tool_body') {
+    if (update.type === 'thread_children') {
+      const v = update.payload, request = q.query
+      const continuation = request.type === 'thread_read_children' ? request.payload.cursor : undefined
+      const capture = JSON.stringify([v.epoch, v.version, v.item_id, v.rev, own(envelope, 'session_id'), envelope.session_id,
+        own(envelope, 'conversation_id'), envelope.conversation_id])
+      if (request.type !== 'thread_read_children' || request.payload.epoch !== v.epoch || request.payload.item_id !== v.item_id ||
+          request.payload.expected_rev !== v.rev || (envelope.conversation_id !== undefined && envelope.conversation_id !== v.conversation_id) ||
+          (q.child && (q.child.capture !== capture || !v.final)) ||
+          (continuation && (continuation.version !== v.version || v.children.some(c => !after(c, continuation)))) ||
+          v.children.length > Math.min(request.payload.limit || 50, 256) ||
+          (v.final && v.more && (!v.cursor || !q.child?.last || v.cursor.order !== q.child.last.order || v.cursor.id !== q.child.last.id))) {
+        fail(id, 'metadata'); return
+      }
+      if (v.final) { queries.delete(id); clearTimeout(q.timer) }
+      else q.child = { capture, last: v.children.at(-1) }
+    } else if (q.query.type === 'thread_read_children') { fail(id, 'metadata'); return }
+    else if (update.type === 'thread_tool_body') {
       const v = update.payload, request = q.query
       const capture = JSON.stringify([v.epoch, v.version, v.item_id, v.rev, v.kind,
         own(envelope, 'session_id'), envelope.session_id, own(envelope, 'conversation_id'), envelope.conversation_id])
@@ -175,8 +226,8 @@ export function createThreadUpdateReceiver(deliver: (event: ThreadDelivery) => v
   return {
     register(id: number, requestId: string, query: ThreadQuery): boolean {
       queries.set(id, { requestId, query })
-      if (query.type === 'thread_read_tool_body') {
-        if ([...queries.values()].filter(q => q.query.type === 'thread_read_tool_body').length > 32) { fail(id, 'limit'); return false }
+      if (query.type === 'thread_read_tool_body' || query.type === 'thread_read_children') {
+        if ([...queries.values()].filter(q => q.query.type === 'thread_read_tool_body' || q.query.type === 'thread_read_children').length > 32) { fail(id, 'limit'); return false }
         const q = queries.get(id)
         if (q) q.timer = setTimeout(() => fail(id, 'expired'), 30000)
       }
@@ -191,11 +242,20 @@ export function createThreadUpdateReceiver(deliver: (event: ThreadDelivery) => v
     },
     receive(envelope: Envelope): void {
       const p = envelope.payload
-      const history = envelope.type === 'thread_items' || envelope.type === 'thread_reset' || envelope.type === 'thread_tool_body'
+      const history = envelope.type === 'thread_items' || envelope.type === 'thread_reset' || envelope.type === 'thread_tool_body' || envelope.type === 'thread_children'
       const request = history ? envelope.in_reply_to : undefined
       if (history && (request === undefined || !queries.has(request))) return
       if (history && (!record(p) || typeof p.conversation_id !== 'string')) { if (request !== undefined) fail(request, 'malformed'); return }
       if (!record(p) || typeof p.conversation_id !== 'string') return
+      if (envelope.type === 'thread_children' && request !== undefined) {
+        const q = queries.get(request)
+        if (!q) return
+        // Reserve the protocol's maximum-width stamps even when absent on the received envelope.
+        q.bytes = (q.bytes ?? 0) + Buffer.byteLength(JSON.stringify({ ...envelope, id: 1e19, in_reply_to: 1e19,
+          event_id: 1e19, history_entry_id: 1e19, ts: '9999-12-31T23:59:59.999999999+23:59',
+          session_state_cleared: false, payload_encrypted: false }))
+        if (q.bytes > 65519 || own(p, 'continuation')) { fail(request, q.bytes > 65519 ? 'limit' : 'malformed'); return }
+      }
       const conversationId = p.conversation_id
       const c = record(p.continuation) ? p.continuation : undefined
       const key = typeof c?.update_id === 'string' ? JSON.stringify([conversationId, c.update_id, ...(history ? [request] : [])]) : undefined

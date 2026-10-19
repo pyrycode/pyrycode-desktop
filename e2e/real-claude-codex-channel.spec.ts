@@ -29,7 +29,7 @@ async function observe(page: Page) {
     }
     if (update.type === 'thread_item_added') put(update.payload.item)
     else if (update.type === 'thread_items') update.payload.items.forEach(put)
-    else if (update.type !== 'thread_reset') {
+    else if (update.type === 'thread_item_changed' || update.type === 'thread_text_append') {
       const held = facts.get(`${prefix}:${update.payload.item_id}`)?.item
       if (!held || held.rev !== update.payload.base_rev) return
       if (update.type === 'thread_item_changed') put({ ...held, ...update.payload.changes, rev: update.payload.rev } as ThreadItem)

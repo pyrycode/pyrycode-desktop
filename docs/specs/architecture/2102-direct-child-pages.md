@@ -29,14 +29,15 @@ Attempts capture unique request ID, owning connection token and store generation
 ## State transitions and identity reuse
 | Event | Regression scenario in the child tests |
 | --- | --- |
-| Duplicate demand/release/continuation | shared page request and independent leases |
-| Data then marker / marker-only success | page completion and empty capture |
-| Continuation refusal with unchanged parent revision | retained partial content and fresh-first-page explicit retry |
-| Byte/record eviction then reopen | failed admission survives pressure; successful content can refetch |
-| Mixed body/child saturation | shared finite bounds and complete-query progress |
-| Navigation/reopen, last release, disconnect/reconnect | retired attempts cannot deliver to reused identity; no automatic fetch |
-| Reset/epoch/generation replacement, deletion/unpair/disposal | revoke subscriptions before reentrant callbacks and late delivery |
-| Same IDs on two hosts or changed demanded revision | host and revision fences |
+| Duplicate demand/release/continuation and data/marker | `child pages traverse production frames and preload, preserve zero ties and continue only on demand` |
+| Marker-only success | `marker-only empty success is cached, and unknown optional facts remain absent` |
+| Continuation refusal with unchanged parent revision | `failed continuation retains incomplete summaries and retry starts a replacement first page` |
+| Byte/record eviction then reopen | `partial child bytes and cursor metadata count, and eviction cannot bypass failed admission`; `received child record eviction reopens successes and never readmits a failed continuation` |
+| Mixed body/child saturation | `mixed body/child saturation leaves complete queries progressing without prefetch` |
+| Navigation/reopen, last release, disconnect/reconnect | `child retirement fences reused identity after %s`; `last child release cancels once and late data cannot complete replacement leases`; `child cached success is stale offline and reconnect waits for explicit demand` |
+| Reset/epoch/generation replacement, deletion/unpair/disposal | `child retirement fences reused identity after %s`; `child generation replacement revokes all leases before reentrant callbacks and late data` |
+| Same IDs on two hosts or changed demanded revision | `two hosts with colliding child identities stay isolated through connection and preload`; `new explicitly demanded parent revision retires old leases and late replies` |
+| Active deadline / explicit retry | `child active deadline requires explicit first-page retry and clears timers on disposal` |
 
 ## Error handling
 Reuse static malformed/metadata/sequence/limit/expired/interrupted/unavailable/daemon-error classifications and content-free lifecycle logging. Partial summaries survive failures as stale/incomplete; another demand or reconnect cannot retry. Invalid continuation fails conservatively and requires fresh retry. No peer error text is interpreted or logged.
@@ -64,3 +65,10 @@ One independently useful paged-demand operation; transport/cache-only splits vio
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-19
+
+## Revisions
+2026-10-19: Typechecking the configured client scenarios exposed three test-only complete-item observers whose catch-all update branch included expansion replies. Narrow those branches to item changes/appends, preserving all scenario assertions. Child state is an additive `page` field on the existing cache state, with inert empty content for child success; body content and its required ready-state type remain compatible. Explicit changed parent revision retires the prior revision's leases. Aggregate byte accounting reserves all protocol stamps and includes an active continuation cursor alongside retained summaries.
+
+2026-10-19: A repeated continuation arriving after its page marker must reuse success, just as duplicates during an active read share it. Retain successfully consumed cursors within the byte-accounted page, clear them on replacement enumeration and reuse only those exact cursors. The multi-page frame test now repeats continuation both before and after completion.
+
+2026-10-19: Child cache identity includes the normalized page limit so a different requested ceiling cannot borrow an incompatible page. Omitted/zero limits still share the default-50 read; the cache test `child demand shares normalized limits and separates distinct page ceilings` proves both paths.

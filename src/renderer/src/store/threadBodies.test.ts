@@ -26,6 +26,86 @@ function fixture(limits = { active: 4, queued: 28, entries: 64, bytes: 16 * 1024
   return { cache, commands, reads, settle, replace() { generation = Symbol(); cache.reconcile() } }
 }
 afterEach(() => vi.useRealTimers())
+const childRequest = { ...request, kind: 'children' as const }
+const child = { id: 2, order: 0, rev: 1, parent: 1, kind: 'unknown', status: 'unknown', active: false,
+  shown: true, headline: 'é', detail_omitted: true as const }
+it('child demand shares normalized limits and separates distinct page ceilings', () => {
+  const h = fixture()
+  h.cache.demand(childRequest); h.cache.demand({ ...childRequest, limit: 0 })
+  h.cache.demand({ ...childRequest, limit: 1 })
+  expect(h.reads()).toHaveLength(2)
+  expect(h.reads()[1].query.payload).toMatchObject({ limit: 1 }); h.cache.dispose()
+})
+function childReply(h: ReturnType<typeof fixture>, index: number, final = true) {
+  const command = h.reads()[index], q = command.query
+  if (q.type !== 'thread_read_children') throw Error('child expected')
+  const route = { conversation_id: q.payload.conversation_id, epoch: q.payload.epoch, version: 0,
+    item_id: q.payload.item_id, rev: q.payload.expected_rev }
+  h.cache.event({ type: 'threadReply', serverId: command.serverId, conversationId: route.conversation_id,
+    requestId: command.requestId, correlation: { id: 99, ts: '' }, reply: { type: 'thread_children',
+      payload: final ? { ...route, children: [], final: true, more: false } :
+        { ...route, children: [{ ...child, parent: route.item_id }], final: false } } })
+}
+it('body and child work share active, queue, record and lease bounds', () => {
+  const h = fixture(), leases = Array.from({ length: 32 }, (_, i) => h.cache.demand({
+    ...request, itemId: i + 1, kind: i % 2 ? 'children' : 'tool_call' }))
+  expect(h.reads()).toHaveLength(4)
+  expect(h.cache.demand({ ...childRequest, itemId: 33 }).getState()).toMatchObject({ type: 'failed', reason: 'limit' })
+  leases[0].release(); expect(h.reads()).toHaveLength(5)
+  for (let i = 0; i < 96; i++) h.cache.demand(childRequest)
+  expect(h.cache.demand(childRequest).getState()).toMatchObject({ type: 'missing', reason: 'limit' })
+  h.cache.dispose()
+})
+it('partial child bytes and cursor metadata count, and eviction cannot bypass failed admission', () => {
+  const h = fixture({ active: 4, queued: 28, entries: 3, bytes: 240, leases: 128 })
+  const a = h.cache.demand(childRequest)
+  childReply(h, 0, false); expect(a.getState().page?.children).toHaveLength(1)
+  const command = h.reads()[0]
+  h.cache.event({ type: 'threadQueryFailed', serverId: 'a', conversationId: 'c', requestId: command.requestId,
+    inReplyTo: 1, reason: 'daemon-error' })
+  expect(a.getState()).toMatchObject({ type: 'failed', page: { complete: false } })
+  const body = h.cache.demand({ ...request, itemId: 3 }); h.settle(1, { output: 'x'.repeat(230) })
+  expect(a.getState()).toMatchObject({ type: 'failed', reason: 'daemon-error' })
+  expect(a.getState().page).toBeUndefined(); a.release(); body.release()
+  const reopened = h.cache.demand(childRequest)
+  expect(reopened.getState().type).toBe('failed'); expect(h.reads()).toHaveLength(2)
+  reopened.retry(); expect(h.reads()).toHaveLength(3); childReply(h, 2)
+  expect(reopened.getState()).toMatchObject({ type: 'ready', page: { children: [], complete: true } }); h.cache.dispose()
+})
+it('successful child byte eviction reopens, while failed records survive mixed record pressure', () => {
+  const h = fixture({ active: 4, queued: 28, entries: 2, bytes: 240, leases: 128 })
+  const a = h.cache.demand(childRequest); childReply(h, 0, false); childReply(h, 0); a.release()
+  const b = h.cache.demand({ ...request, itemId: 3 }); h.settle(1, { output: 'x'.repeat(230) }); b.release()
+  const again = h.cache.demand(childRequest); expect(again.getState().type).toBe('loading')
+  const command = h.reads()[2]
+  h.cache.event({ type: 'threadQueryFailed', serverId: 'a', conversationId: 'c', requestId: command.requestId,
+    inReplyTo: 1, reason: 'daemon-error' }); again.release()
+  h.cache.demand({ ...request, itemId: 4 }); h.settle(3)
+  expect(h.cache.demand(childRequest).getState().type).toBe('failed')
+  expect(h.reads()).toHaveLength(4); h.cache.dispose()
+})
+it('child generation replacement revokes all leases before reentrant callbacks and late data', () => {
+  const h = fixture(), seen: string[] = []
+  const a = h.cache.demand(childRequest, s => {
+    if (s.type === 'missing') { b.retry(); seen.push(h.cache.demand(childRequest).getState().type) }
+  }), b = h.cache.demand(childRequest)
+  h.replace(); expect(a.getState().type).toBe('missing'); expect(seen).toEqual(['failed'])
+  const next = h.cache.demand(childRequest); childReply(h, 0)
+  expect(next.getState().type).toBe('loading'); childReply(h, 1)
+  expect(next.getState().type).toBe('ready'); h.cache.dispose()
+})
+it('child active deadline requires explicit first-page retry and clears timers on disposal', () => {
+  vi.useFakeTimers()
+  const h = fixture(), lease = h.cache.demand(childRequest)
+  childReply(h, 0, false)
+  vi.advanceTimersByTime(29999); expect(lease.getState().type).toBe('loading')
+  vi.advanceTimersByTime(1); expect(lease.getState()).toMatchObject({ type: 'failed', reason: 'expired', page: { complete: false } })
+  h.cache.demand(childRequest); expect(h.reads()).toHaveLength(1)
+  lease.retry(); expect(h.reads()).toHaveLength(2); childReply(h, 0)
+  expect(lease.getState().type).toBe('loading'); childReply(h, 1)
+  expect(lease.getState()).toMatchObject({ type: 'ready', page: { children: [], complete: true } })
+  h.cache.dispose(); expect(vi.getTimerCount()).toBe(0)
+})
 it('invalid identities settle without a command or subscription', () => {
   const h = fixture()
   for (const change of [{ epoch: '' }, { itemId: 0 }, { revision: 0 }, { itemId: Number.MAX_SAFE_INTEGER + 1 }]) {

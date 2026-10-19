@@ -28,7 +28,15 @@ async function settle(page: Page) {
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
 }
 async function focus(app: ElectronApplication, page: Page) {
-  await focusVisibleTailWindow(app)
+  const observations: unknown[] = []
+  const started = Date.now()
+  try {
+    await focusVisibleTailWindow(app, state => observations.push({ ms: Date.now() - started, state }))
+  } finally {
+    await test.info().attach('visible-tail-native-focus', {
+      body: JSON.stringify(observations), contentType: 'application/json'
+    })
+  }
   await page.evaluate(() => {
     delete (document as any).hasFocus
   })

@@ -32,6 +32,28 @@ function harness(outcomes: Outcome[] = []) {
 }
 
 describe('focusVisibleTailWindow', () => {
+  it.each(['visible', 'focused'] as const)('reports a persistent %s mismatch separately without resending', async field => {
+    const h = harness()
+    if (field === 'visible') h.show.mockImplementation(() => {})
+    else h.focusEffect.mockImplementation(() => {})
+    const observe = vi.fn()
+    await expect(focusVisibleTailWindow(h.app, observe)).rejects.toThrow(
+      `visible=${field !== 'visible'}, focused=${field !== 'focused'}`)
+    expect(observe.mock.calls).toEqual(Array.from({ length: 3 }, () => [
+      { visible: field !== 'visible', focused: field !== 'focused' }
+    ]))
+    expect(h.evaluations).toBe(4)
+    expect(h.show).toHaveBeenCalledTimes(1)
+    expect(h.focusEffect).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports unavailable inspection without treating it as a native mismatch', async () => {
+    const h = harness([undefined, 'before'])
+    const observe = vi.fn()
+    await focusVisibleTailWindow(h.app, observe)
+    expect(observe.mock.calls).toEqual([['unavailable'], [{ visible: true, focused: true }]])
+  })
+
   it('confirms visibility and focus; repeated setup leaves completed fields alone', async () => {
     const h = harness()
     await focusVisibleTailWindow(h.app)

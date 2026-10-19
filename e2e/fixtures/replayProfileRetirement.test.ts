@@ -88,6 +88,7 @@ it('settles the delayed resumed list and sends both replies before exit and inde
       await outgoing
       await withIsolatedElectronApp(async () => {
         order.push('independent-connection')
+        console.info(JSON.stringify({ retirementOrdering: order, ...exchange.stats() }))
         exchange.reconnect()
         exchange.reply(encodeEnvelope(message(2, 'list_conversations')))
       })

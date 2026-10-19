@@ -67,6 +67,102 @@ pins Windows rejection. Run the native proof on the operating system running the
 ticket; opposite-OS scheduling is outside scope. Existing NSIS x64/arm64 targets
 remain unchanged.
 
+### Bounded writer native input proof
+
+[`history-writer-native.spec.ts`](../../../e2e/history-writer-native.spec.ts) exercises
+`finite protected writer backlog preserves native keyboard and both event loops`
+through the existing renderer writer, production IPC and real OS-protected storage.
+`launchPairedApp` ordinarily selects reversible test encryption with
+`PYRY_TEST_SECRET_BACKEND=1`. Its child-local `productionSecrets` option selects the
+real adapter and installs a pre-readiness hook removing Playwright's
+`password-store=basic` and `use-mock-keychain` switches. Merely unsetting the test
+backend flag is insufficient: Playwright's Electron loader supplies those switches
+independently. The hook preserves Electron sandbox and isolation settings. Runtime
+assertions require encryption availability, both switches absent, no test-backend
+selection and, on Linux, a selected backend other than `basic_text`. Evidence records
+the actual backend and Electron/embedded Node/ABI/platform identity. The fixture
+first durably observes its version-one initial thread; a version-zero readiness
+barrier previously failed before workload admission.
+
+The isolated mounted input admits exactly one generated 8,333-item owned change,
+then stops production: 6,396 tool calls, 889 assistant messages, 556 turn endings,
+345 user messages, 135 agents and 12 session dividers, with valid relationships and
+non-secret strings at most 256 characters. It measures real keyboard dispatch through
+React input commit while durable item counts positively advance and remain unfinished
+on both sides of each observation. Storage is never paused for input. Recurring main
+and renderer heartbeats cover the complete drain, including its tail. Assertions
+require each input and every heartbeat gap within 1,000 ms, all work drained within
+60 seconds of admission, explicit flush, exact fresh protected-owner reopen and normal
+teardown. The input isolates storage without product visual changes or #2079 renderer
+admission changes. This proves ordinary writer/storage liveness; renderer admission,
+import, retained-format conversion and full replacement (`replaceThread`) are excluded.
+Compact transport and lazy presentation remain separate work.
+
+Recorded Linux x64 evidence for final writer source `ce3a6be7`, reviewed at
+`3a9e7a9a`, is retained in the
+[plan](../../specs/architecture/2088-bounded-history-writer.md) and
+[accepted verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2117#issuecomment-6259224620).
+These are retained executions, not new runs by documentation. macOS is outside this
+Linux ticket's verification scope; no provider credential or fresh live daemon run
+was required.
+
+| Recorded execution | Executed / passed / failed / skipped | Native observations |
+| --- | --- | --- |
+| Builder `/tmp/builder-2088-clock/native-final.json` and `.log` | 1 / 1 / 0 / 0; retries 0 | One admission, 8,333 durable items, 271 submissions, 42,547 ms. Keyboard 73/17/119 ms with durable counts 93→155, 155→217, 217→279, all unfinished. Main 993 heartbeat samples, maximum gap 111 ms; renderer 2,114, maximum 30.9 ms. |
+| Accepted dispatcher rerun `2026-10-19T03-44-28-509Z_verifier-gate-rerun_#2088.log` | 3 / 3 / 0 / 0; exact native test present and passed | One admission, 8,333 durable items, 271 submissions, 48,609 ms. Keyboard 130/191/139 ms with durable counts 93→155, 155→248, 248→310, all unfinished. Main 1,059 samples, maximum gap 113 ms; renderer 2,412, maximum 24.9 ms. |
+
+Both native passes report Electron 33.4.11 / embedded Node 20.18.3 / ABI 130 and
+real `gnome_libsecret`, both mock-protection switches absent. Exact flush and fresh
+protected-owner reopen passed, and both launches exited 0 without signals or teardown
+failures. The configured application run remains **506 executed, 505 passed, 1 failed,
+5 skipped**; its sole failure was this native test's 60-second drain predicate.
+The exact native test passed in the counted rerun above, accepted under dispatcher
+rerun policy. All four earlier buffered-close/permission-notice regressions passed
+in that configured run; the five skipped tests are not passes.
+
+Packaged proof is separate: `/tmp/builder-2088-clock/packaged.log` and
+`packaged/runtime.stdout` / `runtime.stderr` record `check:history-native`, **1 executed,
+1 passed, 0 failed, 0 skipped**, stage complete. The same runtime/backend and adapter
+12.4.1 report packaged/ASAR/native-unpacked true. Protected replacement/owned update,
+plaintext exclusion and exact reopen/traversal assertions passed. Replacement is
+validated for correctness here, not included in the input-liveness timing claim.
+
+The supplied configured unit report records **9,479 executed/passed, 0 failed,
+3 skipped**. It explicitly includes passing
+`protects ordered save parts and exact acknowledgements independently of daemon fences`,
+`rolls back a failed data part and its obligation atomically before exact fresh-owner retry`
+and `stop leaves repeatedly failed admitted work protected without spinning or manufacturing completion`.
+The final builder's five affected files separately executed/passed **232**, failed/skipped
+0: admission 56, indexed storage 78, protected cache 34, writer 27 and lifecycle 37.
+These cover covered-checkpoint interruption, rollback, exact acknowledgement retries,
+owner supersession and frozen-clock flush/stop; a neutral prefix alone missed the
+already-covered checkpoint case. Posted-task assertions check every bounded write,
+including retry, without depending on incidental elapsed timer ticks.
+
+Captured-client proof has distinct provenance. `/tmp/builder-2088-clock/replay.json`
+and `.log` record original `claude-thread` and `daemon-history-on-open`, **2 executed,
+2 passed, 0 failed/skipped/retried**, no runner errors and zero forbidden executable
+launches. Exact exchanges matched 45/32 requests, emitted 378/63 frames and left zero
+requests. Unchanged captures came from Desktop
+`00ec821f9380b00cf2dfc0dd4817ee15584106a5`, daemon
+`58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`, binary SHA256
+`5f5b3b9ce42eda74024637f4929dd720d36c1226ce6e370eb62fbe9e6b22f7c0`.
+This is offline captured-client behavior, not fresh provider or native protection proof.
+
+Historical failures stay failed: #2079's original Linux fixture recorded keyboard
+commit at 17,187 ms and heartbeat gaps of 12–27 seconds; earlier #2088 collection,
+mock-protection and version-zero-barrier failures never established successful
+workload execution. `/tmp/builder-2088/replay.json` (1 passed/1 failed) and
+`replay-history-rerun.json` (1 failed) preserve coverage-deadline failures that drove
+bounded tail coalescing. The protected checkpoint-100 diagnostic
+`/tmp/builder-2088-rework/partial-run2.log` records 2 executed/failed, 0 passed/skipped,
+each exposing only 31 of 100 admitted items before the independent obligation repair.
+Final-source `/tmp/builder-2088-clock/native.json` and `native-retry.json` each record
+1 executed/failed, 0 skipped/retried, on the 60-second drain deadline; neither proves
+complete heartbeat/drain/reopen acceptance despite responsive input. The configured
+native deadline failure also remains separate from its accepted rerun. Later passes
+do not rewrite these outcomes or the earlier paused-clock shutdown failures.
+
 ### Counted legacy storage retirement validation
 
 The [final verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/2048#issuecomment-6223383960)

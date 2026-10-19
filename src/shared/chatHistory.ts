@@ -35,6 +35,8 @@ type ThreadProgress = {
 export type OwnedThreadChanges = ThreadProgress & {
   acceptEpoch: boolean
   resetId?: string
+  /** Local ordered persistence only; grants no daemon progress or owner authority. */
+  persistence?: { id: string; part: number; parts: number }
   /** Earlier owned observations, in admission order, retained through coalescing/retry. */
   priorProgress?: readonly ThreadProgress[]
   items: ThreadSnapshot['items']
@@ -231,7 +233,18 @@ export function parseChatHistoryRequest(value: unknown): ChatHistoryRequest {
   if (v.operation === 'mutateThread') {
     if (Object.keys(v).some(k => !['operation', 'serverId', 'conversationId', 'change'].includes(k))) return invalid()
     const conversationId = id(v.conversationId), c = record(v.change)
-    if (Object.keys(c).some(k => !['metadata', 'acceptEpoch', 'resetId', 'completion', 'availability', 'priorProgress', 'items', 'removeIds', 'ranges'].includes(k))) return invalid()
+    if (Object.keys(c).some(k => !['metadata', 'acceptEpoch', 'resetId', 'persistence', 'completion', 'availability', 'priorProgress', 'items', 'removeIds', 'ranges'].includes(k))) return invalid()
+    const persistence = optional(c.persistence, value => {
+      const p = record(value), token = id(p.id), part = readId(p.part), parts = readId(p.parts)
+      if (Object.keys(p).some(k => !['id', 'part', 'parts'].includes(k)) ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(token) ||
+        parts < 2 || parts > MAX_CHAT_HISTORY_ITEMS || part >= parts ||
+        !Array.isArray(c.items) || !Array.isArray(c.removeIds) || !Array.isArray(c.ranges) ||
+        c.priorProgress !== undefined && !Array.isArray(c.priorProgress) ||
+        c.items.length + c.removeIds.length + c.ranges.length +
+          (Array.isArray(c.priorProgress) ? c.priorProgress.length : 0) + 1 > 32) return invalid()
+      return { id: token, part, parts }
+    })
     const metadata = retainedMetadata(c.metadata, serverId, conversationId)
     const progress = (value: unknown): ThreadProgress => {
       const p = record(value)
@@ -259,11 +272,13 @@ export function parseChatHistoryRequest(value: unknown): ChatHistoryRequest {
     const items = retainedItems(c.items)
     const removeIds = array(c.removeIds, readId), ids = new Set(items.map(i => i.id))
     if (ids.size !== items.length || new Set(removeIds).size !== removeIds.length || removeIds.some(id => ids.has(id))) return invalid()
+    const ranges = retainedRanges(c.ranges)
     return { operation: 'mutateThread', serverId, conversationId, change: {
       ...progress(c), acceptEpoch: bool(c.acceptEpoch),
       ...(c.resetId === undefined ? {} : { resetId: id(c.resetId) }),
+      ...(persistence === undefined ? {} : { persistence }),
       ...(priorProgress === undefined ? {} : { priorProgress }),
-      items, removeIds, ranges: retainedRanges(c.ranges)
+      items, removeIds, ranges
     } }
   }
   const operation = choice(v.operation, ['readList', 'replaceList', 'readThread', 'replaceThread', 'removeConversation', 'removeServer'])

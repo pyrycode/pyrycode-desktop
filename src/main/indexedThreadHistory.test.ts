@@ -32,6 +32,78 @@ const ask = (operation: string, extra: object = {}, serverId = 'Host', conversat
   ({ operation, serverId, ...(operation === 'removeServer' ? {} : { conversationId }), ...extra })
 const put = (s: { serverId: string; conversationId: string } = snapshot()) => ask('replaceThread', { snapshot: s }, s.serverId, s.conversationId)
 const newest = (limit = 2) => ask('newestThreadPage', { limit })
+it('rolls back a failed data part and its obligation atomically before exact fresh-owner retry', async () => {
+  const h = setup(), s = snapshot(0), id = '12345678-1234-4234-8234-123456789abc'
+  await h.store.execute(put(s))
+  const items = Array.from({ length: 31 }, (_, id) => ({ id, rev: 1, kind: 'future' }))
+  const request = parseChatHistoryRequest(owned(s, { items, persistence: { id, part: 0, parts: 2 } }))
+  if (request.operation !== 'mutateThread') throw Error('missing mutation')
+  expect(await h.store.executeMutation(request, async () => { throw Error('injected turn failure') }))
+    .toEqual(error('write-failed'))
+  h.database.close()
+  const fresh = h.fresh().store
+  expect(await fresh.execute(ask('readThread'))).toEqual(stored(s))
+  expect(await fresh.execute(request)).toEqual({ status: 'ok' })
+  expect(await fresh.execute(ask('readThread'))).toEqual(error('unreadable'))
+  expect(await fresh.execute(owned(s, { persistence: { id, part: 1, parts: 2 } }))).toEqual({ status: 'ok' })
+  expect(await fresh.execute(ask('readThread'))).toEqual(stored({ ...s, thread: {
+    ...s.thread, items, arrivalOrder: items.map(i => i.id) } }))
+})
+
+it('protects ordered save parts and exact acknowledgements independently of daemon fences', async () => {
+  const h = setup(), s = snapshot(0)
+  await h.store.execute(put(s))
+  const part = (id: string, n: number, extra: object = {}) => owned(s, {
+    persistence: { id, part: n, parts: 3 }, ...extra })
+  const first = '12345678-1234-4234-8234-123456789abc', next = '22345678-1234-4234-8234-123456789abc'
+  expect(await h.store.execute(part(first, 1))).toEqual(error('write-failed'))
+  expect(await h.store.execute(part(first, 0))).toEqual({ status: 'ok' })
+  expect(await h.store.execute(part(first, 0))).toEqual({ status: 'ok' })
+  expect(await h.store.execute(owned(snapshot(0, 'Other', 'Chat'), {
+    persistence: { id: first, part: 1, parts: 3 } }))).toEqual(error('write-failed'))
+  expect(await h.store.execute(ask('readThread', {}, 'Other', 'Chat'))).toEqual({ status: 'missing' })
+  expect(await h.store.execute(part(first, 0, { removeIds: [99] }))).toEqual(error('write-failed'))
+  expect(await h.store.execute(part(first, 2))).toEqual(error('write-failed'))
+  expect(await h.store.execute(part(next, 0))).toEqual(error('write-failed'))
+  expect(await h.store.execute(part(first, 1, { persistence: { id: first, part: 1, parts: 4 } }))).toEqual(error('write-failed'))
+  expect(await h.store.execute(part(first, 1))).toEqual({ status: 'ok' })
+  h.database.close()
+  const fresh = h.fresh().store
+  expect(await fresh.execute(ask('readThread'))).toEqual(error('unreadable'))
+  expect(await fresh.execute(part(first, 2))).toEqual({ status: 'ok' })
+  expect(await fresh.execute(ask('readThread'))).toEqual(stored(s))
+  // Converting another retained scope must not downgrade the journal's schema.
+  const other = snapshot(0, 'Other', 'Chat')
+  expect(await fresh.execute(put(other))).toEqual({ status: 'ok' })
+  expect((await fresh.execute(ask('openThreadPage', { limit: 1 }, 'Other', 'Chat'))).status).toBe('page')
+  expect(h.database.transaction(db => db.pragma('user_version', { simple: true }))).toBe(8)
+  expect(await fresh.execute(part(next, 0))).toEqual({ status: 'ok' })
+  for (const n of [0, 1, 2]) expect(await fresh.execute(part(first, n))).toEqual({ status: 'ok' })
+  expect(await fresh.execute(ask('readThread'))).toEqual(error('unreadable'))
+  expect(await fresh.execute(part(next, 1))).toEqual({ status: 'ok' })
+  expect(await fresh.execute(part(next, 2))).toEqual({ status: 'ok' })
+  expect(await fresh.execute(ask('readThread'))).toEqual(stored(s))
+})
+
+it.each(['reset', 'epoch', 'replace', 'delete', 'unpair'] as const)(
+  'retires an abandoned save on %s and rejects stale parts after scope reuse', async lifecycle => {
+    const h = setup(), s = snapshot(0), id = '12345678-1234-4234-8234-123456789abc'
+    await h.store.execute(put(s))
+    const part = (n: number) => owned(s, { persistence: { id, part: n, parts: 2 } })
+    expect(await h.store.execute(part(0))).toEqual({ status: 'ok' })
+    if (lifecycle === 'reset') expect(await h.store.execute(owned(s, { resetId: 'replacement' }))).toEqual({ status: 'ok' })
+    else if (lifecycle === 'epoch') expect(await h.store.execute(owned({ ...s, thread: { ...s.thread, epoch: 'other' } }))).toEqual({ status: 'ok' })
+    else if (lifecycle === 'replace') expect(await h.store.execute(put(s))).toEqual({ status: 'ok' })
+    else {
+      expect(await h.store.execute(ask(lifecycle === 'delete' ? 'removeConversation' : 'removeServer'))).toEqual({ status: 'ok' })
+      expect(await h.store.execute(put(s))).toEqual({ status: 'ok' })
+    }
+    const before = await h.store.execute(ask('readThread'))
+    for (const n of [0, 1]) expect(await h.store.execute(part(n))).toEqual(error('write-failed'))
+    h.database.close()
+    expect(await h.fresh().store.execute(ask('readThread'))).toEqual(before)
+  })
+
 it.each(['metadata', 'movement', 'removal', 'replacement'] as const)('rebases protected traversal after %s without losing moved identities', async change => {
   const h = setup(), s = snapshot(0)
   const items = Array.from({ length: 61 }, (_, id) => ({ id, kind: 'future', rev: 1, order: id,

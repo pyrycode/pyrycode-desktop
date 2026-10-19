@@ -18,6 +18,13 @@ const live = (store: ReturnType<typeof createThreadItemStore>, rev = 10, host = 
 }
 const saved = (thread: ThreadSnapshot): Extract<ChatHistorySnapshot, { kind: 'daemon-items' }> => ({
   version: 1, kind: 'daemon-items', serverId: thread.hostId, conversationId: thread.conversationId, thread })
+const owned = (host: string, conversation: string, epoch: string, version: number, acceptEpoch: boolean,
+  items: ThreadSnapshot['items'] = []): ChatHistoryRequest => ({
+  operation: 'mutateThread', serverId: host, conversationId: conversation, change: {
+    acceptEpoch, metadata: { hostId: host, conversationId: conversation, epoch, version,
+      checkpoint: version, uncommittedVersion: 0, repair: null }, items, removeIds: [], ranges: []
+  }
+})
 const held = <T,>() => {
   let resolve!: (value: T) => void
   const promise = new Promise<T>(r => { resolve = r })
@@ -232,10 +239,12 @@ describe('daemon item cache ownership', () => {
     live(h.threads); const flushing = h.writer.flush(); await started.promise
     live(h.threads, 20); live(h.threads, 5, 'a', 'new'); live(h.threads, 30, 'b')
     wait.resolve({ status: 'ok' }); await flushing
-    expect(h.writes().map(r => [r.serverId, r.change.metadata.epoch, r.change.metadata.version])).toEqual([
-      ['a', 'e', 10], ['a', 'new', 5], ['b', 'e', 30] ])
+    const expected = [owned('a', 'c', 'e', 0, true), owned('a', 'c', 'new', 0, true),
+      owned('a', 'c', 'new', 5, false, [item(5)]), owned('b', 'c', 'e', 0, true),
+      owned('b', 'c', 'e', 30, false, [item(30)])]
+    expect(h.writes()).toEqual(expected)
     await h.writer.stop(); live(h.threads, 40)
-    expect(h.writes()).toHaveLength(3)
+    expect(h.writes()).toEqual(expected)
   })
   it('deletion orders both formats and list removal behind held saves', async () => {
     const wait = held<ChatHistoryResult>(), started = held<void>()
@@ -247,34 +256,47 @@ describe('daemon item cache ownership', () => {
     expect(h.threads.getState().snapshot('a', 'c')).toBeNull()
     live(h.threads, 40)
     wait.resolve({ status: 'ok' }); await flushing
-    expect(h.writes().filter(r => r.serverId === 'a')).toHaveLength(1)
-    expect(h.save.mock.calls.map(([r]) => r.operation)).toEqual(['mutateThread', 'mutateThread', 'removeConversation'])
+    const expected = [owned('a', 'c', 'e', 0, true), owned('b', 'c', 'e', 0, true),
+      owned('b', 'c', 'e', 30, false, [item(30)]),
+      { operation: 'removeConversation', serverId: 'a', conversationId: 'c' }]
+    expect(h.save.mock.calls.map(([r]) => r)).toEqual(expected)
     expect(h.threads.getState().snapshot('b', 'c')?.version).toBe(30)
     await h.writer.stop()
+    expect(h.save.mock.calls.map(([r]) => r)).toEqual(expected)
   })
   it('does not deduplicate fresh identical items against a pre-unpair in-flight save', async () => {
     const wait = held<ChatHistoryResult>(), started = held<void>()
-    let first = true
+    let first = false
     const h = harness(async () => { if (first) { first = false; started.resolve(); return wait.promise } return { status: 'ok' } })
+    h.threads.getState().acceptEpoch('a', 'c', 'e'); await h.writer.flush()
+    h.save.mockClear(); first = true
     live(h.threads)
     const flushing = h.writer.flush(); await started.promise
     const settle = beginChatHistoryRemoval('a')
     settle(true)
     live(h.threads)
     wait.resolve({ status: 'ok' }); await flushing
-    expect(h.writes()).toHaveLength(2)
-    expect(h.writes()[1]).toEqual(h.writes()[0])
+    const expected = [owned('a', 'c', 'e', 10, false, [item()]), owned('a', 'c', 'e', 0, true),
+      owned('a', 'c', 'e', 10, false, [item()])]
+    expect(h.writes()).toEqual(expected)
+    expect(h.writes()[2]).toEqual(h.writes()[0])
     await h.writer.stop()
+    expect(h.writes()).toEqual(expected)
   })
   it.each([true, false])('unpair invalidates old work and preserves another host: success=%s', async removed => {
     const h = harness(); live(h.threads); live(h.threads, 10, 'a', 'e', 'offscreen'); live(h.threads, 20, 'b')
     const wait = held<ChatHistoryResult>(), task = readSavedTimeline({ threads: h.threads, read: () => wait.promise.then(project), log: () => {} }, 'a', 'unread')
     const settle = beginChatHistoryRemoval('a')
-    await h.writer.flush(); expect(h.writes().map(r => r.serverId)).toEqual(['b'])
+    const otherHost = [owned('b', 'c', 'e', 0, true), owned('b', 'c', 'e', 20, false, [item(20)])]
+    await h.writer.flush(); expect(h.writes()).toEqual(otherHost)
     live(h.threads, 15, 'a', 'e', 'unread')
     settle(removed)
     wait.resolve({ status: 'stored', snapshot: saved({ ...h.threads.getState().snapshot('b', 'c')!, hostId: 'a', conversationId: 'unread' }) }); await task.done
     await h.writer.flush()
+    expect(h.writes()).toEqual(removed ? otherHost : [...otherHost,
+      owned('a', 'c', 'e', 0, true), owned('a', 'c', 'e', 10, false, [item()]),
+      owned('a', 'offscreen', 'e', 0, true), owned('a', 'offscreen', 'e', 10, false, [item()]),
+      owned('a', 'unread', 'e', 0, true), owned('a', 'unread', 'e', 15, false, [item(15)])])
     expect(h.threads.getState().snapshot('a', 'offscreen') === null).toBe(removed)
     expect(h.threads.getState().snapshot('a', 'unread') === null).toBe(removed)
     if (removed) { live(h.threads, 5); await h.writer.flush(); expect(h.writes().at(-1)?.change.metadata.version).toBe(5) }

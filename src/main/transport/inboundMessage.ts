@@ -3622,6 +3622,7 @@ function parseInboundPayload(envelope: Envelope, plaintext: Uint8Array, diagnost
   switch (envelope.type) {
     case 'thread_items':
     case 'thread_tool_body':
+    case 'thread_children':
     case 'thread_reset':
     case 'thread_item_added':
     case 'thread_item_changed':

@@ -526,6 +526,20 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       const q = value.query
       if (!('type' in q) || !('payload' in q) || typeof q.payload !== 'object' || q.payload === null || Array.isArray(q.payload)) return false
       const p = q.payload
+      if (q.type === 'thread_read_children') {
+        if (!('conversation_id' in p) || !text(p.conversation_id) || !('epoch' in p) || !text(p.epoch) ||
+            !('item_id' in p) || typeof p.item_id !== 'number' || !number(p.item_id) || p.item_id === 0 ||
+            !('expected_rev' in p) || typeof p.expected_rev !== 'number' || !number(p.expected_rev) || p.expected_rev === 0 ||
+            ('limit' in p && !number(p.limit)) ||
+            Object.keys(p).some(k => !['conversation_id', 'epoch', 'item_id', 'expected_rev', 'limit', 'cursor'].includes(k))) return false
+        if (!('cursor' in p)) return true
+        const c = p.cursor
+        return typeof c === 'object' && c !== null && !Array.isArray(c) &&
+          'conversation_id' in c && c.conversation_id === p.conversation_id && 'epoch' in c && c.epoch === p.epoch &&
+          'item_id' in c && c.item_id === p.item_id && 'rev' in c && c.rev === p.expected_rev &&
+          'version' in c && number(c.version) && 'order' in c && number(c.order) &&
+          'id' in c && typeof c.id === 'number' && number(c.id) && c.id > 0 && Object.keys(c).length === 7
+      }
       if (q.type === 'thread_read_tool_body') return 'conversation_id' in p && text(p.conversation_id) &&
         'epoch' in p && text(p.epoch) && 'item_id' in p && number(p.item_id) && typeof p.item_id === 'number' && p.item_id > 0 &&
         'expected_rev' in p && number(p.expected_rev) && typeof p.expected_rev === 'number' && p.expected_rev > 0 &&

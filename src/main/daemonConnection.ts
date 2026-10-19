@@ -1379,7 +1379,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             return
           }
           case 'thread-frame':
-            if (authenticated && !stopped) threadReceiver.receive(inbound.envelope)
+            if (authenticated && !stopped) threadReceiver.receive(inbound.envelope, event.plaintext)
             return
           case 'message':
             emitDaemonEvent(sink, { type: 'messageReceived', message: inbound.message, daemonTs: inbound.ts })
@@ -3335,15 +3335,16 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     const id = nextEnvelopeId++
     if (!threadReceiver.register(id, requestId, query)) return
     if (driver === null || !authenticated || stopped) { threadReceiver.fail(id, 'unavailable'); return }
-    if (query.type === 'thread_read_tool_body' && (!bodyCapable ||
+    if ((query.type === 'thread_read_tool_body' || query.type === 'thread_read_children') && (!bodyCapable ||
         !isRendererCommand({ type: 'queryThread', serverId: deps.serverId, requestId, query }))) {
       threadReceiver.fail(id, 'unavailable'); return
     }
     const p = query.payload
     const payload = { conversation_id: p.conversation_id,
-      ...(query.type === 'thread_read_tool_body' ? { epoch: query.payload.epoch, item_id: query.payload.item_id, expected_rev: query.payload.expected_rev } :
+      ...(query.type === 'thread_read_tool_body' || query.type === 'thread_read_children' ? { epoch: query.payload.epoch, item_id: query.payload.item_id, expected_rev: query.payload.expected_rev } :
         query.type === 'thread_catch_up' ? { epoch: query.payload.epoch, version: query.payload.version } : { before_order: query.payload.before_order }),
-      ...('limit' in p && p.limit !== undefined ? { limit: p.limit } : {}) }
+      ...('limit' in p && p.limit !== undefined ? { limit: query.type === 'thread_read_children' ? Math.min(p.limit || 50, 256) : p.limit } : {}),
+      ...(query.type === 'thread_read_children' && query.payload.cursor ? { cursor: query.payload.cursor } : {}) }
     try {
       const bytes = encodeEnvelope({ id, type: query.type, ts: now(), payload })
       driver.sendMessage(bytes, outcome => {

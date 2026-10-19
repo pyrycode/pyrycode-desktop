@@ -64,7 +64,7 @@ export function createQueueTurnEvidence(options: {
       }
       if (update.type === 'thread_item_added') publish(update.payload.item)
       else if (update.type === 'thread_items') update.payload.items.forEach(item => publish(item))
-      else if (update.type !== 'thread_reset') {
+      else if (update.type === 'thread_item_changed' || update.type === 'thread_text_append') {
         const held = items.get(update.payload.item_id)
         const pairedSuffix = update.type === 'thread_text_append' && update.payload.rev === update.payload.base_rev &&
           companion?.id === update.payload.item_id && companion.rev === update.payload.rev && companion.version === update.payload.version

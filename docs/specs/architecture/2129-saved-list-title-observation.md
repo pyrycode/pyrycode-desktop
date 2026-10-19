@@ -148,7 +148,21 @@ Both retain source Desktop `00ec821f9380b00cf2dfc0dd4817ee15584106a5` and daemon
 `58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf` provenance. No capture bytes, request
 contracts, frame ordering, connection boundaries or completion checks changed.
 
-Pending later-stage work: dispatcher-owned application gate must run both named
-cases without retry; verifier reviews its counted evidence and reports unrelated
-failures separately. These are offline Linux results, with no new live-provider
-or physical-effect claim. macOS is outside this ticket's verification scope.
+Dispatcher application acceptance is satisfied by the retained Linux gate 7 at
+`62845cfd114fe43c973743e88f288d7fe934b88c`:
+`npx playwright test --reporter=json`, **515 executed/passed, 0 failed, 5 skipped**,
+three configured workers, retries zero and no flaky results. Both named thread
+and history cases above are present and passed without retry. All 29 replay
+exchanges have zero remaining requests; thread matched 45 requests/emitted 378
+frames, history 32/63. No unrelated failures were reported. The five skips are
+three macOS-only cases, the existing system-prompt-reset fixme and unreachable-host
+unpair blocked on #2089.
+
+The supplied dispatcher unit gate 4 records **9789 executed/passed, 0 failed,
+3 skipped**, explicitly including passed results for
+`waits for the exact named list after replies are already saved` and
+`does not repeat wrong-host`. The
+[verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2146#issuecomment-6272324515)
+accepts the regression, paired/full replay and named application evidence.
+These are retained offline Linux results, with no new live-provider or
+physical-effect claim. macOS is outside this ticket's verification scope.

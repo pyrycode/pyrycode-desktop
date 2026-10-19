@@ -140,6 +140,189 @@ Offline replay establishes no fresh provider/daemon or physical-effect evidence;
 macOS is outside this Linux ticket's verification scope. The SQLite ABI
 prerequisite above still applies independently of inspection availability.
 
+## Actual submitted-turn reply evidence
+
+The daemon-built scenario in
+[`real-claude-thread.spec.ts`](../../../e2e/real-claude-thread.spec.ts) records the
+actual assistant replies. Requested `THREAD_AGENT`/`THREAD_RESET` wording remains
+in the captured outgoing prompts, but does not determine success. Its single-consumer
+[`threadReplyEvidence`](../../../e2e/fixtures/threadReplyEvidence.ts) collector runs
+synchronously in the page and observes sends through CDP without replacing the preload API.
+It filters both stamped and payload conversation routes to the created chat on the paired host.
+
+Before each send, baseline the existing item and turn identities. Bind the fresh delivered
+top-level user item to the outbound message ID. Native user items have no turn field, so
+select the first fresh top-level work after that delivery's order in the same epoch,
+session and agent, before the next user delivery. Require a fresh, nonempty, done/inactive
+assistant and a later normal `turn_end` with the same attribution: `end_turn`, done/inactive,
+without an error or unsuccessful outcome. Nested items, including replies carrying
+`parent_tool_use_id`, cannot qualify. Neither old items, another chat's completion nor an
+unrelated turn can supply the evidence.
+
+Stable reply identity is host + conversation + epoch + item ID. Revisions and update
+versions describe changes to that item, not a fresh reply. Apply full revisions and
+base-matched text appends, including one immediately ordered same-version/same-revision
+suffix companion; duplicate replay must not append it twice. Record settled native text
+and session/agent/turn attribution. After the observed connection count advances, require
+the first reply's identity and exact text to remain. After the additional reset delimiter,
+take a new baseline and require a distinct reply identity and turn.
+
+Protected `readThread` inspection must contain both recorded top-level replies with their
+exact identities, attribution and original text before profile retirement. After full
+process exit and same-profile relaunch, first assert there is no open conversation thread,
+then inspect protected history again before opening the saved chat. This prevents network
+history-on-open from repairing a missing saved reply. Missing or changed items and
+pre-reset substitution fail. Retain agent placement before/after reconnect, capability
+checks, and the separate [protected saved-list title observation](#protected-saved-list-title-observation)
+with its string assertion. Saved reply content alone cannot establish list durability.
+
+Rendered persistence needs identity as well as text: two turns can legitimately return
+identical words, letting one body satisfy two text-only searches. In one poll, snapshot
+each assistant body's nearest `data-read-row` ID and body text, then require both recorded
+IDs with their expected text. The open conversation supplies host/conversation/epoch scope;
+the row supplies the numeric item ID. Playwright's TSX transformation prevented React
+server rendering of the imported view in this runner. Use the existing `markdownPlainText`
+parser for expected body text, remove code-block headers/copy buttons and task marks from
+cloned rendered bodies, and remove whitespace for the rendered comparison. Cursor and
+statistics chrome are not reply text; native/saved comparisons still use exact original text.
+
+The deterministic [collector and comparison tests](../../../e2e/fixtures/threadReplyEvidence.test.ts)
+cover non-marker text, legitimate item updates, stale/wrong-route/wrong-turn/nested evidence,
+missing or abnormal completion, missing/changed saved items and pre-reset substitution.
+Equal-text rendering coverage requires both identified rows, rejecting either missing row,
+duplicated substitutes, missing/substituted IDs and changed body content.
+
+### Counted Linux thread validation
+
+These are retained builder results accepted by the verifier for
+[PR #2139](https://github.com/pyrycode/pyrycode-desktop/pull/2139), not documentation reruns.
+On Linux x64, 2026-10-19, implementation
+`5d06a2c7bcd080ea5b80817b2cf50166be3e5de8` was reviewed at
+`39dfe1bbe3b299cd9afa9ddb159bb88d33d19c57`; the later commit records evidence only.
+The [plan's rework evidence](../../specs/architecture/2138-actual-thread-replies.md#rework-validation-evidence)
+retains reports and their SHA-256 hashes under `/tmp/builder-2138/`:
+
+| Check | Executed / passed / failed / skipped | Report |
+| --- | --- | --- |
+| Targeted `threadReplyEvidence.test.ts`, including identical-text identity regression | 23 / 23 / 0 / 0 | `rework-unit.xml`, `rework-pre-verify-ready.log` |
+| Exact guarded `claude-thread` replay | 1 / 1 / 0 / 0 | `rework-replay.log` |
+| Exact scenario against real Claude | 1 / 1 / 0 / 0 | `rework-live.log`, `rework-live-stderr.log` |
+
+Both browser reports contain and pass
+`daemon-built thread streams, places an agent, reconnects, resets and reopens saved items`,
+with retries 0 and no flaky results. Replay started `2026-10-19T11:27:28.148Z`, matched
+45 requests, emitted 378 frames, left 0 outstanding requests and recorded 0 forbidden
+launches. Captures, provenance and outgoing prompts are unchanged. This is offline
+evidence; the separate live run establishes the required current provider/daemon behavior.
+Pre-verify's five checks, client-test typecheck and build passed. Electron SQLite preparation
+completed after Node preparation and before either browser launch.
+
+Live started `2026-10-19T11:27:49.423Z` and took 27,366ms. The isolated
+`/tmp/builder-2138/pyry` used clean daemon source
+`664305939d73e5a146457503081d8232fcca5407`, `vcs.modified=false`, Linux amd64,
+SHA-256 `ba2831b24dd8f880c0a707fb694bab8b99cfe2535d76eaa6129dbf11e4d0b869`.
+The live attachment records the Desktop/daemon revisions and authenticated capabilities
+`interactive`, `multi_agent`, `stop_background_task`, `thread`, `thread_expansion`,
+`thread_compact`. Earlier TSX-comparison failures and the interrupted-install prerequisite
+failure remain failed reports in the plan. The identical-text regression failed before
+the identity repair; the final 23-test run includes it passing.
+macOS is outside this Linux ticket's verification scope.
+
+The supplied dispatcher unit gate records 9,699 executed/passed, 0 failed, 3 skipped.
+Its application gate records 509 executed, 507 passed, 2 failed, 5 skipped and explicitly
+lists the named thread scenario as passed. This is captured-client evidence. The accepted
+verifier stage `c8c14257cda146cdfec2e2e28e11cc55b6d19627fae7a061dfde2ffa22ae77ae`
+reports PASS after the two unrelated failures passed same-tree reruns, tracked on
+[#2125](https://github.com/pyrycode/pyrycode-desktop/issues/2125) and
+[#2140](https://github.com/pyrycode/pyrycode-desktop/issues/2140). The original complete
+application run retains its two failures; the supplied gate report records no overall pass.
+
+## Protected saved-list title observation
+
+[`readSavedListTitle`](../../../e2e/fixtures/savedListTitle.ts) observes the actual
+protected `readList` for the exact host and conversation before the shared thread
+scenario calls `initial.relaunch()`. Lists and owned thread changes are buffered
+separately; the handler's serial queue cannot order renderer work not yet submitted.
+Waiting for writer acknowledgement would require instrumentation; reading the
+required protected list directly establishes the needed durable state.
+
+| Protected result | Observation behavior |
+| --- | --- |
+| `missing` | Repeat read-only observation as `missing-list`. |
+| Stored list for the exact host, exact row absent | Repeat as `absent-row`. |
+| Exact row with `name: null` | Repeat as `unnamed-row`. |
+| Exact row with a string name | Return that stored string, including `''`. |
+| Classified storage error | Fail with its static code after one read. |
+| Wrong host, unexpected status/kind, rejected read | Fail after one read as `wrong-host`, `unexpected-result` or `read-failed`. |
+
+Only the three pending categories repeat, within Playwright's unchanged default
+five-second assertion bound. Another chat's name, another host's same chat ID,
+sidebar text and saved replies cannot supply the title. No flush, synthetic
+completion, mutation retry, sleep or enlarged timeout makes this observation pass.
+The explicit `expect(typeof title).toBe('string')` remains. Saved replies are
+checked before relaunch and again immediately afterward with no conversation open,
+then the saved row is reopened and both rendered reply identities/texts are checked.
+Stream, agent placement, reconnect, reset, native-storage prerequisite, synchronous
+inspection and successful-profile retirement proofs remain intact.
+
+The [controlled regression](../../../e2e/fixtures/savedListTitle.test.ts),
+`waits for the exact named list after replies are already saved`, uses the real
+writer, renderer stores, handler and protected SQLite store with an injected
+scheduler and held list write. Replies already satisfy `savedRepliesMatch` while
+the protected result is `stored/list`, exact row present, name null. The original
+one-shot string assertion rejects it. The repaired observation remains pending
+before named-list receipt and while the scheduled write is held. Its payload-free
+trace orders unnamed-list receipt, protected unnamed reads, named-list receipt,
+write submission, another protected unnamed read, successful write acknowledgement,
+protected named read, then a retirement sentinel. The sentinel proves ordering;
+actual profile retirement/relaunch is covered by the application scenario.
+This demonstrates an observation gap, not the unobserved historical trigger or a
+production persistence defect. Persistent pending categories still fail within
+the bound; terminal failures are observed once.
+
+### Counted Linux saved-title validation
+
+These retained Linux x64 results are accepted by the
+[PR #2146 verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2146#issuecomment-6272324515),
+not documentation reruns. Builder implementation
+`aa4938b653cf0b2f9b6f98b238699c2287a17191` contains main `0848c1fb`;
+dispatcher application evidence is at `62845cfd114fe43c973743e88f288d7fe934b88c`.
+The [plan](../../specs/architecture/2129-saved-list-title-observation.md#validation-evidence)
+retains exact commands, worker slots/process IDs and reports under `/tmp/builder-2129/`.
+Node-native checks finished before Electron SQLite preparation; no native rebuild
+ran during replay.
+
+| Check | Executed / passed / failed / skipped | Workers and retries |
+| --- | --- | --- |
+| Original one-shot controlled observation | 1 / 0 / 1 / 0 | 10 other tests unselected |
+| Final `savedListTitle.test.ts` regression file | 11 / 11 / 0 / 0 | Includes ordering, bounded pending state and terminal failures |
+| Five consecutive guarded paired batches | 20 / 20 / 0 / 0 | Each 4 / 4 / 0 / 0; three configured and actual concurrent slots; retries zero |
+| Subsequent complete guarded `npm run e2e:recorded` | 29 / 29 / 0 / 1 | One configured/actual worker; retries zero |
+| Supplied dispatcher unit gate 4 | 9789 / 9789 / 0 / 3 | Named ordering and `does not repeat wrong-host` regressions passed |
+| Dispatcher application gate 7, `npx playwright test --reporter=json` | 515 / 515 / 0 / 5 | Three configured workers; retries zero, no flaky results |
+
+Both named cases were present and passed twice in every paired batch and once
+without retry in both the complete recorded run and application gate 7:
+`daemon-built thread streams, places an agent, reconnects, resets and reopens saved items`
+and `a real daemon lazily fills a served gap after more than 200 entries written while Electron is closed`.
+Batch 3 recycled a worker process after a completed test; all three slots actually
+ran concurrently and no result was retried. Every thread exchange matched 45
+requests/emitted 378 frames; history matched 32/emitted 63, all with zero remaining
+requests. Every builder guard reported zero forbidden launches, and all 29 exchanges
+in both the complete recorded run and application gate had zero remaining requests.
+No unrelated application failures were reported. The complete recorded skip is
+`real claude picks up a saved channel system prompt at Reset session`; the application
+gate also skipped three macOS-only cases and unreachable-host unpair blocked on #2089.
+
+Capture bytes and provenance remain unchanged: thread SHA-256
+`53a3db11cfab2d5041b511d7be4d030ab5b2b8449b7fdb3ea1d7e5e3db552ae3`, history
+`de0b1166b6e05e0792228c07be25c20498b117914e673558222eac12cd4e6d2c`.
+Both retain Desktop source `00ec821f9380b00cf2dfc0dd4817ee15584106a5` and daemon
+source `58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`. Strict request/payload matching,
+frame ordering, causal checkpoints, connection boundaries and exchange-completion
+checks are unchanged. These offline results add no fresh provider/daemon or
+physical-effect claim; macOS is outside this Linux ticket's verification scope.
+
 ## Owned history mutation evidence
 
 A one-item edit after full replacement can conceal an unbounded production append

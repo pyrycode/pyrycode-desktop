@@ -579,7 +579,7 @@ export async function withIsolatedElectronApp(
   const userDataDir = await mkdtemp(join(tmpdir(), 'pyry-e2e-realclaude-'))
   let current: ElectronApplication | null = null
   let relaunching = false
-  const close = async (app: ElectronApplication, completed: boolean): Promise<void> => {
+  const close = async (app: ElectronApplication, completed = true): Promise<void> => {
     const child = app.process()
     let failed = false, primary: unknown
     try {
@@ -608,14 +608,14 @@ export async function withIsolatedElectronApp(
       async close() {
         if (current !== app || relaunching) throw new Error('close fixture: stale app handle')
         current = null
-        await close(app, true)
+        await close(app)
       },
       async relaunch(whileClosed) {
         if (current !== app || relaunching) throw new Error('restart fixture: stale app handle')
         relaunching = true
         try {
           current = null
-          await close(app, true)
+          await close(app)
           await whileClosed?.()
           return await launch()
         } finally {
@@ -630,7 +630,7 @@ export async function withIsolatedElectronApp(
       if (current !== null) {
         const app = current
         current = null
-        await close(app, true)
+        await close(app)
       }
     } finally {
       // Best-effort, like launchPairedApp.ts's drain: a throwing `finally` would REPLACE the causal error

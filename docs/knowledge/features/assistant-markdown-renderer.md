@@ -125,8 +125,9 @@ Inline code keeps `--font-mono` and inherits its heading's size, including 18 px
 inside H2; changing heading type must not replace that monospace treatment.
 
 This scale is independent of the [heading spacing](#configuration-and-usage)
-and preserves non-heading typography. Additional reader-specific verification
-belongs to [#2100](https://github.com/pyrycode/pyrycode-desktop/issues/2100).
+and preserves non-heading typography. [Reader browser verification](assistant-markdown-renderer-verification.md#reader-headings)
+confirms the inherited scale, spacing and first-block clearance at both widths;
+it required no production style changes or duplicate reader heading rules.
 Font packaging is outside this change. See
 [computed typography verification](assistant-markdown-renderer-verification.md#heading-typography)
 for literal-value and token assertions across streaming and settlement.

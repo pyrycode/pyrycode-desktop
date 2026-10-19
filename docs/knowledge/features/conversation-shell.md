@@ -27,13 +27,33 @@ actions and local-count read bookkeeping. Shared row/types/translators remain at
 their existing paths. #2029 separately retired renderer legacy saved IO; main/IPC
 and saved-format/storage retirement remain #2025 and #2026 respectively.
 
-Composer reports read canonical items for the bound session; status and session
-errors read admitted host/conversation/session live state. Without a snapshot,
+Composer reports read the selected complete/compact presentation for the bound
+session; status and session errors read admitted host/conversation/session
+live state. Without a snapshot,
 content reports and item previews are empty; without a binding, current-session
 reports and live activity are empty. Existing items, unaccepted local sends and independently admitted
 prompts keep their own lifetimes. None of these missing inputs activates a legacy
 fallback. Sidebar/badge unread compares only received owning-host shown/read marks.
 Refusal recovery still forwards new model-selection writes to `threadRuntime.refusals`.
+
+Collapsed agents keep their headers; folded tool runs keep their run headers. Their
+descendants/members and closed bodies are unmounted, and full message/body adaptation
+and body-only formatting wait until local expansion makes them visible. Closing
+previously expanded content restores that deferral, including for revisions received
+while closed. Complete-route source-ID expansion state survives collapse, reopen,
+prepends and reparenting; remounted descendants can be new DOM elements. Headlines, counts,
+lifecycle, launch markers, joins and indentation keep their existing presentation.
+On the complete route expansion uses items already held locally. Production selects
+[compact delivery](thread-runtime-compact.md) from the owning accepted handshake;
+visible tool expansion leases its body, while agent expansion leases only direct-child
+summaries, with separate launch-body demand and explicit cursor paging. Grouped-run
+expansion reveals headers only. Summary rows never become invented full messages.
+Questions, approvals, actionable errors, delivery feedback, task status and
+current-session controls keep their independently owned availability. Composer
+reports use selected facts independently of local expansion; compact live task
+controls require [admitted identities](conversation-shell-turn-status.md#session-scoped-live-presentation).
+Compact facts supply no complete read/persistence evidence, including when complete
+history remains held.
 
 Accepted user items without a positive order sit at the tail in snapshot first-arrival
 order. Delivery revises that same scoped item into its supplied positive position,
@@ -189,6 +209,18 @@ An **in-app markdown reader** landed in [#1627](https://github.com/pyrycode/pyry
 
 The positioned `.conversation__covered` pane holds the full-pane message area and separate top/input chrome. Masked backdrop layers soften rows, leaving controls sharp and clickable. The header fades from `#09141D` to transparent with 10px → 0px blur; the input fades to `#0B0E11` at 60% with 0px → 10px blur across its top fifth. Header content and composer status use the Default shadow. Measured chrome heights reserve thread padding, position pills below the header and bound the drawer between controls. See [layout](conversation-shell-chrome.md#layout-contract), [scroll pin](conversation-shell-scroll-pin.md#thread-scroll-pin) and [verification evidence](development-verification-layout-and-input.md#layout-and-input).
 
+`ThreadItemsView` uses metadata-only `threadItemIndex` for ancestry, placement,
+validity, counts and lifecycle, sharing `nest` with the complete adapter. It checks
+ancestor/run visibility and bounded admission before demanding a source's header or
+full presentation. Hidden messages do not format timestamps or usage; closed tools
+do not format shell-command blocks or denial bodies. Usage demand retains matching
+ending metadata and selects the latest nonempty formatted reading: a later empty
+ending must not erase an earlier reading. See
+[supplied presentation](conversation-shell-timeline-render.md#supplied-daemon-item-presentation)
+and [admission, anchoring and counted Linux evidence](conversation-shell-scroll-pin.md#deferred-expansion-verification).
+This complete-thread behavior is separate from incoming-update batching (#2079)
+and compact delivery activation (#2128); it adds no idle prefetch.
+
 This screen is large enough that its surfaces live in their own documents. Each one keeps its original section headings, so an existing `#anchor` still resolves once you follow the link here.
 
 - [Chrome and controls](conversation-shell-chrome.md) — The screen's structure and the persistent controls around the thread: layout, theme, the back, unpair and re-pair controls, and the connection surfaces in the header.
@@ -250,8 +282,11 @@ recovered native acknowledgement alone grants no read target.
 The document must be focused and visible, the reader closed, and the actual newest shown
 source row's trailing edge inside the thread viewport between measured top/input chrome.
 Scrolling above it, chrome overlap, a collapsed ancestor or a folded tool run excludes the
-claim. A visible header/proxy cannot stand for its hidden descendant. Numeric source identity
-locates that row independently of nested presentation; host/conversation/epoch view keys
+claim. Closed descendants are absent, and neither run headers nor launch-marker proxies
+carry source read authority. Reopening must commit the actual visible source revision
+before it can justify publication. A visible header/proxy cannot stand for its hidden
+descendant. Numeric source identity locates that row independently of nested
+presentation; host/conversation/epoch view keys
 replace DOM evidence on scope changes. Observer cleanup removes subscriptions and listeners.
 
 `createReadPublisher` reuses host-bound `markConversationRead` and coalesces evidenced targets.
@@ -390,10 +425,12 @@ The [thread runtime](thread-runtime.md) defines current rendering and live contr
 The authoritative view shares the screen's actual scroll pin. Its ordinary
 Background tasks menu and task-count pill control the same drawer.
 Current-session hook stops, refusals, errors and foreground tools come from
-canonical reports and live readings, so a missing legacy timeline cannot hide them.
+selected reports/header status and live readings, so a missing legacy timeline cannot hide them.
 Tool rows with unchanged immutable source facts reuse their presentation while
-another row streams. Cache presentation only for frozen source objects; mutable
-supplied test inputs must still be reprojected.
+another row streams. Frozen headers and complete bodies use separate source-object
+caches; rebuilding headers on unrelated deltas would defeat `TimelineToolRow`
+memoization even while bodies remain deferred. Mutable supplied test inputs remain
+uncached, and a revised frozen source gets its own presentation.
 
 
 - An empty supplied timeline keeps a focusable history scroller with `EmptyThread` inside. Without a snapshot, chrome, Top overlay and pending inline prompts still mount and measure.

@@ -43,6 +43,16 @@ List canonical-value comparison still suppresses unchanged received lists and bu
 that return to the last successfully saved list value; it does not compare whole
 thread snapshots.
 
+Thread and list durability require separate observations. A protected `readThread`
+containing saved replies does not establish that the host's later named list has
+been received, submitted or acknowledged. The handler orders submitted IPC only;
+renderer work still buffered or awaiting receipt is outside that queue. Before
+retiring a profile whose saved row must reopen, observe the actual protected
+`readList` for that exact host and conversation. Sidebar text or a named row at
+other coordinates cannot establish this. The
+[saved-title observation contract and controlled regression](development-verification.md#protected-saved-list-title-observation)
+distinguish pending results from terminal failures without flushing the writer.
+
 Detached changes keep their original coordinates across host switches and disconnects.
 Main applies completion intervals and oldest-boundary availability against saved
 fences, including unloaded evidence. OR-ing a certification flag while replacing

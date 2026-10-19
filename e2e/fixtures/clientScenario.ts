@@ -201,7 +201,7 @@ const replay = base.extend<ReplayFixtures>({
         server_static_pubkey: Buffer.from(daemon.staticPublicKey).toString('base64') }) })
     } finally { state = undefined; await daemon.close() }
   },
-  _clientReplay: [async ({ daemon, exchange, recording }, use) => {
+  _clientReplay: [async ({ daemon, exchange, recording, relay }, use) => {
     void daemon
     let first = true
     clientAppLifecycle.opened = async (app, page) => {
@@ -212,7 +212,9 @@ const replay = base.extend<ReplayFixtures>({
       else exchange.bindCurrentDevice(identity.deviceId)
     }
     clientAppLifecycle.closing = async (_app, completed) => {
-      if (completed) await exchange.settleConnection()
+      if (!completed) return
+      await exchange.whenConnectionComplete()
+      await relay.whenServerFramesForwarded(exchange.serverFrameCount())
     }
     try { await use() } finally {
       delete clientAppLifecycle.opened

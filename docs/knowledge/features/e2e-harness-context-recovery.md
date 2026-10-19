@@ -2,6 +2,90 @@
 
 Read tolerance and confirmation before resending mutations or native setup. See the [harness overview](e2e-harness.md).
 
+## Shared main-process command ownership
+
+`electronLaunch` installs `mainProcessControl` on every returned local application. Existing
+value-based `app.evaluate` calls now use app-owned operation identities and receipts. A synchronous
+`Runtime.evaluate` dispatch registers the operation before executing the client-owned callback.
+Synchronous results and asynchronous promises remain owned by the application; the inspector only
+reads receipts with `awaitPromise: false`. Losing a dispatch acknowledgement retries the same
+identity, which cannot repeat the callback. Callback errors are outcomes and propagate unchanged,
+including errors whose text resembles a transport loss. Unrelated inspector errors fail immediately.
+A shared 30-second deadline bounds dispatch and observation; an expired callback cannot start late.
+Registry entries expire at that deadline, and each application has its own registry.
+
+This adapter changes test control only. It adds no application IPC endpoint, listener in the normal
+build, daemon message or dependency. Renderer input, DOM assertions and BrowserWindow handles remain
+Playwright-owned. Callbacks must be client-owned and arguments/results must be values serializable by
+Node's V8 serializer. The local Playwright inspector session is an internal API, so dependency upgrades
+must retain adapter fault tests and native smoke/replay coverage. A timed-out asynchronous callback
+already executing is not automatically cancelled; failure cleanup still owns application shutdown.
+Legacy recovery helpers remain useful for their focused fault contracts and specialized handle reads.
+
+### History-on-open inspection validation
+
+`history-on-open.spec.ts` demonstrates why an inspection error must be separated
+from pagination behavior. Three Linux failures (#2095, #2097 and #2107) lost the
+`count()` evaluation after the 41-row second page and scrolling to the bottom.
+Playwright reported `Execution context was destroyed, most likely because of a
+navigation.`; launch-fate still recorded running at outcome, exit 0, null signal
+and no teardown failures. No incorrect count or rejected paging request was
+observed. The upstream Electron/Playwright trigger remains unknown; this evidence
+does not establish a navigation, crash or input-readiness defect.
+
+The [historical reports and same-tree reruns](../../specs/architecture/2112-history-on-open-inspection.md#historical-evidence)
+retain the three retry-0 failures and the preserved suffixed #2107 failure log.
+The #2097 and #2107 selected reruns each executed/passed 3 tests, failed/skipped 0;
+the named case passed at retry 0 in each. Configured/actual workers were 3/2 and
+3/3 respectively, versus 3/3 in each failed run. These reruns do not erase the
+original failures.
+
+The shared command ownership repair in [PR #2132](https://github.com/pyrycode/pyrycode-desktop/pull/2132),
+merge `ebdf6ddf59d4e81b9eb2c0229963bac76f727c0f`, supplies the inspection fix
+without a second adapter or changes to the scenario. Keep its request counts,
+cursor order, ignored/trusted input, demand-band geometry and presentation intact;
+replaying input or replacing unavailable observations with expected counts would
+hide a real pagination failure. Existing fault tests cover loss before/after
+effects, asynchronous completion, falsy values, callback/fatal errors, bounded
+unavailability and expiry; launcher tests cover installation and cleanup.
+
+The [accepted verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2135#issuecomment-6264778255)
+records Linux x64 evidence on 2026-10-19. Builder-recorded focused results at
+`5522fdc8914cd3c6cf4636fb768db824b2557100` were:
+
+| Check | Executed / passed / failed / skipped | Configured / actual workers |
+| --- | --- | --- |
+| `opening asks once and only trusted upward input asks for subsequent pages`, ten repetitions | 10 / 10 / 0 / 0 | 3 / 3 |
+| Complete unchanged four-case `history-on-open.spec.ts` | 4 / 4 / 0 / 0 | 3 / 1 (one sequential file) |
+
+Both used `PW_WORKERS=3`, zero configured retries and retry 0 throughout.
+Original report paths were `/tmp/builder-2112/history-ten.json` and
+`history-all.json` in that directory; the [plan](../../specs/architecture/2112-history-on-open-inspection.md#validation-evidence--2026-10-19)
+records commands and hashes. By verification those reports, matching stderr and
+14 launch-fate attachments were unavailable. Retrieved builder bundle
+`fe5c4526212c6ac4d91671c5ddea2be504a318743006fd6008df2a2fd1913463`
+contains a redacted log with truncated tool entries and no artifact pointers:
+its verified checksums do not independently re-establish those focused counts,
+hashes or clean attachments. They remain builder-recorded evidence.
+
+At reviewed head `f400120f71aa5ea7b80f6df1c53b9e2109aef55f`, the original
+complete configured `npx playwright test --reporter=json` gate independently
+recorded **506 executed, 504 passed, 2 failed, 5 skipped**, three configured/actual
+workers and zero configured retries in both projects. All four history-on-open
+cases were present and passed at retry 0 with clean launch-fate; the exact named
+case passed once in 3026ms and needed no rerun. Report:
+`/work/Projects/pyrycode-desktop-agents/logs/verifier-gate_#2112_7.log`, SHA-256
+`07d078eab67b4e3162668733c93197cfc96f581c614e3d79785588239394118c`.
+The unrelated history-writer and thread-scroll-pin failures remain failures in
+that original run. A selected rerun executed/passed 3, failed/skipped 0; the
+dispatcher accepted those flakes, rather than recording a failure-free first run.
+The unit gate recorded **9,671 executed/passed, 0 failed, 3 skipped**, including
+all 10 inspection fault tests and all 6 launcher tests passed, none skipped in
+those files. This satisfies the previously pending configured-gate criterion.
+These are retained results, not documentation-stage test executions; macOS and
+Windows are outside this Linux ticket's verification scope, with no provider or
+daemon live acceptance required.
+
 ## Tolerating a transient inspection-context loss on reads
 
 `app.evaluate` can raise Playwright's `Execution context was destroyed, most likely because of a
@@ -399,11 +483,40 @@ running at outcome and closed cleanly. The named run records the same setup coun
 zero losses. At `02e7034ad859a672ef9a75128f5d126192826e46`, the complete Linux default-tier
 gate records 432 executed/passed, 0 failed, 10 skipped, two actual workers and zero retries;
 the named case is present and passed, with one installation, one inspection, zero losses
-and clean launch fate. Its exact checkpoint 20, overlap retained once, complete progress
-21 after interruption, replacement epoch, stale-content exclusion and no-legacy-request
-assertions and positive receipt barriers remain intact. Controlled failures and the
+and clean launch fate. At that revision, assertions covered checkpoint 20, overlap retained
+once, complete progress 21 after interruption, replacement epoch, stale-content exclusion
+and no legacy requests, with positive receipt barriers. The current sequence certifies
+checkpoint 25 before reconnect, as described below. Controlled failures and the
 observed recovered acknowledgement establish the confirmation mechanism; the upstream
 Electron/Playwright trigger behind context destruction remains unknown.
+
+### Certified checkpoint inspection
+
+Held-read registration confirms setup, not terminal reply completion. In the restore-overlap
+case, a full `readThread` authenticates hundreds of protected rows synchronously in main.
+Polling it before the final write can spend the assertion deadline returning a snapshot
+admitted before certification, even when the exact completion write later succeeds.
+
+[`readCertifiedCheckpoint`](../../../e2e/fixtures/certifiedCheckpoint.ts) first polls a
+lightweight read-only acknowledgement through `readMainProcess`, then performs one full
+protected read. The scenario wrapper delegates the existing `pyry:chat-history` handler
+once per request and records acknowledgement only after its real `ok` result for
+`mutateThread`, the exact host/conversation, epoch, checkpoint 25 and completed interval
+`{ fromVersion: 20, version: 25 }`. It supplies no completion authority: the
+[correlated terminal certificate](thread-item-store.md#reply-certification-and-recovery)
+and [owned mutation rules](chat-history-api.md#owned-authoritative-mutations) still apply.
+A successful flush or durable prefix cannot substitute for daemon completion.
+
+The helper returns the actual full-read result, including stale checkpoint 20 or missing
+history; the caller still requires exactly 25 before reconnect. Unavailable or pending
+acknowledgement does not admit a full read, and fatal inspection errors fail. Only reads
+are polled; installation, held release, injected frames and reconnect remain single effects.
+No timeout increase, fixed delay, test retry or synthetic flush/commit is involved.
+The `checkpoint-completion-trace` attachment separates synthetic request/connection
+identity, terminal receipt, in-memory batch lifecycle and protected write/read outcomes,
+without item contents or arbitrary error text. See the
+[causal comparison and counted Linux evidence](development-verification-history.md#certified-checkpoint-inspection-verification)
+for the deterministic regression, unchanged overlap assertions and accepted gate result.
 
 ### Saved traversal diagnostics
 

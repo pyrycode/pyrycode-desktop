@@ -1,7 +1,8 @@
-import { expect, it, vi } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { parseRecording, RecordedExchange, type Recording } from './recordedExchange'
 import { encodeEnvelope, decodeEnvelope } from '../../src/main/transport/codec'
 const message = (id: number, type: string, payload = {}) => ({ id, type, ts: '2026-10-16T00:00:00Z', payload })
+afterEach(() => vi.useRealTimers())
 const fixture = (): Recording => ({
   format: 'pyrycode.daemon-exchange', version: 2,
   source: { capturedAt: '2026-10-16T00:00:00Z', desktopRevision: 'a'.repeat(40), daemonRevision: 'b'.repeat(40),
@@ -148,4 +149,40 @@ it('does not require a checkpoint belonging to the independent next connection',
   replay.reply(encodeEnvelope(message(2, 'list_conversations')))
   await replay.settleConnection()
   expect(() => replay.reconnect()).toThrow('connection mismatch')
+})
+
+it('keeps a retiring connection alive until its own trailing request and replies settle', async () => {
+  const replay = new RecordedExchange(fixture())
+  let closed = false
+  const retiring = replay.whenConnectionComplete().then(() => { closed = true })
+  await Promise.resolve()
+  expect(closed).toBe(false)
+  expect(() => replay.reconnect()).toThrow('connection mismatch')
+  await expect(retiring).rejects.toThrow('connection mismatch')
+
+  const healthy = new RecordedExchange(fixture())
+  const complete = healthy.whenConnectionComplete()
+  expect(healthy.reply(encodeEnvelope(message(2, 'list_conversations'))).map(decodeEnvelope)).toHaveLength(1)
+  await complete
+  healthy.reconnect()
+  healthy.reply(encodeEnvelope(message(2, 'list_conversations')))
+  healthy.assertComplete()
+})
+
+it('never waits for a future connection or an unreleased test action during retirement', async () => {
+  const recording = fixture()
+  recording.barriers = [{ before: 1, name: 'future-action' }]
+  const replay = new RecordedExchange(recording)
+  replay.reply(encodeEnvelope(message(2, 'list_conversations')))
+  await expect(replay.whenConnectionComplete()).rejects.toThrow('unreleased checkpoint')
+})
+
+it('bounds missing trailing requests and preserves the failure for final completion', async () => {
+  vi.useFakeTimers()
+  const replay = new RecordedExchange(fixture())
+  const retiring = replay.whenConnectionComplete(50)
+  const check = expect(retiring).rejects.toThrow('connection prefix incomplete')
+  await vi.advanceTimersByTimeAsync(51)
+  await check
+  expect(() => replay.assertComplete()).toThrow('connection prefix incomplete')
 })

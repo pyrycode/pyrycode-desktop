@@ -223,6 +223,30 @@ export class RecordedExchange {
     // handleTransport sends the entire returned reply batch synchronously before
     // these promise continuations resume. Never close from inside drain's matcher.
   }
+  /** Retire only this connection's prefix. Future profiles and unreleased test actions cannot unblock it. */
+  async whenConnectionComplete(timeoutMs = 5_000): Promise<void> {
+    const connection = this.connection
+    return new Promise((resolve, reject) => {
+      const cleanup = (): void => { clearTimeout(timer); this.progress.delete(finish) }
+      const finish = (): void => {
+        if (this.failure) { cleanup(); reject(this.failure); return }
+        if (this.recording.barriers?.[this.barrier]?.before === this.index &&
+            (this.recording.wire[this.index]?.connection ?? connection) === connection) {
+          cleanup(); reject(new Error('Recorded exchange retirement requires an unreleased checkpoint')); return
+        }
+        if (this.index === this.recording.wire.length ||
+            (this.recording.wire[this.index]?.connection ?? 1) > connection) {
+          cleanup(); resolve()
+        }
+      }
+      const timer = setTimeout(() => {
+        this.failure ??= new Error('Recorded exchange connection prefix incomplete')
+        this.notifyProgress()
+      }, timeoutMs)
+      this.progress.add(finish)
+      finish()
+    })
+  }
   private notifyProgress(): void { for (const finish of [...this.progress]) finish() }
   private drain(): Uint8Array[] {
     const frames: Uint8Array[] = []
@@ -253,6 +277,8 @@ export class RecordedExchange {
     return frames
   }
   start(): Uint8Array[] { return this.drain() }
+  /** One Noise response per connection, followed by all emitted application frames. */
+  serverFrameCount(): number { return this.connection + this.emitted }
   private mapped(value: unknown): unknown {
     if (typeof value === 'string') return this.identities.get(value) ?? value
     if (Array.isArray(value)) return value.map(child => this.mapped(child))

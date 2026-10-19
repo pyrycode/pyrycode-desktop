@@ -48,6 +48,16 @@ in the dispatcher gate at `1f994132db599066efd744a9df57a542195133e0` on 2026-10-
 279 executed, 279 passed, 0 failed and 4 skipped. This is fake-transport evidence; no live-Claude
 result is claimed.
 
+For ack-only sends, daemon receipt alone cannot prove the response was parsed.
+[`composer-reset-send.spec.ts`](../../../e2e/composer-reset-send.spec.ts) uses
+`threadMode: 'native'` to prevent synthetic user echoes from settling reset rows.
+It waits for the initial native row before typing, then for each command's receipt
+and an increment of the content-free `inbound-unmodeled`/`ack` diagnostic. A later
+native assistant marker on the same encrypted stream establishes renderer progress
+before checking that Sending and reset rows are absent. An ordinary-send control
+must remain pending after ack alone until its matching authoritative user item
+arrives. See the [named regression and counted Linux evidence](composer-send-limits.md#ack-only-reset-regression).
+
 A streaming assistant row includes cursor and metadata text, so an exact-text locator
 can miss a visible delivery marker. Target the assistant role wrapper with `hasText`
 for the positive barrier, then assert duplicate absence. In
@@ -81,6 +91,56 @@ unthrottled baseline repetitions alone did not establish the cause.
 The footer needs a session-settings snapshot before its controls can render.
 Check the current refresh trigger. A lone idle event does not produce a transition
 from running to idle. Drive the prerequisite transition when the fixture requires it.
+
+## Question-answer interpretation and freshness
+
+Selected-label mention order cannot establish answer delivery: correct contrastive prose
+can mention an unchosen label first, and offered labels can overlap. The shared
+[`real-claude-question-answer.spec.ts`](../../../e2e/real-claude-question-answer.spec.ts)
+instead asks one two-question batch, selects a surfaced policy and enters a unique
+confirmation through Other. Generate the confirmation through `scenarioInput` after the
+batch appears, keeping it absent from the trigger prompt. The accepted model change must
+leave that original batch outstanding before submission.
+
+The scenario-local
+[`createQuestionAnswerEvidence`](../../../e2e/fixtures/questionAnswerEvidence.ts)
+binds host/conversation before sending the trigger, then native epoch and the original
+live `AskUserQuestion` turn. A read-only CDP breakpoint projects only the answer command's
+host, batch and exact indexed values; the daemon-supplied batch associates that command
+with the original conversation, since the command has no conversation field. Preserve
+the chosen label verbatim, including whitespace. Neither that outgoing command nor
+optimistic panel clearing proves interpretation. Success additionally requires the owning
+daemon's `answered` dismissal, fresh top-level assistant text containing the confirmation
+on the original turn, and a subsequent normal `turn_end` on that turn. Error/foreign
+completion, nested text and transcript replacement cannot supply the proof. The observer
+retains necessary projected fields and public identities, never answer tokens or raw frames.
+
+Freshness has two exclusion sources. Same-route/epoch `thread_items` snapshots retain
+assistant text/revisions and already-seen terminal identities, even after submission;
+snapshots never establish the tool turn, witness or completion. Every accepted live
+assistant text revision before the exact submission must also extend the exclusion
+baseline, including the interval after `arm()`. Otherwise `arm → reply → submit → dismiss
+→ status-only update → terminal` can falsely pass using pre-submission text. Exclusions
+only grow: shorter or absent bodies, higher revisions and arming cannot erase known
+text. A higher revision containing unchanged text supplies no fresh witness. Terminal
+identity counts on first observation only; updating an old end item after the witness
+cannot turn it into a new completion.
+
+Genuine post-submission appends remain eligible, including an ordered same-revision
+field-change/text-suffix companion. A snapshot containing that item invalidates its pending
+companion; an empty or unrelated snapshot preserves it. Prefix replacement and epoch reuse
+fail the proof rather than falling back to the whole transcript. Deterministic controls
+reject ignored/restated answers, wrong routes/batches/indices/values, stale text and
+missing/mismatched/error completion. They accept varied correct prose, overlapping labels,
+an unchosen label first and fresh appends after exclusions. The
+[accepted Linux evidence](development-verification-live-test-diagnosis.md#question-answer-linux-acceptance)
+records 47 passed controls and the separate capture/live/replay runs.
+
+Stop the answer observer after original-turn completion, before the subsequent model
+probe. That probe waits for the expected changed Opus announcement and retains its
+resolved-model attachment: native live state can reassert the old Sonnet model before
+the ensuing `system/init` announces the new model. The first new announcement alone
+cannot settle this assertion. See the [recorded inventory](../../client-replay-migration.md#question-answer-proof).
 
 ## History page receipt and terminal demand
 

@@ -42,7 +42,9 @@ const recording = (): Recording => ({
 })
 type ReplayHook = (deps: { daemon: object; exchange: RecordedExchange; recording: Recording },
   use: () => Promise<void>) => Promise<void>
-const replayHook = (registered as unknown as { _clientReplay: [ReplayHook, object] })._clientReplay[0]
+const registeredHook = (registered as unknown as { _clientReplay: [ReplayHook, object] })._clientReplay[0]
+const replayHook: ReplayHook = (deps, use) => registeredHook({ ...deps,
+  relay: { whenServerFramesForwarded: async () => {} } } as any, use)
 
 afterAll(() => { vi.unstubAllEnvs() })
 afterEach(() => {

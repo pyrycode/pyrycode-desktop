@@ -17,8 +17,11 @@ complete consumption for compact coverage.
 
 Keep a separate session-only compact owner, selected explicitly through
 `runtime.open(host, chat, { projection: 'compact-v1' })` after the owning handshake
-accepts `interactive`, `thread`, `thread_expansion` and `thread_compact`. Ordinary
-opening remains complete; advertisement cannot activate compact delivery.
+accepts `interactive`, `thread`, `thread_expansion` and `thread_compact`.
+Production activation in [#2128](https://github.com/pyrycode/pyrycode-desktop/issues/2128)
+adds `projection: 'auto'`, choosing from that owning accepted handshake before
+opening or reconnect dispatch. Omitted options remain complete; advertisement
+cannot activate compact delivery. This activation preserves the authority decision.
 
 Root facts, certified root windows, completed catch-up checkpoints and consumed
 live intervals remain distinct from body freshness and child enumeration. Only a
@@ -52,7 +55,8 @@ can show only retained roots and truthful stale/missing detail; complete saved
 restoration remains independently available. No new compact persistence, complete
 certificate, full-history fallback or unseen-content read authority is introduced.
 Switching projections initializes the destination query at zero while preserving
-held complete state. Presentation and integrated activation remain #2081's work.
+held complete state. Production presentation and visible row demand now use this
+owner; full roots, child summaries and rendered detail remain separate authorities.
 
 See [runtime behavior and validation](../features/thread-runtime-compact.md),
 [complete-store boundaries](../features/thread-item-store.md) and

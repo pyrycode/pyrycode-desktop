@@ -32,13 +32,13 @@ Unrelated storage and fake-suite work remains under its existing owners.
 | `real-claude-permission-modal.spec.ts` | Session checkbox, confirmation, repeated use, new-session prompt, Cancel | Witness mtime proves effects occur only with permission |
 | `real-claude-permission-mode.spec.ts` | Confirmed bypass, no-op write, menu return, Manual approval Read | Registry/handoff-note setup and actual Read denial |
 | `real-claude-phase-reconnect.spec.ts` | Same-turn status restored across reconnect | Real disconnect, running tool and filesystem release gate |
-| `real-claude-question-answer.spec.ts` | Model change during question and continuation with original answer | Real question tool and continued child |
+| `real-claude-question-answer.spec.ts` | Same outstanding two-question batch across model change; exact indexed UI answers, daemon dismissal, fresh confirmation and original-turn completion before model probe | Real question tool, answer interpretation and changed resolved-model announcement |
 | `real-claude-question-cancel.spec.ts` | Clarification refusal, dismissal, stopped work | Absence of generated artifacts after Cancel |
 | `real-claude-queue-delivery.spec.ts` | Queued send, delivery identity and ordering | Real entered/release files and tool effects |
 | `real-claude-queue-drop.spec.ts` | Mid-turn enqueue, drop before drain, no later queued turn | Real gate file and genuinely running child |
 | `real-claude-queue-send-now.spec.ts` | Send now inside the current turn | Real tool entered/release gate and child consumption |
 | `real-claude-system-prompt.spec.ts` | Stored prompt at spawn; a save leaves current session unchanged | Actual system-prompt application; existing reset fixme remains explicit |
-| `real-claude-thread.spec.ts` | Daemon-built stream, agent placement, reconnect, reset and saved reopen | Real agent execution and transport restart |
+| `real-claude-thread.spec.ts` | Daemon-built stream, agent placement, reconnect, reset, exact protected saved-list title and saved-reply reopen | Real agent execution and transport restart |
 | `real-daemon-archive-order.spec.ts` | Archived channels sorted by use | Daemon registry timestamps independently checked |
 | `real-daemon-conversation-lifecycle.spec.ts` | Archive, restore, deletion and reply-gated navigation | Real registry operations |
 | `real-daemon-create-channel.spec.ts` | Named promoted channel, default workspace and dialog close | Real daemon creation semantics |
@@ -64,6 +64,28 @@ is no successful current capture of that assertion; its full test remains a fixm
 Claude spec. It is relevant board context but has no current scenario to migrate.
 #1662's requested two-agent handover is also separate acceptance from the
 existing Codex channel test. Neither can be closed on replay results alone.
+
+## Question-answer proof
+
+`claude-question-answer` selects an offered policy and answers a separate confirmation
+question through Other. `scenarioInput('question-confirmation', ...)` supplies unique
+text only after the two-question batch surfaces; the initial prompt cannot supply it.
+The accepted pending-question model change must leave the original host, conversation,
+batch and turn outstanding. Exact indexed values, including the surfaced policy label,
+must match the observed submission. Panel disappearance alone is optimistic: the proof
+also requires the owning daemon's answered dismissal, fresh top-level assistant text
+containing the confirmation on the original turn, and a later matching normal terminal
+item before the changed-model probe. Label mention order and prose format are irrelevant.
+
+Same-route/epoch snapshots exclude known assistant text/revisions and terminal identities;
+they never establish the witness, original tool turn or completion. Every accepted live
+assistant text revision before submission also extends the exclusion baseline, including
+between arming and submission. Shorter/missing bodies cannot erase exclusions, and a
+status-only update cannot make old confirmation text fresh. Genuine subsequent appends
+remain eligible, including paired same-revision suffixes. A terminal can complete the proof
+only when first observed after the witness. See the
+[observer contract and controls](knowledge/features/development-verification-evidence-that-cannot-pass-too-early.md#question-answer-interpretation-and-freshness)
+and [counted Linux evidence with distinct daemon provenance](knowledge/features/development-verification-live-test-diagnosis.md#question-answer-linux-acceptance).
 
 ## Baseline repairs found by live execution
 
@@ -152,6 +174,14 @@ wins the merge; a replacement item invalidates it. This integrates with the
 saved/live restoration fixes merged in PR #2058.
 
 ## Validation evidence
+
+The [saved-title observation evidence](knowledge/features/development-verification.md#protected-saved-list-title-observation)
+records the controlled stored-null mechanism, 11 passing regressions, five
+three-worker paired batches (20 passed), the complete guarded recorded run
+(29 passed, one existing system-prompt-reset fixme), and both named relaunch cases
+passing without retry in the 515-case Linux application gate. Full executed,
+failed and skipped counts and unchanged capture provenance are retained there.
+The controlled delay does not establish the historical failure's production cause.
 
 The [Linux relaunch repair evidence](knowledge/features/development-verification.md#replay-inspection-after-profile-relaunch)
 records five consecutive two-worker paired runs, the complete guarded recorded

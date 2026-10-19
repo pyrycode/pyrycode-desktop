@@ -35,7 +35,26 @@ and [counted Linux relaunch evidence](knowledge/features/development-verificatio
 
 Seven named read-only queries may reorder within an action. Every other request is an ordered barrier, including read marks. A query cannot borrow a future reply. Daemon frames retain recorded order and wait for all preceding requests, captured connection transitions and explicit test-side checkpoints. Missing, duplicate, extra or changed requests fail even after the final visible assertion. Diagnostics report counts and source provenance without payloads.
 
+A successful explicit profile close or relaunch first settles that connection's captured request prefix and successful relay socket writes. It never waits for a later profile or releases a test checkpoint. Missing requests and delivery failures remain bounded failures. Error cleanup closes immediately and preserves the original error; it does not attempt to finish a failed scenario. The replay fixture owns and clears both lifecycle hooks.
+
+The thread scenario separately observes saved replies and the exact host/chat's
+protected saved-list string title before relaunch. `readSavedListTitle` repeats
+only read-only missing-list, absent-row and unnamed-row observations within the
+existing five-second assertion bound; storage errors, rejected reads, wrong hosts
+and unexpected results fail immediately. It returns the actual stored string,
+including an empty string, and retains the explicit string assertion. Natural
+list receipt and persistence supply the title. See the
+[controlled ordering regression and counted Linux evidence](knowledge/features/development-verification.md#protected-saved-list-title-observation).
+
 `scenarioEffect` marks an external test action before capture executes it. Replay releases only the subsequent actual recorded frames. `liveProof` executes the original filesystem, registry or process assertions during capture/live runs; replay waits for the exact recorded prefix at their successful checkpoint. Offline success does not establish those physical facts.
+
+Explicit `scenarioInput` values also preserve inputs generated during a scenario.
+The [question-answer scenario](client-replay-migration.md#question-answer-proof) generates
+its confirmation only after the batch appears and reuses that captured value in replay.
+Its interpretation proof excludes snapshots and all pre-submission assistant text;
+only fresh original-turn confirmation followed by matching normal completion can count.
+The [Linux acceptance record](knowledge/features/development-verification-live-test-diagnosis.md#question-answer-linux-acceptance)
+keeps the successful replacement capture, guarded replay and separate live run distinct.
 
 ## Capture every scenario
 

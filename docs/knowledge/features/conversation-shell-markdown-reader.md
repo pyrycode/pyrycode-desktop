@@ -126,8 +126,12 @@ has explicit shared styling: Roboto Mono 12/20 px, a 1 px Primary Container stro
 with the nested 8 px rhythm and flush Markdown edges described above. The fixed
 top bar and sole body scrollport follow the [pane layout](#pane-wiring).
 
-Heading scale and reader-specific heading verification belong to the
-[separate heading work](assistant-markdown-renderer.md#heading-typography).
+Headings inherit the [shared H1–H6 scale](assistant-markdown-renderer.md#heading-typography)
+through `.bubble__markdown`: Roboto-first, On Secondary Container ink, H1
+500 20/28 px, H2 500 18/26 px, H3 500 16/24 px, and H4–H6 700 14/20 px.
+Tracking is respectively 0, 0, 0.15 and 0.25 px. Reader-specific browser
+coverage confirms these rules without duplicate heading CSS or production
+style changes; see [heading verification](#heading-verification).
 
 ## Note actions menu
 
@@ -451,7 +455,7 @@ and cells, quotes and external links at 1280 and 800 px window widths. It checks
 literal 14/20 px type and 0.25 px tracking as well as the Roboto family and token
 ink, preserving the quote bar, link underline, fenced code and visible copy icon.
 It measures all five adjacent ordinary-block gaps after the heading-to-paragraph
-pair; heading spacing is separately owned. Shared markup alone would miss a
+pair; [heading verification](#heading-verification) covers heading boundaries. Shared markup alone would miss a
 wrong inherited body size, and a declared flex gap alone would miss extra margins.
 
 The [accepted Linux verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2114#issuecomment-6256632906)
@@ -470,6 +474,25 @@ confirming prose typography/ink, outlined code/copy treatment and 16 px ordinary
 gaps. Retained capture references are `/tmp/verifier-2114/` and
 `/tmp/builder-2099/reader-body-{1280,800}.png`. This body change requires no
 provider/live run; macOS is outside this Linux ticket's verification scope.
+
+## Heading verification
+
+`MarkdownReader.test.tsx`'s “renders H1–H6 inside the shared Markdown wrapper
+(#2100)” pins all six semantic tags under `.bubble__markdown`. The mounted
+“reader headings share the scale, spacing and first-block clearance (#2100)”
+scenario in `e2e/markdown-reader.spec.ts` opens a reply's note link and delivers
+synthetic file text through the verified file-response path. At native window
+widths 1280 and 800 it checks literal family/size/line-height/weight/tracking
+and token ink, six 20/12 px heading/prose boundary pairs, five 16 px adjacent
+heading gaps and zero first/last Markdown insets.
+
+For each width it then refetches a first-paragraph note and compares its distance
+from the fixed chrome's bottom with the first-heading note's distance, asserting
+both scrollports are at zero and the heading clears the chrome. This proves no
+extra first-heading gap; shared markup or a declared flex gap alone cannot
+establish the measured header clearance. The reader keeps the shared heading
+rules; #2100 added tests only. See [counted Linux results, negative control and
+capture provenance](assistant-markdown-renderer-verification.md#reader-headings).
 
 ## Related
 

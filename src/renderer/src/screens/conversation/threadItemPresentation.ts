@@ -84,11 +84,13 @@ function sessionDividerReason(c: Record<string, unknown>): 'clear' | 'idle_evict
     default: return undefined
   }
 }
-function presentation(s: Held): ThreadItem | null {
+const presentationStatuses = new Set(['running', 'done', 'failed', 'denied', 'interrupted', 'queued', 'written', 'delivered', 'lost', 'dropped',
+  'finished', 'stopped', 'stopping', 'ended_with_session', 'gone'])
+function presentation(s: Held, scope: 'body' | 'header' | 'index' = 'body'): ThreadItem | null {
   const c = record(s.content)
-  if (!c || typeof s.status !== 'string' || !['running', 'done', 'failed', 'denied', 'interrupted', 'queued', 'written', 'delivered', 'lost', 'dropped',
-    'finished', 'stopped', 'stopping', 'ended_with_session', 'gone'].includes(s.status)) return null
+  if (!c || typeof s.status !== 'string' || !presentationStatuses.has(s.status)) return null
   const turnId = text(s.turn) ?? ''
+  if (scope !== 'body' && s.kind !== 'tool_call' && s.kind !== 'agent') return null
   switch (s.kind) {
     case 'user_message':
     case 'assistant_message': {
@@ -107,17 +109,18 @@ function presentation(s: Held): ThreadItem | null {
       if (c.result != null && (!r || typeof r.result_summary !== 'string' || typeof r.is_error !== 'boolean')) return null
       if (c.denial != null && (!d || typeof d.tool_name !== 'string' || typeof d.decision_reason_type !== 'string' ||
           typeof d.decision_reason !== 'string' || typeof d.message !== 'string')) return null
-      const input = record(c.input)
+      const input = scope === 'index' ? null : record(c.input)
       return { kind: 'toolCall', turnId, toolUseId: text(c.tool_use_id) ?? '', name: c.name,
-        inputSummary: text(c.input_summary) ?? '',
+        inputSummary: scope === 'index' ? '' : text(c.input_summary) ?? '',
         input: input ? Object.fromEntries(Object.entries(input).filter((entry): entry is [string, string] => typeof entry[1] === 'string')) : undefined,
         elapsedSeconds: numeric(c.elapsed_seconds),
         result: r && typeof r.result_summary === 'string' && typeof r.is_error === 'boolean'
-          ? { isError: r.is_error, resultSummary: r.result_summary, resultDetail: text(r.result_detail) } : null,
+          ? { isError: r.is_error, resultSummary: scope === 'body' ? r.result_summary : '', resultDetail: scope === 'index' ? undefined : text(r.result_detail) } : null,
         denial: d && typeof d.tool_name === 'string' && typeof d.decision_reason_type === 'string' &&
           typeof d.decision_reason === 'string' && typeof d.message === 'string'
-          ? { toolName: d.tool_name, decisionReasonType: d.decision_reason_type, decisionReason: d.decision_reason,
-            message: d.message, truncatedFields: strings(d.truncated_fields), droppedFields: strings(d.dropped_fields) } : undefined }
+          ? { toolName: d.tool_name, decisionReasonType: d.decision_reason_type, decisionReason: scope === 'body' ? d.decision_reason : '',
+            message: scope === 'body' ? d.message : '', truncatedFields: scope === 'body' ? strings(d.truncated_fields) : null,
+            droppedFields: scope === 'body' ? strings(d.dropped_fields) : null } : undefined }
     }
     case 'session_divider': {
       const reason = sessionDividerReason(c)
@@ -269,21 +272,50 @@ function identity(s: Held): string | null {
 }
 /** Adapt display facts only; every join uses the recorded attribution, including hidden endings. */
 export function threadItemPresentations(snapshot: ThreadSnapshot): ItemPresentation[] {
+  return projectThread(snapshot, false)
+}
+/** Lightweight placement and fold facts. No descendant message or body adaptation. */
+export function threadItemIndex(snapshot: ThreadSnapshot): ItemPresentation[] {
+  return projectThread(snapshot, true)
+}
+/** Called only for a mounted source row, with body demand owned by its expansion state. */
+export function threadItemPresentation(source: Held, body: boolean): ThreadItem | null {
+  return body ? retainedPresentation(source) : presentation(source, 'header')
+}
+function projectThread(snapshot: ThreadSnapshot, indexOnly: boolean): ItemPresentation[] {
   const endings = new Map<string, string>(), last = new Map<string, ItemPresentation>()
-  const rows: ItemPresentation[] = snapshot.items.filter(s => s.shown === true).map(source => ({ source, item: retainedPresentation(source),
+  const endingSources = new Map<string, Record<string, unknown>[]>()
+  const rows: ItemPresentation[] = snapshot.items.filter(s => s.shown === true).map(source => ({ source,
+    item: indexOnly ? presentation(source, 'index') : retainedPresentation(source),
     ancestors: [], depth: 0, count: 0, hasChildren: false }))
   for (const source of snapshot.items) {
     const key = identity(source), c = record(source.content)
     if (key !== null && source.kind === 'turn_end' && c) {
+      if (indexOnly) {
+        const sources = endingSources.get(key) ?? []
+        sources.push(c); endingSources.set(key, sources); continue
+      }
       const stats = formatTurnStats(metrics(c))
       if (stats !== null) endings.set(key, stats)
     }
   }
   for (const row of rows) {
     const key = identity(row.source)
-    if (key !== null && row.item?.kind === 'assistantText') last.set(key, row)
+    if (key !== null && (indexOnly ? row.source.kind === 'assistant_message' && typeof row.source.status === 'string' &&
+      presentationStatuses.has(row.source.status) && typeof record(row.source.content)?.text === 'string'
+      : row.item?.kind === 'assistantText')) last.set(key, row)
   }
-  for (const [key, row] of last) row.stats = endings.get(key)
+  for (const [key, row] of last) {
+    if (indexOnly) Object.defineProperty(row, 'stats', { enumerable: false, get: () => {
+      const sources = endingSources.get(key) ?? []
+      for (let at = sources.length - 1; at >= 0; at--) {
+        const stats = formatTurnStats(metrics(sources[at]))
+        if (stats !== null) return stats
+      }
+      return undefined
+    } })
+    else row.stats = endings.get(key)
+  }
   const arrival = new Map((snapshot.arrivalOrder ?? snapshot.items.map(item => item.id)).map((id, index) => [id, index]))
   return nest(rows, arrival)
 }

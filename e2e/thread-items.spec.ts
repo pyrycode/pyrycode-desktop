@@ -15,6 +15,7 @@ import { capturePairedApp } from './fixtures/capturePairedApp'
 import { test, expect, seedConversationsFrame, SEEDED_ROW, FIRST_SERVER_ID, SECOND_SERVER_ID, SECOND_SEEDED_ROW } from './fixtures/launchPairedApp'
 
 type Fixture = {
+  draft: () => string
   read: (row: Partial<ConversationSummary>, readerOpen?: boolean) => void
   readBatch: (items: ThreadItem[], version: number, completion: 'complete' | 'older' | 'incomplete' | 'abandon') => void
   repair: (version: number) => void
@@ -49,7 +50,8 @@ import { useStore } from 'zustand';
 import { activeConversationStore } from './store/activeConversationStore';
 import { sessionStore } from './store/sessionStore';
 import { createThreadItemStore } from './store/threadItemStore';
-import { ThreadItemsTimeline } from './screens/conversation/ConversationScreen';
+import { ThreadItemsTimeline, ComposerSlot } from './screens/conversation/ConversationScreen';
+import { composerDraftStore, selectDraft } from './store/composerDraftStore';
 import { createThreadSendStore } from './store/threadSendStore';
 import { conversationListStore } from './store/conversationListStore';
 import { ConversationListData } from './store/conversationListBridge';
@@ -58,6 +60,7 @@ import { isConversationUnread } from './store/conversationUnread';
 import { useReadPublication, createReadPublisher } from './store/conversationReadPublisher';
 import { submitMessage } from './screens/conversation/composerSend';
 const threadStore = createThreadItemStore();
+const useRealComposer = false;
 const sends = createThreadSendStore(), actions = [];
 const replies = [], paths = [], stops = [], escapes = [];
 const readTargets = [], readAttempts = [], precommitTargets = [];
@@ -86,6 +89,7 @@ function ThreadFixture() {
   const local = useStore(sends, s => scope ? s.select(scope.host, scope.chat) : null);
   const snapshot = useStore(threadStore, s => scope ? s.snapshot(scope.host, scope.chat) : null);
   window.threadFixture = { replies, paths, stops, escapes, turnRunning: setTurnRunning,
+    draft() { return selectDraft(composerDraftStore.getState(), scope.host, scope.chat); },
     readTargets, readAttempts, precommitTargets,
     connected(host) { return sessionStore.getState().statuses.get(host)?.type === 'connected'; },
     receivedMark() { return conversationListStore.getState().conversations?.find(r => r.id === scope.chat && r.serverId === scope.host)?.read_up_to; },
@@ -128,25 +132,37 @@ function ThreadFixture() {
   };
   return snapshot ? <div className="conversation" onKeyDown={event => { if (event.key === 'Escape') escapes.push('bubble'); }}><div className="conversation__covered">
     <ConversationListData />
-    <output hidden data-testid="read-state">{JSON.stringify({ receipts, scope,
+    <output hidden data-testid="read-state">{JSON.stringify({ receipts, scope, version: snapshot.version,
       marks: (rows ?? []).map(row => [row.serverId, row.id, row.read_up_to,
         isConversationUnread(row)]) })}</output>
     <ThreadItemsTimeline snapshot={snapshot} backgroundTasksOpen={backgroundTasksOpen} onBackgroundTasksOpenChange={setBackgroundTasksOpen} readInputs={readInputs && { ...readInputs, completeThrough }} sendInputs={{ connection, local: { ...local, hostId: scope.host, conversationId: scope.chat },
       onAction: (host, command) => actions.push([host, command]) }} taskInputs={taskInputs} turnRunning={turnRunning} foldTools onReply={(role, text) => replies.push(role + ':' + text)}
       onOpenMarkdownPath={path => paths.push(path)} />
-    <textarea className="composer__input" aria-label="Fixture composer" onKeyDown={event => {
+    {useRealComposer ? <div className="conversation__input-chrome"><ComposerSlot serverId={scope.host} conversationId={scope.chat}
+      phase="idle" onMessageSent={() => {}} /></div> : <textarea className="composer__input" aria-label="Fixture composer" onKeyDown={event => {
       if (turnRunning && event.key === 'Escape' && !event.nativeEvent.isComposing) escapes.push('interrupt');
-    }} />
+    }} />}
   </div></div> : <App />;
 }
 `
-async function rendererFixture() {
+async function rendererFixture(realComposer = false) {
   const loaded = await loadConfigFromFile({ command: 'build', mode: 'production' }, resolve('electron.vite.config.ts'))
   const renderer = loaded!.config.renderer
   const outDir = await mkdtemp(join(tmpdir(), 'builder-1904-renderer-'))
   await build({ ...renderer, configFile: false, root: resolve('src/renderer'), base: './',
     plugins: [...renderer.plugins, { name: 'thread-items-fixture', enforce: 'pre', transform(code: string, id: string) {
-      if (id.endsWith('/src/renderer/src/main.tsx')) return code.replace('<App />', '<ThreadFixture />') + fixtureSource
+      if (id.endsWith('/src/renderer/src/main.tsx')) return code.replace('<App />', '<ThreadFixture />') +
+        fixtureSource.replace('const useRealComposer = false;', `const useRealComposer = ${realComposer};`)
+      if (realComposer && id.endsWith('/screens/conversation/threadItemPresentation.ts')) return code.replace(
+        'export function threadItemPresentation(source: Held, body: boolean): ThreadItem | null {',
+        `export function threadItemPresentation(source: Held, body: boolean): ThreadItem | null {
+          const work = window.visualWork ??= { calls: 0, descendants: 0 };
+          work.calls++; if (source.parent) work.descendants++;`)
+      if (realComposer && id.endsWith('/screens/conversation/ConversationScreen.tsx')) return code.replace(
+        'const setDraft = useComposerDraftStore(s => s.setDraft)',
+        `useThreadLayoutEffect(() => { window.composerCommit = { text, at: performance.now(),
+          rows: document.querySelectorAll('[data-read-row]').length }; });
+         const setDraft = useComposerDraftStore(s => s.setDraft)`)
     } }], build: { ...renderer.build, outDir }, logLevel: 'silent' })
   return preview({ configFile: false, root: resolve('src/renderer'), build: { outDir },
     preview: { host: '127.0.0.1', port: 0 }, logLevel: 'silent' })
@@ -333,7 +349,7 @@ for (const width of [1280, 800]) test(`publishes only committed visible authorit
     await batch([item(20, 'agent', { name: 'Agent', tool_use_id: 'parent', input_summary: 'Parent', input: {},
       result: { is_error: false, result_summary: 'launched' } }, { status: 'finished' }),
       item(21, 'assistant_message', { text: 'Nested newest content' }, { parent: 20 })], 25)
-    await expect(row(21)).toBeHidden()
+    await expect(row(21)).toHaveCount(0)
     await read(25); expect(await targets()).not.toContain(25)
     await row(20).getByRole('button').first().click()
     await expect(row(21)).toBeVisible()
@@ -775,31 +791,29 @@ for (const width of [1280, 800]) test(`supplied agents repair nesting and retain
     await folded.click()
     await expect(row(40)).toHaveClass(/depth-0/)
     await chip(40).click()
-    await row(40).evaluate(el => { (window as unknown as { agentChild: Element }).agentChild = el })
     await batch([agent(10), agent(30)])
     await expect(page.locator('.agent-start-marker')).toHaveCount(2)
     expect(await thread.locator('[data-read-row]').evaluateAll(rows => rows.map(row => row.getAttribute('data-read-row'))))
-      .toEqual(['20', '41', '42', '10', '40', '30'])
-    await expect(row(40)).toHaveCount(1)
-    await expect(row(40)).toBeHidden()
+      .toEqual(['20', '41', '42', '10', '30'])
+    await expect(row(40)).toHaveCount(0)
     await expect(folded).toHaveAttribute('aria-expanded', 'true')
     await expect(chip(10)).toContainText('running · 1 tool')
     await chip(10).click()
     await expect(row(40)).toBeVisible()
     await expect(row(40).locator('.tool-row__result')).toHaveText('child output')
-    expect(await row(40).evaluate(el => el === (window as unknown as { agentChild: Element }).agentChild)).toBe(true)
+    await expect(row(40)).toHaveAttribute('data-read-row', '40')
     await change(40, { parent: 30 })
-    await expect(row(40)).toBeHidden()
+    await expect(row(40)).toHaveCount(0)
     await batch([item(35, 'tool_call', { name: 'Read', input_summary: 'older folded member' })])
     await expect(folded).toHaveAttribute('aria-expanded', 'true')
     await expect(chip(10)).toContainText('0 tools')
     await chip(30).click()
     await expect(row(40).locator('.tool-row__result')).toBeVisible()
-    expect(await row(40).evaluate(el => el === (window as unknown as { agentChild: Element }).agentChild)).toBe(true)
+    await expect(row(40)).toHaveAttribute('data-read-row', '40')
     await chip(30).click()
     await page.locator('.agent-start-marker').filter({ hasText: 'agent-30' }).click()
     await expect(chip(30)).toHaveAttribute('aria-expanded', 'false')
-    await expect(row(40)).toBeHidden()
+    await expect(row(40)).toHaveCount(0)
     await change(20, { active: false, content: { text: 'Main reply complete' } })
     await batch([item(60, 'turn_end', { stop_reason: 'end_turn' }, { session: 'prior-session', turn: 'main' }),
       item(70, 'assistant_message', { text: 'work after main reply' }, { parent: 30, active: true })])
@@ -891,7 +905,7 @@ for (const width of [1280, 800]) test(`supplied agents repair nesting and retain
     await settled()
     await expect.poll(async () => (await anchor.boundingBox())!.y).toBeCloseTo(before, 0)
     expect(await distance()).toBeGreaterThan(100)
-    expect(await row(40).evaluate(el => el === (window as unknown as { agentChild: Element }).agentChild)).toBe(true)
+    await expect(row(40)).toHaveAttribute('data-read-row', '40')
     await expect(chip(10)).toHaveAttribute('aria-expanded', 'true')
     await expect(row(40).locator('.tool-row__result')).toBeVisible()
     await page.evaluate(() => (window as unknown as { agentScroll: { remove: () => void } }).agentScroll.remove())
@@ -911,8 +925,121 @@ for (const width of [1280, 800]) test(`supplied agents repair nesting and retain
       await expect(chip(10)).toContainText('Finished')
       await expect(chip(10)).not.toContainText('running ·')
       await expect(chip(10)).toHaveAttribute('aria-expanded', 'false')
-      await expect(row(40)).toBeHidden()
+      await expect(row(40)).toHaveCount(0)
     }
+  } finally { await new Promise<void>((resolve, reject) => server.httpServer.close(e => e ? reject(e) : resolve())) }
+})
+
+test('defers 8333 held items and commits real composer input during unfinished expansion', async ({ launchPairedApp }) => {
+  test.setTimeout(300_000)
+  const server = await rendererFixture(true)
+  try {
+    const { page, app } = await launchPairedApp({ threadMode: 'native' }, { rendererUrl: server.resolvedUrls!.local[0] })
+    await page.locator('.channel-list__row-open').first().click()
+    await expect(page.getByRole('button', { name: 'Send' })).toBeEnabled()
+    await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.setSize(1280, 800); w.show(); w.focus() })
+    const settle = () => page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+    const row = (id: number) => page.locator(`[data-read-row="${id}"]`)
+    const chip = (id: number) => row(id).locator('.tool-row__chip')
+    const mounted = () => page.locator('[data-read-row]').count()
+    const work = () => page.evaluate(() => (window as unknown as { visualWork: { calls: number; descendants: number } }).visualWork)
+    await page.evaluate(({ host, chat }) => (window as unknown as { threadFixture: Fixture }).threadFixture.scope(host, chat, 'workload'),
+      { host: FIRST_SERVER_ID, chat: SEEDED_ROW.id })
+    const agent = (id: number, parent?: number) => item(id, 'agent', { name: 'Agent', input: { description: `Work ${id}` },
+      tool_use_id: `call-${id}`, task_id: `task-${id}`,
+      task_link: { task_id: `task-${id}`, tool_call_id: `call-${id}` },
+      result: { is_error: false, result_summary: 'agent body' } }, { parent, status: 'finished' })
+    const children = Array.from({ length: 8330 }, (_, n) => item(n + 10, 'assistant_message', { text: `Inert held row ${n}` }, { parent: 2 }))
+    await page.evaluate(items => (window as unknown as { threadFixture: Fixture }).threadFixture.readBatch(items, 9002, 'complete'),
+      [agent(1), agent(2, 1), ...children,
+        item(9000, 'tool_call', { name: 'Read', input_summary: 'first member', result: { is_error: false, result_summary: 'member body' } }),
+        item(9001, 'tool_call', { name: 'Read', input_summary: 'second member' })])
+    await expect(chip(1)).toHaveAttribute('aria-expanded', 'false')
+    await expect(page.locator('.tool-run button')).toHaveText('Using tools: 2')
+    await settle()
+    expect(await mounted()).toBe(1)
+    expect((await work()).descendants).toBe(0)
+    await expect(row(10)).toHaveCount(0)
+    const folded = page.locator('.tool-run button')
+    await folded.click()
+    await chip(9000).click()
+    await expect(row(9000).locator('.tool-row__result')).toHaveText('member body')
+    await folded.click()
+    await expect(folded).toHaveAttribute('aria-expanded', 'false')
+    await settle()
+    await expect(row(9000)).toHaveCount(0)
+    await folded.click()
+    await expect(chip(9000)).toHaveAttribute('aria-expanded', 'true')
+    await expect(row(9000).locator('.tool-row__result')).toHaveText('member body')
+    await chip(1).click()
+    await expect(chip(2)).toHaveAttribute('aria-expanded', 'false')
+    await settle()
+    await expect(row(10)).toHaveCount(0)
+    const composer = page.locator('.composer__input')
+    await composer.focus()
+    // The real React expansion handler runs without moving focus away from the actual composer.
+    await chip(2).evaluate(el => (el as HTMLButtonElement).click())
+    await expect.poll(mounted).toBeGreaterThan(4)
+    const before = await mounted()
+    expect(before).toBeLessThan(8334)
+    await page.evaluate(() => { (window as unknown as { inputStart: number }).inputStart = performance.now() })
+    await page.keyboard.type('x')
+    await expect.poll(() => page.evaluate(() => (window as unknown as { composerCommit: { text: string } }).composerCommit.text)).toBe('x')
+    const committed = await page.evaluate(() => {
+      const w = window as unknown as { composerCommit: { at: number; rows: number }; inputStart: number; threadFixture: Fixture }
+      return { latency: w.composerCommit.at - w.inputStart, rows: w.composerCommit.rows, draft: w.threadFixture.draft() }
+    })
+    expect(committed.draft).toBe('x')
+    expect(committed.latency).toBeGreaterThanOrEqual(0)
+    expect(committed.latency).toBeLessThanOrEqual(1000)
+    expect(committed.rows).toBeGreaterThan(4)
+    expect(committed.rows).toBeLessThan(8334)
+    await test.info().attach('composer-during-expansion', { body: JSON.stringify({ before, ...committed }), contentType: 'application/json' })
+    await expect.poll(mounted).toBeGreaterThan(committed.rows)
+    await expect(row(8339)).toHaveText('Inert held row 8329', { timeout: 120_000 })
+    await expect.poll(mounted).toBe(8334)
+    // Commit a collapse, then a closed revision, before checking both projection and DOM absence.
+    await chip(1).click()
+    await expect(chip(1)).toHaveAttribute('aria-expanded', 'false')
+    await settle()
+    const closedWork = (await work()).descendants
+    await page.evaluate(updated => (window as unknown as { threadFixture: Fixture }).threadFixture.readBatch([updated], 9003, 'complete'),
+      { ...children.at(-1)!, order: 10000, rev: 9003, content: { text: 'Revised while closed' } })
+    await page.evaluate(() => { const f = (window as unknown as { threadFixture: Fixture }).threadFixture
+      f.read({ last_shown_version: 9003, read_up_to: 0, latest_entry_id: 10000 }); f.probe() })
+    await expect(page.getByTestId('read-state')).toContainText('"version":9003')
+    await expect(chip(1)).toContainText('Work 1')
+    await settle()
+    await expect(row(2)).toHaveCount(0)
+    expect((await work()).descendants).toBe(closedWork)
+    expect(await page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.readTargets)).not.toContain(9003)
+    await chip(1).click()
+    await expect(chip(2)).toHaveAttribute('aria-expanded', 'true')
+    await expect(row(10)).toHaveText('Inert held row 0')
+    await expect(row(8339)).toHaveText('Revised while closed', { timeout: 120_000 })
+    await row(8339).evaluate(el => el.scrollIntoView({ block: 'center' }))
+    await settle()
+    await page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.probe())
+    await expect.poll(() => page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.readTargets)).toContain(9003)
+    await capturePairedApp(app, page, '/tmp/builder-2127/held-expanded-1280.png')
+    // Existing committed-read cases cover closed/reopened source revisions and proxy exclusion.
+    // Here a real reading row remains at the same offset when a different branch folds above it.
+    const thread = page.getByLabel('Conversation history')
+    await row(100).evaluate(el => el.scrollIntoView({ block: 'start' }))
+    await settle()
+    const top = (await row(100).boundingBox())!.y
+    await folded.evaluate(el => (el as HTMLButtonElement).click())
+    await expect(folded).toHaveAttribute('aria-expanded', 'false')
+    await settle()
+    expect((await row(100).boundingBox())!.y).toBeCloseTo(top, 0)
+    await chip(2).evaluate(el => (el as HTMLButtonElement).click())
+    await expect(chip(2)).toHaveAttribute('aria-expanded', 'false')
+    await settle()
+    await expect(row(10)).toHaveCount(0)
+    const controller = (await row(2).boundingBox())!, viewport = (await thread.boundingBox())!
+    expect(controller.y).toBeGreaterThanOrEqual(viewport.y)
+    expect(controller.y + controller.height).toBeLessThanOrEqual(viewport.y + viewport.height)
+    await capturePairedApp(app, page, '/tmp/builder-2127/held-collapsed-1280.png')
   } finally { await new Promise<void>((resolve, reject) => server.httpServer.close(e => e ? reject(e) : resolve())) }
 })
 

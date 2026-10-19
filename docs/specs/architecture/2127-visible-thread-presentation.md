@@ -59,3 +59,11 @@ No new I/O or rejection modes. Unsupported facts retain escaped summaries. Exist
 ## Open Questions
 
 None. One visibility behavior slice; estimated 760 written lines including plan, tests and existing assertion migrations; three production files, at most three exports, three consumers, four observable criteria, no new reject machine. No in-flight feature branch overlaps the planned production files after remote refresh.
+
+## Revisions
+
+2026-10-19: Keep demanded adaptation in the existing `ThreadItemsView` render loop after visibility and bounded admission, rather than introducing another row component. Existing memoized `TimelineRow` and `TimelineToolRow` already provide the body render seam. Admit up to 256 new source IDs per turn with a cancelled-on-change timer; the 64-row prototype repeated layout reconciliation too often to complete the generated workload within its test deadline. `ThreadPin.layoutChanged` reuses the existing geometry reconciliation for local expansion, including the application's parent-owned pin. Removed reading rows fall back to a surviving controlling header at a visible offset; Go to agent admits its explicit destination immediately.
+
+2026-10-19: Mounted application tool-group checks caught compensation undoing explicit navigation on the reveal-state cleanup render. Reconcile only geometry inputs, and record the post-navigation anchor immediately. The unchanged Go to agent and background-agent scenarios prove this on the parent-owned application pin; supplied fixtures alone would have missed it. Move the existing joined-border precondition after opening the run because closed members are now absent.
+
+2026-10-19: Deferred usage keeps all matching ending metadata until visible demand, selecting the latest nonempty formatted reading just as the complete adapter does. A regression with a later empty ending failed before this correction. Completion assertions allow 120 seconds per large expansion under shared-runner load; the real input commit limit remains 1000 ms and expansion is never paused for input.

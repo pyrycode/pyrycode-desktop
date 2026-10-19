@@ -154,8 +154,9 @@ test('visible tool rows keep joined borders across collapsed descendants', async
   const row = (id: string) => page.locator('.tool-row:not(.tool-run__row)').filter({
     has: page.locator('.tool-row__summary', { hasText: new RegExp(`^${id}$`) })
   })
-  await expect(row('c')).toHaveClass(/tool-row--resolved/)
+  await expect(page.locator('.tool-run button')).toContainText('Using tools: 3')
   await page.locator('.tool-run button').click()
+  await expect(row('c')).toHaveClass(/tool-row--resolved/)
 
   const expectStacks = async (stacks: string[][]) => {
     await expect(page.locator('.tool-row:not(.tool-run__row) .tool-row__summary:visible')).toHaveText(stacks.flat())

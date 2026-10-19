@@ -87,3 +87,33 @@ Errors remain the existing replacement Error with no cause. Parser codes are all
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-15
+
+## Revisions
+
+2026-10-19 — listener ownership investigation after recovery:
+
+- Finished the pending merge in `89a1db2f`, retaining main's explicit IPv4 bind from `fdee12cc` and newer thread fixtures/frame-delivery behavior. Merge build passed; 40 focused setup, forwarder and desktop-isolation tests passed on macOS outside the sandbox.
+- Retrieved native task `cb4e12de9f75482bab04c31cddd0670312bf55c014c22b554b7015cbb4bf76f2` under `/tmp/builder-1983/native-prior-20261019/`. Candidate `e8281ae4` executed 398, passed 397, failed 1, skipped 1, retried 0. The mute test passed; all 456 setup records opened. The sole failure was ArrowUp in `thread-scroll-pin.spec.ts`; this is not rejection evidence. The Desktop native route is now available through `desktop-fake-suite`.
+- A bounded local macOS probe (`/tmp/builder-1983/listener-probe.cjs`) establishes a causal trigger: after `http.listen(0)` binds wildcard, a second server can bind the advertised IPv4 port and receive the dial instead. An explicit `127.0.0.1` owner makes that second bind fail with `EADDRINUSE`, and receives its own dial. This proves an ownership defect and the merged explicit-bind repair, but does not identify the historical responder or equate the historical 400/404/501 occurrences.
+- Keep the merged explicit bind. Add `listenerMatchesDial` to existing snapshots/attempt records, computed from the actual bound address/family, retaining only a boolean. No new export, retry, timeout, response or transport API.
+- Test the real bound address and refusal of a competing exact IPv4 listener. Exercise concurrent forwarders with distinct opaque frame exchanges and independent counters. Use a test-only interception of `Server.listen` to reproduce the prior wildcard binding, then a competing IPv4 responder for each observed status (400, 404, 501). Assert one terminal attempt, an unobserved owning listener, socket close and Noise free; remove the contender and prove a subsequent encrypted exchange through the original owner. Existing parser/upgrade tests continue to prove default rejection responses.
+- Lifecycle coverage: wildcard shadow then contender close/reuse is covered by the setup occurrence cases; exact bind ownership and concurrent forwarder isolation by forwarder tests; failed attempt then fresh Noise/encrypted exchange by setup occurrence cases; repeated close and snapshot independence retain their existing tests. All mute-command assertions remain unchanged.
+- Scope remains one behavior: reliable ownership of the fake setup dial, with its regression and bounded diagnostics. Existing branch work plus this revision targets fewer than 800 written lines, two exported diagnostic types total, one capture caller, three acceptance behaviors, unchanged error branches. No independently useful sibling behavior is added.
+- Run affected tests first, final-main pre-verify and build, then ten retry-disabled macOS mute-test executions. Request the dispatcher-owned configured complete suite only at the pushed candidate revision; record every failure/skip. No live-provider acceptance changes.
+
+## Security review
+
+**Verdict:** PASS (2026-10-19 revision)
+
+- [Trust boundaries] `listenerMatchesDial` compares the actual server address/family to client-owned constants; records contain the boolean only. Request parser/upgrade inputs remain allowlisted classes and booleans.
+- [Tokens, secrets, credentials] No credentials or keys enter capture. Noise state stays in the fake; tests spy on free calls without recording key material.
+- [File and storage operations] Existing Playwright attachment destinations/numeric names remain unchanged; probe artifacts stay outside the tree. No product storage changes.
+- [Electron attack surface] No renderer, IPC, navigation or window changes. Setup failures still precede Electron.
+- [Cryptographic primitives] Same Noise variant/library; a failed dial frees its handshake before the next fresh attempt, which must complete an encrypted exchange.
+- [Network and I/O] MUST FIX addressed by retaining main's exact IPv4 bind on the diagnostic HTTP listener. A competing IPv4 responder must fail to bind. HTTP 400/404/501 remain terminal; parser/ws default responses remain unchanged.
+- [Errors, logs, telemetry] No raw addresses, errors, headers, causes, URLs, keys or content in capture. Controlled responder status is classified through the existing exact fixed HTTP pattern. No diagnostic event histories.
+- [Concurrency] Each listener/counter belongs to one forwarder; tests prove concurrent exchanges cannot cross. Failed sockets, contender listeners and Noise states close in finally paths, with existing idempotent forwarder teardown preserved.
+- [Threat model alignment] A conflicting local test listener is the demonstrated threat. Product relay/daemon/renderer security and at-rest credential controls are unchanged; no new product surface is introduced.
+
+**Reviewer:** builder (self-review per `builder/security-review.md`)
+**Date:** 2026-10-19

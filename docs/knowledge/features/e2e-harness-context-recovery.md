@@ -130,6 +130,92 @@ and one document in the resulting bubble prove that confirmation avoided a
 duplicate. A pre-push count delta could mistake the preceding upload's delayed
 tile for the current completion and is not an equivalent delivery check.
 
+**Connection-pill delivery.** `status` in `connection-pills.spec.ts` delegates only
+to [`confirmConnectionPillStatus`](../../../e2e/fixtures/connectionPillStatus.ts).
+Disconnected and connecting deliberately share pill copy, so unchanged text or a
+main-process send marker cannot prove that the intended transition reached the
+renderer. Before sending, the helper installs an observer through the existing
+`window.pyry.onDaemonEvent` bridge. Each invocation adds a fresh test-only UUID
+beside the unchanged event fields; the observer compares the full serialized event,
+including token, host, type and payload, and requires exactly one receipt even when
+the send was acknowledged. Earlier or identical events cannot confirm a new call.
+The marker stays in the test's IPC injection; no daemon-wire or shipping API changes.
+
+At most two guarded send evaluations share one five-second deadline with observer
+installation, receipt polling and confirmed disposal. Only transient send
+acknowledgement loss, a successful zero-receipt read and conclusive absence of the
+main-process token authorize the second evaluation. Each synchronous send callback
+claims that token before `webContents.send`; recovery and a late first callback
+cannot both deliver it. Tokens remain until app teardown, and expired callbacks
+cannot send. A claimed send awaiting renderer receipt is only polled. Unavailable
+renderer or main-process confirmation never establishes absence or success;
+duplicate receipt, missing observer, exhaustion and unrelated failures fail the case.
+
+This contract is stronger than `pushConfirmingDelivery`: that shared helper returns
+after an acknowledged push and treats transiently unavailable confirmation as
+“not seen yet,” eventually allowing another push. Wrapping `status` with it unchanged
+would neither confirm every transition nor require conclusive absence before resend.
+The stricter adaptation remains local to this single consumer.
+
+Cleanup also needs acknowledgement recovery. In `finally`, synchronous idempotent
+disposal replaces the receipt with a completion tombstone before unregistering its
+listener. Only transient disposal acknowledgement loss permits polling that mutation
+again; success requires acknowledged disposal within the original deadline. A hang,
+unavailable cleanup through expiry or exhausted budget fails, even after receipt.
+Installation checks the tombstone and deadline before registering, preventing a late
+callback from creating an observer after cleanup. Each installed observer also owns
+a renderer expiry timer at that deadline, so its listener is removed even if disposal
+cannot execute or acknowledge. Tombstones remain until app teardown; application
+listeners are preserved. Bounding only the send and read loop would miss both a
+cleanup hang and a listener installed after cleanup completed.
+
+[`connectionPillStatus.test.ts`](../../../e2e/fixtures/connectionPillStatus.test.ts)
+executes the actual serialized callbacks with fake timers and an independent
+application consumer. Faults cover installation, sends, renderer/main-process reads
+and disposal, including loss before/after effect, late execution, non-settling calls,
+same-copy states and mismatched payloads. Consuming-boundary delivery counts and
+listener removals establish single delivery and cleanup; a send counter alone cannot.
+The [accepted Linux verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2123#issuecomment-6260433414)
+records the lifecycle baseline at **35 executed, 25 passed, 10 failed, 0 skipped**,
+then **35 executed/passed, 0 failed/skipped** after repair. The original-send baseline
+separately recorded **21 executed, 1 passed, 20 failed, 0 skipped**; neither controlled
+baseline identifies the upstream Electron/Playwright trigger.
+
+Retained Linux x64 browser evidence at `abae1d274a28656e61719f743e47ac6004b08d63`
+(reviewed head `37d64c3d` adds evidence documentation only):
+
+| Command | Executed / passed / failed / skipped | Configured / actual workers |
+| --- | --- | --- |
+| `npx playwright test e2e/connection-pills.spec.ts --grep "connection pills clear and float over hidden rows" --repeat-each=10 --retries=0 --reporter=json` | 10 / 10 / 0 / 0 | 3 / 3 |
+| `npx playwright test e2e/connection-pills.spec.ts --retries=0 --reporter=json` | 5 / 5 / 0 / 0 | 3 / 1 (one sequential spec) |
+
+The named hidden-row case is present and passed in both reports. `PW_WORKERS` was
+unset; every retry index is 0, with no flaky results or report-level errors and empty
+matching `.stderr`. Reports remain at `/tmp/builder-2120/recovery/hidden-ten.json`
+and `connection-pills.json`. All 15 `launch-fate` attachments record running at
+outcome, exit 0, null signal and no teardown failures.
+
+The supplied dispatcher unit gate records **9,597 executed/passed, 0 failed,
+3 skipped**; it explicitly includes passing `does not await disposal after the
+confirmation budget is exhausted`, `fails exhausted disposal acknowledgement loss
+within the shared budget` and `expires a delayed installation when disposal never
+confirms`. The separate complete configured application gate (`npx playwright test
+--reporter=json`) records **506 executed, 505 passed, 1 failed, 5 skipped**, three
+configured/actual workers, no flaky results and every retry index 0. Its hidden-row
+case is present and passed at retry 0 with clean launch-fate. The retained complete
+run remains failed: the accepted verdict records the unrelated history-writer-native
+failure tracked in [#2125](https://github.com/pyrycode/pyrycode-desktop/issues/2125)
+as accepted after its dispatcher rerun. A focused pass does not replace that run,
+and no overall verifier gate pass is recorded in the supplied gate report.
+
+Empty/hidden/saved rows, selected-host state and recovery target, disabled Send,
+replacement/clearing, 1280/800 geometry, wrapping and pointer pass-through assertions
+remain intact without forced input, new skips, test retries, fixed readiness sleeps
+or larger timeouts. These are retained results, not fresh documentation-stage tests;
+macOS is outside this Linux ticket's verification scope, and no live-provider
+acceptance is required. See the [plan](../../specs/architecture/2120-connection-pill-delivery.md)
+for revision-specific commands and evidence history.
+
 Handler installation has a different confirmation boundary. In
 [`localListFailure.ts`](../../../e2e/fixtures/localListFailure.ts), the single-consumer
 `installUnreadableLocalList` helper synchronously registers the unreadable-list wrapper

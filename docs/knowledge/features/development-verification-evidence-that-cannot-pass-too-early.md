@@ -135,6 +135,19 @@ same append to become visible and the exact sequence `[1,2,3,4,5]`. A last-targe
 check could miss duplicate or out-of-order publications. This tests resumed progress
 as well as exclusion. See the [runtime read contract](thread-runtime.md#live-controls-and-read-publication).
 
+Reconcile later sightings against the executed source before treating them as a
+regression. The Linux failures on [#2165](https://github.com/pyrycode/pyrycode-desktop/issues/2165)
+and [#2190](https://github.com/pyrycode/pyrycode-desktop/issues/2190) used identical
+old frame-only specs; neither revision contained repair `3098f90f` from
+[PR #2189](https://github.com/pyrycode/pyrycode-desktop/pull/2189), despite the later
+wall-clock #2190 sighting. The [source comparison and retained receipt](../../specs/architecture/2197-visible-tail-evidence.md#evidence-receipt--2026-10-20)
+identify both original failures and their unchanged reruns: each rerun had
+3 executed/passed, 0 failed/skipped/flaky, with this named case passed at retry 0.
+The receipt compared main `ebe063cf` with accepted candidate `3ce46e4b` and found
+byte-identical repaired specs. These reruns do not replace the original failures.
+The controlled red below establishes the timer bypass mechanism; neither
+occurrence log traces its exact timer interleaving.
+
 ### Counted Linux validation
 
 These are retained builder/dispatcher results accepted by the

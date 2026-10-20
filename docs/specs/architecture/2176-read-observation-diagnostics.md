@@ -144,3 +144,33 @@ Controlled document focus proves reason selection; it adds no native focus claim
 These focused results do not replace complete macOS dispatcher unit/replay gates or
 fresh verifier judgment, both pending with their owning stages. Documentation handoff
 is pending. No fresh provider/daemon or physical-effect acceptance is required.
+
+### 2026-10-20 synchronization repair design
+The recovered verifier FAIL at `bf3131b5` confirms the diagnostic-exception repair
+and identifies two test barriers that can pass before the intended commit. Integrate
+the existing #2173 reply-readiness and #2186 pending-read repairs locally; do not
+republish the refused #2173 comment. Overlap #2150 changes only the separate native
+focus helper and needs no dependency. No production behavior changes are planned.
+
+The reply scenario must await the exact rendered suffix and absence of the streaming
+cursor before activating its retained Reply control. A controlled held runtime drain
+must show that the old visible-container barrier quotes only the partial source,
+while the repaired barrier waits and then quotes the complete source. Keep all
+existing quote, focus, caret, edited-send and clipboard assertions.
+
+For the pending-read scenario, retain both native frame and paired timer callbacks
+by function identity, count their actual scheduling opportunities and real preload
+receipt, and establish target 4/content unchanged before focus and scroll. Await
+the ordered outgoing context sentinel before excluding target 5. Restore APIs and
+unsubscribe in `finally`; release must commit the suffix and publish exactly target 5.
+Keep hidden/queued exclusions, observer lifetime checks and runtime fallback units.
+
+Verification: first run both original named macOS cases under normal admission;
+then retain controlled before/after evidence, run both repaired specs and the mounted
+diagnostic/receiver selection. After final main merge, run affected pre-verify units,
+build and client-test typecheck; prepare Electron sequentially. Push the complete
+candidate and request the configured macOS application gate. Fresh verifier judgment
+remains owned by the next stage. Historical FAILs and missing original target-matrix
+raw before-evidence remain unchanged. One synchronization invariant is repaired;
+estimated total branch written work remains under 800 lines, with no new exported
+surface, consumer migration, state or production failure branch.

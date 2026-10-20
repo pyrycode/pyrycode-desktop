@@ -118,9 +118,9 @@ export function createQueueTurnEvidence(options: {
     return { complete, thread, conversationId, turns: summaries, queuedMessageIds, queueSnapshots }
   }
   if (options.subscribe) {
-    const target = window as unknown as { pyry: { onDaemonEvent: (listener: typeof observe) => () => void };
+    const target = window as unknown as { pyry: { onDaemonEvent: (listener: typeof observe, content?: boolean) => () => void };
       queueTurnEvidence: { snapshot: typeof snapshot; stop: () => void } }
-    target.queueTurnEvidence = { snapshot, stop: target.pyry.onDaemonEvent(observe) }
+    target.queueTurnEvidence = { snapshot, stop: target.pyry.onDaemonEvent(observe, true) }
   }
   return { observe, snapshot }
 }

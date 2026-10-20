@@ -48,6 +48,9 @@ On the complete route expansion uses items already held locally. Production sele
 visible tool expansion leases its body, while agent expansion leases only direct-child
 summaries, with separate launch-body demand and explicit cursor paging. Grouped-run
 expansion reveals headers only. Summary rows never become invented full messages.
+Active supplied agents keep full opacity on both delivery routes, including inside
+expanded tool runs; ordinary pending tools remain dimmed. See
+[agent emphasis](conversation-shell-timeline-render.md#saved-content-and-activity).
 Questions, approvals, actionable errors, delivery feedback, task status and
 current-session controls keep their independently owned availability. Composer
 reports use selected facts independently of local expansion; compact live task
@@ -426,6 +429,9 @@ The authoritative view shares the screen's actual scroll pin. Its ordinary
 Background tasks menu and task-count pill control the same drawer.
 Current-session hook stops, refusals, errors and foreground tools come from
 selected reports/header status and live readings, so a missing legacy timeline cannot hide them.
+Agent status labels recover complete top-level descriptions from truncated compact
+JSON without requesting details; unusable input falls back to `Running Agent…`.
+See [Agent descriptions](conversation-shell-working-indicator.md#agent-descriptions-from-compact-headers).
 Tool rows with unchanged immutable source facts reuse their presentation while
 another row streams. Frozen headers and complete bodies use separate source-object
 caches; rebuilding headers on unrelated deltas would defeat `TimelineToolRow`

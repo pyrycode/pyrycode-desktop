@@ -2,6 +2,17 @@ import { readFileSync } from 'fs'
 import { resolve } from 'path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
+import { execFileSync } from 'node:child_process'
+import type { Plugin } from 'vite'
+
+export function buildProvenance(profile: 'normal' | 'complete-thread'): Plugin {
+  return { name: 'build-provenance', generateBundle() {
+    this.emitFile({ type: 'asset', fileName: 'build-provenance.json', source: JSON.stringify({ profile,
+      desktopRevision: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+      sourceDirty: Boolean(execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).trim())
+    }) })
+  } }
+}
 
 // The running app's build string (#350), sourced from package.json's `version` and exposed to the
 // renderer as the compile-time constant __APP_VERSION__. Read via readFileSync (not a JSON import) —
@@ -12,7 +23,7 @@ const appVersion = JSON.parse(readFileSync(resolve('package.json'), 'utf-8')).ve
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()]
+    plugins: [externalizeDepsPlugin(), buildProvenance('normal')]
   },
   preload: {
     plugins: [externalizeDepsPlugin()],

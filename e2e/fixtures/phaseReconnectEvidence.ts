@@ -38,7 +38,7 @@ export async function watchPhaseReconnect(page: Page): Promise<void> {
         if (item.kind === 'tool_call' || item.kind === 'assistant_message') turnIds.add(item.turn)
         if (item.kind === 'turn_end') endedTurnIds.add(item.turn)
       }
-    })
+    }, true)
     ;(window as EvidenceWindow).phaseReconnectEvidence = {
       snapshot: () => ({ thread, interactive, connections, conversationId, phases: [...phases],
         turnIds: [...turnIds], endedTurnIds: [...endedTurnIds] }),

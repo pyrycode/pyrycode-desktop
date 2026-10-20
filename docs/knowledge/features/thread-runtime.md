@@ -72,7 +72,9 @@ checkpoint. A correlated reset retires the old scope and starts the new epoch's
 newest window. Older and Retry controls invoke host-addressed thread queries.
 
 Navigation cancels the selected local read and abandons application of its query.
-The coordinator retains sent-query ownership until terminal delivery or expiry.
+The coordinator retains sent-query ownership until terminal delivery or expiry;
+a correlated terminal already received before retirement permits immediate slot
+release, including across repeated navigation.
 Local read tokens, request IDs and store generations reject stale callbacks even
 when host, conversation or epoch strings are later reused.
 Initial epoch admission and same-owner publications preserve the read; explicit
@@ -88,10 +90,45 @@ protected writer removes saved content through its existing ordered removal path
 Failed credential removal does not grant successful-unpair cleanup. Other hosts
 with equal IDs remain independent.
 
-Text appends are published once per animation frame in arrival order. The first
-append schedules that frame. Other event types flush earlier appends before
-application. A bounded flush also handles a paused window. Teardown removes
-subscriptions and retires owned query and live state.
+### Bounded complete-item application
+
+Production queues live additions, changes and text appends together in received
+order. Once content is queued, subsequent controls join that queue: questions,
+permissions, session changes and disconnects wait behind preceding content without
+forcing a synchronous backlog flush. Each drain consumes at most **128 events**,
+including controls. Consecutive content runs share a coordinator/store transaction;
+each run publishes one coherent immutable snapshot per changed host/conversation.
+Only changed slices settle sends and task stops and derive composer reports.
+Authoritative delivery clears Sending in its admitting snapshot.
+
+The first drain races an animation frame against a **50 ms timer**, cancelling
+the losing callback and fencing late callbacks with a scheduling token. Further
+drains yield through **zero-delay timer tasks**: chaining frames alone starved
+the heartbeat. Paused frames still progress with the same per-drain bound.
+Factory instances without a frame scheduler retain synchronous event application;
+scalar item-store APIs remain synchronous too.
+
+The [item-store transaction](thread-item-store.md#snapshots-and-completed-batches)
+copies each changed map and orders its contents once, preserving immutable prior
+snapshots and scalar admission semantics. Owned changes retain all changed items
+and ordered progress/completion evidence for the writer; retaining only the final
+delta would lose saved content. Coordinator completion notifications follow the
+coherent publication once per scope. Receipt and scheduling certify nothing.
+
+Deferred entries retain their received host/conversation and store-generation
+owner. Navigation/cancel removes departed work; reset/epoch replacement fences
+old owners, including reused strings. Confirmed deletion, successful unpair,
+suspend and disposal retire their queues and callbacks. Suspend discards pending
+application and reconnect resumes from the certified checkpoint. Disposal also
+clears ordered subscribers. None of these paths drains an abandoned backlog.
+
+Terminal cleanup has separate receipt bookkeeping: `observeTerminal` recognizes
+only the outstanding host/request/conversation's complete-view final reply, reset
+or failure. Navigation can then release a cancelled slot immediately, even when
+the terminal arrived after an earlier cancellation and another navigation follows.
+Unrelated, incomplete, expansion or compact replies cannot release it. Receipt
+neither admits departed items nor certifies completion; discarding that bookkeeping
+with the content would stall the next conversation until the 30-second timeout.
 
 ### Independent saved traversal
 
@@ -381,6 +418,19 @@ absence selects a reconstructed source. Badge/sidebar status combines admitted
 live inputs (idle when unavailable) with received host-qualified shown/read marks.
 `notificationPreviewFromItems` remains shared; `notificationPreviewIn` is deleted.
 
+Preload's `onDaemonEvent(listener, includeThreadUpdates = false)` filters
+`threadUpdate` before invoking passive listeners across contextBridge. Runtime and
+raw content observers explicitly pass `true`; other event families keep their
+existing delivery. A replay witness that needs turn/reply content must opt in too.
+Otherwise an unchanged assertion can lose its witness without a wire change.
+
+Notifications subscribe through `threadRuntime.subscribe`, which emits content
+in order after the coherent publication and emits controls after their preceding
+content. `usePushNotify` caches presentation rows in a WeakMap keyed by immutable
+snapshot, so multiple turn endings in one batch reuse one projection. Subscribing
+directly to received content would repeat a whole-thread projection for every
+turn ending and bypass bounded application.
+
 `subscribeRefusalRecovery` still forwards newly selected model writes into
 `threadRuntime.refusals`; it no longer dispatches into timelines or settles legacy
 events. The overlay consumes the exact displayed authoritative session-error
@@ -402,11 +452,80 @@ legacy local read stamps cannot replace a missing authoritative mark.
 branch. The publisher requires the authoritative epoch and shown watermark;
 `latest_entry_id` and local counts cannot supply missing eligibility. Observation
 cleanup, acknowledgement and reconnect retry retain their existing ownership fences.
+`useReadObservation` retains its observer while host/conversation/epoch, newest
+shown item, region, pane and connected tail match and the reader stays closed.
+Received list progress can temporarily precede the queued snapshot and make
+`readTargetFor` ineligible; that gap does not require rebuilding the observer.
+Every callback rechecks the latest committed inputs, certification, owning route,
+focus, visibility and uncovered tail geometry before publishing. Reader opening,
+identity changes and detached tails still retire the setup.
 Compact display facts have zero complete version/checkpoint and no ranges; production
 supplies no read observer inputs for them, even with a retained complete checkpoint.
 See [compact evidence separation](thread-runtime-compact.md#root-facts-and-independent-evidence).
 
 ## Validation boundaries
+
+### Bounded update validation
+
+The [accepted verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2154#issuecomment-6285177896),
+stage `7b3ee7f4`, records Linux validation on 2026-10-20 at `eb35b16f`.
+Its exact-head production run executed/passed **4 tests, 0 failed/skipped/retried**.
+All four are present and passed: `8333 finite updates keep mounted
+keyboard, heartbeat, delivery and teardown responsive`, `the mounted bridge
+publishes a delta-only burst with paused frames through its bounded timer
+fallback`, and both `indexed history drains a buffered thread replacement on
+quit/window and restores it offline` variants. Reports:
+`/tmp/verifier-2154/recheck/approved-mounted.json` and `burst-evidence.json`.
+
+After an empty completed baseline, the burst sends the original varied 8,333-item
+workload once and stops. Main delivery, applied progress and mounted commits are
+observed independently. Application advanced **1,530 → 2,194** while unfinished
+across real keyboard input; composer state committed in **24.9 ms**, and submission
+occurred at applied count 2,298. All **8,335** items, including authoritative
+echo/reply, applied in **7,295 ms**; maximum heartbeat gap was **353 ms**, with
+**77 mounted commits**. Exact final state, same-batch send settlement, one reply,
+idle, one-second application quiescence and normal teardown passed without an
+increased timeout. Shutdown fixtures advance 50 ms after positive tail receipt,
+keeping the writer's 200 ms timer buffered for pre-close baseline, close drain and
+offline restoration.
+
+The [item-store tests](thread-item-store.md#testing) retain the differing counted
+unit reports and the final lifecycle/correlation regression results.
+
+The configured verifier Playwright gate executed **1 test: 0 passed, 1 failed,
+522 skipped**. The native-writer prerequisite passed its isolated same-tree retry
+(**1 executed/passed, 0 failed, 0 skipped**); the dispatcher accepted the
+[#2125](https://github.com/pyrycode/pyrycode-desktop/issues/2125) flake. The dependent
+suite was not rerun. Neither the skipped recorded-thread nor read-observer case
+is a pass in that configured run.
+
+Builder's guarded complete-thread replay at `668a6df6` executed/passed **29 tests,
+0 failed, 1 existing reset-prompt fixme skipped, 0 retries/forbidden launches**.
+`daemon-built thread streams, places an agent, reconnects, resets and reopens saved
+items` is present and passed in `/tmp/builder-2079/rework/replay.json`. Exact-head
+replay was not repeated; the verdict confirms unchanged production `src/` between
+that revision and reviewed head. The earlier read-observer run at `1736d627`
+executed/passed **7 tests, 0 failed/skipped/retried**, including `read setup is reused
+across committed same-row deltas on short and long threads` and the hidden, queued,
+uncommitted-tail and late-contract exclusions (`/tmp/builder-2079/read-fixed.json`).
+
+Earlier failures remain failures. The installed `ad83461f` macOS probe received all
+8,333 items but applied only 2,501 after 44,823 ms and exceeded teardown's budget:
+a finite backlog. Initial batching still produced a 44-second heartbeat gap.
+Protected storage measured a **14,314 ms** synchronous mutation and **17,187 ms**
+input latency; acceptance waited for #2087/#2088. The
+[item-store testing record](thread-item-store.md#testing) retains the failed
+protected-coverage replay and storage rollback timeout, isolated retries and
+follow-ups [#2153](https://github.com/pyrycode/pyrycode-desktop/issues/2153) (merged)
+and [#2155](https://github.com/pyrycode/pyrycode-desktop/issues/2155) (open).
+Initial terminal-cleanup and shutdown-visibility failures were resolved by rework. The verifier's first mounted sandbox attempt
+failed all four cases at loopback setup before assertions. The
+[plan](../../specs/architecture/2079-bounded-thread-updates.md#validation-and-hold)
+retains earlier failed runs and artifact references.
+
+These recorded Linux client results establish no fresh provider/daemon behavior;
+none is required for this renderer repair. macOS is outside this ticket's current
+verification scope. Only the docs guard runs in the documentation stage.
 
 ### On-demand child validation
 

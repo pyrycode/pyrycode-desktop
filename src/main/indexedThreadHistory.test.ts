@@ -348,6 +348,34 @@ it('bounded and separately saved application preserve exact items, order and pro
   expect(p.availabilityStart).toBe(0)
 })
 
+it('reuses constructed authenticated nodes within one owned submission without reparsing them', async () => {
+  const h = setup(), s = snapshot(0)
+  const items = Array.from({ length: 31 }, (_, id) => ({ id, rev: 1, kind: 'future', order: (id * 17) % 31 }))
+  const stringify = JSON.stringify, parse = JSON.parse, constructed = new Set<string>()
+  let reparsed = 0
+  vi.spyOn(JSON, 'stringify').mockImplementation((value, ...args) => {
+    const text = stringify(value, ...args)
+    if (value && typeof value === 'object' && 'left' in value && 'right' in value && 'value' in value)
+      constructed.add(text)
+    return text
+  })
+  vi.spyOn(JSON, 'parse').mockImplementation((text, ...args) => {
+    if (constructed.has(text)) reparsed++
+    return parse(text, ...args)
+  })
+  expect(await h.store.execute(owned(s, { items, ranges: s.thread.ranges }))).toEqual({ status: 'ok' })
+  expect(constructed.size).toBeGreaterThan(100)
+  expect(reparsed).toBe(0)
+  vi.restoreAllMocks()
+  h.database.close()
+  const fresh = h.fresh()
+  expect(await fresh.store.execute(ask('readThread'))).toEqual(stored({ ...s, thread: {
+    ...s.thread, items: [...items].sort((a, b) => a.order - b.order), arrivalOrder: items.map(i => i.id) } }))
+  // A later transaction and owner must authenticate disk again, including changed nodes.
+  fresh.database.transaction(db => db.prepare("UPDATE thread_auth SET payload = '{}' WHERE tree = 'ids'").run())
+  expect(await fresh.store.execute(owned(s, { items: [{ ...items[0], rev: 2 }] }))).toEqual(error('write-failed'))
+})
+
 it('successive owned additions keep ordering paths and record work bounded without rewriting placements', async () => {
   const h = setup(), s = snapshot(0)
   let reads = 0, writes = 0

@@ -265,68 +265,81 @@ receives no signal finer than `responding` inside the tool loop, `WORKING_COPY` 
 deliberately generic rather than naming tool activity — a copy like "Running tools…" would be a lie
 whenever the turn is actually still streaming text.
 
-**Named since [#649](../codebase/649.md): `WORKING_COPY` is superseded by the specific tool name whenever
-one is actually open**, closing the operator's remaining complaint that `WORKING_COPY` read identically
-for a 40 ms file read and a four-minute build. This doesn't reopen the lie #215 avoided, because it isn't
-derived from `phase` at all — it's a direct, independent read of `items` (`openToolName`): a `toolCall`
-item carries `name` and starts `result: null`, filled in place when the
-correlated `toolResult` arrives. The scan requires `result === null`, no explicit `denial`,
-and, since [#1750](https://github.com/pyrycode/pyrycode-desktop/issues/1750),
-`parentToolUseId === undefined`. A present parent ID excludes a subagent's call;
-an omitted or explicitly undefined ID remains eligible. Transcript nesting does
-not remove child calls from the flat `items` array, so scanning only for an
-unresolved result would let a newer background-agent tool replace the main
-conversation's activity. Thus "a main-thread tool is open right now" and "which one,
-if more than one" (the
-last such item in array order — `items` is append-only, `fillResult` fills in place without reordering)
-are both facts already sitting in the store, not an inference over `phase`. The
-container computes `openToolCall(items)` alongside its working-state derivation
-and passes the selected name as the indicator's required `toolName: string | null`
-prop; when it is non-null it replaces the phase-derived copy with
-`` `Running ${name}…` `` (`toolWorkingCopy`) rather than sitting beside it, and reverts to the generic copy
-the moment no eligible tool remains — a result or an explicit
-[denial](conversation-shell-tool-rows.md#permission-denied-tool-call-row) retires a call from
-the scan immediately, without another `turn_state`. Denial leaves the turn's working state
-and priority rules intact. If only subagent calls remain open, the lookup returns
-null: thinking/working keeps its generic copy, and an idle conversation gains no
-tool label. Background activity does not change the status precedence or turn gate.
-Renders through a
-`.tool-row__summary`-style one-line-ellipsis bound (not `.tool-row__name`'s never-truncates one — see
-[#649 codebase notes](../codebase/649.md)) so a long tool name never wraps to a second line or moves the
-composer — through #796 via `.bubble--tool-label`, backstopped by `.bubble`'s own `max-width: min(680px,
-75%)`; **since #796 via `.composer-status__label--tool`**, and the backstop changed with it: `.bubble` is
-gone from this label's ancestry, so the bound is now a three-link flex chain instead — see [Composer
-status row § the truncation bound](conversation-shell-composer-status-row.md#composer-status-row-796) below for the replacement and why it had to
-be re-derived rather than copied. One deliberately undefended edge: an interrupted turn can leave a
-main-thread `toolCall` permanently `result: null`, so the *next* turn's indicator
-could name that stale tool — the
-timeline already shows that call as a permanently pending, dimmed row (#230), so the label would mirror
-what's already on screen rather than contradict it; the fix if ever observed is scoping the scan to stop
-at the current turn's `turnBoundary`.
+**Named since [#649](../codebase/649.md): an eligible foreground tool supersedes
+`WORKING_COPY`.** Production uses `threadComposerReports` over the selected
+complete/compact presentation for the bound session. It chooses the last tool in
+source-order traversal whose source is active, has no parent and is not task-linked.
+A newer child, old-session, inactive or background-task call cannot replace it;
+without a session binding there is no tool report. The retired timeline's
+`openToolCall`/`openToolName` result-null scan is no longer the production selector.
+
+The selected name reaches the required `toolName: string | null` prop and
+`toolWorkingCopy` produces `Running ${name}…`. With no eligible report,
+thinking/working retains its generic copy. Background activity does not change
+the existing status precedence or turn gate. `.composer-status__label--tool`
+keeps the label in one ellipsizing text run; see the
+[status row truncation bound](conversation-shell-composer-status-row.md#composer-status-row-796).
+
+### Agent descriptions from compact headers
+
+`threadComposerReports` derives an Agent display name without changing source
+items or their cached presentation (#2162). A complete Agent call uses its
+trimmed, nonempty structured string description: `Running Agent: Investigate build…`.
+A compact Agent headline containing readable prose keeps that headline. Other
+tools keep their existing names.
+
+Compact headers omit structured input and can truncate later JSON fields after
+a complete description. Parsing the entire suffix would discard a usable label;
+matching a `description` substring could select quoted or nested input instead.
+For an Agent-prefixed JSON suffix, the derivation tracks strings, escapes and
+nesting and validates complete top-level member prefixes with `JSON.parse`.
+Only a nonempty top-level string description supplies the label. Missing, empty,
+non-string or incomplete descriptions, malformed prefixes and array-shaped input
+fall back to `Running Agent…`, without exposing the JSON. A valid description
+prefix remains usable even if later input is truncated. JSON escapes decode into
+readable text, which React escapes as a text child.
+
+This derivation reads only available presentation facts; it must not fetch a tool
+body, children or history to improve the label. A revised immutable header for
+the same item recomputes the description through the existing report publication.
 
 ### Tool elapsed reading
 
-The container selects one `openToolCall(items)` for both name and elapsed reading;
-`openToolName` remains a wrapper over that same lookup. The scan chooses the latest
-pending, non-denied main-thread call (`parentToolUseId === undefined`). When its
-tool label is active (thinking or working), the
+The selected `threadComposerReports.tool` supplies both name and elapsed reading.
+When its tool label is active (thinking or working), the
 optional `toolElapsedSeconds` appends the [shared elapsed format](conversation-shell-tool-rows.md#live-elapsed-reading)
 after a space: `Running Bash… 1m 05s`. The whole label remains one ellipsizing text
 run. An absent reading keeps the previous copy; retrying, compacting, stalled and
 hidden states retain their existing behavior regardless of the elapsed prop.
 Name and seconds must come from the same call, especially with overlapping tools.
-An open subagent call supplies neither reading, even after its parent Agent call
-has resolved.
+A child tool call supplies neither reading, even after its parent Agent call
+has finished.
 
 ### Selector regression coverage
 
-`ConversationScreen.test.tsx` tests `openToolName` directly over injected timeline
-items, exercising the shared `openToolCall` lookup. It pins the newest eligible
-main-thread call winning despite a newer subagent call, null for subagent-only
-timelines (also alongside resolved or denied main-thread calls), and eligibility
-for an explicitly undefined parent ID. Static container renders start from the
-initial store and cannot establish this populated-timeline selection; keep this
-coverage at the pure selector seam.
+`threadComposerReports.test.ts` covers complete/compact Agent descriptions,
+truncation, decoded keys/values, quoted/nested decoys, fallback, non-Agent controls
+and foreground/session selection. `compactPresentation.test.tsx` statically
+renders the resulting name through `ThinkingIndicator`, pinning escaped text and
+`… 1m 12s` elapsed formatting. Static rendering cannot prove received revisions.
+
+The mounted `compact Agent status describes truncated input and follows live revisions`
+case in [`compact-demand.spec.ts`](../../../e2e/compact-demand.spec.ts) negotiates
+`compact-v1`, renders the reported truncated headline, then observes a changed
+description on the same item. Both committed labels precede the assertion of no
+body/children/page/history requests. It also checks nowrap/ellipsis CSS and retains
+wide and 800px-window captures. See the
+[fixture provenance requirement](development-verification-evidence-that-cannot-pass-too-early.md#evidence-that-cannot-pass-too-early).
+
+Recorded Linux verification on `13f9e917cd867ea6a91f3040ff1b49f87601611b`:
+the supplied application gate ran 519 executed, 518 passed, 1 failed and 5 skipped;
+the named Agent-status regression was present and passed (1 executed/passed,
+0 failed/skipped). The
+[verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/2168#issuecomment-6288234785)
+accepted the unrelated hosted-app-view failure after the dispatcher reran those
+cases: 3 executed/passed, 0 failed/skipped. The initial failure remains part of
+the evidence. These are retained fake-transport results, not fresh provider or
+physical-effect verification; macOS is outside this Linux ticket's scope.
 
 ### Retired by #967: `ApiRetryIndicator` (#493), `CompactingIndicator` (#496), `StallIndicator` (#317)
 

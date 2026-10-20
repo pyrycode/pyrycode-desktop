@@ -42,7 +42,7 @@ Unrelated storage and fake-suite work remains under its existing owners.
 | `real-daemon-archive-order.spec.ts` | Archived channels sorted by use | Daemon registry timestamps independently checked |
 | `real-daemon-conversation-lifecycle.spec.ts` | Archive, restore, deletion and reply-gated navigation | Real registry operations |
 | `real-daemon-create-channel.spec.ts` | Named promoted channel, default workspace and dialog close | Real daemon creation semantics |
-| `real-daemon-history-on-open.spec.ts` | Saved baseline, closed-app posts, >200 rows, gaps, checkpoints and paging | Real daemon control-socket posts, registry and protected-storage behavior |
+| `real-daemon-history-on-open.spec.ts` | Saved baseline, closed-app posts, >200 rows, gaps, checkpoints and trusted paging with strictly older protected coverage | Real daemon control-socket posts, registry and protected-storage behavior |
 | `real-daemon-multi-agent.spec.ts` | App's hello acknowledgement includes advertised capabilities | Actual authenticated capability negotiation, including reconnect |
 | `real-daemon-promote.spec.ts` | Save-as-channel request and reply-gated affordance transition | Real promotion handler |
 | `real-daemon-rename.spec.ts` | Rename request, new title and old-title removal | Real rename handler |
@@ -96,6 +96,11 @@ The history test now obtains its conversation ID from the real conversation
 list (and independently checks the registry during live execution). Its fresh
 profile reads backward with repeated trusted input: production requests one
 bounded page per input, so one Home key cannot establish coverage of 205 rows.
+Before each trusted input, the history scenario retains actual numeric protected
+coverage for the exact host/conversation, then requires a strictly older start
+within five seconds alongside its exact request-count check. Pending split-save
+`unreadable` remains unavailable evidence. See the
+[observer contract and controlled regression](knowledge/features/chat-history-testing.md#protected-paging-coverage-observation).
 Every original assertion remains. The already completed resumed profile exits
 before the independent fresh profile, giving each captured connection one
 sequential lifetime. Question fixtures explicitly enable the daemon's stdio
@@ -141,7 +146,15 @@ the release-file ordering, remains. Successful live-only assertions also mark
 causal checkpoints: offline waits for their actual recorded message prefix but
 never executes or claims the filesystem/OS proof.
 
-Observed push-overload closes are recorded at the exact application-message prefix with their actual WebSocket code. Replay forwards every preceding encrypted frame before reproducing that local close; explicit application reconnects and profile relaunches still come from the shared scenario. Capture adapters remain separate build inputs.
+Observed push-overload closes retain their raw application-message position and
+actual WebSocket code. Capture observes client calls before sending, so trailing
+calls can still belong to the closing connection without proving successful
+socket writes. Replay exactly matches only its finite contiguous client-only
+tail before reproducing the close, after forwarding every preceding encrypted
+frame. No daemon frame crosses the raw close, and checkpoints and connection
+ownership remain enforced. Explicit reconnects and profile relaunches still come
+from the shared scenario. Capture adapters remain separate build inputs. See the
+[close scheduling contract](recorded-tests.md#replay-contract).
 
 The evidence observers also retain native identity semantics: queue markers include an ordered same-revision suffix, and a completed permission turn is counted once even when reconnect returns its item again. These repairs preserve every original matcher and strengthen the meaning of completion. An AST audit retains all 1,028 original expect expressions, plus all 1,036 from merged baseline `aebee62f`, normalizing only type assertions and the equivalent read-only inspection wrapper.
 
@@ -175,6 +188,40 @@ saved/live restoration fixes merged in PR #2058.
 
 ## Validation evidence
 
+Replay evidence identifies the executed build separately from capture provenance.
+Default replay uses normal output and checks automatic projection policy, including
+compact selection when accepted capabilities permit it. Explicit
+`node scripts/run-offline-replay.mjs --profile complete-thread --retries 0` builds
+the current source's complete route for the whole run, including creation and
+reconnect, then restores normal output after success or failure. Both profiles
+retain the executable guard, original shared assertions, full-envelope matching,
+captured capabilities, causal barriers and completion checks. Neither supplies
+fresh provider behavior or physical transport proof. The
+[replay contract](recorded-tests.md#replay-contract) gives the exact retained-input
+selection, restoration failure behavior and separate revision/dirty/profile,
+bundle-hash, input-checksum and capture-source fields.
+
+The [combined Linux retained-input acceptance](knowledge/features/development-verification.md#captured-close-client-tails)
+resolves the earlier close-ordering hold. On clean build revision
+`3372c1f318aa4da6d46c4638fd0ce4dccb990998`, the unchanged retained question input
+(`24bbe5df…dac1`, captured from Desktop `ef097bfc` / daemon `66430593`, Claude
+2.1.280) passed the original named question-answer scenario under
+`--profile complete-thread`: 1 executed/passed, 0 failed/skipped, retries zero,
+38 matched / 201 emitted / 0 remaining and zero forbidden launches. All four
+original closes remain consumed with their captured codes and positions intact.
+The linked evidence carries the full input checksum, daemon binary checksum,
+bundle provenance and commands separately from the executed build identity.
+
+The subsequent complete guarded normal-profile committed-recording suite recorded
+29 executed/passed, 0 failed, 1 skipped, retries zero and zero forbidden launches;
+all 29 exchanges completed at 773 matched / 3,216 emitted / 0 remaining. The
+excluded `real claude picks up a saved channel system prompt at Reset session`
+remains an explicit fixme. Earlier retained-input runs remain failed: compatibility
+alone forwarded the prefix but left 29 requests outstanding, while automatic
+selection failed earlier on a compact request. Offline completion establishes no
+fresh provider behavior or physical transport acceptance; macOS is outside this
+Linux ticket's verification scope.
+
 The [completed-profile retirement contract and Linux evidence](recorded-tests.md#replay-contract)
 record the final connection-completion then relay-forwarding boundary, five fresh
 three-worker paired batches (20 executed/passed, 0 failed/skipped), subsequent
@@ -182,6 +229,17 @@ guarded replay (29 executed/passed, 0 failed, 1 existing fixme), and both named
 history/thread cases passed without retry in the configured application gate
 (515 executed/passed, 0 failed, 5 skipped). This closes the later retirement
 acceptance; #2129 is closed. Earlier failed runs remain historical failures.
+
+The [protected coverage observation evidence](knowledge/features/chat-history-testing.md#counted-linux-coverage-observer-validation)
+records Linux builder regressions (23 executed/passed, 0 failed/skipped), five
+three-worker paired batches (20 executed/passed, 0 failed/skipped), complete
+guarded complete-thread replay (29 executed/passed, 0 failed, 1 existing fixme),
+and both named history/thread cases passed without retry in the separate
+dispatcher application gate (517 executed/passed, 0 failed, 5 skipped).
+Captures/provenance remain unchanged. The historical `de6e481a` failure and
+unchanged isolated pass remain separate, with the trigger unknown; the controlled
+split-save mechanism does not establish that cause. The reset-prompt fixme
+remains excluded, and replay adds no fresh live or physical-effect claim.
 
 The [saved-title observation evidence](knowledge/features/development-verification.md#protected-saved-list-title-observation)
 records the controlled stored-null mechanism, 11 passing regressions, five

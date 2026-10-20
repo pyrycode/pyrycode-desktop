@@ -253,6 +253,13 @@ retire an abandoned obligation; full replacement rotates persistence ownership e
 in the same epoch. Their internal validation may inspect the pending prefix, while
 public reads stay closed. Stale endings cannot clear another save's marker.
 
+Request dispatch and renderer publication can precede durable coverage. A paging
+test must retain an actual numeric protected range start for the exact outer and
+inner host/conversation before input, then observe a strictly older start; zero
+is valid. Pending-save `unreadable` is unavailable evidence, never coverage.
+Reobserve it within the existing bound without flushing the writer or bypassing
+the obligation. See the [coverage observer and controlled regression](chat-history-testing.md#protected-paging-coverage-observation).
+
 The writer advances its retained request cursor only after successful durable
 acknowledgement and a current queue/generation check. Failure preserves the exact
 request and persistence identity; the failed key is suppressed for the rest of that
@@ -386,6 +393,14 @@ arrival metadata once they use those positions.
 
 Authenticated AVL/radix nodes are cached by their complete proof within each
 transaction-local index instance, with detached node containers returned to mutation.
+The cache includes locally constructed nodes as well as verified disk reads;
+otherwise later updates in the same submission repeatedly parse, hash and validate
+nodes the operation just built. Radix proofs include the reference and path;
+sequence proofs include the reference and balance requirement. Rotations can build
+a temporarily unbalanced sequence node, so construction caches its relaxed proof
+and adds a strict proof only when its balance invariant holds. Cache lifetime never
+crosses operations, commits or fresh owners; disk nodes still require authentication.
+See the [causal regression and native comparison](chat-history-testing-native.md#reopened-slow-drain-cause-and-correction).
 Selected payload and evidence decoding is cached too. Bounded payload work alone
 can conceal thousands of repeated structural SQL/JSON reads; proof caching avoids
 that repetition without trusting plaintext hints or a proof from an earlier root.

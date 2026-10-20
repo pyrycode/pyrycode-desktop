@@ -28,6 +28,61 @@ function setup() {
 }
 
 describe('daemon thread item retention', () => {
+  it('folds ordered admission into one immutable publication with every owned item and progress fence', () => {
+    const scalar = setup(), folded = setup()
+    const before = folded.snapshot()
+    const publications = vi.fn()
+    folded.store.subscribe(publications)
+    const updates = [added(item(2, 1, { order: 5 })), added(), changed({ order: 0 }),
+      append(20, 20, ' companion', 20), added(item(2, 1)), append(999, 1000), added(item(3, 30))]
+    const expected = updates.map(update => scalar.api.applyUpdate('h', update))
+    const results: unknown[] = []
+    folded.api.batch(() => updates.forEach(update => results.push(folded.api.applyUpdate('h', update))))
+    expect(results).toEqual(expected)
+    expect(folded.snapshot()).toEqual(scalar.snapshot())
+    expect(publications).toHaveBeenCalledOnce()
+    expect(before.items).toEqual([])
+    expect(folded.store.getState().hosts.get('h')?.get('c')?.owned?.items.map(i => i.id)).toEqual([2, 1, 3])
+    for (const fixture of [scalar, folded]) fixture.batch().commit(certificate(1000))
+    expect(folded.snapshot()).toEqual(scalar.snapshot())
+    expect(folded.snapshot().repair).toBeNull()
+  })
+
+  it('copies and orders the held conversation once per batch, retaining old published maps', () => {
+    const { api, store, snapshot } = setup()
+    const empty = store.getState().hosts.get('h')!.get('c')!.byId
+    const NativeMap = globalThis.Map, copied = vi.fn()
+    vi.stubGlobal('Map', class extends NativeMap {
+      constructor(entries?: Iterable<readonly [unknown, unknown]>) {
+        super()
+        if (entries) for (const [key, value] of entries) this.set(key, value)
+        if (entries === empty) copied()
+      }
+    })
+    const ordering = vi.spyOn(Array.prototype, 'sort')
+    const maps = new Set<unknown>()
+    try {
+      api.batch(() => {
+        for (let id = 0; id < 128; id++) {
+          api.applyUpdate('h', added(item(id, 1, { order: 128 - id })))
+          // Public state remains the previous coherent publication throughout the transaction.
+          expect(snapshot().items).toHaveLength(0)
+          maps.add(store.getState().hosts.get('h')!.get('c')!.byId)
+        }
+      })
+      expect(ordering).toHaveBeenCalledOnce()
+      expect(copied).toHaveBeenCalledOnce()
+      expect(maps).toEqual(new Set([empty]))
+      expect(empty.size).toBe(0)
+      expect(snapshot().items).toHaveLength(128)
+      const held = snapshot(), byId = store.getState().hosts.get('h')!.get('c')!.byId
+      api.batch(() => api.applyUpdate('h', added(item(200, 2))))
+      expect(ordering).toHaveBeenCalledTimes(2)
+      expect(held.items).toHaveLength(128)
+      expect(byId.size).toBe(128)
+    } finally { ordering.mockRestore(); vi.unstubAllGlobals() }
+  })
+
   it('sorts only by order, retaining hidden/unknown facts and stable unordered arrival', () => {
     const { api, snapshot } = setup()
     api.applyUpdate('h', added(item(9, 10, { shown: false, active: true, status: 'future', kind: 'future', parent: 8 })))

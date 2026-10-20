@@ -149,7 +149,7 @@ test('streaming and settled links preserve conversation drafts', async ({ launch
     ;(window as any).linkTurnSettled = false
     const off = window.pyry.onDaemonEvent(event => {
       if (event.type === 'threadUpdate' && event.update.type === 'thread_item_added' && event.update.payload.item.kind === 'turn_end' && event.update.payload.item.turn === 'links') { (window as any).linkTurnSettled = true; off() }
-    })
+    }, true)
   })
   daemon.pushFrame(s.frame('turn_end', { conversation_id: SEEDED_ROW.id, turn_id: 'links', stop_reason: 'end_turn' }))
   await expect.poll(() => page.evaluate(() => (window as any).linkTurnSettled)).toBe(true)

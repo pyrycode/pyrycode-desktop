@@ -45,8 +45,16 @@ export function probeReplayNativeStorage(
   load: LoadDatabase = (packagePath, mark) => {
     const require = process.getBuiltinModule('module').createRequire(packagePath)
     const resolved = require.resolve('better-sqlite3')
+    const root = process.getBuiltinModule('path').dirname(require.resolve('better-sqlite3/package.json'))
     mark('load')
-    return require(resolved)
+    const Database: new (path: string, options: { nativeBinding: unknown }) => Database = require(resolved)
+    // Inspector evaluation can interrupt stack formatting. bindings' implicit root
+    // discovery needs a nested formatter, which V8 suppresses during that interrupt.
+    const sqliteRequire = process.getBuiltinModule('module').createRequire(resolved)
+    const nativeBinding: unknown = sqliteRequire('bindings')({ bindings: 'better_sqlite3.node', module_root: root })
+    return class extends Database {
+      constructor(path: string) { super(path, { nativeBinding }) }
+    }
   }
 ): NativeObservation {
   // Serialized into Electron: keep every runtime dependency inside this function.

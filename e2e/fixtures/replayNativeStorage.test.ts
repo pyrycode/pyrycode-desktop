@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ElectronApplication } from '@playwright/test'
 import { assertReplayNativeStorage, probeReplayNativeStorage, readReplayMainProcess } from './replayNativeStorage'
 import { NOT_YET_AVAILABLE } from './mainProcessRead'
+import { createRequire } from 'node:module'
 
 const electron = { app: { getAppPath: () => '/fixture/app' } }
 
@@ -12,13 +13,52 @@ function inspectedApp(send: (method: string, params: any) => Promise<any>) {
 function runProbe(load: Parameters<typeof probeReplayNativeStorage>[1]) {
   return inspectedApp(async (_method, params) => {
     const value = new Function('require', 'process', `return ${params.expression}`)(
-      () => electron, { getBuiltinModule: () => ({ createRequire: () => Object.assign(
-        () => load!('/fixture/app/package.json', () => {}), { resolve: () => 'better-sqlite3' }) }) })
+      () => electron, { getBuiltinModule: (name: string) => name === 'path' ? { dirname: () => '/fixture/app' } :
+        { createRequire: () => Object.assign(
+          (id: string) => id === 'bindings' ? () => ({}) : load!('/fixture/app/package.json', () => {}),
+          { resolve: () => 'better-sqlite3' }) } })
     return { result: { value } }
   })
 }
 
 describe('replay native storage prerequisite', () => {
+  it('classifies first-use lazy native binding failure through the default adapter as load', () => {
+    const require = createRequire(import.meta.url)
+    const binding = require.resolve('bindings', { paths: [require.resolve('better-sqlite3')] })
+    const loader = require(binding)
+    const cached = require.cache[binding]!
+    cached.exports = () => { throw Object.assign(new Error('PRIVATE_LAZY_NATIVE_PATH'), { code: 'ERR_DLOPEN_FAILED' }) }
+    try {
+      expect(probeReplayNativeStorage({ app: { getAppPath: () => process.cwd() } }))
+        .toEqual({ ready: false, stage: 'load', category: 'native-load' })
+    } finally { cached.exports = loader }
+  })
+
+  it('establishes cold native readiness during an active V8 stack formatter', () => {
+    const previous = Error.prepareStackTrace
+    let observation: unknown
+    Error.prepareStackTrace = () => {
+      observation = probeReplayNativeStorage({ app: { getAppPath: () => process.cwd() } })
+      return ''
+    }
+    try { void new Error().stack } finally { Error.prepareStackTrace = previous }
+    expect(observation).toEqual({ ready: true, stage: 'complete' })
+  })
+
+  it('distinguishes a loaded binding rejecting a genuine open through the default adapter', () => {
+    const require = createRequire(import.meta.url)
+    const binding = require.resolve('bindings', { paths: [require.resolve('better-sqlite3')] })
+    const loader = require(binding)
+    const cached = require.cache[binding]!
+    cached.exports = () => ({ isInitialized: true, Database: class {
+      constructor() { throw new Error('PRIVATE_SQLITE_OPEN') }
+    } })
+    try {
+      expect(probeReplayNativeStorage({ app: { getAppPath: () => process.cwd() } }))
+        .toEqual({ ready: false, stage: 'open', category: 'error' })
+    } finally { cached.exports = loader }
+  })
+
   it('checks storage when the inspector loses every awaitPromise acknowledgement', async () => {
     const send = vi.fn(async (_method: string, params: { awaitPromise: boolean }) => {
       if (params.awaitPromise) throw new Error('Protocol error (Runtime.evaluate): Promise was collected')
@@ -153,7 +193,7 @@ describe('replay native storage prerequisite', () => {
 
   it('preserves query failure when close also throws', () => {
     class Database {
-      prepare() { throw new TypeError('PRIVATE_QUERY') }
+      prepare(): never { throw new TypeError('PRIVATE_QUERY') }
       close() { throw new Error('PRIVATE_CLOSE') }
     }
     expect(probeReplayNativeStorage(electron, () => Database)).toEqual({

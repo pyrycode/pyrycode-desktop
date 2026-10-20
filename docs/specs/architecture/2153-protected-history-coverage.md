@@ -400,3 +400,32 @@ with distinct build identities and counted named passes. Both historical
 failure/pass pairs, unknown triggers, controlled failing-before mechanisms,
 capture provenance and the reset-prompt exclusion remain preserved. Dispatch,
 publication and protected durability retain their separate proof requirements.
+
+## Revisions
+
+### 2026-10-20 — preserve model recall across the subscription baseline
+
+The complete recorded suite on `1dd48a53` exposed one regression from private
+synchronous status replay: `createRememberedModel.start` subscribes per creation
+attempt and treated the current connected baseline as a subsequent reconnect,
+cancelling recall before model/settings receipt. Extend the plan locally to
+`src/renderer/src/store/rememberedModel.ts` → `createRememberedModel` and its
+adjacent regression file. During the subscription call, connected is the baseline;
+after subscription returns, connected still cancels and cleans up the attempt.
+No callback signature or other consumer changes. The new regression fails before
+this correction, then proves normal recall submission and later reconnect cleanup.
+This is the delivery repair's directly consumed regression, not an independent
+feature. Security re-review: no new boundary, authority, retention or secret; the
+synchronous subscription contract distinguishes initial state from later lifecycle
+edges. Verdict remains PASS. Total incremental scope remains below 650 written
+lines, two production files, no new exports or API migration.
+
+Current repair documentation remains **pending** for the documentation stage:
+reconcile the production subscriber-readiness contract and counted execution-OS
+evidence in `docs/knowledge/features/live-window.md`,
+`docs/knowledge/features/daemon-connection-lifecycle.md` and
+`docs/knowledge/features/chat-history-testing.md`. Distinguish document load,
+accepted main status, renderer subscription, request dispatch and publication.
+Preserve historical failures/passes, unknown Linux trigger, existing causal proofs,
+capture provenance and reset-prompt exclusion; record dispatcher results separately
+from builder results. Update this plan's pending handoff when that evidence arrives.

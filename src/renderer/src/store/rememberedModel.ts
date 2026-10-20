@@ -91,10 +91,12 @@ export function createRememberedModel(storage: ModelPreferenceStorage) {
     pending.setState({ target: created.id })
     deps.log('started')
     wait('models')
+    let subscribed = false
     offs.push(deps.onDaemonEvent(event => {
       if (settled || event.serverId !== serverId || (activated && !own())) return
       if (event.type === 'connected') {
-        finish('cancelled')
+        // Synchronous subscription delivery establishes the held connection, not a reconnect.
+        if (subscribed) finish('cancelled')
       } else if (event.type === 'runConfigReceived' && event.conversationId === created.id && sessionId === undefined) {
         sessionId = event.sessionId
         if (sessionId === '') finish('empty-session')
@@ -106,6 +108,7 @@ export function createRememberedModel(storage: ModelPreferenceStorage) {
         finish(event.type === 'sessionSettingsUpdated' ? 'confirmed' : 'rejected')
       }
     }))
+    subscribed = true
     offs.push(deps.subscribeOwnership(() => { if (activated && !settled) own() }))
     activate()
     activated = true

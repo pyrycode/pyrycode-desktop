@@ -6,6 +6,8 @@ import { RecordedExchange, type Recording } from './recordedExchange'
 import { clientAppLifecycle } from './clientAppLifecycle'
 import { withIsolatedElectronApp } from './realDaemon'
 import { test as registered } from './clientScenario'
+import { withEffortScenarioProof } from './effortScenarioProof'
+import { access } from 'node:fs/promises'
 
 vi.hoisted(() => { vi.stubEnv('PYRY_CLIENT_MODE', 'replay') })
 vi.mock('@playwright/test', async original => {
@@ -113,6 +115,29 @@ it('failure cleanup bypasses settlement and preserves the scenario error', async
   expect(apps[0].child.exitCode).toBe(0)
   expect(order).toEqual(['exit-1'])
   expect(clientAppLifecycle.closing).toBeUndefined()
+})
+
+it('effort replacement prerequisite rejection survives final proof and isolated-profile cleanup', async () => {
+  const order: string[] = [], apps = processes(order)
+  const primary = new Error('replacement prerequisite'), snapshots = vi.fn()
+  let profile = '', opened = 0
+  clientAppLifecycle.opened = async () => { if (++opened === 2) throw primary }
+  await expect(withIsolatedElectronApp(async handles => {
+    profile = handles.userDataDir
+    const page = handles.page
+    page.isClosed = () => apps[0].child.exitCode !== null
+    await withEffortScenarioProof(page, async () => ({
+      samples: [], snapshot: async () => {
+        snapshots()
+        if (page.isClosed()) throw new Error('closed page masks prerequisite')
+        return { events: [], footer: '' }
+      }, dispose: async () => { order.push('proof-disposed') }
+    }), async () => {}, async (_, handoff) => { await handoff(handles.relaunch) })
+  })).rejects.toBe(primary)
+  expect(snapshots).toHaveBeenCalledTimes(1)
+  expect(order).toEqual(['proof-disposed', 'exit-1', 'exit-2'])
+  expect(apps.every(({ child }) => child.exitCode === 0)).toBe(true)
+  await expect(access(profile)).rejects.toMatchObject({ code: 'ENOENT' })
 })
 
 it.each(['forwarded', 'failed'] as const)('retirement waits for relay forwarding: %s', async mode => {

@@ -63,3 +63,9 @@ owns later normal application verification; no fresh provider proof is claimed.
 
 ## Open Questions
 None. The historical relaunch trigger remains unknown and outside this repair.
+
+## Revisions
+2026-10-20: Capture still precedes disposal, but attachment follows disposal so
+the same attachment includes classified disposal failures. Each is attempted
+independently. Retain retirement proof again in the final attachment, including
+when the initial attachment fails. Neither diagnostic cache is an assertion input.

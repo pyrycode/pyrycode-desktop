@@ -8,6 +8,7 @@ import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 
 import type { DaemonEvent } from '../src/shared/ipc/events'
 import { waitForEffortProof, type EffortEvidence, type EffortIntent, type EffortReading as Reading } from './fixtures/effortProof'
+import { withEffortScenarioProof } from './fixtures/effortScenarioProof'
 
 // The bootstrap turn populates the daemon's model-list fallback for never-messaged conversations.
 // Observe real settings replies and acknowledgements; no store injection or optimistic-label proof.
@@ -21,65 +22,79 @@ type ProofWindow = Window & { __effortEvidence: EffortEvidence[]; __stopEffortPr
 async function observe(page: Page) {
   const announcements: Extract<DaemonEvent, { type: 'modelAnnounced' }>[] = []
   const models: Extract<DaemonEvent, { type: 'modelList' }>[] = []
-  await page.exposeFunction('recordModelProof', (event: Extract<DaemonEvent, { type: 'modelAnnounced' | 'modelList' }>) => {
-    if (event.type === 'modelAnnounced') announcements.push(event)
-    else models.push(event)
-  })
-  await page.evaluate(() => {
-    const target = window as unknown as ProofWindow & {
-      pyry: { onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void }
-      recordModelProof: (event: Extract<DaemonEvent, { type: 'modelAnnounced' | 'modelList' }>) => Promise<void>
-    }
-    target.__effortEvidence = []
-    target.__stopEffortProof = target.pyry.onDaemonEvent(event => {
-      if (event.type === 'runConfigReceived') {
-        const { conversationId, sessionId, model, effort, effectiveEffort } = event
-        target.__effortEvidence.push({ type: event.type, conversationId, sessionId, model, effort, effectiveEffort })
-      } else if (event.type === 'modelAnnounced' || event.type === 'modelList') {
-        void target.recordModelProof(event)
-      } else if (event.type === 'sessionSettingsUpdated') {
-        const { sessionId, changeId } = event
-        target.__effortEvidence.push({ type: event.type, sessionId, changeId })
-      } else if (event.type === 'conversationCreated') {
-        target.__effortEvidence.push({ type: event.type, conversationId: event.conversation.id })
-      }
-    })
-  })
-  // Observe outbound settings without replacing or delaying the immutable preload API.
-  const cdp = await page.context().newCDPSession(page)
-  await cdp.send('Debugger.enable')
-  const { result } = await cdp.send('Runtime.evaluate', { expression: 'window.pyry.sendCommand' })
-  if (!result.objectId) throw new Error('Settings command observation is unavailable')
-  await cdp.send('Debugger.setBreakpointOnFunctionCall', {
-    objectId: result.objectId,
-    condition: "(['requestSessionSettings', 'setSessionSettings'].includes(arguments[0].type) && globalThis.__effortEvidence.push(arguments[0]), false)"
-  })
-  const samples: { eventCount: number; footer: string }[] = []
-  const snapshot = async () => {
-    const value = await page.evaluate(() => ({
-      events: (window as unknown as ProofWindow).__effortEvidence,
-      footer: document.querySelector('.composer__effort-label')?.textContent ?? ''
-    }))
-    const last = samples.at(-1)
-    if (last?.eventCount !== value.events.length || last.footer !== value.footer) {
-      samples.push({ eventCount: value.events.length, footer: value.footer })
-    }
-    return value
+  let cdp: Awaited<ReturnType<ReturnType<Page['context']>['newCDPSession']>> | undefined
+  const dispose = async () => {
+    let failure: { error: unknown } | undefined
+    try {
+      if (!page.isClosed()) await page.evaluate(() => (window as unknown as ProofWindow).__stopEffortProof?.())
+    } catch (error) { failure = { error } }
+    try { await cdp?.detach() } catch (error) { failure ??= { error } }
+    if (failure) throw failure.error
   }
-  return {
-    announcements, models, snapshot, samples,
-    mark: async () => (await snapshot()).events.length,
-    confirmations: async () => (await snapshot()).events.filter(e => e.type === 'sessionSettingsUpdated').length,
-    readingsSince: async (after: number) => {
-      const events = (await snapshot()).events.slice(after)
-      const created = events.filter(e => e.type === 'conversationCreated').at(-1)
-      return events.filter((e): e is Extract<EffortEvidence, { type: 'runConfigReceived' }> =>
-        e.type === 'runConfigReceived' && e.conversationId === created?.conversationId)
-    },
-    dispose: async () => {
-      await page.evaluate(() => (window as unknown as ProofWindow).__stopEffortProof())
-      await cdp.detach()
+  try {
+    await page.exposeFunction('recordModelProof', (event: Extract<DaemonEvent, { type: 'modelAnnounced' | 'modelList' }>) => {
+      if (event.type === 'modelAnnounced') announcements.push(event)
+      else models.push(event)
+    })
+    await page.evaluate(() => {
+      const target = window as unknown as ProofWindow & {
+        pyry: { onDaemonEvent: (listener: (event: DaemonEvent) => void) => () => void }
+        recordModelProof: (event: Extract<DaemonEvent, { type: 'modelAnnounced' | 'modelList' }>) => Promise<void>
+      }
+      target.__effortEvidence = []
+      target.__stopEffortProof = target.pyry.onDaemonEvent(event => {
+        if (event.type === 'runConfigReceived') {
+          const { conversationId, sessionId, model, effort, effectiveEffort } = event
+          target.__effortEvidence.push({ type: event.type, conversationId, sessionId, model, effort, effectiveEffort })
+        } else if (event.type === 'modelAnnounced' || event.type === 'modelList') {
+          void target.recordModelProof(event)
+        } else if (event.type === 'sessionSettingsUpdated') {
+          const { sessionId, changeId } = event
+          target.__effortEvidence.push({ type: event.type, sessionId, changeId })
+        } else if (event.type === 'conversationCreated') {
+          target.__effortEvidence.push({ type: event.type, conversationId: event.conversation.id })
+        }
+      })
+    })
+    // Observe outbound settings without replacing or delaying the immutable preload API.
+    cdp = await page.context().newCDPSession(page)
+    await cdp.send('Debugger.enable')
+    const { result } = await cdp.send('Runtime.evaluate', { expression: 'window.pyry.sendCommand' })
+    if (!result.objectId) throw new Error('Settings command observation is unavailable')
+    await cdp.send('Debugger.setBreakpointOnFunctionCall', {
+      objectId: result.objectId,
+      condition: "(['requestSessionSettings', 'setSessionSettings'].includes(arguments[0].type) && globalThis.__effortEvidence.push(arguments[0]), false)"
+    })
+    const samples: { eventCount: number; footer: string }[] = []
+    let lastSnapshot: { events: EffortEvidence[]; footer: string } | undefined
+    const snapshot = async () => {
+      const value = await page.evaluate(() => ({
+        events: (window as unknown as ProofWindow).__effortEvidence,
+        footer: document.querySelector('.composer__effort-label')?.textContent ?? ''
+      }))
+      const last = samples.at(-1)
+      if (last?.eventCount !== value.events.length || last.footer !== value.footer) {
+        samples.push({ eventCount: value.events.length, footer: value.footer })
+      }
+      lastSnapshot = value
+      return value
     }
+    return {
+      announcements, models, snapshot, samples,
+      get lastSnapshot() { return lastSnapshot },
+      mark: async () => (await snapshot()).events.length,
+      confirmations: async () => (await snapshot()).events.filter(e => e.type === 'sessionSettingsUpdated').length,
+      readingsSince: async (after: number) => {
+        const events = (await snapshot()).events.slice(after)
+        const created = events.filter(e => e.type === 'conversationCreated').at(-1)
+        return events.filter((e): e is Extract<EffortEvidence, { type: 'runConfigReceived' }> =>
+          e.type === 'runConfigReceived' && e.conversationId === created?.conversationId)
+      },
+      dispose
+    }
+  } catch (error) {
+    try { await dispose() } catch { /* Preserve the observation setup failure. */ }
+    throw error
   }
 }
 
@@ -117,12 +132,12 @@ test('applied effort, confirmed preference, restart, chat recall and channel cre
   await testInfo.attach('daemon-revision', { body: Buffer.from(revision), contentType: 'text/plain' })
 
   await withIsolatedElectronApp(async ({ page: initialPage, relaunch }) => {
-    let page = initialPage
-    let proof = await observe(page)
-    const attachProof = async () => testInfo.attach('effort-settings-sequence', {
-      body: Buffer.from(JSON.stringify({ ...await proof.snapshot(), samples: proof.samples })), contentType: 'application/json'
-    })
-    try {
+    await withEffortScenarioProof(initialPage, observe, async value => {
+      await testInfo.attach('effort-settings-sequence', {
+        body: Buffer.from(JSON.stringify(value)), contentType: 'application/json'
+      })
+    }, async (initial, handoff) => {
+      let { page, proof } = initial
       await pairFromUnpairedLaunch(page, encodePairingPayload({
         server: daemon.pairFields.server, relay: `${relay.url}/v1/client`,
         token: daemon.pairFields.token, server_static_pubkey: daemon.pairFields.server_static_pubkey
@@ -231,10 +246,7 @@ test('applied effort, confirmed preference, restart, chat recall and channel cre
       expect(running.effectiveEffort).toBe(picked)
 
       // The shared lifecycle owns both processes and preserves the isolated profile.
-      await attachProof()
-      await proof.dispose()
-      page = (await relaunch()).page
-      proof = await observe(page)
+      ;({ page, proof } = await handoff(relaunch))
       expect(await page.evaluate(() => localStorage.getItem('pyry.lastEffort'))).toBe(picked)
       const original = page.getByRole('button', { name: originalName, exact: true })
       await expect(original).toBeVisible({ timeout: 45_000 })
@@ -304,9 +316,6 @@ test('applied effort, confirmed preference, restart, chat recall and channel cre
       await refresh(page, proof)
       expect(await proof.confirmations()).toBe(ackBeforeChange + 1)
       expect(await page.evaluate(() => localStorage.getItem('pyry.lastEffort'))).toBe(remembered)
-    } finally {
-      await attachProof()
-      await proof.dispose()
-    }
+    })
   })
 })

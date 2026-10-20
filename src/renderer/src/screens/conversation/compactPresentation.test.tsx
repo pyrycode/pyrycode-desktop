@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { threadItemPresentation } from './threadItemPresentation'
-import { ToolRow } from './ConversationScreen'
+import { ThreadItemsTimeline, ToolRow } from './ConversationScreen'
 import { threadComposerReports } from './threadComposerReports'
 import { threadTaskPresentations } from './threadTaskPresentation'
 
@@ -14,6 +14,21 @@ it('keeps supplied compact headlines expandable without inventing a tool body or
   expect(markup).toContain('aria-expanded="false"')
   expect(markup).toContain('Inspect workspace')
   expect(markup).not.toContain('tool-row__body')
+})
+
+it.each([
+  { name: 'unknown error', error: undefined, visible: false },
+  { name: 'known no error', error: '', visible: false },
+  { name: 'reported error', error: 'Read failed <details>', visible: true }
+])('renders compact error text only when present: $name', ({ error, visible }) => {
+  const markup = renderToStaticMarkup(<ThreadItemsTimeline compact snapshot={{ hostId: 'host', conversationId: 'chat',
+    epoch: 'epoch', version: 0, checkpoint: 0, ranges: [], repair: null, items: [
+      { id: 1, kind: 'tool_call', rev: 1, status: 'done', shown: true, active: false,
+        summary: '', content: null, headline: 'Read', detail_omitted: true,
+        ...(error === undefined ? {} : { error_summary: error }) }
+    ] }} />)
+  expect(markup.includes('<p role="status">')).toBe(visible)
+  if (error) expect(markup).toContain('Read failed &lt;details&gt;')
 })
 
 it('does not turn a child message summary into a complete message', () => {

@@ -14,6 +14,94 @@ const header = (id: number, parent = 0, kind = 'tool_call'): ThreadSummary => ({
   rev: 1, status: 'done', active: false, shown: true, headline: `Inspect ${id}`, detail_omitted: true,
   subtree_version: 10000, session: 'session' })
 
+for (const width of [800, 1280]) test(`compact tool stacks join every visible seam at ${width}px`, async ({ launchPairedApp }, info) => {
+  const requests: Envelope[] = []
+  const route = { conversation_id: SEEDED_ROW.id, epoch: 'joins' }
+  const { page, app, daemon } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities }, buildReplyFrames: bytes => {
+    const request = decodeEnvelope(bytes); requests.push(request)
+    if (request.type === 'list_conversations') return [seedConversationsFrame({ ...SEEDED_ROW, current_session_id: 'session' })]
+    if (request.type === 'thread_catch_up') return [
+      frame('thread_items', { ...route, projection: 'compact-v1', version: 10000,
+        items: [full(1, 'Compact joins ready'), full(4, 'Visible separator'), full(6, 'After lone tool')],
+        // Successful daemon headers explicitly report known-no-error, rather than omit it.
+        headers: [{ ...header(2), headline: 'Read', error_summary: '' },
+          { ...header(3), headline: 'SendMessage', error_summary: '' },
+          { ...header(5), headline: 'Lone tool', error_summary: '' }], final: false }, request.id),
+      frame('thread_items', { ...route, projection: 'compact-v1', version: 10000, items: [], final: true,
+        lower_order: 1, upper_order: 7, continuation: 1, older_exists: false }, request.id)]
+    return []
+  } })
+  await app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size, 800), width)
+  await expect(page.getByText('Compact joins ready', { exact: true })).toBeVisible()
+  expect(requests.find(request => request.type === 'thread_catch_up')?.payload.projection).toBe('compact-v1')
+  const run = page.getByRole('button', { name: /^Using tools: 2/ })
+  const row = (id: number) => page.locator(`[data-read-row="${id}"] > .tool-row`)
+  await expect(run).toHaveAttribute('aria-expanded', 'false')
+  await expect(row(2)).toHaveCount(0)
+  await expect(row(3)).toHaveCount(0)
+  await run.click()
+  await expect(run).toHaveAttribute('aria-expanded', 'true')
+  await expect(row(2)).toContainText('Read')
+  await expect(row(3)).toContainText('SendMessage')
+  await expect(row(2)).toBeVisible()
+  await expect(row(3)).toBeVisible()
+  await page.mouse.move(0, 0)
+  const measure = () => page.locator('.tool-run__row, [data-read-row="2"] > .tool-row, [data-read-row="3"] > .tool-row, [data-read-row="5"] > .tool-row').evaluateAll(elements => elements.map(element => {
+    const box = element.getBoundingClientRect(), css = getComputedStyle(element)
+    return { top: box.top, bottom: box.bottom, left: box.left, width: box.width,
+      corners: [css.borderTopLeftRadius, css.borderTopRightRadius, css.borderBottomLeftRadius, css.borderBottomRightRadius],
+      border: [css.borderTopWidth, css.borderBottomWidth], borderColor: css.borderColor, shadow: css.boxShadow,
+      wrapper: element.parentElement?.className }
+  }))
+  const geometry = await measure()
+  await info.attach('compact-join-geometry', { body: JSON.stringify(geometry), contentType: 'application/json' })
+  await page.screenshot({ path: `/tmp/builder-2165/compact-joins-${width}.png`, animations: 'disabled' })
+  expect(geometry).toHaveLength(4)
+  for (let index = 1; index <= 2; index++) {
+    expect(Math.abs(geometry[index].top - geometry[index - 1].bottom + 1)).toBeLessThanOrEqual(0.5)
+    expect(geometry[index].left).toBe(geometry[0].left)
+    expect(geometry[index].width).toBe(geometry[0].width)
+  }
+  expect(geometry.map(row => row.corners)).toEqual([
+    ['6px', '6px', '0px', '0px'], ['0px', '0px', '0px', '0px'],
+    ['0px', '0px', '6px', '6px'], ['6px', '6px', '6px', '6px']
+  ])
+  expect(geometry.every(row => row.border.every(width => width === '1px'))).toBe(true)
+  expect(geometry.every(row => row.borderColor === geometry[0].borderColor)).toBe(true)
+  expect(geometry[0].shadow).toBe('none')
+  expect(geometry[1].shadow).toBe('none')
+  expect(geometry[2].shadow).not.toBe('none')
+  expect(geometry[3].shadow).toBe(geometry[2].shadow)
+  const separator = await page.locator('[data-read-row="4"]').boundingBox()
+  const gap = await page.locator('.conversation__thread').evaluate(element => parseFloat(getComputedStyle(element).rowGap))
+  expect(separator).not.toBeNull()
+  expect(gap).toBeGreaterThan(0)
+  expect(separator!.y - geometry[2].bottom).toBe(gap)
+  expect(geometry[3].top - separator!.y - separator!.height).toBe(gap)
+  await run.click()
+  await expect(row(2)).toHaveCount(0)
+  await expect(row(3)).toHaveCount(0)
+  const closedHeader = await page.locator('.tool-run__row').boundingBox()
+  const closedSeparator = await page.locator('[data-read-row="4"]').boundingBox()
+  expect(closedHeader).not.toBeNull()
+  expect(closedSeparator).not.toBeNull()
+  expect(closedSeparator!.y - closedHeader!.y - closedHeader!.height).toBe(gap)
+  await run.click()
+  await expect(row(2)).toBeVisible()
+  await expect(row(3)).toBeVisible()
+  expect((await measure()).map(row => [row.top, row.bottom])).toEqual(geometry.map(row => [row.top, row.bottom]))
+  // A new revision under the same source id preserves the visible-neighbour joins.
+  daemon.pushFrame(frame('thread_compact_update', { ...route, projection: 'compact-v1', from_version: 10000, version: 10001,
+    progress: false, header: { ...header(3), rev: 2, headline: 'SendMessage refreshed', error_summary: '' } }))
+  await expect(row(3)).toContainText('SendMessage refreshed')
+  const refreshed = await measure()
+  for (let index = 1; index <= 2; index++) {
+    expect(Math.abs(refreshed[index].top - refreshed[index - 1].bottom + 1)).toBeLessThanOrEqual(0.5)
+  }
+  expect(refreshed.map(row => row.corners)).toEqual(geometry.map(row => row.corners))
+  expect(requests.filter(request => request.type === 'thread_read_tool_body' || request.type === 'thread_read_children')).toHaveLength(0)
+})
+
 for (const retained of [false, true]) test(`compact recovery and closed-parent live tasks, retained complete=${retained}`, async ({ launchPairedApp }) => {
   test.setTimeout(90000)
   const grants = retained ? ['interactive', 'thread', 'stop_background_task'] : [...capabilities, 'stop_background_task']

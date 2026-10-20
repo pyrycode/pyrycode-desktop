@@ -397,8 +397,13 @@ it('bounds index SQL compilation per flush while preserving writes, yields, roll
     expect(units).toBe(16); turns++
     await new Promise<void>(resolve => setImmediate(resolve))
   }
+  const mutation = (extra: object) => {
+    const request = parseChatHistoryRequest(owned(s, extra))
+    if (request.operation !== 'mutateThread') throw new Error('expected mutation')
+    return request
+  }
   const items = Array.from({ length: 31 }, (_, id) => ({ id, rev: 1, kind: 'future', order: (id * 17) % 31 }))
-  expect(await h.store.executeMutation(parseChatHistoryRequest(owned(s, { items })), onTurn)).toEqual({ status: 'ok' })
+  expect(await h.store.executeMutation(mutation({ items }), onTurn)).toEqual({ status: 'ok' })
   expect(executed).toBeGreaterThan(100)
   expect(turns).toBeGreaterThan(5)
   // Compilation is bounded by the index families, independently of flushed node count.
@@ -406,14 +411,14 @@ it('bounds index SQL compilation per flush while preserving writes, yields, roll
   const inserted = await h.store.execute(ask('readThread'))
   h.database.transaction(db => db.exec(`CREATE TRIGGER reject_index_flush BEFORE INSERT ON thread_auth
     WHEN new.tree = 'sequence' BEGIN SELECT RAISE(ABORT, 'injected'); END`))
-  expect(await h.store.executeMutation(parseChatHistoryRequest(owned(s, {
+  expect(await h.store.executeMutation(mutation({
     items: [{ ...items[0], rev: 2 }]
-  })), onTurn)).toEqual(error('write-failed'))
+  }), onTurn)).toEqual(error('write-failed'))
   expect(await h.store.execute(ask('readThread'))).toEqual(inserted)
   h.database.transaction(db => db.exec('DROP TRIGGER reject_index_flush'))
   prepared = 0; executed = 0; turns = 0
   const removeIds = items.slice(0, 16).map(i => i.id)
-  expect(await h.store.executeMutation(parseChatHistoryRequest(owned(s, { removeIds })), onTurn)).toEqual({ status: 'ok' })
+  expect(await h.store.executeMutation(mutation({ removeIds }), onTurn)).toEqual({ status: 'ok' })
   expect(executed).toBeGreaterThan(100)
   expect(turns).toBeGreaterThan(5)
   expect(prepared).toBeLessThanOrEqual(10)

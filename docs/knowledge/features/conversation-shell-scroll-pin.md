@@ -250,6 +250,36 @@ confirmed by the [verifier verdict](https://github.com/pyrycode/pyrycode-desktop
 These runs exercised the built Electron app with fake-daemon streaming; physical
 trackpad gestures and live-Claude streaming were not exercised.
 
+### Thumbnail reader setup
+
+The late-image held-reader case in [`thread-scroll-pin.spec.ts`](../../../e2e/thread-scroll-pin.spec.ts)
+must establish released intent before either withheld image resolves. `sendWithThumbnail`
+waits for a numeric `data-read-row` on the direct-child supplied wrapper containing
+the bubble; the optimistic bubble or its inner row cannot certify completed daemon
+echo publication. `parkThumbnailReader` keeps the pointer outside, deliberately
+reveals metadata through Copy focus with `preventScroll`, settles that geometry,
+then focuses the thread and settles again. Trusted ArrowUp must actually move upward
+from the bottom before one exact assignment to 40% of the settled content height.
+Programmatic parking during metadata reflow can leave following armed even after
+every echo has arrived.
+
+A spec-local target listener registered after React records processed scroll count
+and offset. Before release, require a newer processed event at the parked target
+and 20 unchanged frame comparisons of offset, content height, viewport width/height,
+thread focus and processing state. The helper removes its listeners and attaches
+`thumbnail-reader-setup` phase samples in `finally`, including failed readiness.
+This observation acknowledges the park rather than merely flushing two frames.
+
+Keep the exact parked-offset precondition, positive nonzero offset, more than one
+viewport of bottom distance and above/below row-placement guards. The pre-release
+baseline stays immutable: decoded below-reader growth leaves its offset unchanged;
+decoded above-reader growth compensates by that growth while preserving the visible
+reference row and remaining away from bottom. Image decoding, drawn height and
+positive growth checks, plus both bottom-resting thumbnail cases, remain required.
+The [controlled diagnosis and counted Linux runs](development-verification-layout-and-input.md#thumbnail-reader-setup-verification)
+distinguish echo, focus/layout and processed input readiness without attributing the
+controlled schedule to the historical failure or changing production behavior.
+
 ### Inline permission reader verification
 
 A stable offset alone can be an overwritten bottom endpoint. A programmatic park during

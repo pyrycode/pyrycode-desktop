@@ -107,6 +107,112 @@ evidence live in [protected history testing](../../knowledge/features/chat-histo
 
 ## Revisions
 
+### 2026-10-20 — late subscriber startup repair
+
+The reopened contract now includes production status delivery. One useful behavior:
+saved-profile catch-up remains ready when main accepts before React mounts. The
+preload listener must exist before document load; a React effect is too late.
+Cleaner-shape check: use the existing load replay and a preload-local status cache,
+not a second renderer-to-main snapshot request with an asynchronous ordering race.
+No consumer signature, main authorization, storage, wire or relay change is needed.
+
+Additional files read:
+- `src/main/index.ts` → `openWindow`: load replays retained statuses and starts idempotently.
+- `src/main/liveWindow.ts` → `createLiveWindow`, `originOf`: four statuses, trusted stamped origins.
+- `src/preload/index.ts` → `onDaemonEvent`: currently subscribes too late; retains receipt/content filtering.
+- `src/preload/appUpdate.test.ts` → preload boundary test pattern.
+- `src/renderer/src/store/threadRuntime.ts` → `useThreadRuntime`: independent layout subscription.
+- `src/renderer/src/store/daemonEventBridge.ts` → `useDaemonEventBridge`: independent effect subscription.
+- `e2e/fixtures/launchPairedApp.ts` → native thread scripting and saved profile ownership.
+- `e2e/real-daemon-history-on-open.spec.ts` → saved checkpoint and independent protected paging.
+- `docs/knowledge/features/live-window.md`, `daemon-connection-lifecycle.md` → retained main status contract.
+- `chat-history-testing.md` → Protected paging coverage observation; `chat-history-api.md` → Owned authoritative mutations.
+- `docs/recorded-tests.md`, `docs/client-replay-migration.md`, development verification overview → guarded counted acceptance.
+
+Design: install a status-only IPC recorder during preload evaluation. Keep the last
+`connecting`, `connected`, `failed` or `disconnected` per stamped origin in a Map
+(string/null/absent remain distinct). Keep the original event, including capabilities
+and absent properties. Each `onDaemonEvent` call registers its live handler, then
+synchronously delivers retained statuses only to that listener through its existing
+receipt wrapper. No awaits mean no stale connected snapshot can overwrite a later
+failure/disconnect. No transcript, query reply or other daemon event is retained.
+Main's load replay and idempotent start remain unchanged; no healthy redial.
+
+State/concurrency: cache lifetime is one preload document, including gaps with zero
+React consumers. The recorder owns one document-lifetime IPC listener; each consumer
+removes its own handler on unsubscribe. Document destruction releases all state.
+Snapshot delivery and live IPC execute serially on the renderer thread.
+
+| Repeated event / identity | Regression |
+| --- | --- |
+| Host status precedes first/second subscription | preload status tests: independent replay without rebroadcast |
+| Connected superseded by connecting/failed/disconnected | preload status tests: latest origin status and subsequent live ordering |
+| Null, absent, prototype-shaped and multiple hosts | preload status tests: exact stamp/capabilities and distinct Map slots |
+| Unsubscribe/remount, content owner opt-in | preload status tests: removed callback stays inert, no content replay |
+| Full exit/reopen after accepted main status before React | startup spec: delayed and normal native saved-checkpoint catch-up |
+
+Error handling: no new I/O or rejection path. Existing parsing and main delivery
+remain authoritative. Retention never manufactures a connected event or logs payloads.
+The controlled startup spec uses static stage names and counts for main acceptance,
+renderer status receipt, request dispatch and received publication.
+
+Tests first: preload boundary failures before correction, then production correction.
+Adapt the retained HTTP React-mount scheduling diagnostic to native thread replies;
+prove saved baseline durability, full exit, main accepted status before releasing
+mount, one selection, exact saved-version catch-up, received newest publication and
+enabled Send. Run normal bootstrap alongside the delayed control. Preserve the
+original diagnostic red in `/tmp/builder-2153/resume/startup-boundary.*`; synthetic
+scheduling demonstrates the mechanism, not the unknown historical Linux trigger.
+All de6e481a/b505bf01/3e533963 failed/unchanged-pass evidence and the split-save and
+bounded-reader repairs remain separate and unchanged.
+
+Validation: finish Node checks (pre-verify, observer/query regressions, client-test
+typecheck, docs guard and build), then Electron native preparation and actual startup
+controls. Five consecutive complete-thread paired batches, each two named cases
+twice, three actual workers, retries zero; then full guarded recorded suite. Retain
+counts, build/profile, capture provenance and exchange/guard attachments. Dispatcher
+owns configured application gate; no fresh provider or second-OS run is required.
+
+Sizing: approximately 550–650 incremental written lines including this revision,
+production/tests and counted evidence; one production file, no new exported types,
+no API migrations, five observable criteria, no new rejection state machine. No
+remote feature branch overlaps the planned production/scenario files. No independent
+plumbing slice is useful without its regression. Open questions: none.
+
+Pending documentation stage: reconcile the production subscriber-readiness contract
+and counted execution-OS evidence in `docs/knowledge/features/live-window.md`,
+`daemon-connection-lifecycle.md` and `chat-history-testing.md`. Distinguish document
+load, accepted main status, renderer subscription, request dispatch and publication.
+Preserve historical failures/passes, unknown Linux trigger, existing causal proofs,
+capture provenance and reset-prompt exclusion; record dispatcher results separately
+from builder results. Update this plan's pending handoff when that evidence arrives.
+
+## Security review
+
+**Verdict:** PASS
+
+- Trust boundaries: main's parsed/stamped IPC is the sole status producer. The new
+  preload cache keys only on `serverId`, never daemon `ack.server_id`; renderer
+  callers supply only a callback and cannot assert status or manufacture origins.
+- Tokens/secrets: retain only the same four status events already delivered to the
+  renderer; no pairing token, key, raw bytes or transcript enters the cache.
+- File/storage: no new disk access, paths or persistence; safeStorage is unchanged.
+- Electron surface: no new IPC/API/request. Existing context isolation, sandbox,
+  navigation guards and main-frame authorization remain unchanged.
+- Cryptography: no crypto, randomness, keys or Noise lifecycle changes.
+- Network/I/O: no new connections, retries or deadlines. Existing parsed daemon
+  status and idempotent connection startup remain authoritative.
+- Errors/logging: no production logging added; control evidence contains static
+  stage names/counts only, with no daemon text, tokens or exception payloads.
+- Concurrency: synchronous private replay avoids await races and rebroadcast;
+  per-consumer cleanup removes callbacks, document teardown owns the recorder.
+- Threat alignment: relay/daemon cannot mint cache slots through ack contents;
+  Map handles prototype-shaped trusted origins safely. Compromised renderer gains
+  no new authority or access to main-only credentials/network resources.
+
+**Reviewer:** builder (self-review per `builder/security-review.md`)
+**Date:** 2026-10-20
+
 ### 2026-10-20 — reopened current-source validation plan
 
 The reopened contract first validates the already merged split-save repair

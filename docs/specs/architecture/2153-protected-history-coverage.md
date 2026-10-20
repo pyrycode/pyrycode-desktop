@@ -187,6 +187,50 @@ Preserve historical failures/passes, unknown Linux trigger, existing causal proo
 capture provenance and reset-prompt exclusion; record dispatcher results separately
 from builder results. Update this plan's pending handoff when that evidence arrives.
 
+### 2026-10-20 — verifier rework: document isolation and processing barrier
+
+Answer findings 1 and 2 from the review of `98cb0144`. These are directly
+consumed regressions of the existing status-subscription behavior, with no
+independently useful production change. Incremental forecast: under 150 written
+lines including evidence; no production files, exports, API migrations or new
+failure branches. The full branch remains below 800 written lines. Remote
+feature-branch inspection found no overlap with the two test files.
+
+Additional files read: `src/main/sessionStateMetadata.test.ts` → `connected`
+and host-isolation integration: fixture currently removes the recorder while
+retaining the imported preload's Map; `src/preload/daemonStatus.test.ts` →
+fresh module-per-document pattern; `e2e/saved-profile-startup.spec.ts` →
+observer mount: final request count lacks a processing barrier;
+`e2e/visible-tail-read.spec.ts` → ordered context-usage sentinel pattern;
+`threadRuntime.ts` → `handle`: connected status dispatches opening work
+synchronously; development-verification's positive-processing-barrier contract.
+
+Reset the preload module and mocked IPC listeners together before each metadata
+case. Assert an empty initial subscription and one document recorder, then check
+host-isolated retained connected baselines separately from subsequent live stall
+delivery. Preserve accepted capabilities, provenance and unsubscribe assertions.
+For native startup, send a uniquely addressed read-only context-usage sentinel
+after mounting/unmounting the observer on the same ordered IPC/transport path.
+Require its actual fake-daemon receipt before the unchanged one-query assertion.
+No sleeps, timeout changes, synthetic completion or replay changes.
+
+Validation: reproduce the exact unit failure first; run the complete metadata
+file plus existing status, history-observer and query controls under Node. After
+the final main merge, run pre-verify, build, client-test typecheck and docs guard,
+then prepare Electron and run both startup cases. Preserve previous counted
+acceptance separately; repeat the five paired batches and full guarded recorded
+suite on macOS, with the existing reset-prompt exclusion. Dispatcher owns the
+subsequent configured application gate. Documentation handoff above stays pending.
+
+Security re-review per `builder/security-review.md`: **PASS**. Tests only:
+main remains the sole status authority; no credentials, storage, crypto, network
+policy or Electron surface changes. The sentinel uses existing validated IPC
+with a static test identity and no mutation. Diagnostics remain content-free.
+Fresh document ownership resets cache/listeners together; ordered daemon receipt
+closes the asynchronous observation gap. Existing relay, hostile-daemon, disk and
+renderer threat boundaries remain unchanged. No MUST FIX or SHOULD FIX security
+findings. Reviewer: builder, 2026-10-20.
+
 ### 2026-10-20 — macOS production-delivery validation
 
 Final tested source: `33aa5fee23efd70365a829f908f6e736a8ada084`, including final

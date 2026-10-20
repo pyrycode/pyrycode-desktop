@@ -161,6 +161,103 @@ source live scenario uses `spawnClaude: false`; even a live pass would establish
 daemon storage/transport rather than a Claude turn or production-relay delivery.
 See [current replay/native evidence and historical live failures](chat-history-testing-native.md#counted-legacy-storage-retirement-validation).
 
+### Protected paging coverage observation
+
+Dispatch, renderer publication and protected durability are separate facts.
+[`readHistoryCoverage`](../../../e2e/fixtures/historyCoverage.ts) consumes complete
+`ChatHistoryResult` values instead of collapsing unavailable results to
+`undefined`. Before Home and each ArrowUp it retains the first actual numeric
+range start from a stored `daemon-items` snapshot with exact outer and inner
+host/conversation ownership. Zero is valid. The successful polling callback
+supplies the retained value; a second read could lose availability again.
+
+After input, one five-second progress observation runs alongside the exact
+one-additional-`thread_page` assertion and requires a strictly smaller protected
+start. `unreadable`, missing snapshots, empty ranges and equal/increased starts
+remain pending within that bound; none supplies coverage. Other classified
+errors, rejected reads, unexpected status/kind and wrong ownership stop without
+another read, using static codes rather than exception text or content. A pending
+status must not mask a later terminal result. Request counts, loading-indicator
+disappearance and bubble growth retain their separate assertions.
+
+[`historyCoverage.test.ts`](../../../e2e/fixtures/historyCoverage.test.ts)'s
+`waits across split saves at baseline and after dispatch` uses the real writer,
+handler, SQLite database and protected store with test encryption. It holds prefix
+acknowledgement and final submission outside the handler queue, so reads actually
+return `unreadable` before baseline acquisition and after controlled publication.
+The old projection fails on those reads; the reader remains pending until final
+durability and retains starts 100 then 50. Controlled dispatch/publication markers
+come from the existing owned-state fixture seam; the application scenario checks
+actual requests separately. The content-free trace is
+`/tmp/builder-2153/regression.log`; `unit-final/0.log` is only the final
+JSON-reporter notification, and `unit-final/0.json` contains the 23 passing results.
+Failure controls bound persistent pending/no-progress states at five seconds and
+cover terminal errors, rejection, each ownership coordinate, pending-to-terminal
+transition and successful zero without rereading. No writer flush, synthetic
+completion, repeated input, sleep, retry or longer timeout supplies progress.
+
+The scenario retains saved-checkpoint catch-up, all 205 closed-app posts, trusted
+Home/ArrowUp input, exact request growth, bubble growth, baseline recovery, order,
+uniqueness and no legacy requests. Synchronous inspection, successful-profile
+retirement, full outgoing-envelope matching, causal checkpoints and final exchange
+completion remain required. See [owned persistence obligations](chat-history-api.md#owned-authoritative-mutations).
+
+### Counted Linux coverage-observer validation
+
+The [plan and commands](../../specs/architecture/2153-protected-history-coverage.md#validation-evidence)
+and [accepted verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2156#issuecomment-6284779714)
+record Linux x64 results on 2026-10-20. Builder runs tested clean implementation
+`172d3f959d6b1fb89368c7805885d95d44aa6076`, after main `845cf9a25196`;
+reviewed head `894c381df2bb1d9da6edbc873aaf31fa214f1a51` adds plan evidence only.
+These are recorded results, not documentation-stage test runs.
+
+| Run | Executed / passed / failed / skipped | Workers and retries |
+| --- | --- | --- |
+| Final controlled/failure regressions, `unit-final/0.json` | 23 / 23 / 0 / 0 | Node-native preparation before Electron preparation |
+| Five consecutive guarded paired batches, `paired-{1..5}.json` | 20 / 20 / 0 / 0 | Each 4 / 4 / 0 / 0; three configured/overlapping slots, retries zero |
+| Subsequent complete guarded replay, `recorded-full.json` | 29 / 29 / 0 / 1 | One configured/actual worker, retries zero |
+| Supplied dispatcher unit gate 4 | 9844 / 9844 / 0 / 3 | Controlled split-save case explicitly present and passed |
+| Dispatcher application gate 7, `npx playwright test --reporter=json` | 517 / 517 / 0 / 5 | Both named cases below present and passed without retry |
+
+The paired and complete builder runs used `--profile complete-thread`. Both
+`a real daemon lazily fills a served gap after more than 200 entries written while Electron is closed`
+and `daemon-built thread streams, places an agent, reconnects, resets and reopens saved items`
+passed twice per paired batch and once in complete replay. Separately, the verifier
+confirmed each executed/passed once, retries zero, with completed exchanges in the
+dispatcher application gate. Unit totals above come from the supplied dispatcher
+gate report. Builder reports and the independent verifier summary are retained at
+`/tmp/builder-2153/` and `/tmp/verifier-2156/evidence-summary.json` respectively.
+
+All six builder guards recorded zero forbidden launches. Every paired history
+exchange matched 32 requests/emitted 63 frames; thread matched 45/emitted 378,
+with zero remaining requests per exchange. All 29 full-suite exchanges completed:
+773 matched requests, 3,216 emitted frames, zero remaining. Recycled worker
+identities in batches 2/4 reused completed slots; all five batches reached three
+overlapping tests with retries zero. The plan retains bundle hashes, report hashes,
+commands and capture provenance separately from the tested build identity.
+
+Recording bytes remain unchanged: history SHA-256
+`de0b1166b6e05e0792228c07be25c20498b117914e673558222eac12cd4e6d2c`;
+thread `53a3db11cfab2d5041b511d7be4d030ab5b2b8449b7fdb3ea1d7e5e3db552ae3`.
+Both retain capture Desktop `00ec821f9380b00cf2dfc0dd4817ee15584106a5`, daemon
+`58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`, binary SHA-256
+`5f5b3b9ce42eda74024637f4929dd720d36c1226ce6e370eb62fbe9e6b22f7c0`.
+`real claude picks up a saved channel system prompt at Reset session` remains
+the explicit full-replay fixme/skip and was skipped in dispatcher gate 7 too.
+No fresh provider/daemon or physical-effect acceptance is required or claimed;
+macOS is outside this Linux ticket's verification scope.
+
+Historical Linux outcomes at `de6e481a` remain separate: the filed full run
+`/tmp/builder-2079/replay-fixed.json` recorded 29 executed, 28 passed, 1 failed,
+1 existing reset-prompt skip, and the unchanged isolated `replay-history.json`
+recorded 1 executed/passed, 0 failed/skipped. The former timed out on paging
+coverage with one outgoing request remaining. These counts come from the
+[retained refinement evidence](https://github.com/pyrycode/pyrycode-desktop/issues/2153#issuecomment-6284141287),
+not fresh inspection of the original full reports. The controlled old-projection
+failure (1 executed/failed, 21 unselected) establishes a pending-save observation
+mechanism; it does not establish that historical trigger. Neither the isolated
+pass nor later passing replay reclassifies the historical failure.
+
 Legacy row-fold overlap fixtures must place the live overlap at the newest end of the newest-first
 page. Putting an unmatched older entry first exercises the intentional
 stop-at-first-unmatched rule in `withoutLiveEntries`, producing a duplicate instead

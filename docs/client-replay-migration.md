@@ -42,7 +42,7 @@ Unrelated storage and fake-suite work remains under its existing owners.
 | `real-daemon-archive-order.spec.ts` | Archived channels sorted by use | Daemon registry timestamps independently checked |
 | `real-daemon-conversation-lifecycle.spec.ts` | Archive, restore, deletion and reply-gated navigation | Real registry operations |
 | `real-daemon-create-channel.spec.ts` | Named promoted channel, default workspace and dialog close | Real daemon creation semantics |
-| `real-daemon-history-on-open.spec.ts` | Saved baseline, closed-app posts, >200 rows, gaps, checkpoints and paging | Real daemon control-socket posts, registry and protected-storage behavior |
+| `real-daemon-history-on-open.spec.ts` | Saved baseline, closed-app posts, >200 rows, gaps, checkpoints and trusted paging with strictly older protected coverage | Real daemon control-socket posts, registry and protected-storage behavior |
 | `real-daemon-multi-agent.spec.ts` | App's hello acknowledgement includes advertised capabilities | Actual authenticated capability negotiation, including reconnect |
 | `real-daemon-promote.spec.ts` | Save-as-channel request and reply-gated affordance transition | Real promotion handler |
 | `real-daemon-rename.spec.ts` | Rename request, new title and old-title removal | Real rename handler |
@@ -96,6 +96,11 @@ The history test now obtains its conversation ID from the real conversation
 list (and independently checks the registry during live execution). Its fresh
 profile reads backward with repeated trusted input: production requests one
 bounded page per input, so one Home key cannot establish coverage of 205 rows.
+Before each trusted input, the history scenario retains actual numeric protected
+coverage for the exact host/conversation, then requires a strictly older start
+within five seconds alongside its exact request-count check. Pending split-save
+`unreadable` remains unavailable evidence. See the
+[observer contract and controlled regression](knowledge/features/chat-history-testing.md#protected-paging-coverage-observation).
 Every original assertion remains. The already completed resumed profile exits
 before the independent fresh profile, giving each captured connection one
 sequential lifetime. Question fixtures explicitly enable the daemon's stdio
@@ -224,6 +229,17 @@ guarded replay (29 executed/passed, 0 failed, 1 existing fixme), and both named
 history/thread cases passed without retry in the configured application gate
 (515 executed/passed, 0 failed, 5 skipped). This closes the later retirement
 acceptance; #2129 is closed. Earlier failed runs remain historical failures.
+
+The [protected coverage observation evidence](knowledge/features/chat-history-testing.md#counted-linux-coverage-observer-validation)
+records Linux builder regressions (23 executed/passed, 0 failed/skipped), five
+three-worker paired batches (20 executed/passed, 0 failed/skipped), complete
+guarded complete-thread replay (29 executed/passed, 0 failed, 1 existing fixme),
+and both named history/thread cases passed without retry in the separate
+dispatcher application gate (517 executed/passed, 0 failed, 5 skipped).
+Captures/provenance remain unchanged. The historical `de6e481a` failure and
+unchanged isolated pass remain separate, with the trigger unknown; the controlled
+split-save mechanism does not establish that cause. The reset-prompt fixme
+remains excluded, and replay adds no fresh live or physical-effect claim.
 
 The [saved-title observation evidence](knowledge/features/development-verification.md#protected-saved-list-title-observation)
 records the controlled stored-null mechanism, 11 passing regressions, five

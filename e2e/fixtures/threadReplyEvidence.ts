@@ -86,7 +86,7 @@ export function createThreadReplyEvidence(options: { host: string; conversation:
     return !!held && held.kind === 'assistant_message' && held.session === recorded.session && held.agent === recorded.agent &&
       held.turn === recorded.turn && held.status === 'done' && !held.active && top(held) && object(held.content).text === recorded.text
   }
-  const stop = options.subscribe ? window.pyry.onDaemonEvent(observe) : () => {}
+  const stop = options.subscribe ? window.pyry.onDaemonEvent(observe, true) : () => {}
   const proof = { observe, mark, send, reply, retained, stop, capabilities: () => capabilities }
   if (options.subscribe) (window as typeof window & { threadReplyEvidence: typeof proof }).threadReplyEvidence = proof
   return proof

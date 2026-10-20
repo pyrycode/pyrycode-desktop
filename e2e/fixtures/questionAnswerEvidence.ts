@@ -130,7 +130,7 @@ export function createQuestionAnswerEvidence(subscribe = false) {
   const snapshot = () => ({ armed, submitted, dismissed, witnessed, completed, invalid, failure })
   const proof = { observe, submit, arm, complete, identity, snapshot, stop: () => {} }
   if (subscribe) {
-    proof.stop = window.pyry.onDaemonEvent(observe)
+    proof.stop = window.pyry.onDaemonEvent(observe, true)
     ;(window as typeof window & { questionAnswerEvidence: typeof proof }).questionAnswerEvidence = proof
   }
   return proof

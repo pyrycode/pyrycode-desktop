@@ -104,3 +104,61 @@ once with retries zero and completed exchanges. The reset-prompt case remains
 skipped. These dispatcher results are separate from the builder's guarded runs;
 no gate or live test was rerun by documentation. The reconciled contract and
 evidence live in [protected history testing](../../knowledge/features/chat-history-testing.md#protected-paging-coverage-observation).
+
+## Revisions
+
+### 2026-10-20 — reopened current-source validation plan
+
+The reopened contract first validates the already merged split-save repair
+`172d3f95` and bounded-reader repair `a17ce883` on admitted current main
+`2d8a7e323ffe74f7ba4e232483a267d8b5a0d0a1`. Both are ancestors of this tree.
+No implementation change is planned unless current-source execution demonstrates
+a local observer/scenario defect. Existing causal regressions are reused.
+
+Additional files read: `e2e/fixtures/historyCoverage.ts` → `readHistoryCoverage`
+(exact-owner `newestThreadPage`, limit 1, newest range, retained numeric value);
+`e2e/fixtures/historyCoverage.test.ts` → held split-save and bounded-read contention
+regressions plus pending/terminal/ownership/disconnected-range/zero controls;
+`docs/specs/architecture/2158-bounded-protected-coverage.md` → original causal red
+and subsequent green evidence; `docs/knowledge/features/chat-history-testing.md`
+→ Protected paging coverage observation; `chat-history-api.md` → Owned authoritative
+mutations; replay/profile documentation and development verification overview.
+QMD found the owning observation contract. Remote feature-branch overlap inspection
+after fetch found no overlap with the plan, observer, regression or scenario paths.
+The issue labels were read before this plan commit; no security-sensitive label.
+
+One deliverable remains durable numeric progress at every trusted paging input.
+Incremental scope: approximately 150–250 written plan/evidence lines, zero
+production files, zero new exported types, one existing scenario consumer,
+four acceptance behaviors and no new rejection branches. This fits all ceilings;
+the regression and single-consumer observer remain one verifiable slice.
+
+Retain the bounded contract added by #2158 rather than the original full-reader
+design above: newest authenticated range for page results, exact ownership,
+numeric baseline before each input and strictly older numeric progress in the
+existing single five-second bound. Existing lifecycle, failure and identity tests
+remain the coverage table; add no state, cancellation path, UI or production change.
+
+Validation order: install dependencies; finish Node-native pre-verify for the
+entire `historyCoverage.test.ts` file, client-test typecheck and docs guard; build;
+prepare Electron SQLite; run five consecutive complete-thread paired batches
+(both named history/thread cases twice, three actual workers, retries zero),
+then the complete guarded committed suite. Count executions, skips, worker
+overlap, guard attempts, build identity, input provenance and every exchange's
+remaining requests. Keep the existing reset-prompt fixme explicitly excluded.
+Dispatcher owns the subsequent configured application gate, including no-retry
+passes for both named cases; verifier reviews that evidence separately.
+
+Historical outcomes are not reclassified: the original `de6e481a` failure and
+unchanged isolated pass remain recorded above. The reopened #2125 failure at
+`b505bf011812970b2b8048afebb735381b8e4691` contains the split-save repair but
+predates `a17ce883`. Refinement independently inspected report SHA-256
+`6357d95a5b114944be2f73f747764f711ebf675884d785423e5035367ea48218`:
+518 executed / 516 passed / 2 failed / 5 skipped, history ArrowUp `no-progress`,
+32 matched / 63 emitted / 0 remaining. Its unchanged selected rerun passed
+3 / 3 / 0 / 0. Neither historical trigger is established. Preserve original
+causal failing-before evidence above and in the #2158 plan; do not manufacture
+a new failure or claim exchange completion proves publication/durability.
+
+Open questions: none. Linux x64 is this run's verification scope; no fresh
+provider/daemon or physical-effect acceptance is required.

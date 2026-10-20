@@ -75,3 +75,7 @@ None. The repair changes only settlement scheduling and its regression controls.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-20
+
+## Revisions
+
+2026-10-20: A focused control exposed that a later received event before an automatic continuation runs would otherwise inherit failure suppression. The capture scheduling helper now clears the queued continuation's failed set when no drain is running; it keeps the same scheduled handle and debounce. Active drains retain their failure suppression. Public flush still starts a fresh set. Added `allows a later received event to retry before a settlement continuation runs` (controlled red: 1 executed, 1 failed) to preserve that retry contract.

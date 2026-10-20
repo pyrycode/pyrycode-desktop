@@ -73,6 +73,21 @@ async function open(app: ElectronApplication, server = FIRST_SERVER_ID, separate
       const result = controller.open(parent, server, appId, { x: 400, y: 60, width: 600, height: 600 })
       if (!result.ok) { (globalThis as any).hostedOpenRefusal = result; return result }
       ;(globalThis as any).hosted = result.view
+      const wc = result.view.content.webContents
+      ;(globalThis as any).hostedContents = wc
+      const contentId = wc.id
+      ;(globalThis as any).hostedContentId = contentId
+      const boundaries: unknown[] = []
+      ;(globalThis as any).hostedBoundaries = boundaries
+      ;(globalThis as any).hostedOperation = 0
+      const snapshot = (event: string) => boundaries.push({ event, id: contentId,
+        state: result.view.read().type, destroyed: wc.isDestroyed(),
+        attached: !wc.isDestroyed() && wc.debugger.isAttached() })
+      snapshot('retained')
+      wc.on('did-start-navigation', (_event, _url, _inPlace, main) => { if (main) snapshot('navigation-start') })
+      wc.on('did-finish-load', () => snapshot('navigation-finish'))
+      wc.on('destroyed', () => snapshot('destroyed'))
+      wc.debugger.on('detach', () => snapshot('debugger-detach'))
       ;(globalThis as any).hostedParent = parent
       ;(globalThis as any).hostedStates = [result.view.read().type]
       result.view.subscribe(() => (globalThis as any).hostedStates.push(result.view.read().type))
@@ -96,7 +111,29 @@ async function expectDiscoveryPending(app: ElectronApplication) {
     .toEqual({ ok: false, error: 'unconfirmed', state: { type: 'loading' } })
 }
 async function evaluate(app: ElectronApplication, script: string) {
-  return app.evaluate(async (_, script) => (globalThis as any).hosted.content.webContents.executeJavaScript(script), script)
+  try {
+    return await app.evaluate(async (_, script) => {
+      const held = globalThis as any, wc = held.hosted.content.webContents
+      held.hostedBoundaries.push({ event: 'evaluate', operation: ++held.hostedOperation,
+        state: held.hosted.read().type, available: wc !== undefined,
+        destroyed: held.hostedContents.isDestroyed() })
+      return wc.executeJavaScript(script)
+    }, script)
+  } catch (error) {
+    await attachHostedLifetime(app).catch(() => test.info().attach('hosted-lifetime-unavailable', {
+      body: 'Native lifetime inspection did not complete', contentType: 'text/plain'
+    }))
+    throw error
+  }
+}
+
+async function attachHostedLifetime(app: ElectronApplication) {
+  const state = await app.evaluate(() => {
+    const held = globalThis as any, wc = held.hostedContents
+    return { id: held.hostedContentId, state: held.hosted?.read().type, destroyed: wc?.isDestroyed(),
+      currentId: held.hosted?.content.webContents?.id, states: held.hostedStates, boundaries: held.hostedBoundaries }
+  })
+  await test.info().attach('hosted-lifetime', { body: JSON.stringify(state), contentType: 'application/json' })
 }
 
 test('Fetch writes retained preferences and serializes bounded request bodies', async ({ launchPairedApp }) => {
@@ -171,6 +208,7 @@ test('Fetch cancellation and document replacement fence late completions and for
   expect(await evaluate(app, `Promise.all(['https://other.invalid/api/x','data:text/plain,hello',location.origin.replace('https://','https://user@')+'/api/x'].map(url=>fetch(url).then(()=>false,()=>true)))`)).toEqual([true,true,true])
   expect(await evaluate(app, `fetch('/api/read?barrier=forged').then(r=>r.status)`)).toBe(200)
   expect(s.seen.filter(r=>r.type==='app_api_request').slice(baseline).map(r=>r.payload.path)).toEqual(['/api/read'])
+  await attachHostedLifetime(app)
 })
 
 for (const encoding of ['Blob', 'FormData']) {

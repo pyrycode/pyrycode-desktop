@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import type { ChatHistoryResult } from '../../src/shared/chatHistory'
+import type { ChatHistoryRequest, ChatHistoryResult, ThreadSnapshot } from '../../src/shared/chatHistory'
 import { createChatHistoryStore } from '../../src/main/chatHistoryStore'
 import { createHistoryDatabase } from '../../src/main/historyDatabase'
 import { createSecureStore } from '../../src/main/secureStore'
@@ -22,11 +22,94 @@ const stored = (start: number | null = 100): ChatHistoryResult => ({ status: 'st
     ranges: start === null ? [] : [{ start, end: 200 }]
   }
 } })
+function page(start: number | null = 100): Extract<ChatHistoryResult, { status: 'page' }> {
+  const result = stored(start)
+  if (result.status !== 'stored' || result.snapshot.kind !== 'daemon-items') throw Error('fixture')
+  const { items, ranges, arrivalOrder: _arrival, ...metadata } = result.snapshot.thread
+  return { status: 'page', page: { partial: true, metadata, items, ranges, continuation: null } }
+}
 function gate() {
   let release = () => {}
   const ready = new Promise<void>(resolve => { release = resolve })
   return { ready, release }
 }
+
+it('bounded protected reads leave time for received paging progress', async () => {
+  vi.useFakeTimers({ toFake: ['performance'] })
+  const root = await mkdtemp(join(tmpdir(), 'history-coverage-work-'))
+  const database = createHistoryDatabase({ userDataPath: root })
+  let observing = false, decrypts = 0
+  const encryption = { isAvailable: () => true, encrypt: (b: Uint8Array) => b.map(n => n ^ 173),
+    decrypt: (b: Uint8Array) => {
+      if (observing) {
+        decrypts++
+        // Controlled synchronous keychain cost: full reads monopolize main's queue,
+        // whereas a selected protected page leaves time for receipt and persistence.
+        // Advance only the monotonic deadline clock. Real tasks stay queued
+        // until this synchronous protected read returns; no wall-clock sleep.
+        vi.advanceTimersByTime(10)
+      }
+      return b.map(n => n ^ 173)
+    } }
+  const log = createDiagnosticLog({ sink: { write: () => {} } })
+  const store = createChatHistoryStore({ database, encryption, log,
+    secureStore: createSecureStore({ encryption, persistence: fileSecretPersistence(root) }) })
+  const handle = createChatHistoryHandler({ store, log, pairedServers: { loadById: async () => ({}) as never } })
+  const threads = createThreadItemStore(), lists = createConversationListStore(), trace: string[] = []
+  const thread: ThreadSnapshot = { hostId: 'host', conversationId: 'chat', epoch: 'epoch', version: 412,
+    checkpoint: 412, uncommittedVersion: 0, repair: null, ranges: [{ start: 113, end: 413 }],
+    items: Array.from({ length: 300 }, (_, index) => ({ id: 113 + index, rev: 1, kind: 'future', order: 113 + index })) }
+  expect(await handle(null, { operation: 'replaceThread', serverId: 'host', conversationId: 'chat',
+    snapshot: { version: 1, kind: 'daemon-items', serverId: 'host', conversationId: 'chat', thread } })).toEqual({ status: 'ok' })
+  threads.getState().beginLocalRead('host', 'chat')!.complete(thread)
+  const writer = createChatHistoryWriter({ threads, lists, receipt: () => null, log: () => {},
+    schedule: run => { const timer = setTimeout(run, 0); return () => clearTimeout(timer) },
+    write: async request => {
+      const result = await handle(null, request)
+      if (request.operation === 'mutateThread' && request.change.ranges.length) trace.push('range-durable')
+      expect(result).toEqual({ status: 'ok' })
+      return result
+    } })
+  let publication: ReturnType<typeof setTimeout> | undefined
+  let first = true
+  try {
+    trace.push('query-dispatched')
+    const start = await readHistoryCoverage(async (request: ChatHistoryRequest = {
+      operation: 'readThread', serverId: 'host', conversationId: 'chat'
+    }) => {
+      observing = true
+      let result: ChatHistoryResult
+      try { result = await handle(null, request) } finally { observing = false }
+      const ranges = result.status === 'page' ? result.page.ranges
+        : result.status === 'stored' && result.snapshot.kind === 'daemon-items' ? result.snapshot.thread.ranges : []
+      trace.push(`protected-read:${ranges[0]?.start ?? result.status}`)
+      if (first) {
+        first = false
+        // Delivery is ready on the next task, after the initial protected read.
+        publication = setTimeout(() => {
+          const batch = threads.getState().beginBatch('host', 'chat', 'epoch')!
+          batch.applyItems(Array.from({ length: 50 }, (_, index) => ({
+            id: 63 + index, rev: 1, kind: 'future', order: 63 + index
+          })), 412)
+          expect(batch.commit({ fromVersion: 0, version: 412, ranges: [{ start: 63, end: 113 }], olderAvailable: true }).type).toBe('applied')
+          trace.push('page-published')
+        }, 0)
+      }
+      return result
+    }, 'host', 'chat', 113)
+    expect(start).toBe(63)
+    expect(trace.indexOf('page-published')).toBeGreaterThan(trace.indexOf('protected-read:113'))
+    expect(trace.indexOf('range-durable')).toBeGreaterThan(trace.indexOf('page-published'))
+    expect(trace.indexOf('protected-read:63')).toBeGreaterThan(trace.indexOf('range-durable'))
+    expect(decrypts).toBeLessThan(50)
+  } finally {
+    console.info(JSON.stringify({ boundedCoverage: { decrypts, trace } }))
+    clearTimeout(publication)
+    observing = false
+    await writer.stop(); await store.close()
+    await rm(root, { recursive: true, force: true })
+  }
+}, 15_000)
 
 it('waits across split saves at baseline and after dispatch', async () => {
   const root = await mkdtemp(join(tmpdir(), 'history-coverage-'))
@@ -61,8 +144,8 @@ it('waits across split saves at baseline and after dispatch', async () => {
       }
       return result
     } })
-  const read = async () => {
-    const result = await handle(null, { operation: 'readThread', serverId: 'host', conversationId: 'chat' })
+  const read = async (request: ChatHistoryRequest = { operation: 'readThread', serverId: 'host', conversationId: 'chat' }) => {
+    const result = await handle(null, request)
     trace.push(result.status === 'error' ? `protected-read:${result.code}` : 'protected-read:stored')
     return result
   }
@@ -125,6 +208,31 @@ it('waits across split saves at baseline and after dispatch', async () => {
     vi.useRealTimers(); await writer.stop(); await store.close()
     await rm(root, { recursive: true, force: true })
   }
+})
+
+it('requests one protected item and retains the actual newest range boundary', async () => {
+  const read = vi.fn(async () => page(0))
+  expect(await readHistoryCoverage(read, 'host', 'chat', 1)).toBe(0)
+  expect(read).toHaveBeenCalledOnce()
+  expect(read).toHaveBeenCalledWith({ operation: 'newestThreadPage', serverId: 'host', conversationId: 'chat', limit: 1 })
+})
+
+it.each(['hostId', 'conversationId'] as const)('rejects wrong page ownership: %s', async field => {
+  const result = page()
+  result.page.metadata = { ...result.page.metadata, [field]: 'other' }
+  const read = vi.fn(async () => result)
+  await expect(readHistoryCoverage(read, 'host', 'chat')).rejects.toThrow('wrong-owner')
+  expect(read).toHaveBeenCalledOnce()
+})
+
+it('does not treat an older disjoint protected range as progress of the newest window', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date', 'performance'] })
+  const result = page()
+  result.page.ranges = [{ start: 0, end: 50 }, { start: 100, end: 200 }]
+  const read = vi.fn(async () => result)
+  const failure = expect(readHistoryCoverage(read, 'host', 'chat', 100)).rejects.toThrow('no-progress')
+  await vi.runAllTimersAsync(); await failure
+  expect(read.mock.calls.length).toBeGreaterThan(1)
 })
 
 it.each([

@@ -192,17 +192,29 @@ Earlier failed runs remain failed evidence in the plan. Offline Linux replay
 adds no current provider/daemon or physical-effect proof; macOS is outside this
 ticket's verification scope.
 
-History paging separately retains actual numeric protected coverage before each
-trusted Home/ArrowUp and requires a strictly older start within five seconds,
-alongside the exact one-additional-request check. Pending split-save `unreadable`
-results cannot become coverage; dispatch and rendered rows do not establish
-durability. The [reader contract, controlled regression and counted Linux evidence](knowledge/features/chat-history-testing.md#protected-paging-coverage-observation)
-retain the original historical failure and unchanged isolated pass with unknown
-trigger, five three-worker paired batches (20 executed/passed, 0 failed/skipped),
-complete guarded complete-thread replay (29 executed/passed, 0 failed, 1 skipped),
-and the separate configured application gate (517 executed/passed, 0 failed,
-5 skipped), where both named history/thread cases passed without retry. Captures
-and their provenance above are unchanged; the reset-prompt fixme stays excluded.
+History paging observes actual numeric protected coverage through an authorized
+`newestThreadPage` request with `limit: 1` before each trusted Home/ArrowUp. It
+validates metadata ownership and retains the newest authenticated range start;
+an older disconnected range cannot fake progress. Each input still requires a
+strictly older protected start within five seconds alongside exactly one
+additional request. Pending split-save `unreadable` results cannot become coverage;
+dispatch and rendered rows do not establish durability. Full transcript reads
+would compete with receipt/persistence on main's serial queue as history grows.
+The [reader contract and controlled regression](knowledge/features/chat-history-testing.md#protected-paging-coverage-observation)
+retain the split-save controls and demonstrate that contention separately from
+unknown historical host timings.
+
+The [latest Linux normal-build evidence](knowledge/features/chat-history-testing.md#counted-linux-bounded-observation-validation)
+records the exact history case (1 executed/passed, 0 failed/skipped) followed by
+complete guarded replay (29 executed/passed, 0 failed, 1 existing skip), retries
+zero. The subsequent application gate recorded 518 executed, 516 passed, 2
+unrelated thumbnail failures and 5 skipped; the named history case passed at
+retry 0, completing all 32 requests / 63 frames with zero remaining requests.
+The verifier accepted the dispatcher's rerun disposition for the thumbnail
+failures. Original failing evidence and prior complete-thread results remain
+retained in the testing reference. Captures and their provenance above are
+unchanged; the reset-prompt fixme stays excluded. These are captured-client results,
+with no fresh provider/daemon or physical-effect claim; macOS is outside scope.
 
 The thread scenario separately observes saved replies and the exact host/chat's
 protected saved-list string title before relaunch. `readSavedListTitle` repeats

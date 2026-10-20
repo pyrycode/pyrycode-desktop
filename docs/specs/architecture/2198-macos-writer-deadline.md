@@ -105,3 +105,36 @@ controlled regression and baseline/candidate comparison before claiming a repair
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-21
+
+## Revisions — measured correction, 2026-10-21
+
+Baselines at `7e673487` and `ee41da2a` pass, retaining the earlier #2176 failure
+separately. Under ordinary four configured / one actual native worker, retries zero,
+actual work is 10178.9 / 11615.4 ms; IPC is 10131.3 ms in the first run.
+Second-run main CPU is 12098.7 ms, SQL preparation 1561.9 ms for 356637 calls,
+SQL execution 1539.1 ms, COMMIT 736.7 ms for 271 commits, protection 42.7 ms.
+Main heartbeat max is 46.0 ms. This identifies avoidable CPU in the actual drain,
+rather than renderer observation or OS protection latency in these observations.
+Reports and complete native attachments: `/tmp/builder-2198/baseline.json` and
+`baseline-phases.json`; the latter includes all eight visible-tail selected cases.
+The historical overrun's scheduler/host state remains unknown, not reconstructed.
+
+Correction contract: `sequence` and `tree` flush generators lazily prepare their
+fixed INSERT and DELETE at most once each per invocation, rebinding every row's
+arguments on each execution. Keep every row execution, yielded unit, transaction,
+authentication check and operation-local constructed-node proof unchanged.
+The simpler existing generator scope owns statements; no global cache, new type,
+connection lifetime or read cache is needed. Statements never outlive that flush.
+
+The causal regression measures compilations separately from actual executions
+for insertion and deletion, checks real task yields, exact fresh-owner data,
+rollback/retry after an interrupted flush, and subsequent fresh-owner use.
+It must fail on unchanged storage before the correction. Compare the same native
+probe afterward: statement preparations must fall while writes, reads, encryption,
+admission and durability stay unchanged. Five consecutive exact native runs plus
+the full visible-tail selection remain required. Final scope is one production
+file, no new exports/call-site migrations/error branches and under 450 written lines.
+
+Security re-review: PASS. Reusing only compiled SQL retains no authenticated node
+or protected payload cache across operations. SQL remains fixed, parameters are
+rebound, and any execution error still rolls back the owning transaction.

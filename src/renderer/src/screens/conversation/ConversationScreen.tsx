@@ -231,7 +231,7 @@ export function ConversationScreen({
   const compactSelected = useStore(threadRuntime.state, s => s.selection?.host === selectedHost && s.selection?.chat === openConversationId && s.selection?.projection === 'compact-v1')
   const compactSnapshot = useStore(threadRuntime.compact.state, s => compactSelected
     ? s.snapshots.get(JSON.stringify([selectedHost, openConversationId])) : undefined)
-  // This display value never enters the complete store, writer or read observer.
+  // This display value never supplies complete-store or persistence authority.
   const authoritativeSnapshot = useMemo((): ThreadSnapshot | null => compactSelected
     ? compactSnapshot && selectedHost !== null && openConversationId !== null ? {
       hostId: selectedHost, conversationId: openConversationId, epoch: compactSnapshot.epoch,
@@ -417,7 +417,8 @@ export function ConversationScreen({
         standaloneStatus={false}
         backgroundTasksOpen={panelOpen} onBackgroundTasksOpenChange={setPanelOpen}
         onOlder={() => selectedHost !== null && threadRuntime.query('older', selectedHost)}
-        readInputs={!compactSelected && threadSummary ? { row: threadSummary, readerOpen,
+        readInputs={threadSummary ? { row: threadSummary, readerOpen,
+          ...(compactSelected && compactSnapshot ? { compact: threadRuntime.compact.readEvidence(authoritativeSnapshot, compactSnapshot) } : {}),
           completeThrough: complete?.epoch === authoritativeSnapshot.epoch ? complete.version : 0 } : undefined}
         sendInputs={{ midTurnInput: liveInput.runConfig?.midTurnInput === true, diagnose: window.pyry.sendDiagnostic, local: selectedHost !== null && openConversationId !== null && localSend !== null
           ? { hostId: selectedHost, conversationId: openConversationId, ...localSend } : undefined,
@@ -1264,7 +1265,7 @@ function ThreadItemsView({ compact = false, pin, snapshot, readInputs, sendInput
   activePin.current = pin ?? localPin
   useThreadLayoutEffect(() => activePin.current.layoutChanged(), [expandedTools, expandedRuns, admitted, snapshot])
   const paneRef = localPin.paneRef
-  useReadObservation(!compact && readInputs ? { ...readInputs, snapshot } : undefined, pin?.paneRef ?? paneRef, scrollPin.ref)
+  useReadObservation(readInputs ? { ...readInputs, snapshot } : undefined, pin?.paneRef ?? paneRef, scrollPin.ref)
   const items: ThreadItem[] = rows.map(row => row.item ?? { kind: 'userText', text: '' })
   const positions = new Map(rows.flatMap((row, index) => row.marker ? [] : [[row.source.id, index] as const]))
   const projection = rows.map((row, index) => ({ index, depth: row.depth,

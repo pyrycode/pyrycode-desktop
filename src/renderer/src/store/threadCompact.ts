@@ -2,16 +2,18 @@ import { createStore } from 'zustand/vanilla'
 import type { RendererCommand } from '../../../shared/ipc/commands'
 import type { StampedDaemonEvent } from '../../../shared/ipc/events'
 import type { ThreadItem, ThreadSummary, ThreadQuery } from '../../../shared/wire/thread'
+import type { ThreadReadInputs } from './conversationReadPublisher'
+import { conversationReadRouteStore } from './conversationReadRouteStore'
 
 type Row = ThreadItem | ThreadSummary
 type Snapshot = { epoch: string; generation: symbol; rows: readonly Row[]; checkpoint: number; consumed: number;
   ranges: readonly { start: number; end: number }[]; older?: boolean; failed?: string; repairThrough?: number;
-  versions?: ReadonlyMap<number, number> }
+  versions?: ReadonlyMap<number, number>; readThrough?: number; readRoots?: ReadonlySet<number> }
 type Pending = { requestId: string; query: ThreadQuery; generation?: symbol; captured?: { epoch: string; version: number }; recovery: boolean }
 type Work = Extract<RendererCommand, { type: 'queryThread' }>
 const key = (host: string, chat: string) => JSON.stringify([host, chat])
 
-/** Session-only projection evidence. Never receives complete-store, disk or receipt capabilities. */
+/** Session-only projection evidence. Never receives complete-store or disk capabilities. */
 export function createThreadCompact(deps: {
   send: (command: RendererCommand) => void
   invalidate: (host: string, chat: string, row: Row) => void
@@ -29,7 +31,10 @@ export function createThreadCompact(deps: {
     state.setState(s => { const pending = new Map(s.pending); pending.delete(host); return { pending } })
   }
   const incompatible = new Set<string>()
-  let selected: { host: string; chat: string } | undefined, disposed = false
+  let selected: { host: string; chat: string; readEpoch: string } | undefined, disposed = false
+  function retireRead(): void {
+    if (selected) conversationReadRouteStore.getState().select(selected.host, selected.chat, null)
+  }
   const snapshot = (host: string, chat: string) => state.getState().snapshots.get(key(host, chat))
   function owner(host: string, chat: string) {
     const selection = selected, connection = connections.get(host)
@@ -40,6 +45,8 @@ export function createThreadCompact(deps: {
       if (!current()) return false
       expected = value
       state.setState(s => ({ snapshots: new Map(s.snapshots).set(key(host, chat), value) }))
+      if (!current()) return false
+      if (selected) conversationReadRouteStore.getState().select(host, chat, `${selected.readEpoch}:${value.epoch}`)
       if (!current()) return false
       deps.changed()
       return current()
@@ -151,7 +158,13 @@ export function createThreadCompact(deps: {
       const gap = p.from_version > s.consumed
       const owned = owner(host, e.conversationId)
       const next = admit(host, e.conversationId, s, p.item ? [p.item] : p.header ? [p.header] : [], p.version, owned.current)
-      if (!next || !owned.publish({ ...next, consumed: Math.max(s.consumed, p.version),
+      const contiguous = s.readThrough !== undefined && p.from_version <= s.readThrough
+      const readThrough = contiguous ? Math.max(s.readThrough ?? 0, p.version) : s.readThrough
+      const readRoots = new Set(s.readRoots)
+      const row = p.item ?? p.header
+      if (contiguous && row) readRoots.add(row.id)
+      else if (row) readRoots.delete(row.id)
+      if (!next || !owned.publish({ ...next, readThrough, readRoots, consumed: Math.max(s.consumed, p.version),
         ...(gap ? { repairThrough: Math.max(s.repairThrough ?? 0, p.version) } : {}) })) return true
       if (gap && !s.failed) query(host, e.conversationId, false, true)
       return true
@@ -181,6 +194,8 @@ export function createThreadCompact(deps: {
         s?.generation !== p.generation || selected?.host !== host || selected.chat !== chat) { clearPending(host); pump(host); return true }
     if (reply.type === 'thread_reset') {
       clearPending(host)
+      retireRead()
+      if (selected) selected.readEpoch = crypto.randomUUID()
       if (!owned.publish({ epoch: v.epoch, generation: Symbol(), rows: [], checkpoint: 0, consumed: 0, ranges: [], ...(p.recovery ? { failed: 'recovery' } : {}) })) return true
       if (!p.recovery) query(host, chat, false, true)
       pump(host); return true
@@ -218,7 +233,14 @@ export function createThreadCompact(deps: {
     }
     const page = p.query.type === 'thread_page'
     const repairThrough = page || current.repairThrough !== undefined && current.repairThrough > v.version ? current.repairThrough : undefined
-    if (!owned.publish({ ...current, repairThrough, checkpoint: page ? current.checkpoint : Math.max(current.checkpoint, v.version),
+    const readRoots = page ? current.readRoots : new Set([...current.readRoots ?? [], ...current.rows.filter(row => {
+      const order = row.order
+      return (current.versions?.get(row.id) ?? Infinity) <= v.version && typeof order === 'number' &&
+        (ranges.some(range => range.start <= order && order < range.end) ||
+          'from_version' in marker && marker.from_version <= current.checkpoint)
+    }).map(row => row.id)])
+    if (!owned.publish({ ...current, repairThrough, readRoots, readThrough: page ? current.readThrough : Math.max(current.readThrough ?? 0, v.version),
+      checkpoint: page ? current.checkpoint : Math.max(current.checkpoint, v.version),
       consumed: page ? current.consumed : Math.max(current.consumed, v.version),
       ranges, ...('older_exists' in marker ? { older: marker.older_exists } : {}) }) || !currentOwner()) return true
     clearPending(host)
@@ -229,6 +251,7 @@ export function createThreadCompact(deps: {
     pump(host); return true
   }
   function retire(host: string, chat?: string, clear = false): void {
+    if (clear && selected?.host === host && (chat === undefined || selected.chat === chat)) retireRead()
     const lane = lanes.get(host), active = lane?.active
     if (chat === undefined || pendings.get(host)?.query.payload.conversation_id === chat) clearPending(host)
     if (lane) lane.queue = lane.queue.filter(work => chat !== undefined && work.query.payload.conversation_id !== chat)
@@ -247,26 +270,37 @@ export function createThreadCompact(deps: {
     if (clear) for (const id of incompatible) if (chat ? id === key(host, chat) : id.startsWith('[' + JSON.stringify(host) + ',')) incompatible.delete(id)
   }
   return { state, snapshot, send, event,
+    readEvidence(rendered: ThreadReadInputs['snapshot'], held: Snapshot): ThreadReadInputs['compact'] {
+      const selection = selected, generation = held.generation, connection = connections.get(rendered.hostId)
+      return { snapshot: rendered, through: held.readThrough ?? -1,
+        roots: new Set([...held.readRoots ?? []].filter(id => (held.versions?.get(id) ?? Infinity) <= (held.readThrough ?? -1))),
+        routeEpoch: `${selection?.readEpoch}:${held.epoch}`, current: () => !disposed && selected === selection &&
+          connection?.supported === true && connections.get(rendered.hostId) === connection &&
+          selection?.host === rendered.hostId && selection.chat === rendered.conversationId &&
+          snapshot(rendered.hostId, rendered.conversationId)?.generation === generation }
+    },
     open(host: string, chat: string) {
       if (disposed) return
-      selected = { host, chat }
+      retireRead()
+      selected = { host, chat, readEpoch: crypto.randomUUID() }
       const s = snapshot(host, chat)
       const owned = owner(host, chat)
       if (s && incompatible.has(key(host, chat))) {
         for (const row of s.rows) { deps.invalidate(host, chat, row); if (!owned.current()) return }
-        if (!owned.publish({ ...s, checkpoint: 0, consumed: 0, ranges: [], older: undefined, repairThrough: undefined })) return
+        if (!owned.publish({ ...s, readThrough: undefined, readRoots: undefined, checkpoint: 0, consumed: 0, ranges: [], older: undefined, repairThrough: undefined })) return
       }
+      if (s) conversationReadRouteStore.getState().select(host, chat, `${selected.readEpoch}:${s.epoch}`)
       if (!lanes.has(host)) lanes.set(host, { queue: [] }); query(host, chat)
     },
     query(type: 'older' | 'retry', host: string) { if (selected?.host !== host) return false; query(host, selected.chat, type === 'older', false, type === 'retry'); return true },
-    close() { if (selected) { const p = pendings.get(selected.host); if (p) send({ type: 'cancelThreadQuery', serverId: selected.host, requestId: p.requestId }); clearPending(selected.host) }; selected = undefined },
+    close() { retireRead(); if (selected) { const p = pendings.get(selected.host); if (p) send({ type: 'cancelThreadQuery', serverId: selected.host, requestId: p.requestId }); clearPending(selected.host) }; selected = undefined },
     retire,
     complete(host: string, chat: string) {
       const initialize = Boolean(snapshot(host, chat)) && !incompatible.has(key(host, chat))
       if (snapshot(host, chat)) incompatible.add(key(host, chat))
       return initialize
     },
-    suspend() { selected = undefined; connections.clear(); for (const host of lanes.keys()) retire(host) },
-    dispose() { disposed = true; selected = undefined; for (const host of lanes.keys()) retire(host); connections.clear(); state.setState({ snapshots: new Map(), pending: new Map() }) }
+    suspend() { retireRead(); selected = undefined; connections.clear(); for (const host of lanes.keys()) retire(host) },
+    dispose() { retireRead(); disposed = true; selected = undefined; for (const host of lanes.keys()) retire(host); connections.clear(); state.setState({ snapshots: new Map(), pending: new Map() }) }
   }
 }

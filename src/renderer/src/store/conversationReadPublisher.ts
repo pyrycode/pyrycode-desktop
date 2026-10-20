@@ -16,6 +16,7 @@ type ReadCommand = Extract<RendererCommand, { type: 'markConversationRead' }>
 export type ThreadReadInputs = { snapshot: ThreadSnapshot; row: ReadRow; readerOpen?: boolean;
   /** Completed newest-window/catch-up progress represented by this immutable snapshot, never a page. */
   completeThrough: number;
+  compact?: { snapshot: ThreadSnapshot; through: number; roots: ReadonlySet<number>; routeEpoch: string; current: () => boolean };
   publisher?: ReturnType<typeof createReadPublisher> }
 
 export function createReadPublisher(deps: {
@@ -75,16 +76,25 @@ export function readTargetFor(thread: ThreadReadInputs, log = sendReadDiagnostic
   const { snapshot: s, row } = thread, target = row.last_shown_version, tail = newestShown(s), order = tail?.order
   const reject = (code: 'scope-unavailable' | 'scope-mismatch' | 'read-metadata-unavailable' | 'target-invalid' |
     'checkpoint-insufficient' | 'completion-insufficient' | 'repair-pending' | 'tail-unavailable' |
-    'coverage-insufficient' | 'shown-tail-pending'): undefined => { log({ event: 'read-target', code }); return undefined }
+    'coverage-insufficient' | 'shown-tail-pending' | 'compact-snapshot-mismatch' | 'compact-stale' |
+    'compact-completion-insufficient' | 'compact-tail-uncovered'): undefined => { log({ event: 'read-target', code }); return undefined }
   if (row.serverId === undefined || row.serverId === null) return reject('scope-unavailable')
   if (s.hostId !== row.serverId || s.conversationId !== row.id) return reject('scope-mismatch')
   if (row.read_up_to === undefined || target === undefined) return reject('read-metadata-unavailable')
   if (!Number.isSafeInteger(target) || target < 0) return reject('target-invalid')
-  if (target > s.checkpoint) return reject('checkpoint-insufficient')
-  if (!Number.isSafeInteger(thread.completeThrough) || target > thread.completeThrough) return reject('completion-insufficient')
-  if (s.repair && target > s.repair.fromVersion) return reject('repair-pending')
   if (!tail || typeof order !== 'number') return reject('tail-unavailable')
-  if (!s.ranges.some(r => r.start <= order && r.start < r.end)) return reject('coverage-insufficient')
+  if (thread.compact) {
+    const proof = thread.compact
+    if (proof.snapshot !== s) return reject('compact-snapshot-mismatch')
+    if (!proof.current()) return reject('compact-stale')
+    if (!Number.isSafeInteger(proof.through) || target > proof.through) return reject('compact-completion-insufficient')
+    if (!proof.roots.has(tail.id)) return reject('compact-tail-uncovered')
+  } else {
+    if (target > s.checkpoint) return reject('checkpoint-insufficient')
+    if (!Number.isSafeInteger(thread.completeThrough) || target > thread.completeThrough) return reject('completion-insufficient')
+    if (s.repair && target > s.repair.fromVersion) return reject('repair-pending')
+    if (!s.ranges.some(r => r.start <= order && r.start < r.end)) return reject('coverage-insufficient')
+  }
   if (s.items.some(i => i.shown === true && (i.status === 'queued' || typeof i.order !== 'number' || i.order <= 0))) return reject('shown-tail-pending')
   return target
 }
@@ -120,7 +130,8 @@ export function useReadObservation(inputs: ThreadReadInputs | undefined,
   useReadLayoutEffect(() => {
     const region = thread.current, covered = pane.current
     const newest = inputs && newestShown(inputs.snapshot)
-    const key = inputs && newest && JSON.stringify([inputs.snapshot.hostId, inputs.snapshot.conversationId, inputs.snapshot.epoch, newest.id])
+    const routeEpoch = inputs?.compact?.routeEpoch ?? inputs?.snapshot.epoch
+    const key = inputs && newest && JSON.stringify([inputs.snapshot.hostId, inputs.snapshot.conversationId, routeEpoch, newest.id])
     const held = setup.current
     if (held && key === held.key && region === held.region && covered === held.covered &&
       !inputs?.readerOpen && held.tail.isConnected) {
@@ -146,7 +157,8 @@ export function useReadObservation(inputs: ThreadReadInputs | undefined,
       const target = readTargetFor(current, log)
       if (target === undefined) return // The delegated rejection already emitted its one record.
       if (newestShown(current.snapshot)?.id !== newest.id) return stop('tail-stale')
-      if (conversationReadRouteStore.getState().epochFor(hostId, conversationId) !== epoch) return stop('route-stale')
+      if ((current.compact?.routeEpoch ?? current.snapshot.epoch) !== routeEpoch ||
+        conversationReadRouteStore.getState().epochFor(hostId, conversationId) !== routeEpoch) return stop('route-stale')
       if (!document.hasFocus()) return stop('document-unfocused')
       if (document.visibilityState !== 'visible') return stop('document-hidden')
       if (!tail.isConnected) return stop('tail-disconnected')
@@ -159,7 +171,7 @@ export function useReadObservation(inputs: ThreadReadInputs | undefined,
       if (rect.height <= 0) return stop('viewport-empty')
       if (rect.bottom <= top) return stop('viewport-above')
       if (rect.bottom > bottom) return stop('viewport-below')
-      ;(current.publisher ?? publisher).observe(hostId, conversationId, target, epoch)
+      ;(current.publisher ?? publisher).observe(hostId, conversationId, target, routeEpoch ?? epoch)
     }
     const resize = new ResizeObserver(observe)
     resize.observe(region); resize.observe(covered); resize.observe(tail)

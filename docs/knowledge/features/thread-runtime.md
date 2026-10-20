@@ -84,11 +84,10 @@ Restoration creates no owned save, read acknowledgement or current-session/promp
 authority; pending local sends keep their separate ownership.
 
 Confirmed deletion clears the owning conversation's retained items, pending sends,
-live binding, completion and read authority. Successful unpair retires those
-resources for every scope on that host, including scopes without content. The
-protected writer removes saved content through its existing ordered removal path.
-Failed credential removal does not grant successful-unpair cleanup. Other hosts
-with equal IDs remain independent.
+live binding, completion and read authority. Successful unpair retires every host
+scope through the [host cleanup lifecycle](thread-runtime-unpair.md), including
+scopes without content. Failed removal retains state; equal IDs on other hosts
+remain independent.
 
 ### Bounded complete-item application
 
@@ -449,7 +448,7 @@ read command is distinct from received daemon acknowledgement. Every host-stampe
 sidebar row uses `last_shown_version` for unread state before its first opening;
 legacy local read stamps cannot replace a missing authoritative mark.
 `readTargetFor(inputs)` and `useReadObservation` have no legacy receipt/row-key
-branch. The publisher requires the authoritative epoch and shown watermark;
+branch. The publisher requires the selected route epoch and shown watermark;
 `latest_entry_id` and local counts cannot supply missing eligibility. Observation
 cleanup, acknowledgement and reconnect retry retain their existing ownership fences.
 `useReadObservation` retains its observer while host/conversation/epoch, newest
@@ -459,9 +458,12 @@ Received list progress can temporarily precede the queued snapshot and make
 Every callback rechecks the latest committed inputs, certification, owning route,
 focus, visibility and uncovered tail geometry before publishing. Reader opening,
 identity changes and detached tails still retire the setup.
-Compact display facts have zero complete version/checkpoint and no ranges; production
-supplies no read observer inputs for them, even with a retained complete checkpoint.
-See [compact evidence separation](thread-runtime-compact.md#root-facts-and-independent-evidence).
+Compact observes committed root rows/headers with its own newest/catch-up watermark,
+certified roots and lifecycle-bound route epoch. Contiguous live progress can
+advance eligibility. Display facts retain zero complete version/checkpoint and no
+ranges; complete/persistence evidence supplies no compact authority. See the
+[compact contract](thread-runtime-compact.md#root-facts-and-independent-evidence)
+and [validation/mobile hold](thread-runtime-compact.md#validation-evidence).
 
 ## Validation boundaries
 

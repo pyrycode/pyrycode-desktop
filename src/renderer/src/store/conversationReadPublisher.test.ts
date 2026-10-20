@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createReadPublisher, readTargetFor, type ThreadReadInputs } from './conversationReadPublisher'
 import { createThreadItemStore } from './threadItemStore'
+import { createThreadCompact } from './threadCompact'
+import type { RendererCommand } from '../../../shared/ipc/commands'
+import type { ThreadSnapshot } from './threadItemStore'
 
 describe('read target diagnostics', () => {
   const valid = (): ThreadReadInputs => ({ snapshot: {
@@ -99,6 +102,102 @@ it('isolates thread pending targets by host and epoch and retries only evidenced
 
 const row = (host = 'a', latest = 20, read = 0) => ({ id: 'c', serverId: host,
   read_up_to: read, last_shown_version: latest, latest_entry_id: 999 })
+
+it('uses compact authority paired with committed rows, never retained complete progress', () => {
+  const snapshot = { hostId: 'a', conversationId: 'c', epoch: 'e', version: 0, checkpoint: 0,
+    ranges: [], repair: null, items: [{ id: 5, rev: 1, kind: 'agent', order: 5, shown: true, status: 'done' }] }
+  let current = true
+  const compact = { snapshot, through: 10, roots: new Set([5]), routeEpoch: 'opening', current: () => current }
+  const input = { snapshot, row: row('a', 10), completeThrough: 999, compact }
+  expect(readTargetFor(input)).toBe(10)
+  expect(readTargetFor({ ...input, row: row('a', 11) })).toBeUndefined()
+  expect(readTargetFor({ ...input, snapshot: { ...snapshot } })).toBeUndefined()
+  expect(readTargetFor({ ...input, compact: { ...compact, roots: new Set<number>() } })).toBeUndefined()
+  expect(readTargetFor({ ...input, compact: { ...compact, through: 0 } })).toBeUndefined()
+  current = false
+  expect(readTargetFor(input)).toBeUndefined()
+})
+
+it('certifies compact roots only from newest completion and contiguous live progress, retiring reused scopes', () => {
+  const sent: RendererCommand[] = []
+  const compact = createThreadCompact({ send: c => sent.push(c), invalidate: () => {}, changed: () => {},
+    failure: () => {}, detailEvent: () => false, admitDispatch: () => true, log: () => {} })
+  const connect = () => compact.event({ type: 'connected', serverId: 'a', ack: { server_id: 'a',
+    capabilities: ['interactive', 'thread', 'thread_expansion', 'thread_compact'] } } as any)
+  const item = (id = 5, shown = true) => ({ id, rev: 1, kind: 'agent', order: id, shown, status: 'done', active: false, summary: '' })
+  const request = () => sent.filter(c => c.type === 'queryThread').at(-1)!
+  const reply = (version: number, final: boolean, extra = {}) => compact.event({ type: 'threadReply', serverId: 'a',
+    conversationId: 'c', requestId: (request() as any).requestId, inReplyTo: 1,
+    reply: { type: 'thread_items', payload: { conversation_id: 'c', epoch: 'e', projection: 'compact-v1',
+      version, final, items: final ? [] : [item()], ...extra } } } as any)
+  const update = (from: number, version: number, id: number, shown = true) => compact.event({ type: 'threadCompactUpdate', serverId: 'a', conversationId: 'c',
+    update: { type: 'thread_compact_update', payload: { conversation_id: 'c', epoch: 'e', projection: 'compact-v1',
+      from_version: from, version, progress: false, item: item(id, shown) } } } as any)
+  const input = (target = 10) => {
+    const held = compact.snapshot('a', 'c')!
+    const snapshot: ThreadSnapshot = { hostId: 'a', conversationId: 'c', epoch: held.epoch,
+      version: 999, checkpoint: 999, ranges: [{ start: 0, end: 100 }], repair: null, items: held.rows.map(r => ({ ...r })) }
+    return { snapshot, compact: compact.readEvidence(snapshot, held), completeThrough: 999, row: row('a', target) }
+  }
+  connect(); compact.open('a', 'c')
+  reply(10, false)
+  expect(readTargetFor(input())).toBeUndefined()
+  reply(10, true, { lower_order: 5, upper_order: 6, older_exists: true })
+  const committed = input()
+  expect(readTargetFor(committed)).toBe(10)
+  compact.query('retry', 'a')
+  update(10, 11, 6)
+  expect(readTargetFor(input(11))).toBe(11)
+  reply(10, false); reply(10, true, { from_version: 10 })
+  expect(readTargetFor(input(11))).toBe(11) // An overlapping older capture cannot withdraw admitted live proof.
+  expect(readTargetFor({ ...committed, row: row('a', 11) })).toBeUndefined()
+  update(11, 12, 7, false)
+  expect(readTargetFor(input(11))).toBe(11)
+  update(14, 15, 8)
+  expect(readTargetFor(input(15))).toBeUndefined()
+  update(15, 16, 9)
+  expect(readTargetFor(input(16))).toBeUndefined()
+  reply(16, false)
+  reply(16, true, { from_version: 10 })
+  expect(readTargetFor(input(16))).toBe(16)
+  compact.query('older', 'a')
+  reply(99, false)
+  reply(99, true, { lower_order: 1, upper_order: 5, older_exists: false })
+  expect(readTargetFor(input(99))).toBeUndefined()
+  const beforeClose = input(16)
+  compact.close(); compact.open('a', 'c')
+  expect(readTargetFor(beforeClose)).toBeUndefined()
+  const beforeReset = input(16)
+  compact.event({ type: 'threadReply', serverId: 'a', conversationId: 'c', requestId: (request() as any).requestId,
+    inReplyTo: 1, reply: { type: 'thread_reset', payload: { conversation_id: 'c', epoch: 'e', projection: 'compact-v1' } } } as any)
+  expect(readTargetFor(beforeReset)).toBeUndefined()
+  expect(readTargetFor(input(16))).toBeUndefined()
+  reply(20, false); reply(20, true, { lower_order: 5, upper_order: 6, older_exists: false })
+  const beforeDisconnect = input(20)
+  compact.event({ type: 'disconnected', serverId: 'a' } as any); connect()
+  expect(readTargetFor(beforeDisconnect)).toBeUndefined()
+  const beforeDelete = input(20)
+  expect(readTargetFor(beforeDelete)).toBe(20)
+  compact.retire('a', 'c', true); compact.open('a', 'c')
+  expect(readTargetFor(beforeDelete)).toBeUndefined()
+  reply(30, false); reply(30, true, { lower_order: 5, upper_order: 6, older_exists: false })
+  const beforeUnpair = input(30)
+  expect(readTargetFor(beforeUnpair)).toBe(30)
+  compact.retire('a', undefined, true)
+  expect(readTargetFor(beforeUnpair)).toBeUndefined()
+  connect(); compact.open('a', 'c')
+  reply(40, false); reply(40, true, { lower_order: 5, upper_order: 6, older_exists: false })
+  const beforeSuspend = input(40)
+  expect(readTargetFor(beforeSuspend)).toBe(40)
+  compact.suspend()
+  expect(readTargetFor(beforeSuspend)).toBeUndefined()
+  connect(); compact.open('a', 'c')
+  reply(40, false); reply(40, true, { from_version: 40 })
+  const beforeDispose = input(40)
+  expect(readTargetFor(beforeDispose)).toBe(40)
+  compact.dispose()
+  expect(readTargetFor(beforeDispose)).toBeUndefined()
+})
 
 describe('observed read publication', () => {
   it('coalesces offline targets, deduplicates attempts and resends once per reconnect', () => {

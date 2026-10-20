@@ -189,3 +189,16 @@ Execution OS: macOS arm64. Fresh evidence root: `/tmp/builder-2163/`; all browse
 - The preferences-then-cancellation sequence passed in original order. Its `hosted-lifetime` attachment retains content ID 2 throughout loading/ready transitions and document replacement; all fifteen evaluations had an available, undestroyed receiver, and navigation after initial readiness retained debugger attachment. No destruction or detach occurred. The earlier undefined receiver remains unreproduced; this is observation evidence, not a claimed lifetime repair. Forged-call rejection and mutation/cancellation assertions remain intact.
 
 The failed native task was freshly retrieved through the managed route into `resume-capture-20261020/`, with its manifest/checksums and original 532/529/3/2 outcome. Both prior failures and the saved FAIL remain preserved. Existing exact-v0.41.4 before/after live evidence is unchanged; no new live run is claimed. Next: capture this pushed merged candidate through the complete configured native route, inspect all results, and obtain fresh verifier judgment before merge.
+
+### Complete native capture handoff — 2026-10-20
+
+Requested managed task `e16fea0745ef00a5127d1e1b0e79654ed3d12a4e44537921bb56aab586934908` (`desktop-fake-suite`, capability `desktop-fake-suite`) for pushed `bad15d599b8a75f4191b9626ea15a30a49928a9f`. It is queued; no result or full-suite pass is claimed. Request file: `/tmp/builder-2163/resumed-capture-request.json`. This subsequent plan-only commit does not change the tested candidate's executable or tests. PR #2170 names the task and retains the complete-capture/fresh-verifier pre-merge hold. The dispatcher-managed pending-task handoff must retain ownership until the exact artifacts are read and their evidence committed; do not create an unchanged duplicate request. Retrieve with `fleet-task.py await e16fea0745ef00a5127d1e1b0e79654ed3d12a4e44537921bb56aab586934908 --out /tmp/builder-2163/resumed-complete-capture`, inspect configuration/counts/skip reasons/retries/setup attachments and hosted-lifetime/pending-read-barrier evidence, then record the result before ordinary review. Prior saved FAIL and failed reports stay failed.
+
+## Documentation handoff
+
+Pending for the documentation stage:
+
+- `docs/knowledge/features/thread-runtime-compact.md` — `Root facts and independent evidence`: optional-order full roots, static refusal codes, retained Retry and certified checkpoint versus consumed progress.
+- `docs/knowledge/features/thread-runtime-compact.md` — `Validation evidence`: counted live before/after provenance, authoritative echo and request-correlated Older barriers; preserve historical failures and offline/live distinction.
+- `docs/knowledge/features/development-verification-layout-and-input.md` — `Visible-tail native acknowledgement verification`: bounded read-only confirmation of the same native window, without replaying acknowledged controls.
+- `docs/knowledge/features/development-verification-evidence-that-cannot-pass-too-early.md` — `Received but uncommitted read evidence`: fresh macOS receipt, paired scheduling opportunities and version-5 release evidence. Preserve existing Linux and historical macOS evidence separately.

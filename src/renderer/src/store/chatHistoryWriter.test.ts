@@ -131,7 +131,10 @@ describe('chat history recording', () => {
       const retried = threadRequests(h).filter(r => r.conversationId === 'failed')
       expect(retried).toHaveLength(4)
       expect(retried[1]).toEqual(failed)
-      expect(retried.slice(2).flatMap(r => r.change.items.map(i => i.content?.text))).toEqual(['failed', 'failed newer'])
+      expect(retried.slice(2).flatMap(r => r.change.items)).toEqual([
+        expect.objectContaining({ content: { text: 'failed' } }),
+        expect.objectContaining({ content: { text: 'failed newer' } })
+      ])
     } finally { h.save.mockResolvedValue({ status: 'ok' }); release({ status: 'ok' }); await h.writer.stop() }
   })
 

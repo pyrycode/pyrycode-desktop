@@ -154,7 +154,7 @@ assertion. Changing focus or scroll readiness would address an unproven cause.
 failure than one lost acknowledgement: Playwright's public main-process
 `evaluate` and `evaluateHandle` force `awaitPromise`, which can repeatedly lose
 even synchronous results after relaunch. More polling on that path cannot
-restore inspection. The [controlled diagnosis and counted Linux evidence](development-verification.md#replay-inspection-after-profile-relaunch)
+restore inspection. The [controlled diagnosis and counted Linux evidence](development-verification-replay-native-storage.md#replay-inspection-after-profile-relaunch)
 retain the original failures and same-process awaited/synchronous comparison.
 
 Only the replay SQLite prerequisite and history's `mainRead` use this adapter.

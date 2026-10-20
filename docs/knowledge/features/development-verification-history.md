@@ -197,7 +197,7 @@ predicates before SQLite preparation. `spec-final.json` recorded **20 executed, 
 7 failed, 0 skipped** when Node ABI rebuilding overlapped Electron. Acceptance uses the
 later sequentially prepared complete spec, not reclassification of those failures.
 Complete Node preparation before `npm run rebuild:electron` and Electron execution;
-the [native storage prerequisite](development-verification.md#replay-native-storage-prerequisite)
+the [native storage prerequisite](development-verification-replay-native-storage.md#replay-native-storage-prerequisite)
 applies independently of inspection ordering.
 
 The [plan](../../specs/architecture/2122-certified-checkpoint-overlap.md#validation-evidence)

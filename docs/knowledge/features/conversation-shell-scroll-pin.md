@@ -252,11 +252,23 @@ trackpad gestures and live-Claude streaming were not exercised.
 
 ### Thumbnail reader setup
 
-The late-image held-reader case in [`thread-scroll-pin.spec.ts`](../../../e2e/thread-scroll-pin.spec.ts)
-must establish released intent before either withheld image resolves. `sendWithThumbnail`
-waits for a numeric `data-read-row` on the direct-child supplied wrapper containing
-the bubble; the optimistic bubble or its inner row cannot certify completed daemon
-echo publication. `parkThumbnailReader` keeps the pointer outside, deliberately
+All three late-image cases in [`thread-scroll-pin.spec.ts`](../../../e2e/thread-scroll-pin.spec.ts)
+use `sendWithThumbnail`'s numeric `data-read-row` barrier on the direct-child supplied
+wrapper containing the bubble; optimistic presence cannot certify daemon publication.
+
+The last-row case holds the echo independently of image bytes. Its optimistic node
+starts connected in the thread without numeric identity, then detaches on publication.
+Keep that handle only for identity diagnostics; inspect geometry through a fresh locator
+after the existing barrier. Require connected active-thread ownership, numeric direct-child
+identity, final-child membership and no image before release. Preserve overflow, bottom
+and overlapping-row guards, 200px intrinsic width, 160px drawn height, 172px growth floor
+and bottom tolerance without an intervening send, unrelated frame/render or manual scroll.
+`thumbnail-row-ownership` and `thumbnail-bottom-growth` retain the observations. The
+[controlled failure and counted Linux runs](development-verification-thumbnail-readers.md#last-row-thumbnail-ownership-verification)
+prove this boundary without establishing the historical failure's unknown schedule.
+
+The held-reader case additionally establishes released intent before either image
+resolves. `parkThumbnailReader` keeps the pointer outside, deliberately
 reveals metadata through Copy focus with `preventScroll`, settles that geometry,
 then focuses the thread and settles again. Trusted ArrowUp must actually move upward
 from the bottom before one exact assignment to 40% of the settled content height.
@@ -276,7 +288,7 @@ baseline stays immutable: decoded below-reader growth leaves its offset unchange
 decoded above-reader growth compensates by that growth while preserving the visible
 reference row and remaining away from bottom. Image decoding, drawn height and
 positive growth checks, plus both bottom-resting thumbnail cases, remain required.
-The [controlled diagnosis and counted Linux runs](development-verification-layout-and-input.md#thumbnail-reader-setup-verification)
+The [controlled diagnosis and counted Linux runs](development-verification-thumbnail-readers.md#thumbnail-reader-setup-verification)
 distinguish echo, focus/layout and processed input readiness without attributing the
 controlled schedule to the historical failure or changing production behavior.
 

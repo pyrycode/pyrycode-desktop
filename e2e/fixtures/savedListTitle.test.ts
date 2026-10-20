@@ -73,11 +73,11 @@ it('waits for the exact named list after replies are already saved', async () =>
     scheduled?.()
     const reply: RecordedReply = { host: 'host', conversation: 'chat', epoch: 'epoch', id: 1,
       session: 'session', agent: 'claude', turn: 'turn', text: 'Actual reply' }
-    await vi.waitFor(async () => {
-      const result = await handle(null, { operation: 'readThread', serverId: 'host', conversationId: 'chat' })
-      expect(savedRepliesMatch(result.status === 'stored' && result.snapshot.kind === 'daemon-items'
-        ? result.snapshot.thread : null, [reply])).toBe(true)
-    })
+    // Persistence completion is the setup barrier, not the default one-second polling budget.
+    await writer.flush()
+    const savedReply = await handle(null, { operation: 'readThread', serverId: 'host', conversationId: 'chat' })
+    expect(savedRepliesMatch(savedReply.status === 'stored' && savedReply.snapshot.kind === 'daemon-items'
+      ? savedReply.snapshot.thread : null, [reply])).toBe(true)
     // The original one-shot projection deterministically yields a stored null name.
     const original = await read()
     expect(original).toMatchObject({ status: 'stored', snapshot: { kind: 'list',

@@ -45,6 +45,7 @@ test('held suffix distinguishes visible partial content from current-source read
   const reply = row.getByRole('button', { name: 'Reply to message' })
   const input = page.locator('.composer__input')
   await expect(markdown.locator('p')).toHaveText('A "literal" quote')
+  await expect(markdown.locator('code')).toHaveCount(0)
   await expect(row.locator('.bubble__cursor')).toBeVisible()
   // Extend #2173's held-delivery comparison to actual preload receipt with a held drain.
   await page.evaluate(() => {

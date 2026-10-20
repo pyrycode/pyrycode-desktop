@@ -159,6 +159,15 @@ async function rendererFixture(realComposer = false) {
           const work = window.visualWork ??= { calls: 0, descendants: 0 };
           work.calls++; if (source.parent) work.descendants++;`)
       if (realComposer && id.endsWith('/screens/conversation/ConversationScreen.tsx')) return code.replace(
+        'const admittedNow = new Set(admitted)',
+        `useThreadLayoutEffect(() => {
+          const trace = window.expansionTrace ??= [];
+          trace.push({ at: performance.now(), admitted: admitted.size, visible: visible.length,
+            rows: document.querySelectorAll('[data-read-row]').length,
+            focused: document.hasFocus(), visibility: document.visibilityState });
+        }, [visible, admitted]);
+        const admittedNow = new Set(admitted)`
+      ).replace(
         'const setDraft = useComposerDraftStore(s => s.setDraft)',
         `useThreadLayoutEffect(() => { window.composerCommit = { text, at: performance.now(),
           rows: document.querySelectorAll('[data-read-row]').length }; });
@@ -996,7 +1005,37 @@ test('defers 8333 held items and commits real composer input during unfinished e
     expect(committed.rows).toBeLessThan(8334)
     await test.info().attach('composer-during-expansion', { body: JSON.stringify({ before, ...committed }), contentType: 'application/json' })
     await expect.poll(mounted).toBeGreaterThan(committed.rows)
-    await expect(row(8339)).toHaveText('Inert held row 8329', { timeout: 120_000 })
+    // Count unrelated accessibility inspection while the final deferred row is absent.
+    const inspection = await page.context().newCDPSession(page)
+    let utilityContext: number | undefined
+    inspection.on('Runtime.executionContextCreated', ({ context }) => {
+      if (context.name.startsWith('__playwright_utility_world_')) utilityContext = context.id
+    })
+    try {
+      await inspection.send('Runtime.enable')
+      if (utilityContext === undefined) throw new Error('Missing Playwright utility context')
+      await inspection.send('Runtime.evaluate', { contextId: utilityContext, expression: `(() => {
+        const getAttribute = Element.prototype.getAttribute;
+        window.expansionProbe = { reads: 0, restore: () => { Element.prototype.getAttribute = getAttribute; } };
+        Element.prototype.getAttribute = function(name) {
+          if (name === 'aria-hidden' && this.hasAttribute('data-read-row')) window.expansionProbe.reads++;
+          return getAttribute.call(this, name);
+        };
+      })()` })
+      const pendingRows = await row(8339).count()
+      expect(pendingRows).toBe(0) // The regression must actually observe unfinished work.
+      // A missing scalar locator assertion snapshots the whole growing accessibility tree
+      // on every failed poll. Read only the target so the observer cannot starve admission.
+      await expect.poll(() => row(8339).allTextContents(), { timeout: 120_000 }).toEqual(['Inert held row 8329'])
+      const { result } = await inspection.send('Runtime.evaluate', { contextId: utilityContext, expression: 'window.expansionProbe.reads' })
+      await test.info().attach('completion-observer', { body: JSON.stringify({ pendingRows, unrelatedAriaReads: result.value }), contentType: 'application/json' })
+      expect(result.value).toBe(0)
+    } finally {
+      if (utilityContext !== undefined) await inspection.send('Runtime.evaluate', { contextId: utilityContext, expression: 'window.expansionProbe?.restore()' })
+      await inspection.detach()
+      await test.info().attach('expansion-progress', { body: JSON.stringify(await page.evaluate(() =>
+        (window as unknown as { expansionTrace: unknown[] }).expansionTrace)), contentType: 'application/json' })
+    }
     await expect.poll(mounted).toBe(8334)
     // Commit a collapse, then a closed revision, before checking both projection and DOM absence.
     await chip(1).click()
@@ -1016,12 +1055,12 @@ test('defers 8333 held items and commits real composer input during unfinished e
     await chip(1).click()
     await expect(chip(2)).toHaveAttribute('aria-expanded', 'true')
     await expect(row(10)).toHaveText('Inert held row 0')
-    await expect(row(8339)).toHaveText('Revised while closed', { timeout: 120_000 })
+    await expect.poll(() => row(8339).allTextContents(), { timeout: 120_000 }).toEqual(['Revised while closed'])
     await row(8339).evaluate(el => el.scrollIntoView({ block: 'center' }))
     await settle()
     await page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.probe())
     await expect.poll(() => page.evaluate(() => (window as unknown as { threadFixture: Fixture }).threadFixture.readTargets)).toContain(9003)
-    await capturePairedApp(app, page, '/tmp/builder-2127/held-expanded-1280.png')
+    await capturePairedApp(app, page, '/tmp/builder-2184/held-expanded-1280.png')
     // Existing committed-read cases cover closed/reopened source revisions and proxy exclusion.
     // Here a real reading row remains at the same offset when a different branch folds above it.
     const thread = page.getByLabel('Conversation history')
@@ -1040,7 +1079,7 @@ test('defers 8333 held items and commits real composer input during unfinished e
     const controller = (await row(2).boundingBox())!, viewport = (await thread.boundingBox())!
     expect(controller.y).toBeGreaterThanOrEqual(viewport.y)
     expect(controller.y + controller.height).toBeLessThanOrEqual(viewport.y + viewport.height)
-    await capturePairedApp(app, page, '/tmp/builder-2127/held-collapsed-1280.png')
+    await capturePairedApp(app, page, '/tmp/builder-2184/held-collapsed-1280.png')
   } finally { await new Promise<void>((resolve, reject) => server.httpServer.close(e => e ? reject(e) : resolve())) }
 })
 

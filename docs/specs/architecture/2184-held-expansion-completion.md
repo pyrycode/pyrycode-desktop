@@ -53,6 +53,14 @@ No new I/O or reject branches. Diagnostic attachments contain counts, timing and
 
 ## Open Questions
 
-- Does a controlled renderer schedule establish an admission liveness defect or fixture-orchestration defect? Resolve from mounted evidence and record the exact boundary and repair in Revisions before changing production.
+Resolved by the diagnostic and discriminating regression below: the demonstrated defect is expensive test-driver inspection during a missing-row wait. No production scheduler change is justified.
 
 Size: approximately 250 written lines, at most one production file, no new exports or migrated consumers, three observable criteria, no new reject branches; below all ceilings. One independently verifiable behavior, no split warranted.
+
+## Revisions
+
+2026-10-20 diagnosis: A mounted CPU profile of unchanged production during initial expansion sampled accessibility-tree generation (`getCSSContent`, `processElement`, `toAriaNode`, visibility/style/geometry reads) in the Playwright utility world. Local installed Playwright's `InjectedScript.expect` calls `_ariaSnapshotForExpect` on each failed scalar assertion; when the element is absent it snapshots the entire document body. The growing 8,334-row workload therefore makes its own completion observer repeatedly traverse unrelated mounted rows on the renderer thread. The admission trace progresses normally; this run provides no evidence for a lost renderer timer.
+
+The discriminating regression instruments `aria-hidden` reads on source-row wrappers in the actual isolated Playwright utility world during the pending wait. With the original assertion it fails: 47,920 unrelated source-row accessibility reads, one executed/failed, zero passed/skipped/retries (`/tmp/builder-2184/utility-regression-before.json`). The real composer still commits in 91.4 ms at 772 rows. An initial main-world probe did not intercept utility-world reads and is explicitly excluded as discriminating evidence (`regression-before.json`).
+
+Chosen repair: poll the final row's `allTextContents()` for the exact singleton expected text, bounded by the same 120 seconds, for both initial expansion and revised reopening. This checks existence, uniqueness and full text without generating failure-time accessibility snapshots. Preserve all other workload, input, progress, read-publication, retention and anchor assertions. Keep the zero-unrelated-inspection assertion and commit-count attachment. This fixture-only change is simpler than modifying production scheduling and changes no application visuals, state, exports or failure modes. The historical macOS timeout remains failed evidence; its precise environmental trigger was not captured, so this establishes the amplification boundary rather than claiming to reproduce its unrecorded schedule.

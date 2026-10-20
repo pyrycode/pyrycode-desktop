@@ -81,3 +81,34 @@ None. The repair changes only settlement scheduling and its regression controls.
 2026-10-20: A focused control exposed that a later received event before an automatic continuation runs would otherwise inherit failure suppression. The capture scheduling helper now clears the queued continuation's failed set when no drain is running; it keeps the same scheduled handle and debounce. Active drains retain their failure suppression. Public flush still starts a fresh set. Added `allows a later received event to retry before a settlement continuation runs` (controlled red: 1 executed, 1 failed) to preserve that retry contract.
 
 2026-10-20: The same queued-continuation control for failed-unpair resumption failed (1 executed, 1 failed). Host-removal settlement now uses the same scheduling helper after its existing stopped/readiness checks, preserving the prior retry permission on resumption even when a timer is already queued. The parameterized retry control covers both later received events and failed unpair.
+
+## Linux validation — 2026-10-20
+
+Checked implementation `afc62339b37538dcf9b763d6f3e863e48da75e4f`, clean normal build, after merging `origin/main` at `a9197ae634e441a16ab72a038553f4fd54841557` (already up to date). Subsequent changes to this plan only record evidence. No assertions were skipped or weakened. macOS is outside this run's verification scope.
+
+All report/log names below are relative to `/tmp/builder-2205/`. The first regression run exposed held-write cleanup timeouts in the controls; cleanup was corrected before the causal red run below. The initial pre-verify caught a test-only TypeScript property access, corrected to an item-shape assertion before the final passing check.
+
+| Check / report | Executed | Passed | Failed | Skipped / filtered |
+| --- | ---: | ---: | ---: | ---: |
+| Pre-repair causal settlement controls, `settlement-red-2.json` | 5 | 2 | 3 | 27 filtered |
+| Queued continuation / later received event control, `pending-continuation-red.json` | 1 | 0 | 1 | 32 filtered |
+| Queued continuation / failed unpair control, `unpause-red.json` | 1 | 0 | 1 | 33 filtered |
+| Final writer pre-verify, `pre-verify-evidence/unit-peq0yheb/0.json` | 34 | 34 | 0 | 0 |
+| Final writer, thread ownership, handler, storage, migration and lifecycle selection (10 files), `focused-final.json` | 318 | 318 | 0 | 0 |
+| Existing native writer, packaged protection and quit/window reopen specs, `native-lifecycle.json` | 4 | 4 | 0 | 0 |
+| Guarded recorded thread/history scenarios, `recorded-history.json` | 2 | 2 | 0 | 0 |
+
+Pre-verify, `npm run build`, `npm run check:docs` and recorded Electron-native preparation passed. Browser checks used retries 0. The native selection ran `e2e/history-native.spec.ts` and `e2e/indexed-history-lifecycle.spec.ts`, including the configured native-writer prerequisite. The packaged production-encryption probe reports Electron 33.4.11, SQLite adapter 12.4.1, Linux x64 `gnome_libsecret`, 1,000 retained items and 1 executed/passed, 0 failed/skipped. Its fresh packaged artifacts remain at `/tmp/pyry-history-native-pcs38X`.
+
+Recorded selection: `npm run e2e:recorded -- --grep "a real daemon lazily fills|daemon-built thread streams" --retries 0` with JSON/list reporters and output under `recorded-history-results`. Both original assertion bodies passed: `daemon-built thread streams, places an agent, reconnects, resets and reopens saved items` (45 matched requests / 378 emitted frames / 0 remaining) and `a real daemon lazily fills a served gap after more than 200 entries written while Electron is closed` (32 / 63 / 0). Executed build provenance is the clean normal implementation above; retained input hashes are `53a3db11cfab2d5041b511d7be4d030ab5b2b8449b7fdb3ea1d7e5e3db552ae3` and `de0b1166b6e05e0792228c07be25c20498b117914e673558222eac12cd4e6d2c`. Capture provenance remains Desktop `00ec821f9380b00cf2dfc0dd4817ee15584106a5`, daemon `58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`, captured 2026-10-16; replay made zero forbidden launch attempts and adds no fresh provider/daemon or native encryption claim. The separate packaged probe supplies native protection evidence. The complete application/replay gate remains dispatcher-owned.
+
+Report SHA-256 receipts:
+
+- `settlement-red-2.json`: `a94d70021d90a73bc0f395c8e656e07b32a5c9a1575918c7dc9e21338f984f8c`
+- `pending-continuation-red.json`: `ad4b71ffc41636d97596acc81bf00b1244f9d040f44938e66ce1716835f99e0b`
+- `unpause-red.json`: `655ae4f8f06f24668f5204240dd8315353a7dcfad4172d1cc94da40217a6b354`
+- `focused-final.json`: `865e8bca099ee0a694a3a94611153262998c099386d53478f1b4559d6afbe8d3`
+- `pre-verify-final.log`: `227b734a1f783823938de74f770a438f94c8707bff003237f2b943e86fda5660`
+- `build.log`: `2dcd238ef45ed5d6248d896e79efc9bec90ce7c0982b26260cbf035611768281`
+- `native-lifecycle.json`: `286257258dcb4757626d73baa302bc71b17e132fbd43ebebda9fb8c9bb852933`
+- `recorded-history.json`: `70cc44a9b0010bbcd66c32addee8523d286f1b4ac42baf5b52ad15b8f3076461`

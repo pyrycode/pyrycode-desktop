@@ -12,7 +12,7 @@ import {
   type FakeRelayForwarder
 } from '../../src/main/transport/fakeRelayForwarder'
 import type { FakeDaemon, FakeDaemonOptions } from '../../src/main/transport/fakeDaemon'
-import { startFakeDaemonForTest } from './fakeDaemonSetup'
+import { startFakeDaemonForTest, type FakeDaemonSetupAttempt } from './fakeDaemonSetup'
 import { createScriptedThread } from './scriptedThread'
 import { decodeEnvelope, encodeEnvelope } from '../../src/main/transport/codec'
 import { LOOPBACK_RELAY_ENV_FLAG } from '../../src/main/relayPolicy'
@@ -292,8 +292,10 @@ export const test = base.extend<PairedAppFixtures>({
     testInfo.setTimeout(LAUNCH_TEST_TIMEOUT_MS)
     const fate = createLaunchFateLog()
     const teardown: Array<{ step: TeardownStep; run: () => Promise<void> }> = []
+    let setupIndex = 0
 
     await use(async (options = {}, control = {}) => {
+      const setupOrdinal = ++setupIndex
       const threadBridges: ReturnType<typeof createScriptedThread>[] = []
       // Isolated `--user-data-dir`. Default: `mkdtemp` a fresh throwaway for a guaranteed-unpaired start
       // (the launch-time pairing-status query resolves `not-paired`, so the router shows the pairing
@@ -327,6 +329,7 @@ export const test = base.extend<PairedAppFixtures>({
       ): Promise<PairedServerHandle> => {
         const forwarder = await startFakeRelayForwarder()
         teardown.push({ step: steps.forwarder, run: () => forwarder.close() })
+        const attempts: FakeDaemonSetupAttempt[] = []
         // Explicit thread fixtures retain their exact wire scripts. Existing event scripts use a
         // daemon-side publisher, never the retired renderer path. Native also permits old-host tests.
         const { threadMode, ...daemonOptions } = serverOptions
@@ -337,26 +340,37 @@ export const test = base.extend<PairedAppFixtures>({
           ? daemonOptions.buildReplyFrames(bytes) : daemonOptions.buildReply ? [daemonOptions.buildReply(bytes)]
             : decodeEnvelope(bytes).type === 'list_conversations'
               ? [seedConversationsFrame(serverId === SECOND_SERVER_ID ? SECOND_SEEDED_ROW : SEEDED_ROW)] : []
-        const rawDaemon = await startFakeDaemonForTest({
-          ...daemonOptions,
-          url: forwarder.url,
-          buildReplyFrames: bytes => {
-            const frames = replies(bytes)
-            const history = bridge?.historyRequest(bytes)
-            // The optional alias is a SCRIPT INPUT only. The authenticated client sent a real thread
-            // request; scripts observing outbound protocol should inspect the first call, not this alias.
-            if (history && !frames.some(frame => decodeEnvelope(frame).type.startsWith('thread_')))
-              frames.push(...replies(history))
-            return bridge ? bridge.reply(bytes, frames) : frames
-          },
-          ...(bridge ? { buildReconnectFrames: hello => (daemonOptions.buildReconnectFrames?.(hello)
-            ?? daemonOptions.reconnectResendFrames ?? []).flatMap(bridge.publish) } : {})
-        })
-        const daemon = bridge ? { ...rawDaemon, pushFrame: (bytes: Uint8Array) => {
-          for (const frame of bridge.publish(bytes)) rawDaemon.pushFrame(frame)
-        } } : rawDaemon
-        teardown.push({ step: steps.daemon, run: () => daemon.close() })
-        return { serverId, daemon, forwarder }
+        try {
+          const rawDaemon = await startFakeDaemonForTest({
+            ...daemonOptions,
+            url: forwarder.url,
+            buildReplyFrames: bytes => {
+              const frames = replies(bytes)
+              const history = bridge?.historyRequest(bytes)
+              // The optional alias is a SCRIPT INPUT only. The authenticated client sent a real thread
+              // request; scripts observing outbound protocol should inspect the first call, not this alias.
+              if (history && !frames.some(frame => decodeEnvelope(frame).type.startsWith('thread_')))
+                frames.push(...replies(history))
+              return bridge ? bridge.reply(bytes, frames) : frames
+            },
+            ...(bridge ? { buildReconnectFrames: hello => (daemonOptions.buildReconnectFrames?.(hello)
+              ?? daemonOptions.reconnectResendFrames ?? []).flatMap(bridge.publish) } : {})
+          }, {
+            snapshot: () => forwarder.setupDiagnostics(),
+            record: attempt => { attempts.push(attempt) }
+          })
+          const daemon = bridge ? { ...rawDaemon, pushFrame: (bytes: Uint8Array) => {
+            for (const frame of bridge.publish(bytes)) rawDaemon.pushFrame(frame)
+          } } : rawDaemon
+          teardown.push({ step: steps.daemon, run: () => daemon.close() })
+          return { serverId, daemon, forwarder }
+        } finally {
+          for (const attempt of attempts) {
+            await testInfo.attach(`fake-daemon-setup-${setupOrdinal}-${steps.forwarder}-${attempt.attempt}`, {
+              body: Buffer.from(JSON.stringify(attempt)), contentType: 'application/json'
+            })
+          }
+        }
       }
 
       const first = await startFakeServer(FIRST_SERVER_ID, options, {

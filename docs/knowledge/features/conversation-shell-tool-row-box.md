@@ -112,14 +112,14 @@ and the pending row's 50% opacity dims the shadow with the box.
 
 ## Consecutive tool rows join into one stack (#1073)
 
-A run of tool rows now draws as one stack with exactly one border line at each join, rather than as
-separate boxes apart on `.conversation__thread`'s flex gap. Two selectors carry all of it, each naming
-one half of a join — `.tool-row + .tool-row` the lower row, `.tool-row:has(+ .tool-row)` the upper — so a
-lone row, or a tool row beside a message bubble, matches neither and is byte-identical to what #1102 already
-shipped. The markup does not change: every tool row is already a direct child of the thread's flex column
-with no wrapper, so the adjacent-sibling selectors reach exactly the internal joins of a run. `:has()`
-shipped in Chromium 105; this app runs Electron 33 (Chromium 130) with no other renderer, so no fallback was
-needed.
+A run of tool rows draws as one stack with exactly one border line at each join. Bare rows use
+`.tool-row + .tool-row` for the lower row and `.tool-row:has(+ .tool-row)` for the upper.
+Supplied rows mount inside wrappers, so `ThreadItemsView`'s
+[visible-neighbour join map](conversation-shell-tool-row-header-groups.md#visible-tool-row-joins)
+applies the equivalent treatment through
+`.tool-group-row--joined-above > .tool-row` and
+`.tool-group-row--joined-below > .tool-row`. Complete rows and compact omitted-detail headers
+share that contract. A lone tool and tool-to-message spacing retain their ordinary appearance.
 
 **The join is a negative margin, not a gap change** — `gap` cannot be varied per pair.
 `margin-top: calc(-1 * var(--space-4) - 1px)` on the lower row cancels the column's gap and overlaps
@@ -160,6 +160,18 @@ the [join scan](conversation-shell-tool-row-header-groups.md#visible-tool-row-jo
 must include that visible stop as well: rendering the label while skipping every
 boundary still joins tool cards across it. The stopped-turn static render test
 asserts that two tools separated by the label receive no joined-row classes.
+
+**Compact wrapper contents affect the seam too.** Successful daemon headers can explicitly
+send `error_summary: ""` for known no error. `CompactRow` renders its status paragraph only for
+a nonempty string; nonempty error text remains an escaped React child. A type check alone
+mounted an empty `<p role="status">` whose vertical margins added 32px inside the wrapper,
+leaving a 31px gap between Read and SendMessage despite correct join classes (#2165).
+Changing classification or the negative margin would have addressed the wrong cause.
+Compact fixtures must exercise both absent and explicitly empty summaries; omitting the field
+hid this failure. Static coverage in `compactPresentation.test.tsx` distinguishes those cases
+from escaped nonempty errors. The [mounted compact regression and counted evidence](conversation-shell-tool-row-header-groups.md#coverage-and-recorded-evidence)
+measure both seams, since a correct header-to-first-row join alone missed the extra content
+after that row. Opening the run reveals held headers without requesting bodies or child pages.
 
 **Testing.** All four rendered properties here — adjacency, the corner radii, the computed shadow, the
 border colour at a join — are invisible to the `renderToStaticMarkup` unit tier, so `e2e/tool-row-toggle.spec.ts`

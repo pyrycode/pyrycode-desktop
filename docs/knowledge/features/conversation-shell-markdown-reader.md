@@ -98,7 +98,7 @@ One new file, `src/renderer/src/screens/conversation/MarkdownReader.tsx`.
   ticket, not a gap in this one.
 - **`MARKDOWN_OPEN_FAILED_NOTICE`** — the one client-owned string, `'Could not open the
   file.'`, shown after the reader closes as one non-dismissible Error pill in
-  [`TopOverlay`](conversation-shell.md#what-it-does). It reuses
+  [`TopOverlay`](conversation-shell-behavior.md#what-it-does). It reuses
   `.top-overlay-pill--error` with `role="status"` for a polite announcement and no X;
   there is no `conversation__banner` for this failure. Never the path, never the
   failure reason — a `failed` outcome for the current key is the reducer's only route to

@@ -259,7 +259,7 @@ tests establish client behavior with fake transport and do not claim live accept
 
 Local pending settlement and queue actions are supplied through `sendInputs`; see
 [Composer send](composer-send.md#data-flow) and the
-[queue authority contract](conversation-shell.md#what-it-does).
+[queue authority contract](conversation-shell-behavior.md#what-it-does).
 Production connects task controls, server paging/recovery and session-scoped live
 admission through the [thread runtime](thread-runtime.md). A host without `thread`
 shows daemon update-required and draws no content. Legacy roster events cannot

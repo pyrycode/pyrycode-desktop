@@ -1,9 +1,85 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createReadPublisher, readTargetFor } from './conversationReadPublisher'
+import { createReadPublisher, readTargetFor, type ThreadReadInputs } from './conversationReadPublisher'
 import { createThreadItemStore } from './threadItemStore'
 import { createThreadCompact } from './threadCompact'
 import type { RendererCommand } from '../../../shared/ipc/commands'
 import type { ThreadSnapshot } from './threadItemStore'
+
+describe('read target diagnostics', () => {
+  const valid = (): ThreadReadInputs => ({ snapshot: {
+    hostId: 'HOST_SECRET', conversationId: 'CHAT_SECRET', epoch: 'EPOCH_SECRET',
+    version: 10, checkpoint: 10, items: [{ id: 900, rev: 999, kind: 'assistant_message',
+      order: 5, shown: true, status: 'done', active: false, summary: 'CONTENT_SECRET', content: { text: 'CONTENT_SECRET' } }],
+    ranges: [{ start: 5, end: 6 }], repair: null
+  }, completeThrough: 10, row: { id: 'CHAT_SECRET', serverId: 'HOST_SECRET', read_up_to: 0, last_shown_version: 10 } })
+  const compact = (t: ThreadReadInputs): NonNullable<ThreadReadInputs['compact']> => t.compact = { snapshot: t.snapshot, through: 10,
+    roots: new Set([900]), routeEpoch: 'ROUTE_SECRET', current: () => true }
+  const cases: [string, (input: ThreadReadInputs) => void][] = [
+    ['scope-unavailable', t => { t.row.serverId = undefined }],
+    ['scope-unavailable', t => { t.row.serverId = null }],
+    ['scope-mismatch', t => { t.row.serverId = 'other' }],
+    ['scope-mismatch', t => { t.row.id = 'other' }],
+    ['read-metadata-unavailable', t => { t.row.read_up_to = undefined }],
+    ['read-metadata-unavailable', t => { t.row.last_shown_version = undefined }],
+    ...[-1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1].map(n =>
+      ['target-invalid', (t: ThreadReadInputs) => { t.row.last_shown_version = n }] as [string, (t: ThreadReadInputs) => void]),
+    ['checkpoint-insufficient', t => { t.snapshot = { ...t.snapshot, checkpoint: 9 } }],
+    ['completion-insufficient', t => { t.completeThrough = NaN }],
+    ['completion-insufficient', t => { t.completeThrough = 9 }],
+    ['repair-pending', t => { t.snapshot = { ...t.snapshot, repair: { fromVersion: 9, throughVersion: 12 } } }],
+    ['tail-unavailable', t => { t.snapshot = { ...t.snapshot, items: [] } }],
+    ['tail-unavailable', t => { t.snapshot = { ...t.snapshot, items: t.snapshot.items.map(i => ({ ...i, status: 'queued' })) } }],
+    ['coverage-insufficient', t => { t.snapshot = { ...t.snapshot, ranges: [] } }],
+    ['compact-snapshot-mismatch', t => { compact(t).snapshot = { ...t.snapshot } }],
+    ['compact-stale', t => { compact(t).current = () => false }],
+    ['compact-completion-insufficient', t => { compact(t).through = NaN }],
+    ['compact-completion-insufficient', t => { compact(t).through = 9 }],
+    ['compact-tail-uncovered', t => { compact(t).roots = new Set() }],
+    ...[{ status: 'queued' }, { order: undefined }, { order: 0 }].map(fields =>
+      ['shown-tail-pending', (t: ThreadReadInputs) => { t.snapshot = { ...t.snapshot,
+        items: [...t.snapshot.items, { ...t.snapshot.items[0], id: 901, ...fields }] } }] as [string, (t: ThreadReadInputs) => void])
+  ]
+  it.each(cases)('emits one static %s rejection', (code, change) => {
+    const input = valid(), log = vi.fn()
+    change(input)
+    expect(readTargetFor(input, log)).toBeUndefined()
+    expect(log.mock.calls).toEqual([[{ event: 'read-target', code }]])
+    const throwing = vi.fn(() => { throw new Error('diagnostic failure') })
+    expect(readTargetFor(input, throwing)).toBeUndefined()
+    expect(throwing.mock.calls).toEqual(log.mock.calls)
+  })
+  it.each([
+    ['window unavailable', undefined], ['bridge unavailable', {}], ['method unavailable', { pyry: {} }],
+    ['bridge access throws', Object.defineProperty({}, 'pyry', { get() { throw new Error('bridge access') } })],
+    ['method access throws', { pyry: Object.defineProperty({}, 'sendDiagnostic', { get() { throw new Error('method access') } }) }],
+    ['method throws', { pyry: { sendDiagnostic() { throw new Error('bridge send') } } }]
+  ])('preserves target results when %s', (_name, bridge) => {
+    vi.stubGlobal('window', bridge)
+    try {
+      const input = valid()
+      expect(readTargetFor(input)).toBe(10)
+      input.completeThrough = 0
+      expect(readTargetFor(input)).toBeUndefined()
+    } finally { vi.unstubAllGlobals() }
+  })
+  it('preserves compact precedence and does not swallow domain errors', () => {
+    const input = valid(), log = vi.fn()
+    compact(input).current = () => { throw new Error('domain failure') }
+    input.snapshot = { ...input.snapshot, items: [] }
+    expect(readTargetFor(input, log)).toBeUndefined()
+    expect(log.mock.calls).toEqual([[{ event: 'read-target', code: 'tail-unavailable' }]])
+    input.snapshot = input.compact!.snapshot
+    expect(() => readTargetFor(input, log)).toThrow('domain failure')
+  })
+  it('preserves guard precedence and keeps success silent', () => {
+    const input = valid(), log = vi.fn()
+    expect(readTargetFor(input, log)).toBe(10)
+    expect(log).not.toHaveBeenCalled()
+    input.row.serverId = undefined; input.row.last_shown_version = -1; input.completeThrough = 0
+    expect(readTargetFor(input, log)).toBeUndefined()
+    expect(log.mock.calls).toEqual([[{ event: 'read-target', code: 'scope-unavailable' }]])
+  })
+})
 
 it('pairs shown targets with completed immutable thread progress, never ids or held versions', () => {
   const store = createThreadItemStore().getState()

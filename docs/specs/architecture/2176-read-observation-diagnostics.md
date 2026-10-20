@@ -206,3 +206,21 @@ Final main integration was already current at `3fd12cc640d4`. Pre-verify passed
 executed/passed 42 tests (26 runtime, 16 copy), zero failed/skipped
 (`runtime-copy-units.json`). Build, client-test typecheck and docs check passed.
 No assertion, timeout, retry, worker configuration or production timer was relaxed.
+
+Final clean normal build: `b5afdda75ff8c0a6c23b411cfe6ca7cc55eb7f09`,
+`sourceDirty: false`. After sequential Electron preparation, both complete affected
+specs executed/passed 14 cases (`affected-specs.json`), and the mounted diagnostic,
+both committed-read widths and held-expansion selection executed/passed 4 cases
+(`mounted-read.json`), all zero failed/skipped/retried. Receiver and lifecycle/reuse
+assertions remain. Worker-count correction from the JSON reports: configuration is
+4 workers, the paired-spec runs used 3 distinct processes across dependent projects
+(2 concurrent after the prerequisite), and the mounted selection used 1 process.
+The earlier “2 configured/actual” receipt described concurrency incorrectly.
+
+The complete configured macOS gate for pushed `b5afdda7` is requested as managed task
+`985ed4b1f04d6fcab6ff20b5bcc65a968eb88eefb676156ce2519d3dde491744`.
+It is queued, not passed; request is `mac-gate-request.json` in the scratch root.
+Its owning continuation must retrieve/inspect the full counts and artifacts and
+commit its evidence. Fresh normal verifier judgment and documentation remain pending.
+Subsequent plan-only receipts do not change the executable or tests from that candidate.
+Original and controlled failures remain failed; other operating systems are outside scope.

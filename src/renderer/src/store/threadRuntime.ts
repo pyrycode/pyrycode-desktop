@@ -55,6 +55,10 @@ export function createThreadRuntime(deps: {
     selection?: { host: string; chat: string; projection: 'compact-v1' | 'complete'; generation: symbol }
   }>(() => ({ liveRevision: 0, linked: new Set(), saved: new Set(), queries: new Map(), localQueries: new Map(), complete: new Map(), restoring: new Set() }))
   const lives = new Map<string, ReturnType<typeof createThreadLiveState>>()
+  // Unpaired hosts read one inert, unregistered store until a new connection, so rows still listed
+  // after removal (badge recount, projection) cannot recreate departed live state.
+  const departed = new Set<string>()
+  let inert: ReturnType<typeof createThreadLiveState> | undefined
   const compactHosts = new Map<string, boolean>()
   const isLinked = (host: string): boolean => state.getState().linked.has(host)
   const setLinked = (host: string, linked: boolean): void => {
@@ -122,6 +126,13 @@ export function createThreadRuntime(deps: {
   // There is no legacy route: any selected host and conversation draws through the item view.
   const isThread = (host: string | null, chat: string | null): boolean => host !== null && chat !== null
   const live = (host: string, chat: string) => {
+    if (departed.has(host)) {
+      if (!inert) {
+        inert = createThreadLiveState({ isConnected: () => false, sendResponse: () => {} })
+        inert.getState().dispatch({ type: 'dispose' })
+      }
+      return inert
+    }
     const id = key(host, chat), held = lives.get(id)
     if (held) return held
     const store = createThreadLiveState({ isConnected: isLinked,
@@ -235,10 +246,12 @@ export function createThreadRuntime(deps: {
     compact.retire(host, undefined, true)
     if (selected?.host === host) { cancelLocal(); selected.cancel?.(); selected = undefined }
     query.cancelHost(host)
+    departed.add(host)
     const prefix = '[' + JSON.stringify(host) + ','
-    for (const [id, store] of lives) if (id.startsWith(prefix)) {
-      store.getState().dispatch({ type: 'dispose' }); lives.delete(id)
-    }
+    // Detach before disposing: each dispose notifies readers synchronously, mid-iteration.
+    const leaving = [...lives].filter(([id]) => id.startsWith(prefix))
+    for (const [id] of leaving) lives.delete(id)
+    for (const [, store] of leaving) store.getState().dispatch({ type: 'dispose' })
     items.getState().removeHost(host); sends.getState().removeHost(host); refusals.getState().remove(host); taskStops.getState().remove(host)
     conversationReadRouteStore.setState(s => { const hosts = new Map(s.hosts); hosts.delete(host); return { hosts } })
     state.setState(s => {
@@ -357,7 +370,7 @@ export function createThreadRuntime(deps: {
       selected?.cancel?.(); selected = undefined; query.dispose(); offItems(); offCompact(); offRemoval()
       for (const [host, chats] of items.getState().hosts) for (const chat of chats.keys()) conversationReadRouteStore.getState().select(host, chat, null)
       for (const store of lives.values()) store.getState().dispatch({ type: 'dispose' })
-      lives.clear(); state.setState({ linked: new Set(), localQueries: new Map() }); items.getState().clearAll(); sends.getState().dispose()
+      lives.clear(); departed.clear(); state.setState({ linked: new Set(), localQueries: new Map() }); items.getState().clearAll(); sends.getState().dispose()
     }
   }
   function unschedule(): void {
@@ -446,6 +459,7 @@ export function createThreadRuntime(deps: {
     if (event.type === 'connected') {
       replySuggestionStore.getState().receive(event)
       query.cancelHost(host)
+      departed.delete(host)
       // Main reports a handshake without `thread` as update-required; a stray one links nothing.
       const thread = event.ack.capabilities.includes('thread')
       setLinked(host, thread)

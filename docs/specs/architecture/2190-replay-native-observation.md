@@ -41,3 +41,36 @@ Preserve content-free static diagnostics and immediate fatal-error propagation. 
 
 ## Open Questions
 None. The controlled missing-result mechanism is independently demonstrated; the historical trigger remains unknown.
+
+## Validation evidence — 2026-10-20
+Linux x64; implementation `68388cb2e78ce5b482d248c2c37e12e349b9cc4a`, main `3fd12cc640d4`. Node 25.8.0, Electron 33.4.11, SQLite addon 12.4.1. Final pre-verify passed all five checks and all 43 affected unit cases; `npm run build`, `npm run typecheck:client-tests` and the additional scratch-config typecheck of the new Electron spec passed. Node-native preparation finished before the final Electron rebuild; none overlapped replay. No production files changed.
+
+| Check | Executed / passed / failed / skipped | Configured / actual workers | Retained evidence under `/tmp/builder-2190/` |
+| --- | --- | --- | --- |
+| Corrected causal unit regression against original classifier | 43 / 24 / 19 / 0 | Vitest | `unit-causal-red-corrected.log` |
+| Final unit regression / pre-verify | 43 / 43 / 0 / 0 | Vitest | `unit-final.log`, `pre-verify.log` |
+| Actual-Electron original classifier | 1 / 0 / 1 / 0 | 3 / 1 | `electron-causal-red.json`, `.log`, `electron-causal-red-results/` |
+| Actual-Electron committed correction | 1 / 1 / 0 / 0 | 3 / 1 | `electron-final.json`, `.log`, `electron-final-results/` |
+| Guarded paired complete-thread batch | 4 / 4 / 0 / 0 | 3 / 3 | `paired.json`, `.log`, `paired-results/` |
+| Complete guarded recorded suite | 29 / 29 / 0 / 1 | 1 / 1 | `recorded-full.json`, `.log`, `recorded-full-results/` |
+
+All browser runs used zero retries. The paired run used `--fully-parallel --workers 3 --repeat-each 2 --retries 0` and selected exactly:
+- `a real daemon lazily fills a served gap after more than 200 entries written while Electron is closed`
+- `daemon-built thread streams, places an agent, reconnects, resets and reopens saved items`
+
+Both paired history executions matched 32 requests / emitted 63 frames, and both thread executions matched 45 / 378, all zero remaining. The full suite retained those totals and all 29 exchanges completed with zero remaining. Both guarded commands used `node scripts/run-offline-replay.mjs --profile complete-thread`, list/JSON/zero-executed reporters and separate artifact directories; both reported zero forbidden launches and restored normal output successfully. The sole existing fixme is `real claude picks up a saved channel system prompt at Reset session` (upstream `pyrycode/pyrycode#2436`); no assertion was newly skipped or weakened. Subsequent configured application acceptance belongs to the dispatcher; this is recorded-client evidence, not fresh provider evidence.
+
+The actual-Electron red attachment records a genuine `sqliteReady: true` followed by a deliberately omitted inspector value, which the original classifier rejected as SQLite failure. The corrected control records that same missing observation followed by another genuine successful SQLite load/open/query/close on each of two processes using the same saved profile. A persisted client-owned marker proves profile reuse; both processes exited with code zero and no teardown failures. This establishes unavailable inspection as the controlled category, not the cause of the historical macOS event. Its original reported 4 / 3 / 1 / 0 batch and 10 matched / 21 emitted / 22 remaining exchange remain failed, separately retained in the earlier-run bundle described above; its raw paired report is not present in that bundle or on this host.
+
+Both replay logs identify clean compiled source `68388cb2e78ce5b482d248c2c37e12e349b9cc4a`, profile `complete-thread`, and the same seven emitted bundle hashes. `paired-summary.json` and `recorded-full-summary.json` retain that map, actual worker indices, every input checksum and capture source, and all exchange counts. The history/thread inputs remain unchanged:
+
+| Input | SHA-256 |
+| --- | --- |
+| `daemon-history-on-open` | `de0b1166b6e05e0792228c07be25c20498b117914e673558222eac12cd4e6d2c` |
+| `claude-thread` | `53a3db11cfab2d5041b511d7be4d030ab5b2b8449b7fdb3ea1d7e5e3db552ae3` |
+
+Both captures identify Desktop `00ec821f9380b00cf2dfc0dd4817ee15584106a5`, daemon `58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`, binary SHA-256 `5f5b3b9ce42eda74024637f4929dd720d36c1226ce6e370eb62fbe9e6b22f7c0`; thread records Claude 2.1.280, history `not-spawned`. Report SHA-256:
+- `electron-causal-red.json`: `a7787f188490b5e97b52401cd4cb98a2abf9c428abaf830bba47b62ea1bc8f9b`
+- `electron-final.json`: `427e6527cc6a1f629275df0ba3f57cededa24882114fa92adba313c16ca5ac84`
+- `paired.json`: `4c9eb9344b486d9d7f6aaf134ef118dcb1e6b69ccc869622005e561a67cd7fd4`
+- `recorded-full.json`: `ecf8bac30d39a00a8bb499fa4f940e0a0586ab0f98ae9a9526a57398a051b124`

@@ -4,7 +4,7 @@ import type { ElectronApplication } from '@playwright/test'
 import { installPagingDurabilityEvidence } from './pagingDurabilityEvidence'
 
 afterEach(() => {
-  for (const key of ['__pagingDurability', '__observePagingWriter', '__pagingWriterObservations']) delete (globalThis as any)[key]
+  for (const key of ['__pagingDurability', '__observePagingWriter', '__pagingWriterObservations', '__observeProtectedPaging']) delete (globalThis as any)[key]
 })
 
 it('observes exact owners and split acknowledgements without exposing content or changing IPC', async () => {
@@ -50,6 +50,11 @@ it('observes exact owners and split acknowledgements without exposing content or
   expect(await handler({}, second)).toBe(result)
   expect(original.mock.calls.map(call => call[1])).toEqual([first, second])
   const trace = (globalThis as any).__pagingDurability.observations
+  const observeHeader = (globalThis as any).__observeProtectedPaging
+  observeHeader('peer', 'chat-secret', { metadata: {} })
+  observeHeader('host-secret', 'chat-secret', { metadata: first.change.metadata,
+    persistence: { id: 'persistence-secret', next: 1, parts: 2 } })
+  expect(trace.at(-1)).toMatchObject({ stage: 'protected-header', sameOwner: true, sameEpoch: true, pending: true, next: 1, parts: 2 })
   expect(trace.find((e: any) => e.stage === 'received')).toMatchObject({ sameOwner: true })
   expect(trace.find((e: any) => e.stage === 'request')).toMatchObject({ sameEpoch: true })
   expect(trace.filter((e: any) => e.stage === 'acknowledged').map((e: any) => e.completed)).toEqual([false, true])

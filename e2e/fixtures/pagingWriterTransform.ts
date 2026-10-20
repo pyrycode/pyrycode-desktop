@@ -16,3 +16,10 @@ export function pagingWriterTransform(source: string): string {
   }
   return source
 }
+
+export function pagingProtectedReadTransform(source: string): string {
+  const anchor = '    if (h.persistence) throw INVALID_CHAT_HISTORY'
+  if (source.split(anchor).length !== 2) throw Error('Paging checkpoint anchor changed')
+  return source.replace(anchor,
+    '    if (limit === 1 && !token && !opening) globalThis.__observeProtectedPaging?.(server, conversation, h)\n' + anchor)
+}

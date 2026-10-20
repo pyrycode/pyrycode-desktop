@@ -37,6 +37,12 @@ export async function installPagingDurabilityEvidence(
     const saves = new Map<string, number>(), pending = new Set<number>(), completedSaves = new Set<number>()
     let epoch: string | undefined
     const record = (stage: string, fields: object = {}) => observations.push({ stage, ms: Date.now(), ...fields })
+    state.__observeProtectedPaging = (host: string, chat: string, header: any) => {
+      if (host !== owner.host || chat !== owner.chat) return
+      record('protected-header', { sameOwner: header.metadata.hostId === owner.host && header.metadata.conversationId === owner.chat,
+        sameEpoch: epoch === header.metadata.epoch, pending: header.persistence !== undefined,
+        next: header.persistence?.next, parts: header.persistence?.parts })
+    }
     const original = handlers.get('pyry:chat-history')
     if (!original) throw Error('Missing chat history handler')
     const handler = async (event: unknown, request: any) => {

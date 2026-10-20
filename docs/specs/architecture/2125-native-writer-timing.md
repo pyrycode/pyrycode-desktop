@@ -311,3 +311,79 @@ The new causal regression counts reparses of locally constructed authenticated
 nodes in one 31-item submission, then checks exact fresh reopen and rejection of
 corrupted disk nodes by a later transaction. Native baseline/candidate comparison
 must establish the reduction before claiming this correction resolves slow drain.
+
+## Revisions — causal regression and final Linux evidence, 2026-10-20
+
+The open cause question is resolved as redundant verification of locally constructed
+authenticated index nodes in the ordinary writer's main-process CPU path. The test
+`reuses constructed authenticated nodes within one owned submission without reparsing them`
+fails on unchanged production code with **3,349 reparses** of freshly constructed
+nodes in one 31-item submission (`causal-red.log`: 1 executed/failed, 78 filtered).
+After the correction it passes with zero reparses, exact protected-disk fresh-owner
+contents and rejection of corrupted disk nodes in a later transaction
+(`causal-green.log`: 1 executed/passed, 78 filtered). All 79 indexed-storage tests
+then execute/pass, including rollback, rotations, replay rejection and identity reuse.
+
+Controlled comparison: baseline `8074fabe` and candidate
+`18d4fae2aea128844c3a55a841ca55ae4e24f906` use identical probe instrumentation,
+runtime, production backend, two configured workers, retries zero and unchanged
+prerequisite ordering. The baseline production writer/storage files are byte-identical
+to the recurrence's `eb35b16f`. Only the candidate's constructed-node reuse changes
+production behavior. Compare `baseline.json` with `candidate-1.json`: actual drain
+49,945 → 32,289.7 ms, IPC 49,840.7 → 32,180.3 ms and main CPU user+system
+53,928.5 → 35,564.8 ms. SQLite prepare/run/get counts remain
+356,637 / 305,121 / 57,322, and real safeStorage encrypt/decrypt counts remain
+17,210 / 813. CPU self samples for `read` fall 6,238 → 2,450, `same`
+3,345 → 165 and `Hash` 4,813 → 2,358. This is removal of demonstrated CPU work,
+with identical durable storage operations, rather than a faster observation alone.
+The retained overdue recurrence remains failed; its external scheduler state is unknown.
+
+Five **consecutive** Linux x64 executions on the candidate each executed/passed 1,
+failed/skipped 0, retries zero, two configured / one actual worker. Command:
+`PW_WORKERS=2 npx playwright test e2e/history-writer-native.spec.ts --retries=0 --reporter=json`;
+each invocation has a separate `--output` directory and report. Runtime is Electron
+33.4.11 / embedded Node 20.18.3 / ABI 130, real `gnome_libsecret` throughout.
+All retain one admission, exactly 8,333 durable items / 271 submissions, no writer
+or diagnostic errors, advancing unfinished durable counts around all three real
+inputs, explicit flush, exact fresh protected-owner equality, both app exits 0,
+no signals and no teardown failures. Thresholds and backend assertions are unchanged.
+
+All artifact paths below are under `/tmp/builder-2125-reopen/`. Reports are
+`candidate-N.json`, with `candidate-N.stderr` and `candidate-N-results/` siblings.
+Heartbeat entries show sample count / maximum gap in ms; other times are ms.
+
+| N | Actual drain | IPC | Runner observation | Keyboard x / y / z | Renderer beats / gap | Main beats / gap |
+| --- | ---: | ---: | ---: | --- | --- | --- |
+| 1 | 32289.7 | 32180.3 | 32517.0 | 89.0 / 126.6 / 143.9 | 1615 / 24.9 | 1048 / 88.6 |
+| 2 | 29960.1 | 29863.9 | 30109.5 | 76.6 / 14.2 / 82.1 | 1498 / 24.2 | 998 / 76.0 |
+| 3 | 33554.0 | 33447.2 | 33738.9 | 94.7 / 74.4 / 78.5 | 1678 / 24.6 | 1066 / 98.5 |
+| 4 | 35218.5 | 35107.8 | 35489.9 | 55.7 / 71.3 / 17.1 | 1761 / 26.5 | 1117 / 100.2 |
+| 5 | 53777.1 | 53642.0 | 54063.6 | 131.1 / 102.6 / 108.2 | 2684 / 58.1 | 1443 / 118.6 |
+
+Main CPU totals for runs 1–5: 35,564.8 / 32,774.1 / 36,364.8 / 38,264.6 /
+54,463.4 ms. One-minute host load before→after: 3.82→4.40, 3.46→3.14,
+3.68→3.94, 4.05→4.84, 6.25→8.29. Cgroup throttling remains zero throughout.
+The slower fifth run is retained as measured; higher observed load is context,
+not a controlled attribution of its slowdown. IPC continues to track actual work,
+independently of the renderer/runner observation clocks.
+
+Collection (`collection.json`) contains **523** ordinary cases: native-writer 1,
+clipboard 31, parallel 491. The exact scenario occurs only in native-writer;
+clipboard and parallel retain their existing dependencies and parallelism. No
+global worker reduction, added retry, skip, storage pause or synthetic input.
+
+Post-final-main-merge checks on candidate `18d4fae2` / main `1c001e0e` passed:
+`pre-verify-final.log` (five checks, all 79 indexed-storage tests passed),
+`related-units.log` (seven timing + 36 migration tests, 43 executed/passed),
+`build-candidate.log` and `docs-guard.log`. Host Node 25.8.0 / ABI 141 checks
+finished before `electron-candidate.log` restored Electron ABI 130; no rebuild
+overlapped native executions. All native executions and collection have finished.
+
+Dispatcher handoff: the complete configured application gate remains pending. It
+must pass this prerequisite without retry **and run the dependent projects**
+(522 collected cases, with existing skip reasons retained);
+a prerequisite-only rerun cannot establish that acceptance. Verifier must review
+the counted complete result. Documentation handoff above remains pending for its
+own stage. macOS is outside this ticket's verification scope. Final repair remains
+one behavior, one production file, one new test-helper export, no API migration or
+new product reject branch, and under 450 written lines including plan and tests.

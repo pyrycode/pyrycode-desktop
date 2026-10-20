@@ -1,8 +1,9 @@
 # Development verification — replay native storage and inspection
 
 [Development verification](development-verification.md) owns the shared verification
-map. This reference separates native SQLite readiness from inspector availability
-and retains the counted regression and saved-profile replay evidence.
+map. This reference separates native SQLite readiness from inspector availability,
+preserves effort-scenario proof across process handoff, and retains counted
+regression and saved-profile replay evidence.
 
 ## Replay native storage prerequisite
 
@@ -255,3 +256,135 @@ It contains the builder log but none of those raw paired artifacts and no artifa
 pointers; the raw files are unavailable on the execution host. These historical
 counts remain reported evidence rather than independently parsed results. New
 acceptance never replaces that failure or supplies its missing causal observation.
+
+## Effort scenario proof ownership
+
+In [`real-claude-effort-default.spec.ts`](../../../e2e/real-claude-effort-default.spec.ts),
+`page = (await relaunch()).page` cannot replace old handles when relaunch rejects.
+Unconditional final capture through the old observer can then throw a closed-page
+error, replace the relaunch failure and prevent disposal. The directly consumed
+[`withEffortScenarioProof`](../../../e2e/fixtures/effortScenarioProof.ts) keeps setup,
+scenario execution, handoff and finalization inside one first-error boundary.
+It preserves the first thrown value, including a non-Error value. Without an
+earlier failure, failed setup, required capture/disposal/attachment, unexpected
+closure or relaunch still fails; missing evidence cannot manufacture success.
+
+Each process owns one observer. Handoff clears current ownership, captures the
+retiring page while available, attempts disposal, then attaches proof including
+any classified disposal failure. Only successful retirement proceeds to relaunch
+and replacement observation. Final capture, disposal and attachment are attempted
+independently even after a scenario failure. Final attachment includes retained
+retirement proof again, including when its first attachment failed. The outer
+`withIsolatedElectronApp` continues process/profile cleanup while preserving its
+incoming error. Observer setup releases partial resources; disposal attempts CDP
+detach even when stopping the page listener fails. This is a scenario-local
+boundary, not a shared lifecycle API or production settings repair.
+
+Attachments identify process ordinal, `retirement`/`final` phase and availability:
+`current` means a successful snapshot in that phase, `last-available` means cached
+diagnostics, and `unavailable` means no snapshot for that owner. Process 1 retirement
+proof cannot stand in for process 2 final proof. `retirement-requested` and
+`relaunch-requested` distinguish intended handoff from `unexpected-closure`;
+`replacement-failed` identifies rejection before replacement handles return,
+including a failed prerequisite, without asserting its underlying cause.
+Lifecycle entries use static phases/failure categories and event/sample counts,
+without raw inspector/native errors, paths, settings payloads or daemon content.
+Existing proof snapshots remain separate from those lifecycle diagnostics.
+
+The observer caches only successful snapshots. `mark`, `confirmations`,
+`readingsSince` and `waitForEffortProof` still request fresh observations; cached
+diagnostics never satisfy settings or freshness assertions. The
+[`effortScenarioProof.test.ts`](../../../e2e/fixtures/effortScenarioProof.test.ts)
+regressions exercise the helper actually consumed by the scenario: rejection after
+old-page closure but before replacement return, secondary diagnostic failures,
+unexpected closure, successful handoff, setup failures and required finalization
+without an earlier error. Isolated-profile coverage also checks incoming-error
+preservation through the outer cleanup boundary.
+
+### Counted macOS effort failure-preservation evidence
+
+These retained macOS arm64 results, 2026-10-20, were accepted by the
+[PR #2200 verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2200),
+authoritative accepted stage
+`9846673d6a2be07006145766f8f509284fa592d7548c697b8e2581ceec48ee58`.
+They are recorded evidence, not documentation-stage executions. The clean executed
+build was `734e6a03dcabc645c65250a93dc87913e7359b87`, normal profile,
+`sourceDirty: false`, with main `83a7fc075bfe` merged. Reviewed head
+`0abab663bd99a2250dc7233e22e04becf977b3f3` changes only plan evidence afterward.
+The [plan's validation evidence](../../specs/architecture/2196-effort-proof-finalization.md#validation-evidence--macos-arm64-2026-10-20)
+retains exact commands, report hashes and capture provenance. Artifacts under
+`/tmp/builder-2196/` include `evidence-summary.json`, seven-bundle hashes, input
+identities, exchange totals and lifecycle phases.
+
+| Check | Executed / passed / failed / skipped | Artifact under `/tmp/builder-2196/` |
+| --- | --- | --- |
+| Extracted original finalization, causal regression | 10 / 1 / 9 / 0 | `causal-red.log` |
+| Initial repaired causal regression | 10 / 10 / 0 / 0 | `causal-green.log` |
+| Final proof, isolated-profile and effort-ordering units | 33 / 33 / 0 / 0 | `unit-final.log` |
+| Final proof pre-verify, all five checks passed | 13 / 13 / 0 / 0 | `pre-verify-proof-approved.log` |
+| Final isolated-profile pre-verify, all five checks passed | 9 / 9 / 0 / 0 | `pre-verify-retirement.log` |
+| Exact guarded effort replay | 1 / 1 / 0 / 0 | `recorded-focused.json` |
+| Subsequent complete guarded replay | 29 / 29 / 0 / 1 | `recorded-full.json` |
+
+Both replay reports have matching `.log` and `-results/` artifacts. The exact
+`applied effort, confirmed preference, restart, chat recall and channel creation choice`
+case is present and passed in both, consuming 96 matched requests / 396 emitted
+frames / zero remaining. Both commands used one configured/actual worker, retries
+zero and zero forbidden launches. All 29 full-suite exchanges completed:
+773 matched / 3,216 emitted / zero remaining. The sole skip remains
+`real claude picks up a saved channel system prompt at Reset session`, the existing
+fixme tracked by [upstream #2436](https://github.com/pyrycode/pyrycode/issues/2436).
+
+The focused command was `node scripts/run-offline-replay.mjs --grep "applied effort, confirmed preference, restart, chat recall and channel creation choice" --retries 0 --reporter=list,json`;
+the subsequent full command omitted only the grep. The linked plan retains report
+output arguments and the preceding unit, client-test typecheck, pre-verify, build
+and `npm run rebuild:electron` commands. Node checks and build passed before
+`native-preparation.log`; no native rebuild overlapped replay. The approved final
+pre-verify rerun resolved the earlier sandboxed label-read limitation.
+`assertion-audit.json` records all 134 original expect-rooted calls unchanged.
+Settings, restart, recall, channel-creation and original-explicit-choice assertions,
+full-envelope matching, causal checkpoints, connection/device ownership, native
+prerequisites, retirement/forwarding waits and final completion remain intact.
+No retries, skips, repeated mutations or longer deadlines were introduced.
+
+The supplied dispatcher unit gate 3 records 9,986 executed/passed, zero failed,
+six skipped, explicitly including these passed cases:
+
+- `relaunch rejection retains primary and pre-retirement proof`
+- `secondary failures preserve primary and finish cleanup`
+- `unexpected closure fails with last available proof`
+- `successful handoff distinguishes process proof`
+
+The accepted verdict separately reports 10,084 passed / zero failed / six skipped
+units and 538 executed/passed / zero failed / two skipped application cases,
+including the named effort scenario. These remain separate reported counts from
+the supplied unit summary; no counts are inferred from exit status. The supplied
+gate report has no overall pass marker; the authoritative verifier stage is accepted.
+
+Effort input bytes remain SHA-256
+`999324c7bc7fce3f8a0ce6a6eaf78139ca4cb98b8b9afe79f15bf69704b21866`.
+Capture provenance remains Desktop `00ec821f9380b00cf2dfc0dd4817ee15584106a5`,
+daemon `58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`, daemon binary SHA-256
+`5f5b3b9ce42eda74024637f4929dd720d36c1226ce6e370eb62fbe9e6b22f7c0`,
+Claude 2.1.280. Focused/full report hashes remain in the linked plan.
+
+### Historical effort failure and unchanged pass
+
+The original clean source was `4cac8bd7c0580e8f23684376eb2f9c099856aa2c`.
+The separate original reports remain under
+`/private/tmp/desktop-manual-evidence-20261020/`, with hashes in the
+[historical evidence](../../specs/architecture/2196-effort-proof-finalization.md#historical-failure-and-unchanged-pass-remain-separate):
+
+| Report | Executed / passed / failed / skipped | Configured / actual workers | Effort matched / emitted / remaining |
+| --- | --- | --- | --- |
+| `application.json`, original failed run | 531 / 529 / 2 / 2 | 4 / 4 | 36 / 147 / 60 |
+| `application-exact-retry.json`, unchanged-tree comparison | 2 / 2 / 0 / 0 | 4 / 2 | 96 / 396 / 0 |
+
+Both used retries zero and the same effort input checksum above. The comparison
+passed the named effort scenario; it does not turn the original failure into a
+pass. The controlled red regression reports a closed-snapshot error instead of
+the replacement-prerequisite error and establishes masking only. The historical
+relaunch trigger remains unknown; no causal claim follows from nearby native
+inspection or production status-subscription repairs. These captured-client checks
+supply no fresh provider/daemon proof and require no new capture or wire/schema
+change. Linux is outside this macOS ticket's verification scope.

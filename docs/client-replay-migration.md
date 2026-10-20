@@ -139,6 +139,16 @@ session and opening after an admitted withdrawal of a previously held settings
 reading. It does not retry missing initial replies. Effort recall waits for a
 real configuration reading before interpreting an empty effort as unset.
 
+Effort replay preserves its first failure through profile handoff and final proof
+cleanup. Retired observer ownership is cleared before relaunch; proof identifies
+process, phase and availability, with cached snapshots used only for diagnostics.
+The [local proof contract and counted macOS evidence](knowledge/features/development-verification-replay-native-storage.md#effort-scenario-proof-ownership)
+retain the successful 96-request/396-frame scenario, original failed run and
+separate unchanged-tree pass. The controlled regression proves failure masking;
+the historical relaunch trigger remains unknown. Capture bytes, original settings
+assertions, strict matching and retirement/completion waits are unchanged. These
+checks add no fresh provider/daemon proof; the reset-prompt fixme stays excluded.
+
 Core #3508 adds the successful Send now write fact needed before a held tool
 echoes input. Desktop recognizes the explicit pending `written` status as one
 user row without queue actions. Every original Send now assertion, including

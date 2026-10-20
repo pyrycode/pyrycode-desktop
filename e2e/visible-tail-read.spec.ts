@@ -244,43 +244,83 @@ test('stable callbacks exclude hidden, queued and received but uncommitted tails
   // Publish the authoritative next watermark before holding the canonical append's frame.
   daemon.pushFrame(frame('conversations', { conversations: [{ ...row, last_shown_version: 5 }] }))
   const pendingItem = Number(await page.locator('[data-read-row]').last().getAttribute('data-read-row'))
-  // Hold the bridge's frame, with a receipt barrier from the real preload event.
+  // Hold the bridge's frame and its paired timer drain, with real preload receipt.
   // Focus/scroll callbacks still run, and must use the displayed target rather than receipt.
   await page.evaluate(() => {
-    const request = window.requestAnimationFrame.bind(window)
-    const cancel = window.cancelAnimationFrame.bind(window)
+    const browser: Window = window
+    const request = browser.requestAnimationFrame
+    const cancel = browser.cancelAnimationFrame
+    const timeout = browser.setTimeout
+    const clear = browser.clearTimeout
     const pending = new Map<number, FrameRequestCallback>()
-    let handle = -1
+    const timers = new Map<number, () => void>()
+    let frames = 0, timerOpportunities = 0
     let delivered = 0
     const off = window.pyry.onDaemonEvent(event => { if (event.type === 'threadUpdate' && event.update.type === 'thread_text_append') delivered++ }, true)
-    window.requestAnimationFrame = callback => { pending.set(handle, callback); return handle-- }
-    window.cancelAnimationFrame = handle => { if (!pending.delete(handle)) cancel(handle) }
-    window.pendingReadFrame = { received: () => delivered, release: () => {
-      window.requestAnimationFrame = request; window.cancelAnimationFrame = cancel; off()
-      const callbacks = [...pending.values()]; pending.clear()
-      callbacks.forEach(callback => callback(performance.now()))
+    browser.requestAnimationFrame = callback => {
+      const handle = request.call(window, () => { frames++ })
+      pending.set(handle, callback); return handle
+    }
+    browser.cancelAnimationFrame = handle => { pending.delete(handle); cancel.call(window, handle) }
+    browser.setTimeout = (callback, delay, ...args) => {
+      // createThreadRuntime races the identical drain function through both APIs.
+      // Leave unrelated timers live, including focus work and the test's polling.
+      if (typeof callback !== 'function' || ![...pending.values()].some(frame => frame === callback)) {
+        return timeout.call(window, callback, delay, ...args)
+      }
+      const handle = timeout.call(window, () => { timerOpportunities++ }, delay)
+      timers.set(handle, () => callback(...args)); return handle
+    }
+    browser.clearTimeout = handle => { if (handle !== undefined) timers.delete(handle); clear.call(window, handle) }
+    window.pendingReadFrame = { received: () => delivered,
+      opportunities: () => ({ frames, timers: timerOpportunities }), release: () => {
+      browser.requestAnimationFrame = request; browser.cancelAnimationFrame = cancel
+      browser.setTimeout = timeout; browser.clearTimeout = clear; off()
+      const callbacks = [...pending.values()], drains = [...timers.values()]
+      for (const handle of pending.keys()) cancel.call(window, handle)
+      for (const handle of timers.keys()) clear.call(window, handle)
+      pending.clear(); timers.clear()
+      callbacks.forEach(callback => callback(performance.now())); drains.forEach(drain => drain())
+      return browser.requestAnimationFrame === request && browser.cancelAnimationFrame === cancel &&
+        browser.setTimeout === timeout && browser.clearTimeout === clear
     } }
   })
   try {
     daemon.pushFrame(frame('thread_text_append', { conversation_id: row.id, epoch: `scripted-thread:${row.id}`,
       version: 5, item_id: pendingItem, base_rev: 4, rev: 5, text: ' Awaiting commit' }))
     await expect.poll(() => page.evaluate(() => window.pendingReadFrame.received())).toBe(1)
+    await expect.poll(() => page.evaluate(() => window.pendingReadFrame.opportunities().frames)).toBeGreaterThan(0)
+    await expect.poll(() => page.evaluate(() => window.pendingReadFrame.opportunities().timers)).toBeGreaterThan(0)
+    // Give the runtime's 50 ms fallback a real opportunity while the frame is held.
+    await page.waitForTimeout(100)
     await expect(page.locator('.bubble').last()).not.toContainText('Awaiting commit')
     const prior = targets(commands)
-    await page.evaluate(() => {
+    expect(prior.at(-1)).toBe(4)
+    const contextAsks = commands.filter(c => c.type === 'request_context_usage').length
+    await page.evaluate(conversationId => {
       window.dispatchEvent(new Event('focus'))
       document.querySelector('.conversation__thread')!.dispatchEvent(new Event('scroll'))
-    })
+      // Both observers run synchronously. Drain their outbound IPC before exclusion.
+      window.pyry.sendCommand({ type: 'requestContextUsage', payload: { conversation_id: conversationId } })
+    }, row.id)
+    await expect.poll(() => commands.filter(c => c.type === 'request_context_usage').length).toBe(contextAsks + 1)
     await expect(page.locator('.bubble').last()).not.toContainText('Awaiting commit')
     expect(targets(commands)).toEqual(prior)
+    await test.info().attach('pending-read-barrier', { body: JSON.stringify({
+      received: await page.evaluate(() => window.pendingReadFrame.received()),
+      opportunities: await page.evaluate(() => window.pendingReadFrame.opportunities()), targets: prior,
+      sentinel: commands.at(-1)?.type
+    }), contentType: 'application/json' })
   } finally {
-    await page.evaluate(() => window.pendingReadFrame.release())
+    expect(await page.evaluate(() => window.pendingReadFrame.release())).toBe(true)
   }
   await expect(page.locator('.bubble').last()).toContainText('Awaiting commit')
   await expect.poll(() => targets(commands).at(-1)).toBe(5)
 })
 
-declare global { interface Window { pendingReadFrame: { received: () => number; release: () => void } } }
+declare global { interface Window { pendingReadFrame: {
+  received: () => number; opportunities: () => { frames: number; timers: number }; release: () => boolean
+} } }
 
 test('committed folded tails require focus, uncovered viewport and a closed reader', async ({ launchPairedApp }) => {
   const commands: Envelope[] = []

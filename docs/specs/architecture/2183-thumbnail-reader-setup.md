@@ -49,3 +49,11 @@ Readiness fails the existing bounded Playwright assertions. No new application f
 ## Open Questions
 
 - Which controlled echo/input/layout boundary discriminates original setup from repaired setup? Resolve experimentally and record under Revisions before publishing.
+
+## Revisions
+
+2026-10-20: Resolved the question with controlled metadata focus during the original park. All three user rows had supplied numeric identities (`1`, `2`, `123`), proving echo publication. Focusing the first thumbnail's Copy action with `preventScroll` and reading layout changed height 3149 → 3177 (viewport 733); assigning 1260 succeeded immediately, then scroll/resize processing returned to bottom 2444. The original pre-release equality failed. This is a controlled focus/layout intervention, not attribution of the historical unrecorded schedule (whose observed endpoint was 2416).
+
+The repair retains that focus intervention, settles focus geometry, transfers focus to the thread with pointer outside, and settles again. Trusted ArrowUp then proves actual upward movement (2416 → 2376). One exact park follows; the observer registered after React records a newer processed scroll at 1260, with 20 unchanged frame comparisons covering offset, content/viewport dimensions, focus and processing. Its pre-release snapshot remains immutable through the original assertions. Each setup phase is attached as `thumbnail-reader-setup`, including failed observations. All listeners are removed before release.
+
+The repaired controlled run passed 2/2 including native writer; the reader case retained both above/below growth oracles. An initial diagnostic looked for the authoritative identity on the inner message row and failed there; corrected observation uses the existing direct-child supplied wrapper. No product defect or product change was needed. No remote feature branch overlaps this spec. Written scope remains below 300 lines, with zero production files or exported abstractions.

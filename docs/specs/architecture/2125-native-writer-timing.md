@@ -282,3 +282,32 @@ observation-clock defect.
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-20
+
+### Measured correction decision — 2026-10-20
+
+Instrumented production baseline `8074fabe`, `baseline.json` under
+`/tmp/builder-2125-reopen/`, executes/passes 1, failed/skipped 0 at two configured /
+one actual worker, retries zero. Real `gnome_libsecret`, Electron 33.4.11 / Node
+20.18.3 / ABI 130, Linux x64. Actual drain 49,945 ms, IPC 49,840.7 ms, runner
+50,213.7 ms. Main CPU user/system 50,131.9/3,796.6 ms; native encryption/decryption
+278.6 ms total; SQLite prepare/run/get 7,494.5/5,112.8/497.2 ms. No cgroup
+throttling; host load before 4.85/5.82/7.82 and after 4.47/5.59/7.64. CPU samples
+include `read` 6,238, `same` 3,345, `Hash` 4,813 and GC 4,067 of 45,719 samples.
+Thus IPC transports predominantly CPU-heavy actual index work, rather than a
+renderer observation or keychain delay. Host load remains measured context, not
+an attribution for the historical failure. Retained recurrence bundle checksums
+verified: `/tmp/builder-2125-reopen/recurrence/7b3ee7f480d0f4a38fe77101fbbd1269ad52305931b97dd0daca2c7841afd00b/`.
+
+The existing verified caches are filled only by reads; newly constructed nodes
+are serialized, then repeatedly parsed, hashed and revalidated on subsequent
+updates in that same submission. Select reuse of those already-owned constructed
+nodes via the existing exact-proof cache in `tree` and `sequence`, preserving
+copy-on-read containers. Cache only inside the existing per-operation instance;
+disk nodes still require full verification. Sequence construction temporarily
+permits an unbalanced node during rotation: cache that only for `balanced=false`,
+and cache its strict proof only when the balance invariant holds. No SQL/schema,
+yield, batch-size, protected backend or scheduling changes.
+The new causal regression counts reparses of locally constructed authenticated
+nodes in one 31-item submission, then checks exact fresh reopen and rejection of
+corrupted disk nodes by a later transaction. Native baseline/candidate comparison
+must establish the reduction before claiming this correction resolves slow drain.

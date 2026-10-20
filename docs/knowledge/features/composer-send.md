@@ -35,7 +35,7 @@ occupants keep their connected-only priority. Send gating and automatic retries
 retain their existing policy.
 
 The local row represents submission, not confirmed delivery. Accepted daemon items
-render through [the supplied thread view](conversation-shell.md#what-it-does).
+render through [the supplied thread view](conversation-shell-behavior.md#what-it-does).
 
 ## How it works
 

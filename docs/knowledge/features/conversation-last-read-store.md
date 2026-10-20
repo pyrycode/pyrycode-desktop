@@ -26,6 +26,19 @@ visibility, focus, reader and actual source-row geometry fences remain. A newer
 summary received before React commits cannot upgrade an old observation. See the
 [full read contract](conversation-shell.md#authoritative-thread-read-publication).
 
+Read-target, observer-setup and observer diagnostics are best-effort. Missing
+transport or exceptions from an injected sink, bridge lookup or send cannot change
+eligibility, observer lifetime, geometry, publication or deduplication. The catch
+surrounds diagnostic emission only; domain evaluation and publication retain
+their existing behavior. A throwing `reused` diagnostic must still allow the
+retained callback to observe and publish an eligible target exactly once.
+
+These producers emit only static client-owned `event` and `code` fields through
+`window.pyry.sendDiagnostic`, retaining the unchanged receiver projection and the
+logger's normal `seq`/`ts` stamps. They emit no host, conversation, epoch, item or
+request identities, content, DOM text or raw errors. See the
+[event/reason reference](conversation-shell.md#read-observation-diagnostics).
+
 The publisher coalesces evidenced targets by host/conversation/epoch. Sending is
 an attempt; only received `read_up_to` reaching the target confirms it. A lower
 clamp or send failure leaves it pending. Each reconnect permits one retry of the

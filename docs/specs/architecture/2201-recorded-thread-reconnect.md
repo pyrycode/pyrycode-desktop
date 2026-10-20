@@ -105,3 +105,56 @@ Retained pre-correction evidence under `/tmp/builder-2201/`:
 - `controlled-after.json` / `.log` / matching results directory: causal success, 1 executed/passed, 0 failed/skipped, exact complete exchange.
 
 Earlier #2191 bundles were retrieved with `fleet-task.py evidence` into `prior-evidence/`. Their pointers are empty; redacted logs remain historical supplied evidence, not rehashed raw paired reports. All failing runs above remain separate from later passes.
+
+### Final Linux acceptance — 2026-10-20
+
+Execution OS: Linux amd64, Node 25.8.0, Electron 33.4.11. All final replay runs compiled/executed clean implementation revision `dcc0a895d47ebe8d482399656db588949ba5ce13`, containing main `f8e4e508f0a25660f1b252fcb19fa99da4b020fc`; `sourceDirty: false`. The subsequent evidence commit changes this plan only. macOS is outside this ticket's verification scope; the historical MacBook trigger remains unknown. No fresh provider/daemon or physical transport acceptance is claimed.
+
+The controlled failing Electron trace also traverses the exact historical 23/124/22 prefix: index 147, connection 2, at 1792533013231. Scenario dispatch follows three milliseconds later; two background queries finish before the extra handshake is rejected at index 151. This establishes progress through that prefix and an extra transition, with renderer and authenticated ordinals agreeing and no earlier exchange/observer error.
+
+The final committed causal control runs the exact thread title with `PYRY_THREAD_RECONNECT_CONTROL=after-authentication`, the complete-thread profile, one worker, retries zero and the zero-executed reporter. It executes/passes 1, fails/skips 0, completes 45/378/0 and reports zero forbidden launches. Its annotation records baseline 1, actual delivered count 2, `dispatched: false`; only real authentication advanced the observer. Ordinary paired/full runs leave this control unset.
+
+Five consecutive ordinary batches use this exact command with `N` replaced by 1 through 5; stdout/stderr are retained separately as `paired-N.log`:
+
+```sh
+PLAYWRIGHT_JSON_OUTPUT_FILE=/tmp/builder-2201/paired-N.json \
+node scripts/run-offline-replay.mjs --profile complete-thread \
+  --grep 'a real daemon lazily fills a served gap after more than 200 entries written while Electron is closed|daemon-built thread streams, places an agent, reconnects, resets and reopens saved items' \
+  --fully-parallel --workers 3 --repeat-each 2 --retries 0 \
+  --reporter list,json,./e2e/reporters/zeroExecutedGate.ts \
+  --output /tmp/builder-2201/paired-N-results
+```
+
+| Run | Executed / passed / failed / skipped | Worker process identities | Overlapping slots | Report SHA-256 |
+| --- | --- | --- | --- | --- |
+| `paired-1` | 4 / 4 / 0 / 0 | 0, 1, 2 | 0, 1, 2; peak 3 | `773b9599b49d921e15954cc38d064c9fd565c86456f0f41e62ab680427d724a4` |
+| `paired-2` | 4 / 4 / 0 / 0 | 0, 1, 2, 3 | 0, 1, 2; peak 3 | `f80b427a6b2eea3b2d448cd3694424f0140279199164eed582bf48a8189396e4` |
+| `paired-3` | 4 / 4 / 0 / 0 | 0, 1, 2 | 0, 1, 2; peak 3 | `1b1727f2425534dad3f4351d8b4a158dfceba9d6fe8f3ddcb5d9653d5ad05175` |
+| `paired-4` | 4 / 4 / 0 / 0 | 0, 1, 2, 3 | 0, 1, 2; peak 3 | `1722f77f994e1cec99ce863ceef140af312baa52c4c55d732e0cf0815288c5dc` |
+| `paired-5` | 4 / 4 / 0 / 0 | 0, 1, 2, 3 | 0, 1, 2; peak 3 | `a94838990e2dbc370ccfe4e9b11701bc28fa767d1ac8424e89cd33695bda352e` |
+| `final-controlled` | 1 / 1 / 0 / 0 | 0 | 0 | `490c48d6e422c97e3e233cc2bd633b878c9bb3f575e74bbfdd821a896a60e370` |
+| `complete-recorded` | 29 / 29 / 0 / 1 existing fixme | 0 | 0 | `5946f501c92ef5ff1638e13c78749422d74e2c1b2f1b37aac4cefcf66c2cfce8` |
+
+Every paired batch completes two thread exchanges at 45 matched requests / 378 emitted frames / 0 remaining and two history exchanges at 32/63/0. Totals: 20 executed/passed, 0 failed/skipped, retries zero, zero forbidden launches. `workerIndex` identifies processes; `parallelIndex` identifies slots, so the later process 3 reuses a slot rather than creating a fourth concurrent slot. Actual result start times and durations prove three overlapping slots in every batch.
+
+After batch 5 restored normal output, the complete guarded suite ran with `node scripts/run-offline-replay.mjs --retries 0 --reporter list,json,./e2e/reporters/zeroExecutedGate.ts`, JSON report `complete-recorded.json`, log `complete-recorded.log`, output `complete-recorded-results/`. It completed all 29 exchanges: 773 requests / 3,216 frames / 0 remaining. The sole skipped fixme remains `real claude picks up a saved channel system prompt at Reset session`. Zero forbidden launches and no flaky outcomes.
+
+`acceptance-summary.jsonl` under `/tmp/builder-2201/` retains report hashes, counts, each worker's start/duration and slot, exact exchange counts, dispatch annotations, all input/source attachments and all compiled bundle maps. SHA-256: `49be9a2e37b0116abc822c5681e3d16882f13290cbbe76658bb24e13da87d60b`. Each report retains the bounded `reconnect-boundary` trace, including on failed runs.
+
+Compiled bundle provenance, separate from capture identity (all paths relative to `out/`):
+
+| Bundle | Complete-thread SHA-256 | Normal SHA-256 |
+| --- | --- | --- |
+| `main/build-provenance.json` | `54a8d7df035231ba6990bec0d69342a9f546da21fdd4dd610a68217b9d070b23` | `4f0d184247f2f2172cfd11fa318de021ab6d2cb20b06b302a18dfa9855d798cc` |
+| `main/index.js` | `4f3e287df0be619ac33d72d5497a3660e11196dc66ae03e26bcd0911a89d866a` | same |
+| `preload/hosted.js` | `0edfdf2d3ed72973e0fc022b780f8c6229917542064a05d710219aece09cbf42` | same |
+| `preload/index.js` | `0430e6aac5d4c276ae9e2d22447431b4c388c5e1bd68dbe3c7a7d9bada0d4df7` | same |
+| renderer JavaScript | `index-77fnpiU2.js`: `e478dcb992b1ea8f8805706b89b810acd1bd7d853d8eb3b5b0bc1996cf0ac373` | `index-BJwj8DQm.js`: `11eb9031b4f71443d4e58fbff422a12b765c6a7aee52916b23fac8061874e671` |
+| `renderer/assets/index-CsfLv1rn.css` | `e2228755fdff34ced77591a0f2cb7cd82892583e6f76a0667a4071434200c2a9` | same |
+| `renderer/index.html` | `3dfce895265240dfe53324d0557e2d03bfb74bc98f8acf06f38d75beddde6f35` | `47147833e725c3ad782f01a0a54dd0d3ce639f101bd935c78bece431dd94bb77` |
+
+Unchanged captured inputs: thread SHA-256 `53a3db11cfab2d5041b511d7be4d030ab5b2b8449b7fdb3ea1d7e5e3db552ae3`; history `de0b1166b6e05e0792228c07be25c20498b117914e673558222eac12cd4e6d2c`. Both retain capture Desktop `00ec821f9380b00cf2dfc0dd4817ee15584106a5`, daemon `58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`, daemon binary SHA-256 `5f5b3b9ce42eda74024637f4929dd720d36c1226ce6e370eb62fbe9e6b22f7c0`. Thread capture time is `2026-10-16T12:29:37.005Z`, Claude `2.1.280 (Claude Code)`; history time is `2026-10-16T12:30:09.805Z`, Claude `not-spawned`. No capture bytes/provenance changed.
+
+Post-main checks: pre-verify PASS (5 checks, 5 causal tests), 51/51 affected units, client-test typecheck, documentation guard and normal build pass. Logs are `pre-verify.log`, `final-units.log`, `check-docs.log`, `build.log` and `final-build.log`; pre-verify's counted JSON/audit/JUnit evidence is copied to `pre-verify-unit-evidence/` outside the worktree. Original failure report hashes: environment batch `29a1fff4cb0d206d8f66702ec07e93e512793e6e610f910f0d60140b436ffd1c`; passive pair `d552828fbd45f85d5c15cd50d5e7ea454a45aef8d1b55e818276ca583fcd4e00`; zero-selection attempt `2ef47bee228eac54ccb9d74e5a43df0f09f161d8027e019d727c7c0ae4126737`; controlled failure `ff65f56e936238a777011530b17473aa9d6dd41775ae916bf71a14d669e67258`. The pre-fix unit failure log is `a74fd742877f20132a2922a7def96b95d7be64e97017a780c0ee5ac34593211f`.
+
+Final scope remains one reconnect behavior with its consumed regression and attribution, below 800 written lines, one new exported helper, one scenario consumer and no new production type/state/error branch. Dispatcher-owned normal application acceptance remains for the verifier; all ticket-required builder replay checks are complete.

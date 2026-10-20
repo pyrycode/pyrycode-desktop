@@ -63,6 +63,68 @@ hold writer admission and removal settlement, then reopen protected storage thro
 fresh owners. Only confirmed deletion or successful unpair grants cleanup;
 failed unpair preserves admitted facts and pending read ownership.
 
+### Writer settlement handoff
+
+[`chatHistoryWriter.test.ts`](../../../src/renderer/src/store/chatHistoryWriter.test.ts)'s
+`schedules owned work captured during final list settlement exactly once` resolves
+a held final `replaceList` acknowledgement, then queues a microtask publishing
+through the real thread store's `acceptEpoch`/`applyUpdate`. This places owned work
+between drain completion and promise cleanup. The test executes the newly scheduled
+callback and awaits acknowledged epoch/item submissions exactly once, before any
+explicit flush or stop. Inspecting pending state alone would miss stranded work.
+
+Failure controls carry a retained cursor through repeated settlement continuations
+at different eligible keys. A final list submission supplies a positive barrier
+after item submissions and their task yields, before asserting no failed retry or
+idle timer. Explicit-flush and received-event variants then require the identical
+failed request before newer queued items. Separate queued-continuation controls
+prove both later received events and failed-unpair resumption restore retry
+permission; paused-only work and stop cannot create settlement timers. See the
+[scheduling contract](chat-history-storage.md#buffered-replacements).
+
+The [plan's Linux validation](../../specs/architecture/2205-writer-settlement.md#linux-validation--2026-10-20)
+retains commands, report hashes and provenance. Builder checks used implementation
+`afc62339b37538dcf9b763d6f3e863e48da75e4f`; reviewed head
+`6edf5f721e8861ffd3625a98716356e64b8f61f7` adds plan evidence only. These are
+recorded results from October 20, 2026, confirmed by the
+[accepted verifier review](https://github.com/pyrycode/pyrycode-desktop/pull/2206#issuecomment-6304338944),
+not documentation-stage test executions.
+
+| Run | Executed / passed / failed / skipped or filtered |
+| --- | --- |
+| Pre-repair causal settlement controls | 5 / 2 / 3 / 27 filtered |
+| Queued-continuation received-event control before repair | 1 / 0 / 1 / 32 filtered |
+| Queued-continuation failed-unpair control before repair | 1 / 0 / 1 / 33 filtered |
+| Final writer pre-verify, including all settlement/failure controls above | 34 / 34 / 0 / 0 |
+| Focused writer, ownership, handler, storage, migration and lifecycle selection | 318 / 318 / 0 / 0 |
+| Native writer, packaged protection, quit and window-reopen selection | 4 / 4 / 0 / 0 |
+| Guarded recorded history/thread selection | 2 / 2 / 0 / 0 |
+| Dispatcher application gate 7, `npx playwright test --reporter=json` | 536 / 536 / 0 / 4 |
+
+The native selection included `history-native.spec.ts`,
+`indexed-history-lifecycle.spec.ts` and their configured native-writer prerequisite.
+The packaged production-protection probe independently reported 1 executed/passed,
+0 failed/skipped, Electron 33.4.11, SQLite adapter 12.4.1, Linux x64
+`gnome_libsecret` and 1,000 retained items. Its artifacts remain at
+`/tmp/pyry-history-native-pcs38X`; builder reports are under `/tmp/builder-2205/`.
+
+Both `daemon-built thread streams, places an agent, reconnects, resets and reopens saved items`
+and `a real daemon lazily fills a served gap after more than 200 entries written while Electron is closed`
+are present and passed in the two-case recorded selection and dispatcher application
+gate. Builder replay used retries zero and reported respectively 45 matched
+requests / 378 emitted frames and 32 / 63, with zero remaining requests and zero
+forbidden launches. The plan retains both recording hashes and October 16 capture
+provenance: Desktop `00ec821f9380b00cf2dfc0dd4817ee15584106a5`, daemon
+`58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`. The four application skips were
+three macOS-only cases and the existing system-prompt-reset fixme.
+
+Replay establishes captured-client behavior; the separate packaged probe supplies
+native protection evidence. No fresh provider/daemon or physical relay result is
+claimed. macOS is outside this Linux ticket's verification scope. The controlled
+settlement defect establishes neither the historical protected-unreadable cause of
+\#2191 nor a prerequisite relationship with #2191/#2153; earlier failures retain
+their original status.
+
 ## Restoration
 
 Bounded `openThreadPage` restoration selects 200 shown identities plus active and

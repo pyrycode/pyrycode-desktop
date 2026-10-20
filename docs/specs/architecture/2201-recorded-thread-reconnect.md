@@ -77,3 +77,31 @@ The first strict exchange failure remains sticky and attributable. Diagnostic ob
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-20
+
+## Revisions
+
+### 2026-10-20 — demonstrated duplicate phase dispatch
+
+Both Open Questions are resolved. The first passive paired run passed 4/4: recorded close 4413 was scheduled before scenario dispatch, but the scenario's explicit request beat automatic authentication. A controlled Electron run then let that already scheduled automatic reconnect authenticate before the scenario sampled its old baseline. It reproduced the original 45-second assertion failure (observed 2, expected greater than 2). The first exchange error was an extra authenticated handshake while the next recorded work still belonged to connection 2, rather than lost prefix progress or an observer exception.
+
+The controlled failing trace records close at index 107, connection-2 authentication at 1792533013050, renderer delivery at 1792533013063, scenario dispatch at 1792533013234, and an extra authenticated handshake at 1792533013249. The first strict error follows at 1792533013250, index 151, 25 matched / 126 emitted / 20 remaining. This has two more background requests than the supplied historical 23/124/22 prefix, but both positions precede `new_session` on connection 2. The controlled execution establishes the duplicate-dispatch mechanism; it does not establish the historical MacBook's scheduling trigger.
+
+The simpler local shape is to give the scenario one reconnect phase, rather than change replay's strict connection rules or introduce a transport queue. Sample its baseline before submitting the first turn. At the existing post-reply dispatch point, `reconnectPhase({ host, connections })` reads the actual observer count and dispatches only when that baseline connection remains current. Its read and decision execute in one page task. An already delivered authenticated replacement satisfies this phase; another phase takes a fresh baseline and may dispatch again. The original 45-second count-advance assertion, agent/reply preservation checks, reset, saved-profile retirement, relay forwarding and final completion remain intact. No replay position or connected event is manufactured. Production code is unchanged.
+
+`phaseReconnectOrdering.test.ts` executes the actual page observer callback and consumed dispatch helper, with a real strict `RecordedExchange`. Before correction, the completed-reconnect case fails with `Recorded exchange connection mismatch`; after correction it leaves connection-2 reset work intact and completes. Controls retain explicit dispatch, actual-event-only count advancement, sticky incomplete/wrong-connection rejection, original dispatch-error identity and a fresh baseline on a later phase. All 51 affected observer/exchange/lifecycle unit cases passed after correction.
+
+The same controlled Electron ordering passed after correction: 1 executed / 1 passed / 0 failed / 0 skipped, 45/378/0, zero forbidden launches. The persistent control is `PYRY_THREAD_RECONNECT_CONTROL=after-authentication` on the exact thread case; it explicitly waits for the captured automatic replacement before the normal phase dispatch decision. It is a causal test control, not passive diagnostics, and is disabled for ordinary paired/full acceptance. No bound is enlarged.
+
+Passive diagnostics are capped at 256 adapter entries and 64 renderer connection timestamps; the error slot is retained even at capacity. They contain numeric positions/counts/times, close codes and static exchange errors only. `RecordedExchange.boundary()` is read-only. The plan's security concurrency finding is addressed by phase ownership, with no new IPC/transport/cryptographic surface.
+
+Retained pre-correction evidence under `/tmp/builder-2201/`:
+
+- `diagnostic-paired.json` / `.log` / `diagnostic-paired-results/`: 4 executed / 0 passed / 4 failed / 0 skipped before pairing due to Node ABI 141 instead of Electron ABI 130. Forced standard Electron rebuild and an actual Electron SQLite query resolved the environment prerequisite.
+- `boundary-paired.json` / `.log` / `boundary-paired-results/`: passive diagnostic pair, 4 executed/passed, 0 failed/skipped; all three worker slots overlap.
+- `controlled-before.json` / `.log`: overly narrow grep selected zero tests; excluded from proof.
+- `controlled-before-executed.json` / `.log` / matching results directory: causal failure, 1 executed / 0 passed / 1 failed / 0 skipped; original 45-second assertion and first-error trace retained.
+- `regression-before.log`: 3 executed / 2 passed / 1 failed; the failing case is the completed automatic reconnect followed by unconditional dispatch.
+- `regression-after.log`: 51 executed/passed, 0 failed/skipped.
+- `controlled-after.json` / `.log` / matching results directory: causal success, 1 executed/passed, 0 failed/skipped, exact complete exchange.
+
+Earlier #2191 bundles were retrieved with `fleet-task.py evidence` into `prior-evidence/`. Their pointers are empty; redacted logs remain historical supplied evidence, not rehashed raw paired reports. All failing runs above remain separate from later passes.

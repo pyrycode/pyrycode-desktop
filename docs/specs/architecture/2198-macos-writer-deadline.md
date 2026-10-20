@@ -138,3 +138,99 @@ file, no new exports/call-site migrations/error branches and under 450 written l
 Security re-review: PASS. Reusing only compiled SQL retains no authenticated node
 or protected payload cache across operations. SQL remains fixed, parameters are
 rebound, and any execution error still rolls back the owning transaction.
+
+## Revisions — causal regression and macOS evidence, 2026-10-21
+
+The controlled regression `bounds index SQL compilation per flush while preserving
+writes, yields, rollback and fresh owners` fails on unchanged production code:
+3592 compilations in one 31-item submission, against a bound of 10
+(`/tmp/builder-2198/causal-red.log`, 1 executed/failed, 79 filtered).
+It passes with the correction (`causal-green.log`, 1 executed/passed, 79 filtered).
+The final pre-verify executes all 80 indexed-storage tests with no failures/skips,
+including constructed-node reuse, disk corruption rejection, rotations and rollback.
+The related storage/migration/timing run executes/passes 123, no failures/skips.
+
+Native candidate source/build revision is
+`3b103f3902ab0fee09761762a31da7253a538ee4`, clean when built and executed,
+with final main `f8e4e508f0a25660f1b252fcb19fa99da4b020fc` merged. The only
+production difference from instrumented baseline `ee41da2a` is the two local
+flush statement caches. Writer/storage production files at that baseline also
+match historical #2176 revision `7aa73aa6`. Reports are separate JSON files under
+`/tmp/builder-2198/`, each with matching `.log` and `-results/` paths. Every native
+attachment is retained inline, with decoded `-native.json` and `-summary.json`
+siblings for review. No raw profiler, item body, SQL argument or secret is retained.
+
+Runtime throughout: macOS arm64, Electron 33.4.11, embedded Node 20.18.3 / ABI 130,
+real `os-keychain`. Four configured workers; native attachment reports one actual
+worker, worker index 0, parallel index 0 and retry 0. Project ordering and downstream
+parallelism are unchanged. Commands, with each invocation's unique output path:
+
+`npx playwright test e2e/history-writer-native.spec.ts --retries=0 --reporter=json --output=/tmp/builder-2198/candidate-N-results`
+
+All five consecutive invocations execute/pass 1, fail/skip 0. They preserve exactly
+8333 admitted/durable items, 271 submissions, explicit flush and exact fresh-owner
+equality. Every input has advancing unfinished durable counts. There are no writer
+or diagnostic errors; both launched owners exit 0 without signals/teardown failures.
+Heartbeat entries below are sample count / maximum gap in milliseconds.
+
+| Report | Workload ms | IPC ms | Main CPU ms | Keyboard x / y / z ms | Renderer beats/gap | Main beats/gap |
+| --- | ---: | ---: | ---: | --- | --- | --- |
+| `candidate-1.json` | 6363.4 | 6332.3 | 6398.6 | 21.2 / 20.2 / 19.8 | 300 / 40.0 | 303 / 30.9 |
+| `candidate-2.json` | 7873.7 | 7835.3 | 8091.7 | 26.8 / 17.1 / 25.4 | 355 / 50.4 | 330 / 90.1 |
+| `candidate-3.json` | 12326.8 | 12265.9 | 13063.5 | 46.7 / 29.3 / 47.4 | 479 / 64.7 | 521 / 39.7 |
+| `candidate-4.json` | 8729.5 | 8685.5 | 8993.7 | 35.9 / 36.7 / 32.6 | 377 / 55.3 | 352 / 96.6 |
+| `candidate-5.json` | 9343.2 | 9301.1 | 9626.9 | 27.6 / 26.5 / 25.3 | 404 / 65.2 | 385 / 81.2 |
+| `visible-tail.json` | 7418.1 | 7381.1 | 7583.7 | 24.5 / 26.9 / 24.8 | 340 / 47.5 | 322 / 37.2 |
+
+The subsequent command selects `e2e/visible-tail-read.spec.ts` with the same flags
+and `--output=/tmp/builder-2198/visible-tail-results`: **8 executed/passed,
+0 failed/skipped**, retries zero, including native prerequisite and all seven
+dependents. No automatic retries, sleeps, skips or bounds changes were introduced.
+
+The measured mechanism is repeated compilation/allocation in the CPU-heavy native
+writer drain. Baseline → candidate counts: preparations 356637 → 71221 (285416
+removed), while SQL executions 305121, reads 57322, encryptions 17210, decryptions
+813 and commits 271 stay identical. Baseline preparation takes 1561.9 ms versus
+209.4–460.6 ms across the five candidates. COMMIT remains 729.6–854.8 ms and
+protection 26.2–54.8 ms. Baseline self samples include 197 `Statement` samples;
+the five candidates record 28 / 31 / 54 / 31 / 44 samples for that function.
+Baseline/complete-selection workload is 11615.4 → 7418.1 ms and main CPU
+12098.7 → 7583.7 ms; five-candidate median workload is 8729.5 ms. This is actual
+removed work with unchanged durable output, not a passing retry or delayed clock.
+
+Host conditions vary: one-minute load before/after the baseline is 5.93/5.20;
+candidates are 5.06/5.53, 5.29/5.10, 5.22/5.56, 5.25/5.44 and 4.92/5.61;
+the complete selection is 4.73/4.62. Host CPU/memory and main resource counters
+remain in each attachment. The third candidate is slower than the baseline and
+is retained without exclusion. No historical host-contention or keychain cause is
+asserted: the original 62413.2-ms failure has no storage attachment, so its exact
+external trigger cannot be reconstructed. Its original failed log/result directory
+and separate passing retry remain at `/tmp/builder-2176/visible-tail-merge-20261020/`.
+The supported causal claim is removal of measured per-node compilation overhead;
+these native observations do not prove that overhead was the sole historical trigger.
+
+Report SHA-256 values (all under `/tmp/builder-2198/`):
+
+| Report | SHA-256 |
+| --- | --- |
+| `baseline-phases.json` | `2959fd3833b5daa857bbb8932e77ef4230e86f7514612ba9c95ed6dd03d6993f` |
+| `candidate-1.json` | `2a11b339d44354c8b2ad818887a92f3f4750cffa7e863f0fa4316a0d81358fbb` |
+| `candidate-2.json` | `6484b2e506ef8d9ef0e0bc42468045f00e849ee12a228f30036e411b89429145` |
+| `candidate-3.json` | `66c948995673b7372502f0ba005afd6ee9e439a4a3cd8720b3fd5ca6332a5b49` |
+| `candidate-4.json` | `870244d1dea3f2cfb37006363a7e20c3f3ac2141e67dde0f83590132d9522971` |
+| `candidate-5.json` | `32bc2edea8eef6f20d5445266529cf15edceb04b070a63a68791c7b9afde630e` |
+| `visible-tail.json` | `5491487b540afe4ff8065891f1e754efd7c91e3efab3203f63d262f8fa526e2c` |
+
+Final checks: `pre-verify-approved.log` passes all five checks including label/security
+review and all 80 affected units; `build-checked.log`, `client-typecheck-fixed.log`
+and `docs-guard.log` pass. Node checks finished before `electron-candidate.log`
+prepared native execution; no ABI rebuild overlapped any native scenario.
+The earlier type-narrowing failure and sandbox label-read logs remain separately.
+No native job is left running. Final scope is one production file, no exports,
+consumer migrations or product reject branches, three criteria, below 450 written
+lines including this evidence. No documentation-only ticket requirement was given.
+
+Verifier handoff: review retained native artifacts and the subsequent complete
+configured application gate with prerequisite and dependent projects actually run.
+That gate remains pending, not replaced by these focused checks. Linux is outside
+this macOS ticket's verification scope.

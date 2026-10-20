@@ -263,7 +263,7 @@ export function createChatHistoryWriter(deps: {
       else paused.set(serverId, remaining)
       removals.delete(settlement)
       done()
-      if (!stopped && hasReady() && cancel === undefined && running === undefined) cancel = deps.schedule(() => { void flush() })
+      if (!stopped && hasReady()) scheduleReceived()
     }
   })
   deps.log({ event: 'history-writer-started' })

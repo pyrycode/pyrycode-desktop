@@ -79,3 +79,5 @@ None. The repair changes only settlement scheduling and its regression controls.
 ## Revisions
 
 2026-10-20: A focused control exposed that a later received event before an automatic continuation runs would otherwise inherit failure suppression. The capture scheduling helper now clears the queued continuation's failed set when no drain is running; it keeps the same scheduled handle and debounce. Active drains retain their failure suppression. Public flush still starts a fresh set. Added `allows a later received event to retry before a settlement continuation runs` (controlled red: 1 executed, 1 failed) to preserve that retry contract.
+
+2026-10-20: The same queued-continuation control for failed-unpair resumption failed (1 executed, 1 failed). Host-removal settlement now uses the same scheduling helper after its existing stopped/readiness checks, preserving the prior retry permission on resumption even when a timer is already queued. The parameterized retry control covers both later received events and failed unpair.

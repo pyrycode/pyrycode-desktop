@@ -155,7 +155,7 @@ describe('chat history recording', () => {
     } finally { resume(true); await h.writer.stop() }
   })
 
-  it('allows a later received event to retry before a settlement continuation runs', async () => {
+  it.each(['received event', 'failed unpair'])('allows a later %s to retry before a settlement continuation runs', async trigger => {
     let release: (result: ChatHistoryResult) => void = () => {}
     let fail = true
     const h = harness(request => request.operation === 'replaceList'
@@ -172,8 +172,12 @@ describe('chat history recording', () => {
       await draining
       expect(h.hasScheduled()).toBe(true)
       fail = false
+      if (trigger === 'failed unpair') beginChatHistoryRemoval('a')(false)
+      // For the unpair case this later publication happens during the resumed drain,
+      // so it cannot independently turn the queued continuation into a retry cycle.
+      if (trigger === 'failed unpair') h.run()
       h.delta('later received event', 'trigger')
-      h.run()
+      if (trigger === 'received event') h.run()
       await vi.waitFor(() => expect(threadRequests(h).filter(r => r.conversationId === 'trigger')).toHaveLength(2))
       expect(threadRequests(h).filter(r => r.conversationId === 'failed')[1]).toEqual(failed)
     } finally { h.save.mockResolvedValue({ status: 'ok' }); release({ status: 'ok' }); await h.writer.stop() }

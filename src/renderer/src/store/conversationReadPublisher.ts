@@ -112,7 +112,7 @@ export function useReadObservation(inputs: ThreadReadInputs | undefined,
     const key = inputs && newest && JSON.stringify([inputs.snapshot.hostId, inputs.snapshot.conversationId, inputs.snapshot.epoch, newest.id])
     const held = setup.current
     if (held && key === held.key && region === held.region && covered === held.covered &&
-      !inputs?.readerOpen && target !== undefined && held.tail.isConnected) { held.observe(); return }
+      !inputs?.readerOpen && held.tail.isConnected) { held.observe(); return }
     held?.dispose(); setup.current = undefined
     if (!inputs || inputs.readerOpen || !region || !covered || target === undefined || !newest || !key) return
     const tail = region.querySelector<HTMLElement>(`[data-read-row="${newest.id}"]`)

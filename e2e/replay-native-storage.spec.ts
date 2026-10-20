@@ -5,6 +5,50 @@ import { join } from 'node:path'
 import { appWindow, attachLaunchFate, createLaunchFateLog, launchIsolatedApp } from './fixtures/desktopIsolation'
 import { assertReplayNativeStorage } from './fixtures/replayNativeStorage'
 
+function assertSuccessfulNativeProbe(response: { exceptionDetails?: unknown; result: { value?: unknown } }): void {
+  if (response.exceptionDetails !== undefined) throw new Error('Native prerequisite control inspection failed')
+  if (response.result.value !== true) throw new Error('Native prerequisite control did not observe successful SQLite probe')
+}
+
+for (const { name, response, category } of [
+  {
+    name: 'exception details',
+    response: { result: {}, exceptionDetails: {
+      text: 'PRIVATE_INSPECTOR_TEXT',
+      exception: { description: 'PRIVATE_INSPECTOR_DESCRIPTION',
+        stack: 'PRIVATE_INSPECTOR_STACK', path: '/PRIVATE_INSPECTOR_PATH' }
+    } },
+    category: 'Native prerequisite control inspection failed'
+  },
+  {
+    name: 'unexpected scalar',
+    response: { result: { value: 'PRIVATE_INSPECTOR_VALUE' } },
+    category: 'Native prerequisite control did not observe successful SQLite probe'
+  },
+  {
+    name: 'unexpected object',
+    response: { result: { value: { description: 'PRIVATE_INSPECTOR_DESCRIPTION', path: '/PRIVATE_INSPECTOR_PATH' } } },
+    category: 'Native prerequisite control did not observe successful SQLite probe'
+  }
+]) {
+  test(`native prerequisite control keeps ${name} diagnostics content-free`, async () => {
+    let failure: unknown
+    let reads = 0
+    const controlled = { _connection: { toImpl: () => ({ _nodeSession: {
+      send: async () => {
+        reads++
+        assertSuccessfulNativeProbe(response)
+        return response
+      }
+    } }) } } as unknown as ElectronApplication
+    try { await assertReplayNativeStorage(controlled) } catch (error) { failure = error }
+    // Assert derived values so even a regression cannot print the injected fields.
+    expect(failure instanceof Error && !`${failure.message}\n${failure.stack}`.includes('PRIVATE_INSPECTOR')).toBe(true)
+    expect(failure instanceof Error && failure.message === category).toBe(true)
+    expect(reads).toBe(1)
+  })
+}
+
 test('missing inspector values do not diagnose native failure on launch or profile relaunch', async ({}, testInfo) => {
   const directory = await mkdtemp(join(tmpdir(), 'pyry-native-observation-'))
   const fate = createLaunchFateLog()
@@ -32,8 +76,7 @@ test('missing inspector values do not diagnose native failure on launch or profi
         const controlled = { _connection: { toImpl: () => ({ _nodeSession: {
           send: async (method: string, params: object) => {
             const response = await session.send(method, params)
-            expect(response.exceptionDetails).toBeUndefined()
-            expect(response.result.value).toBe(true)
+            assertSuccessfulNativeProbe(response)
             const missingResult = reads++ === 0
             observations.push({ launch, sqliteReady: response.result.value === true, missingResult })
             return missingResult ? { ...response, result: {} } : response

@@ -74,3 +74,32 @@ Both captures identify Desktop `00ec821f9380b00cf2dfc0dd4817ee15584106a5`, daemo
 - `electron-final.json`: `427e6527cc6a1f629275df0ba3f57cededa24882114fa92adba313c16ca5ac84`
 - `paired.json`: `4c9eb9344b486d9d7f6aaf134ef118dcb1e6b69ccc869622005e561a67cd7fd4`
 - `recorded-full.json`: `ecf8bac30d39a00a8bb499fa4f940e0a0586ab0f98ae9a9526a57398a051b124`
+
+## Revisions
+2026-10-20 — Verifier finding 1: the actual-Electron control's assertions could print
+raw inspector exception details or unexpected values before the shared reader
+sanitized them. A local `assertSuccessfulNativeProbe` guard will emit static failure
+categories for these two paths. The control still forwards each genuine probe and
+omits only the first successful observation per process. Parameterized Playwright
+regressions inject exception details and unexpected scalar/object values, require
+the exact static category, and check error messages/stacks for fixture content using
+boolean assertions. The existing two-process Electron control proves genuine
+success forwarding and saved-profile reuse remain intact.
+
+This repairs the existing content-free diagnostic invariant, with no new deliverable,
+exported symbol, consumer migration, production file, lifecycle state or dependency.
+Approximately 70 additional written lines keep total scoped work below 350 lines.
+No remote feature branch overlaps the code/test files. Re-run the affected unit file,
+pre-verify, build, client-test and control-spec typechecks before Electron-native
+preparation, then the complete control spec, guarded paired batch and complete
+guarded recorded suite. Preserve all prior reports and store rework evidence under
+`/tmp/builder-2190/rework-*`; historical macOS causality remains unknown.
+
+## Documentation handoff
+- Pending for the documentation stage: `docs/knowledge/features/development-verification.md`
+  § Replay native storage prerequisite / Replay inspection after profile relaunch and
+  `docs/recorded-tests.md` § Replay contract: document explicit true/false classification,
+  bounded non-boolean unavailability, and preserved generic synchronous empty values.
+- Pending for the documentation stage: carry counted Linux causal, Electron, paired
+  and complete replay evidence, provenance and artifact paths into those sections;
+  retain the historical failed batch separately and its trigger as unknown.

@@ -448,7 +448,7 @@ read command is distinct from received daemon acknowledgement. Every host-stampe
 sidebar row uses `last_shown_version` for unread state before its first opening;
 legacy local read stamps cannot replace a missing authoritative mark.
 `readTargetFor(inputs)` and `useReadObservation` have no legacy receipt/row-key
-branch. The publisher requires the authoritative epoch and shown watermark;
+branch. The publisher requires the selected route epoch and shown watermark;
 `latest_entry_id` and local counts cannot supply missing eligibility. Observation
 cleanup, acknowledgement and reconnect retry retain their existing ownership fences.
 `useReadObservation` retains its observer while host/conversation/epoch, newest
@@ -458,9 +458,12 @@ Received list progress can temporarily precede the queued snapshot and make
 Every callback rechecks the latest committed inputs, certification, owning route,
 focus, visibility and uncovered tail geometry before publishing. Reader opening,
 identity changes and detached tails still retire the setup.
-Compact display facts have zero complete version/checkpoint and no ranges; production
-supplies no read observer inputs for them, even with a retained complete checkpoint.
-See [compact evidence separation](thread-runtime-compact.md#root-facts-and-independent-evidence).
+Compact observes committed root rows/headers with its own newest/catch-up watermark,
+certified roots and lifecycle-bound route epoch. Contiguous live progress can
+advance eligibility. Display facts retain zero complete version/checkpoint and no
+ranges; complete/persistence evidence supplies no compact authority. See the
+[compact contract](thread-runtime-compact.md#root-facts-and-independent-evidence)
+and [validation/mobile hold](thread-runtime-compact.md#validation-evidence).
 
 ## Validation boundaries
 

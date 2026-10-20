@@ -12,6 +12,7 @@ type ReadCommand = Extract<RendererCommand, { type: 'markConversationRead' }>
 export type ThreadReadInputs = { snapshot: ThreadSnapshot; row: ReadRow; readerOpen?: boolean;
   /** Completed newest-window/catch-up progress represented by this immutable snapshot, never a page. */
   completeThrough: number;
+  compact?: { snapshot: ThreadSnapshot; through: number; roots: ReadonlySet<number>; routeEpoch: string; current: () => boolean };
   publisher?: ReturnType<typeof createReadPublisher> }
 
 export function createReadPublisher(deps: {
@@ -70,10 +71,13 @@ function newestShown(snapshot: ThreadSnapshot) {
 export function readTargetFor(thread: ThreadReadInputs): number | undefined {
   const { snapshot: s, row } = thread, target = row.last_shown_version, tail = newestShown(s), order = tail?.order
   if (s.hostId !== row.serverId || s.conversationId !== row.id || row.read_up_to === undefined ||
-    target === undefined || !Number.isSafeInteger(target) || target < 0 || target > s.checkpoint ||
-    !Number.isSafeInteger(thread.completeThrough) || target > thread.completeThrough ||
-    s.repair && target > s.repair.fromVersion || !tail || typeof order !== 'number' ||
-    !s.ranges.some(r => r.start <= order && r.start < r.end)) return undefined
+    target === undefined || !Number.isSafeInteger(target) || target < 0 || !tail || typeof order !== 'number') return undefined
+  if (thread.compact) {
+    const proof = thread.compact
+    if (proof.snapshot !== s || !proof.current() || !Number.isSafeInteger(proof.through) ||
+      target > proof.through || !proof.roots.has(tail.id)) return undefined
+  } else if (target > s.checkpoint || !Number.isSafeInteger(thread.completeThrough) || target > thread.completeThrough ||
+    s.repair && target > s.repair.fromVersion || !s.ranges.some(r => r.start <= order && r.start < r.end)) return undefined
   if (s.items.some(i => i.shown === true && (i.status === 'queued' || typeof i.order !== 'number' || i.order <= 0))) return undefined
   return target
 }
@@ -109,7 +113,8 @@ export function useReadObservation(inputs: ThreadReadInputs | undefined,
   useReadLayoutEffect(() => {
     const region = thread.current, covered = pane.current
     const target = inputs && readTargetFor(inputs), newest = inputs && newestShown(inputs.snapshot)
-    const key = inputs && newest && JSON.stringify([inputs.snapshot.hostId, inputs.snapshot.conversationId, inputs.snapshot.epoch, newest.id])
+    const routeEpoch = inputs?.compact?.routeEpoch ?? inputs?.snapshot.epoch
+    const key = inputs && newest && JSON.stringify([inputs.snapshot.hostId, inputs.snapshot.conversationId, routeEpoch, newest.id])
     const held = setup.current
     if (held && key === held.key && region === held.region && covered === held.covered &&
       !inputs?.readerOpen && held.tail.isConnected) { held.observe(); return }
@@ -123,14 +128,15 @@ export function useReadObservation(inputs: ThreadReadInputs | undefined,
       if (!current || current.readerOpen || current.snapshot.hostId !== hostId || current.snapshot.conversationId !== conversationId || current.snapshot.epoch !== epoch) return
       const target = readTargetFor(current)
       if (target === undefined || newestShown(current.snapshot)?.id !== newest.id ||
-        conversationReadRouteStore.getState().epochFor(hostId, conversationId) !== epoch ||
+        (current.compact?.routeEpoch ?? current.snapshot.epoch) !== routeEpoch ||
+        conversationReadRouteStore.getState().epochFor(hostId, conversationId) !== routeEpoch ||
         !document.hasFocus() || document.visibilityState !== 'visible' || !tail.isConnected || tail.closest('[hidden]') || tail.classList.contains('message-row--queued')) return
       const viewport = region.getBoundingClientRect(), rect = tail.getBoundingClientRect()
       const shell = covered.closest('.conversation__covered') ?? covered
       const top = Math.max(viewport.top, shell.querySelector('.conversation__top-chrome')?.getBoundingClientRect().bottom ?? viewport.top)
       const bottom = Math.min(viewport.bottom, shell.querySelector('.conversation__input-chrome')?.getBoundingClientRect().top ?? viewport.bottom)
       if (rect.height <= 0 || rect.bottom <= top || rect.bottom > bottom) return
-      ;(current.publisher ?? publisher).observe(hostId, conversationId, target, epoch)
+      ;(current.publisher ?? publisher).observe(hostId, conversationId, target, routeEpoch ?? epoch)
     }
     const resize = new ResizeObserver(observe)
     resize.observe(region); resize.observe(covered); resize.observe(tail)

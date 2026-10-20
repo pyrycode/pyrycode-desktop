@@ -25,8 +25,7 @@ for (const [kind, count] of [['agent', 135], ['tool_call', 6396], ['assistant_me
 }
 type Fiber = { tag: number; type: unknown; memoizedProps: any; flags: number; child: Fiber | null; sibling: Fiber | null }
 
-// https://github.com/pyrycode/pyrycode-desktop/issues/2086: synchronous protected writes block native input.
-test.skip('blocked on #2086 — 8333 finite updates keep mounted keyboard, heartbeat, delivery and teardown responsive', async ({ launchPairedApp }, testInfo) => {
+test('8333 finite updates keep mounted keyboard, heartbeat, delivery and teardown responsive', async ({ launchPairedApp }, testInfo) => {
   let submitted = false, deviceId = ''
   const counts = { delivered: 0, applied: 0, first: 0, last: 0 }
   const { page, daemon } = await launchPairedApp({ threadMode: 'native', buildReplyFrames: bytes => {

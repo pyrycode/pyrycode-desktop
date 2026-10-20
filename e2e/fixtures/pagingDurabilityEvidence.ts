@@ -1,6 +1,6 @@
 import type { ElectronApplication, Page } from '@playwright/test'
 
-/** Read-only checkpoints. Exact coordinates stay inside the isolated main process. */
+/** Read-only checkpoints. Exact coordinates stay inside the isolated Electron app. */
 export async function installPagingDurabilityEvidence(
   app: Pick<ElectronApplication, 'evaluate'>, host: string, chat: string, page?: Pick<Page, 'evaluate'>
 ): Promise<void> {

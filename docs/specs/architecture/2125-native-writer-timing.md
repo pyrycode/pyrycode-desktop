@@ -184,3 +184,101 @@ five checks including seven timing regressions (`pre-verify-final.log`), applica
 build (`build-final.log`) and docs guard. Electron ABI preparation was restored only
 after the Node gate finished (`electron-preparation-final.log`); all paths share the
 `/tmp/builder-2125/` evidence directory. No native check is left running.
+
+## Revisions — reopened slow drain, 2026-10-20
+
+### Files read
+
+- `e2e/history-writer-native.spec.ts` → `source`: retain the complete native contract.
+- `e2e/historyWriterTiming.ts` → `writerWorkloadDuration`: existing observation repair stays.
+- `src/renderer/src/store/chatHistoryWriter.ts` → `drain`: bounded sequential IPC submissions.
+- `src/main/chatHistoryStore.ts` → `execute`: serialized storage ownership across yields.
+- `src/main/historyDatabase.ts` → `transactionSteps`: transactional native storage and task yields.
+- `src/main/indexedThreadHistory.ts` → `tree`, `sequence`, `mutateThread`: authenticated index updates.
+- `src/main/electronSecretEncryption.ts` → `electronSecretEncryption`: production protected backend.
+- `playwright.config.ts` → `native-writer`: preserve prerequisite ordering and global parallelism.
+- `docs/knowledge/features/chat-history-testing-native.md` and `development-verification.md`:
+  runtime ABI ordering, historical failed evidence and native acceptance boundaries.
+
+### Context and design
+
+This is the same native liveness invariant. The recurrence at `eb35b16f` is genuine
+unfinished work (8,277 durable items after 67,850.6 ms); the unchanged 51,556.7 ms
+rerun and 65,077.8 ms baseline do not establish cause. Keep all historical evidence.
+No product visuals, schema, encryption format, shared harness migration or ADR.
+Remote feature branches inspected against current main: no overlapping planned files.
+
+Add single-consumer, bounded content-free measurements to the exact native proof:
+renderer IPC totals/maxima, main CPU profile aggregates, real safeStorage call counts
+and time, process CPU usage, host load and cgroup throttling counters. Observation
+timestamps remain separate from renderer admission-to-flush and IPC duration.
+Wrappers must delegate unchanged to real safeStorage and restore on failure/success.
+Run instrumented baseline/candidate at two configured workers, retries zero, retaining
+the prerequisite ordering. Use measured hot paths to select a local correction in
+the existing indexed writer, with deterministic operation-count/correctness regression
+before the correction. Consider existing transaction-local authenticated-node caches
+before introducing another abstraction. If measurement instead requires a broader
+storage/host repair, stop implementation and link its native blocker.
+
+### State + concurrency and repeated events
+
+No product lifecycle state or public API changes. Any index cache optimization stays
+inside its existing transaction-scoped tree instance; never share verified values
+across commits, reopened owners or protected roots. Existing transaction yields,
+atomic rollback and queue ownership stay. Native probe profiling/wrappers are owned
+by its app and stopped/restored in the failure attachment path before normal close.
+
+| Repeated event | Required coverage |
+| --- | --- |
+| Repeated index updates within one submission | deterministic causal regression and exact native reopen |
+| Later submission / fresh owner with same identity | existing indexed-storage tests and exact native reopen |
+| Assertion failure / slow or missing completion | existing timing regressions; finally retains partial evidence |
+
+### Error handling and testing strategy
+
+No new product error branch. Existing typed storage errors and fail-closed backend
+selection remain. Diagnostics retain bounded static counts/times only, never item
+bodies, SQL parameters, keys or credentials. Diagnostic failure cannot mask assertion
+failure. Prepare host Node units before rebuilding Electron ABI. Run causal regression
+red/green, seven existing timing regressions, affected indexed-storage units, pre-verify
+and build after final main merge; then five consecutive exact Linux native executions
+at two configured workers and retries zero. Record runtime/backend, counts, workload,
+input/heartbeat metrics and paths. Dispatcher owns the complete subsequent gate;
+macOS is outside scope.
+
+Open question: which measured writer/IPC/storage phase accounts for the slow drain?
+Resolve in a dated revision with baseline/candidate evidence before handoff.
+One behaviour, estimated 450 written lines, at most two production files, two new
+exports, no consumer migration, four acceptance criteria, no new product rejects.
+
+## Documentation handoff
+
+Pending documentation stage: update `docs/knowledge/features/chat-history-testing-native.md`
+under “Bounded writer native input proof” with the remaining cause, correction and
+new counted Linux evidence. Preserve the first repair's historical successes and
+failures; describe the reopened slow drain separately from its resolved
+observation-clock defect.
+
+## Security review — reopened repair, 2026-10-20
+
+**Verdict:** PASS
+
+- Trust boundaries: existing `parseChatHistoryRequest` validates production IPC;
+  test wrappers delegate without replacing the backend or bypassing validation.
+- Tokens/secrets: real safeStorage and rejection of `basic_text`/test switches stay;
+  instrumentation counts calls without retaining arguments, results or keys.
+- Files/storage: private profile and transactional protected rows unchanged;
+  fresh protected owner compares exact contents. Scratch evidence stays outside tree.
+- Electron surface: no new IPC or navigation surface; existing sandbox and isolation stay.
+- Cryptography: no algorithm/key/nonce change; any verified-node reuse must be bound
+  to the exact existing transaction-local reference, never unchecked disk data.
+- Network/I/O: fake relay and production IPC unchanged; all observations bounded.
+- Errors/logs: bounded timing/counts and static profile function names only;
+  never serialize raw inspector profiles, SQL parameters, payloads or environment.
+- Concurrency: profiling timers/wrappers stop in finally, normal owner teardown stays;
+  cache lifetime cannot extend beyond the existing tree instance.
+- Threat alignment: relay and hostile daemon validation unchanged; compromised-renderer
+  storage requests still cross validated IPC; protected storage stays fail-closed.
+
+**Reviewer:** builder (self-review per `builder/security-review.md`)
+**Date:** 2026-10-20

@@ -34,3 +34,20 @@ One useful behaviour: reliable current-source reply verification, with its diagn
 2026-10-20: Controlled baseline reproduced the missing-code-fence quote on unchanged production at `7db59e7b0af351d22aa49e5dbdd922dc9e275582` plus the retained diagnostic test diff. The old visibility barrier accepted partial content, trusted Enter appended PARTIAL, and delivering the suffix afterward did not repair the draft: 2 executed, 1 native-writer passed, 1 comparison failed, 0 skipped/retried, 3 configured / 1 actual worker. Report `/tmp/builder-2173/old-control.json`, log `old-control.log`, failure context under `old-control-results/`; diagnostic source `old-boundary-control.spec.ts` SHA-256 `4d9fe9b6ec8ac10817cb3f246ac5cce3874a62d771611013cf674d1335d5b4cc`. This is a controlled schedule, not a reconstruction of historical schedules.
 
 The shipping comparison retains that old-boundary partial quote, starts the content-specific barrier before release, observes absent code and a pending barrier after renderer animation frames, then releases the suffix in `finally` and awaits readiness before Enter. Its attachment records the exact before/after quotes. The original named case changes only its readiness assertion. No design departure or open question remains.
+
+## Linux acceptance receipts
+
+Tested candidate `dd069c67295a0e015d3fad6e519dc6838b62a59e`, with main `e83ec64fd338` merged. Normal build provenance records that revision and `sourceDirty: false`; retained at `/tmp/builder-2173/build-provenance.json`. Linux x64/Xvfb, Electron 33.4.11. Subsequent receipt edits affect this plan only.
+
+| Run | Executed | Passed | Failed | Skipped | Retried | Configured / actual workers |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| Named case, 20 consecutive repetitions | 20 | 20 | 0 | 0 | 0 | 3 / 1 |
+| Complete message-reply spec, including native prerequisite | 7 | 7 | 0 | 0 | 0 | 3 / 1 |
+
+The repetition invocation additionally executed/passed its one native-writer prerequisite (21 total executed/passed). The named case executed/passed once in the complete spec, as did the held-suffix comparison. Every result had retry index 0. The full default run's final receipt follows on completion.
+
+Commands retained normal project scheduling and workers: `npx playwright test e2e/message-reply.spec.ts --grep 'pointer and keyboard replies' --repeat-each=20 --retries=0 --reporter=list,json`, `npx playwright test e2e/message-reply.spec.ts --reporter=list,json`, and `npm run e2e -- --reporter=list,json`. Each used `PLAYWRIGHT_JSON_OUTPUT_NAME` and `--output` under `/tmp/builder-2173/`; reports are `repeat20.json`, `spec.json`, `default.json`, with matching `.log` files and `*-results/` artifacts. The original failed control is `old-control.json` and `old-control.log`.
+
+Final pre-verify passed all five checks, including 16 executed/passed quote/copy units, 0 failed/skipped, after the final main merge. Candidate build passed, and the full default command rebuilt the same clean candidate. Logs: `candidate-pre-verify.log`, `candidate-build.log`, `default.log`. Native ABI preparation ran sequentially before browser acceptance. No provider credentials or live-Claude proof were required; macOS is outside this ticket's verification scope.
+
+Report SHA-256: `old-control.json` = `563c97e02e3c6c8b03b3627816387caabb28570f60c9e86c6550b92d655b28ec`; `spec.json` = `d94cf35212da8582dbe1c00d2b7310666230a3b60642bb2305eacca139928c76`; `repeat20.json` = `f8a8737d0d275ecd12132dade0435ccab1affd2dd990ec428f443d388a6d9fe7`. Committed test source SHA-256 = `fa4a78f16789ddcc7584bcab17b4341eab6324b1db07ceea1e9415f08918ce70`.

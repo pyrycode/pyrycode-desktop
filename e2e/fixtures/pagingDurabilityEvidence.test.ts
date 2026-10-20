@@ -42,6 +42,9 @@ it('observes exact owners and split acknowledgements without exposing content or
   expect(trace.filter((e: any) => e.stage === 'acknowledged').map((e: any) => e.completed)).toEqual([false, true])
   expect(trace.filter((e: any) => e.stage === 'acknowledged').map((e: any) => e.pendingSaves)).toEqual([1, 0])
   expect(trace.filter((e: any) => e.stage === 'submitted').map((e: any) => [e.sameEpoch, e.save])).toEqual([[true, 1], [true, 1]])
+  // A previously accepted prefix replay cannot imply a new pending obligation.
+  await handler({}, first)
+  expect(trace.at(-1)).toMatchObject({ stage: 'acknowledged', pendingSaves: 0 })
   const count = trace.length
   await handler({}, { ...first, serverId: 'peer' })
   await handler({}, { ...first, conversationId: 'peer' })

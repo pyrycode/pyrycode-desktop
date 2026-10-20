@@ -14,7 +14,7 @@ export async function installPagingDurabilityEvidence(
       return
     }
     const observations: unknown[] = []
-    const saves = new Map<string, number>(), pending = new Set<number>()
+    const saves = new Map<string, number>(), pending = new Set<number>(), completedSaves = new Set<number>()
     let epoch: string | undefined
     const record = (stage: string, fields: object = {}) => observations.push({ stage, ms: Date.now(), ...fields })
     const original = handlers.get('pyry:chat-history')
@@ -37,8 +37,8 @@ export async function installPagingDurabilityEvidence(
       if (mutation) {
         const completed = result.status === 'ok' && (!p || p.part + 1 === p.parts)
         if (save !== undefined && result.status === 'ok') {
-          if (completed) pending.delete(save)
-          else pending.add(save)
+          if (completed) { pending.delete(save); completedSaves.add(save) }
+          else if (!completedSaves.has(save)) pending.add(save)
         }
         record('acknowledged', { ...fields, status: result.status, code: result.code, completed, pendingSaves: pending.size })
       }

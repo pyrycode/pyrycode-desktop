@@ -2,7 +2,7 @@
 export async function startWriterDiagnostics({ safeStorage }: typeof import('electron')) {
   const { Session } = require('node:inspector')
   const { readFileSync } = require('node:fs')
-  const { loadavg } = require('node:os')
+  const { loadavg, cpus, freemem } = require('node:os')
   const session = new Session()
   session.connect()
   const post = (method: string) => new Promise<any>((resolve, reject) =>
@@ -10,12 +10,20 @@ export async function startWriterDiagnostics({ safeStorage }: typeof import('ele
   const throttling = () => {
     try { return readFileSync('/sys/fs/cgroup/cpu.stat', 'utf8') } catch { return null }
   }
+  const host = () => ({ load: loadavg(), freeBytes: freemem(), cpu: cpus().reduce((sum: Record<string, number>, cpu: any) => {
+    for (const [key, value] of Object.entries(cpu.times)) sum[key] = (sum[key] ?? 0) + Number(value)
+    return sum
+  }, {}) })
   const started = performance.now(), cpu = process.cpuUsage(), load = loadavg(), throttle = throttling()
+  const hostBefore = host(), resources = process.resourceUsage()
   const calls: Record<string, { count: number; ms: number; max: number }> = {}
   const restore: (() => void)[] = []
-  function measure(target: any, key: string, name: string) {
-    const original = target[key], stats = calls[name] = { count: 0, ms: 0, max: 0 }
+  function measure(target: any, key: string, name: string, classify?: (args: unknown[]) => string) {
+    const original = target[key]
+    calls[name] = { count: 0, ms: 0, max: 0 }
     target[key] = function (this: unknown, ...args: unknown[]) {
+      const label = classify?.(args) ?? name
+      const stats = calls[label] ??= { count: 0, ms: 0, max: 0 }
       const start = performance.now()
       try { return original.apply(this, args) }
       finally { const ms = performance.now() - start; stats.count++; stats.ms += ms; stats.max = Math.max(stats.max, ms) }
@@ -29,6 +37,11 @@ export async function startWriterDiagnostics({ safeStorage }: typeof import('ele
   const statement = Object.getPrototypeOf(db.prepare('SELECT 1'))
   db.close()
   measure(Database.prototype, 'prepare', 'prepare')
+  measure(Database.prototype, 'exec', 'exec', args => {
+    // Emit only a fixed category, never SQL text or arguments.
+    const verb = typeof args[0] === 'string' ? args[0].trim().split(/\s/, 1)[0].toUpperCase() : ''
+    return ['BEGIN', 'COMMIT', 'ROLLBACK'].includes(verb) ? 'exec-' + verb : 'exec-other'
+  })
   for (const key of ['run', 'get', 'all']) measure(statement, key, key)
   await post('Profiler.enable')
   await post('Profiler.start')
@@ -47,7 +60,8 @@ export async function startWriterDiagnostics({ safeStorage }: typeof import('ele
         functions.set(name, (functions.get(name) ?? 0) + (counts.get(node.id) ?? 0))
       }
       result = { elapsed: ended - started, cpu: used, loadBefore: load, loadAfter: loadavg(),
-        throttleBefore: throttle, throttleAfter: throttling(), calls,
+        throttleBefore: throttle, throttleAfter: throttling(), hostBefore, hostAfter: host(),
+        resourcesBefore: resources, resourcesAfter: process.resourceUsage(), calls,
         samples: profile.samples?.length, hot: [...functions].sort((a, b) => b[1] - a[1]).slice(0, 20) }
       return result
     } finally { session.disconnect() }

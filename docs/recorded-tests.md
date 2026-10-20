@@ -29,6 +29,19 @@ skip the old connection's requests or borrow future replies, and final
 `assertComplete()` still checks the entire exchange. See the
 [captured-close controls and counted Linux acceptance](knowledge/features/development-verification.md#captured-close-client-tails).
 
+A captured automatic reconnect may finish during the thread scenario's reply
+waits. Its reconnect phase therefore samples the delivered-connection baseline
+before the first turn; the post-reply helper reads and decides in one page task,
+dispatching only while that baseline remains current. Only real `connected`
+delivery advances the count, and the original 45-second assertion still applies.
+An extra handshake while reset requests still belong to the current connection
+remains a strict error. The bounded `reconnect-boundary` attachment and
+`scenario-reconnect-dispatch` annotation correlate authenticated callbacks,
+recorded prefix/close positions and renderer observations without payloads.
+`PYRY_THREAD_RECONNECT_CONTROL=after-authentication` is an explicit causal control
+for the exact thread case; ordinary acceptance leaves it unset. See the
+[phase ownership contract, diagnostic bounds and counted Linux evidence](knowledge/features/development-verification.md#recorded-reconnect-phase-ownership).
+
 Replay uses the normal Desktop build by default, native thread mode, the existing encrypted fake daemon and a local forwarding relay. It never invokes the older event-to-thread publisher. Every outgoing envelope field and complete payload must match. Only fresh request IDs/timestamps and explicitly bound opaque identities vary. The same identity binds once across requests, replies and connections. Text, permission choices, routes, cursors and unknown extra fields remain part of the comparison.
 
 For older complete-thread recordings whose accepted capabilities already include

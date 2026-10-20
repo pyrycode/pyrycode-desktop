@@ -376,6 +376,66 @@ it('reuses constructed authenticated nodes within one owned submission without r
   expect(await fresh.store.execute(owned(s, { items: [{ ...items[0], rev: 2 }] }))).toEqual(error('write-failed'))
 })
 
+it('bounds index SQL compilation per flush while preserving writes, yields, rollback and fresh owners', async () => {
+  const h = setup(), s = snapshot(0)
+  expect(await h.store.execute(put(s))).toEqual({ status: 'ok' })
+  let prepared = 0, executed = 0, turns = 0
+  h.database.transaction(db => {
+    const prepare = db.prepare.bind(db)
+    vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+      const statement = prepare(sql)
+      if (sql === 'INSERT OR REPLACE INTO thread_auth VALUES (?, ?, ?, ?)' ||
+          sql === 'DELETE FROM thread_auth WHERE scope = ? AND tree = ? AND path = ?') {
+        prepared++
+        const run = statement.run.bind(statement)
+        statement.run = (...args) => { executed++; return run(...args) }
+      }
+      return statement
+    })
+  })
+  const onTurn = async (units: number) => {
+    expect(units).toBe(16); turns++
+    await new Promise<void>(resolve => setImmediate(resolve))
+  }
+  const mutation = (extra: object) => {
+    const request = parseChatHistoryRequest(owned(s, extra))
+    if (request.operation !== 'mutateThread') throw new Error('expected mutation')
+    return request
+  }
+  const items = Array.from({ length: 31 }, (_, id) => ({ id, rev: 1, kind: 'future', order: (id * 17) % 31 }))
+  expect(await h.store.executeMutation(mutation({ items }), onTurn)).toEqual({ status: 'ok' })
+  expect(executed).toBeGreaterThan(100)
+  expect(turns).toBeGreaterThan(5)
+  // Compilation is bounded by the index families, independently of flushed node count.
+  expect(prepared).toBeLessThanOrEqual(10)
+  const inserted = await h.store.execute(ask('readThread'))
+  h.database.transaction(db => db.exec(`CREATE TRIGGER reject_index_flush BEFORE INSERT ON thread_auth
+    WHEN new.tree = 'sequence' BEGIN SELECT RAISE(ABORT, 'injected'); END`))
+  expect(await h.store.executeMutation(mutation({
+    items: [{ ...items[0], rev: 2 }]
+  }), onTurn)).toEqual(error('write-failed'))
+  expect(await h.store.execute(ask('readThread'))).toEqual(inserted)
+  h.database.transaction(db => db.exec('DROP TRIGGER reject_index_flush'))
+  prepared = 0; executed = 0; turns = 0
+  const removeIds = items.slice(0, 16).map(i => i.id)
+  expect(await h.store.executeMutation(mutation({ removeIds }), onTurn)).toEqual({ status: 'ok' })
+  expect(executed).toBeGreaterThan(100)
+  expect(turns).toBeGreaterThan(5)
+  expect(prepared).toBeLessThanOrEqual(10)
+  vi.restoreAllMocks()
+  h.database.close()
+  const fresh = h.fresh(), remaining = items.filter(i => !removeIds.includes(i.id))
+  const expected = stored({ ...s, thread: { ...s.thread,
+    items: [...remaining].sort((a, b) => a.order - b.order), arrivalOrder: remaining.map(i => i.id) } })
+  expect(await fresh.store.execute(ask('readThread'))).toEqual(expected)
+  // A new flush after reopening cannot reuse a statement from the closed connection.
+  expect(await fresh.store.execute(owned(s, { items: [items[0]] }))).toEqual({ status: 'ok' })
+  fresh.database.close()
+  const retried = await h.fresh().store.execute(ask('readThread'))
+  expect(retried).toEqual(stored({ ...s, thread: { ...s.thread,
+    items: [...remaining, items[0]].sort((a, b) => a.order - b.order), arrivalOrder: [...remaining.map(i => i.id), items[0].id] } }))
+})
+
 it('successive owned additions keep ordering paths and record work bounded without rewriting placements', async () => {
   const h = setup(), s = snapshot(0)
   let reads = 0, writes = 0

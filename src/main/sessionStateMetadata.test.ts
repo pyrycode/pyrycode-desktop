@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createDaemonConnection } from './daemonConnection'
 import { base64StdEncode, decodeEnvelope, WireDecodeError } from './transport/codec'
 import { parseInboundMessage } from './transport/inboundMessage'
@@ -11,8 +11,17 @@ vi.mock('electron', () => ({ contextBridge: { exposeInMainWorld: electron.expose
   on: (_channel: string, listener: Function) => electron.listeners.add(listener),
   removeListener: (_channel: string, listener: Function) => electron.listeners.delete(listener)
 } }))
-import '../preload'
-const api: PyryApi = electron.expose.mock.calls[0][1]
+let api: PyryApi
+beforeEach(async () => {
+  // One preload module and its recorder/cache belong to one document lifetime.
+  vi.resetModules(); electron.expose.mockClear(); electron.listeners.clear()
+  await import('../preload')
+  api = electron.expose.mock.calls[0][1]
+  expect(electron.listeners.size).toBe(1)
+  const initial = vi.fn(), off = api.onDaemonEvent(initial)
+  expect(initial).not.toHaveBeenCalled()
+  off()
+})
 const c = { conversation_id: 'conversation' }
 const settings = { session_id: 'payload-session', model: '', effort: '', yolo: false,
   permission_mode: '', used_tokens: 0, window_tokens: 0 }
@@ -207,12 +216,20 @@ it('isolates equal conversation/session IDs across hosts and preserves subscript
     expect((decodeEnvelope(h.configs[0].session.hello).payload as { capabilities: string[] }).capabilities).toContain('thread')
     expect(h.sent).toHaveLength(0)
   }
+  const baseline = received.filter(e => e.type === 'connected')
+  expect(baseline).toMatchObject(['a', 'b'].map(serverId => ({ type: 'connected', serverId,
+    ack: { server_id: 'host', capabilities: ['thread'] } })))
   off(); const before = received.length
-  a.emit(frame('turn_state', c, metadata)); expect(received).toHaveLength(before)
+  a.emit(frame('turn_state', { ...c, state: 'idle' }, metadata)); expect(received).toHaveLength(before)
   const offAgain = api.onDaemonEvent(e => received.push(e))
-  b.emit(frame('stall', c)); expect(received).toHaveLength(before + 1)
+  expect(received.slice(before)).toEqual(baseline)
+  for (const event of received.slice(before)) expect(Object.hasOwn(event, 'envelopeSessionId')).toBe(false)
+  const afterBaseline = received.length
+  b.emit(frame('stall', c)); expect(received).toHaveLength(afterBaseline + 1)
+  expect(received.at(-1)).toMatchObject({ type: 'stallDetected', serverId: 'b', conversationId: 'conversation' })
   expect(Object.hasOwn(received.at(-1)!, 'envelopeSessionId')).toBe(false)
-  offAgain(); a.connection.stop(); b.connection.stop()
+  offAgain(); a.emit(frame('stall', c)); expect(received).toHaveLength(afterBaseline + 1)
+  a.connection.stop(); b.connection.stop()
 })
 
 it('clear metadata cannot forge conversation attribution, advance replay or feed thread progress', async () => {

@@ -11,7 +11,8 @@ import { readReplayMainProcess } from './fixtures/replayNativeStorage'
 // Hold only React mount; main, preload and the actual native-thread protocol run normally.
 for (const delayed of [false, true]) test(`saved-profile native catch-up with delayed React=${delayed}`, async ({ launchPairedApp }, info) => {
   const trace: string[] = []
-  let resumed = false, handshakes = 0
+  let resumed = false, handshakes = 0, subscriptionBarrierReceived = false
+  const subscriptionBarrier = 'startup-subscription-barrier'
   const baseline = 'controlled saved baseline', newest = 'controlled resumed publication'
   const asks: { type: string; version?: number }[] = []
   const first = await launchPairedApp({ threadMode: 'native',
@@ -19,6 +20,11 @@ for (const delayed of [false, true]) test(`saved-profile native catch-up with de
     buildReconnectFrames: () => { handshakes++; trace.push('resumed-handshake'); return [] },
     buildReplyFrames: bytes => {
       const request = decodeEnvelope(bytes)
+      if (request.type === 'request_context_usage' &&
+          (request.payload as { conversation_id: string }).conversation_id === subscriptionBarrier) {
+        subscriptionBarrierReceived = true; trace.push('observer-barrier-received')
+        return []
+      }
       if (request.type === 'list_conversations') return [seedConversationsFrame()]
       if (request.type === 'request_history') throw Error('legacy request in native control')
       if (request.type !== 'thread_catch_up') return []
@@ -97,7 +103,12 @@ for (const delayed of [false, true]) test(`saved-profile native catch-up with de
     expect(handshakes).toBe(1)
     await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
     // Mounting another observer must not dispatch another opening query.
-    await page.evaluate(() => { const off = window.pyry.onDaemonEvent(() => {}); off() })
+    await page.evaluate(({ serverId, conversationId }) => {
+      const off = window.pyry.onDaemonEvent(() => {}); off()
+      // A later read-only command on the same IPC/transport path drains synchronous opening work.
+      window.pyry.sendCommand({ type: 'requestContextUsage', serverId, payload: { conversation_id: conversationId } })
+    }, { serverId: FIRST_SERVER_ID, conversationId: subscriptionBarrier })
+    await expect.poll(() => subscriptionBarrierReceived).toBe(true)
     expect(asks).toHaveLength(1)
   } finally {
     await info.attach('controlled-startup', { body: Buffer.from(JSON.stringify(trace)), contentType: 'application/json' })

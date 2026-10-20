@@ -198,6 +198,119 @@ rerun `2026-10-19T16-15-00-239Z_verifier-gate-rerun_#2125.log` executed/passed *
 failed/skipped **0**, retries zero, including the native prerequisite. That later
 result does not turn the original full run into a failure-free run.
 
+#### Reopened slow drain cause and correction
+
+The [reopened evidence](https://github.com/pyrycode/pyrycode-desktop/issues/2125#issuecomment-6285238165)
+is separate from the resolved observation-clock defect. On `eb35b16f45`, the Linux
+prerequisite executed/failed **1**, passed **0**, skipped **522**, retries zero,
+two configured/actual workers: **8,277/8,333** persisted, 268 submissions, no flush
+completion **67,850.6 ms** after admission (runner 67,896.2 ms). Keyboard
+52.5/253.0/250.0 ms and renderer/main gaps 59.5/172.3 ms passed; no writer/diagnostic
+errors occurred. Fresh reopen was not reached. No dependent case executed, so two
+actual workers in metadata do not establish sibling contention. The unchanged
+prerequisite-only rerun separately executed/passed **1**, failed/skipped **0**, two
+configured/one actual worker: drain **51,556.7 ms**, 8,333 items/271 submissions,
+exact reopen passed. It did not execute the 522 dependents. Unchanged main
+`845cf9a251` separately executed/failed **1**, passed **0**, skipped **2**, workers
+2/1: completed drain **65,077.8 ms** correctly failed despite passing input/heartbeat
+checks. Both failures remain failed; an unchanged rerun establishes no cause.
+
+The checksummed recurrence reports are retained under
+`/tmp/builder-2125-reopen/recurrence/`; the linked refinement evidence identifies
+both bundle IDs, failed/rerun filenames and original source paths.
+
+The cause was redundant verification of locally constructed authenticated index
+nodes in the main-process CPU path. Populating caches only during reads left updates
+parsing, hashing and validating newly serialized nodes again.
+[`indexedThreadHistory.ts`](../../../src/main/indexedThreadHistory.ts) now caches
+constructed radix/sequence nodes under their exact proofs within the operation,
+returning detached containers. Unbalanced rotation nodes get only relaxed proofs
+until balanced. Later operations/owners authenticate disk again. SQL/schema,
+encryption, batching, yields and scheduling remain unchanged.
+
+The [causal regression](chat-history-testing-storage.md#owned-mutation-regressions-and-counted-validation)
+failed before correction with **3,349 reparses**, then passed with **zero**, exact
+fresh reopen and later corrupted-disk rejection. Under `/tmp/builder-2125-reopen/`,
+`causal-red.log` records **1 executed/failed, 0 passed/skipped**, 78 filtered;
+`causal-green.log` records **1 executed/passed, 0 failed/skipped**, 78 filtered.
+
+Content-free diagnostics separate IPC totals/maxima/samples from workload and
+observation clocks, recording main CPU/profiler aggregates, real safeStorage/SQLite
+counts/times, host load and throttling. Wrappers delegate unchanged, retaining no
+arguments, results, keys or raw profiles. The finish path restores instrumentation
+before normal close. The accepted review notes a nonblocking startup gap:
+SQLite/profiler setup precedes cleanup registration and the failure boundary;
+setup failure can lose diagnostics and leave wrappers until teardown. Measured
+runs initialized and cleaned up successfully.
+
+#### Counted reopened Linux validation
+
+The [reopened plan](../../specs/architecture/2125-native-writer-timing.md#revisions--causal-regression-and-final-linux-evidence-2026-10-20)
+and [repair PR](https://github.com/pyrycode/pyrycode-desktop/pull/2159) retain the
+comparison. Accepted verifier run
+`55afa7335001014f2b8b89a282a4635347e5598af427d63db8813d424be43973` reviewed
+`b505bf011812970b2b8048afebb735381b8e4691`. All native evidence here uses Linux x64,
+Electron **33.4.11**, embedded Node **20.18.3**, ABI **130**, real
+**`gnome_libsecret`**, production-backend assertions and retries **zero**.
+These are retained native executions, not documentation reruns or replay.
+macOS is outside this ticket's verification scope.
+
+`baseline.json` at `8074fabe` and `candidate-1.json` at `18d4fae2` each
+executed/passed **1**, failed/skipped **0**, with identical instrumentation,
+two configured/one actual worker and preserved prerequisite ordering. Baseline
+production writer/storage files match the recurrence. Actual drain fell
+**49,945 → 32,289.7 ms**, IPC **49,840.7 → 32,180.3 ms**, main CPU user+system
+**53,928.5 → 35,564.8 ms**. SQLite prepare/run/get counts stayed
+**356,637 / 305,121 / 57,322**; real safeStorage encrypt/decrypt counts stayed
+**17,210 / 813**. CPU self samples fell: `read` **6,238 → 2,450**, `same`
+**3,345 → 165**, `Hash` **4,813 → 2,358**. This removes measured index CPU work
+with identical durable operations. Baseline native encryption/decryption totaled
+278.6 ms; cgroup throttling was zero. Neither host-load observations nor the earlier
+three-worker isolation experiment explain the historical external scheduler state.
+
+Five consecutive exact native runs on `18d4fae2` each executed/passed **1**,
+failed/skipped **0**, two configured/one actual worker, retries zero. Each preserved
+one 8,333-item admission, 271 submissions, no writer/diagnostic errors, advancing
+unfinished counts around three real inputs, explicit flush, exact fresh protected-owner
+equality and both exits 0 without signals/teardown failures. Artifacts are
+`/tmp/builder-2125-reopen/candidate-N.json`, matching `.stderr` files and
+`candidate-N-results/` directories. Times are ms; heartbeats give samples/max gap.
+
+| N | Actual drain | IPC | Runner observation | Keyboard x/y/z | Renderer beats/gap | Main beats/gap |
+| --- | ---: | ---: | ---: | --- | --- | --- |
+| 1 | 32,289.7 | 32,180.3 | 32,517.0 | 89.0 / 126.6 / 143.9 | 1,615 / 24.9 | 1,048 / 88.6 |
+| 2 | 29,960.1 | 29,863.9 | 30,109.5 | 76.6 / 14.2 / 82.1 | 1,498 / 24.2 | 998 / 76.0 |
+| 3 | 33,554.0 | 33,447.2 | 33,738.9 | 94.7 / 74.4 / 78.5 | 1,678 / 24.6 | 1,066 / 98.5 |
+| 4 | 35,218.5 | 35,107.8 | 35,489.9 | 55.7 / 71.3 / 17.1 | 1,761 / 26.5 | 1,117 / 100.2 |
+| 5 | 53,777.1 | 53,642.0 | 54,063.6 | 131.1 / 102.6 / 108.2 | 2,684 / 58.1 | 1,443 / 118.6 |
+
+Throttling stayed zero. Run five's CPU total was 54,463.4 ms and one-minute host
+load rose 6.25→8.29; this measured context does not establish its slowdown's cause.
+The linked plan retains every run's CPU/load measurements.
+
+Builder units executed/passed **79** indexed-storage and **43** related tests
+(seven timing + 36 migration), each with **0 failed/skipped**. Supplied dispatcher
+unit gate 4 records **9,870 executed/passed, 0 failed, 3 skipped**, explicitly
+including the passed constructed-node regression. Host Node 25.8.0 / ABI 141
+checks preceded Electron ABI 130 restoration; no rebuild overlapped native execution.
+Build/pre-verify passed per the plan.
+
+`collection.json` contains **523** cases: native-writer **1**, clipboard **31**,
+parallel **491**, preserving dependencies/global parallelism. Complete application
+gate 7 executed **518: 516 passed, 2 failed, 5 skipped**, two configured/actual
+workers, retries zero. The named native scenario passed once, first attempt:
+**1 executed/passed, 0 failed/skipped**, drain **28,947.4 ms**, keyboard
+**74.7/15.9/87.6 ms**, renderer **1,448 samples / 21.2 ms**, main
+**1,020 samples / 70.1 ms**, 8,333 items/271 submissions and no errors. Clipboard
+then executed **31**, parallel **486** with **5 skipped**. The verifier accepted
+this complete result, including execution of both dependent projects.
+
+The message-reply and recorded daemon-history failures remain failed. Selected report
+`2026-10-20T08-43-21-405Z_verifier-gate-rerun_#2125.log` separately executed/passed
+**3**, failed/skipped **0**, retries zero, including native and both failed cases.
+Dispatcher acceptance used its unrelated-flake rerun policy; daemon-history remains
+tracked by #2153. The accepted bundle retains `handoff/verifier-2125.md` and `logs/`.
+
 #### Earlier writer validation
 
 Recorded Linux x64 evidence for final writer source `ce3a6be7`, reviewed at

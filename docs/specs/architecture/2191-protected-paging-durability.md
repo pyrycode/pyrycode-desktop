@@ -1,51 +1,5 @@
 # Protected paging durability
 
-## Revisions — authenticated-index comparison, 2026-10-21
-
-Resume attribution at the third trusted page (historical request 27, before_order
-263), preserving every preceding request and paired three-worker execution. Measure
-SQL compilation/execution counts and time during each exact-owner admitted mutation,
-alongside existing publication, queue, protected-header and transaction-yield
-checkpoints. Wrap the existing SQLite prototype methods only in the isolated test
-app, delegate all arguments/results unchanged, and retain no SQL or arguments.
-Only fixed index INSERT/DELETE equality contributes to index counts. No profiler,
-extra workload, delay, retry, flush or completion is introduced.
-
-Compare #2198's pushed per-flush statement reuse after establishing the baseline;
-its native writer proof is not paging attribution. Overlap: #2198 changes both
-`flushSteps` blocks in `indexedThreadHistory`; reuse must preserve its exact repair
-and coordinate ownership before a production correction. #2153 changes only a
-different scenario block and remains dependent on this ticket. An actual paging
-failure with scoped pending/admission evidence remains necessary; passing overhead
-measurements alone cannot establish the historical failing boundary.
-
-Security re-review: PASS across all nine categories. Exact request ownership gates
-aggregation; fixed IPC validation/membership and encrypted transactions remain
-unchanged. No tokens, keys, content, raw owners, SQL arguments or exception details
-are exported. Existing Electron isolation, cryptography, network admission,
-cancellation and fail-closed reads remain authoritative. Test wrappers add no
-capability, persistent cache, task or storage path. Restore method wrappers at app
-teardown through process lifetime. Forecast remains one durability behavior, under
-800 written lines including retained diagnostics, no new exported type or helper,
-no signature migration and three observable criteria. Causal regression/correction
-selection remains contingent on Electron evidence.
-
-Implementation choice: extend the existing exact-anchor protected-read source
-transform with local index-write wrappers rather than patching SQLite prototypes.
-This limits measurement to the two flush loops and works identically with #2198's
-local statement reuse. The installed observer aggregates only during exact-owner
-admission. Ordinary builds contain no wrappers. The anchor assertions failed before
-implementation and passed afterward; this is instrumentation proof only.
-
-The instrumented baseline passed 4/4 with all sixteen original paging inputs.
-Its third inputs compiled 13,345 and 13,335 index statements and reached older
-numeric coverage in 2,467 and 1,183 ms respectively. This is measured amplification,
-not a failing protected-paging trace. Temporarily apply the exact two-flush change
-from #2198 commit `6c3e95b3` for one paired diagnostic comparison, then remove it
-unless paging attribution justifies retaining a correction. Keep the candidate's
-dirty source/build identity explicit. #2198's causal unit regression belongs to
-that repair; it cannot substitute for this ticket's unresolved paging regression.
-
 ## Files read
 
 - `src/renderer/src/store/chatHistoryWriter.ts` → `createChatHistoryWriter`, `mutationSteps`, `drain`: bounded acknowledged save cursor and task yields.
@@ -256,3 +210,99 @@ A scratch application-storage probe used the original nine captured fresh-profil
 The protected-paging cause remains unresolved. There is no production correction, controlled failing-before durability regression, post-correction 20/20 paired acceptance or subsequent full replay. The historical failure and #2153 dependency direction remain unchanged. Do not treat these observations or observer fixes as a completed repair or open a repair PR from them.
 
 Closing validation after the final merge of main `f8e4e508f0a2`: `recovery-final-pre-verify.log` passed all five checks, including the live security-label read and 4/4 transform tests; `recovery-final-targeted.log` passed the other 145/145 affected tests, including both named coverage regressions. `recovery-final-client-typecheck.log` and `recovery-final-build.log` passed. Node checks finished before final Electron preparation. Clean diagnostic revision `b62a71a5` then ran the unchanged original history scenario once under guarded complete-thread replay (`recovery-final-history.json`, SHA-256 `00bfd7204abf0c3b6dea7039e42239d83d0f0fe9143c93e5f8b2f6153ae9ecfb`): 1 executed/passed, zero failed/skipped/retried, 32 matched/63 emitted/zero remaining and zero forbidden launches. Its eight inputs, 19 publications/queue insertions and 51 submissions/admissions/storage completions/main acknowledgements/renderer settlements all completed, with zero scoped owner/epoch mismatches. This validates the final diagnostic recorder only; it is not paired or post-correction acceptance. Same-stem log/results retain build and input provenance. Original protected-paging and saved-only failure hashes were rechecked unchanged. No job remains running; preserve this unfinished investigation without claiming a repair.
+
+## Revisions — authenticated-index comparison, 2026-10-21
+
+Resume attribution at the third trusted page (historical request 27, before_order
+263), preserving every preceding request and paired three-worker execution. Measure
+SQL compilation/execution counts and time during each exact-owner admitted mutation,
+alongside existing publication, queue, protected-header and transaction-yield
+checkpoints. Wrap the existing SQLite prototype methods only in the isolated test
+app, delegate all arguments/results unchanged, and retain no SQL or arguments.
+Only fixed index INSERT/DELETE equality contributes to index counts. No profiler,
+extra workload, delay, retry, flush or completion is introduced.
+
+Compare #2198's pushed per-flush statement reuse after establishing the baseline;
+its native writer proof is not paging attribution. Overlap: #2198 changes both
+`flushSteps` blocks in `indexedThreadHistory`; reuse must preserve its exact repair
+and coordinate ownership before a production correction. #2153 changes only a
+different scenario block and remains dependent on this ticket. An actual paging
+failure with scoped pending/admission evidence remains necessary; passing overhead
+measurements alone cannot establish the historical failing boundary.
+
+Security re-review: PASS across all nine categories. Exact request ownership gates
+aggregation; fixed IPC validation/membership and encrypted transactions remain
+unchanged. No tokens, keys, content, raw owners, SQL arguments or exception details
+are exported. Existing Electron isolation, cryptography, network admission,
+cancellation and fail-closed reads remain authoritative. Test wrappers add no
+capability, persistent cache, task or storage path. Restore method wrappers at app
+teardown through process lifetime. Forecast remains one durability behavior, under
+800 written lines including retained diagnostics, no new exported type or helper,
+no signature migration and three observable criteria. Causal regression/correction
+selection remains contingent on Electron evidence.
+
+Implementation choice: extend the existing exact-anchor protected-read source
+transform with local index-write wrappers rather than patching SQLite prototypes.
+This limits measurement to the two flush loops and works identically with #2198's
+local statement reuse. The installed observer aggregates only during exact-owner
+admission. Ordinary builds contain no wrappers. The anchor assertions failed before
+implementation and passed afterward; this is instrumentation proof only.
+
+The instrumented baseline passed 4/4 with all sixteen original paging inputs.
+Its third inputs compiled 13,345 and 13,335 index statements and reached older
+numeric coverage in 2,467 and 1,183 ms respectively. This is measured amplification,
+not a failing protected-paging trace. Temporarily apply the exact two-flush change
+from #2198 commit `6c3e95b3` for one paired diagnostic comparison, then remove it
+unless paging attribution justifies retaining a correction. Keep the candidate's
+dirty source/build identity explicit. #2198's causal unit regression belongs to
+that repair; it cannot substitute for this ticket's unresolved paging regression.
+
+## Index-work comparison evidence — macOS arm64, 2026-10-21
+
+Both guarded complete-thread runs retained the original paired selection twice,
+three configured/actually overlapping workers, retries zero and zero forbidden
+launches. Baseline `8dca876b` was clean: 4 executed/passed, no failures/skips,
+history exchanges 32/63/0 and thread exchanges 45/378/0. Report
+`/tmp/builder-2191/index-baseline-paired.json` SHA-256:
+`d3121f3a43476d620a51837b8805952c050590fafb09a70690c04da335c3c5cf`.
+Its two history walks compiled/executed 110,103 and 110,112 index statements;
+compilation took 1,255.8/1,050.4 ms, execution 1,380.6/1,100.9 ms, existing
+transaction yields 1,567/1,593 ms. Third-input compilations were 13,345/13,335,
+taking 201.9/113.4 ms. Both exact-owner five-part saves finished normally.
+
+The temporary candidate matched #2198's production file exactly (empty diff
+against `origin/feature/2198`). Build `f2a58a2e`, dirty=true, executed 4: 2 passed,
+2 failed, none skipped. Report `index-candidate-paired.json` SHA-256:
+`e8c076dd31d05cf5f7e380cf3c76c88db74db086cc32db36d56377ddb9b7c1e7`.
+Its completed history walk compiled only 85 statements while executing 110,110;
+compilation 2.45 ms, execution 718.3 ms, yield waits 416 ms. Third input: 10
+compilations, 0.26 ms compilation, older coverage in 1,019 ms. All three observed
+walks retained eight trusted inputs, 19 publications/queues and 51 submissions,
+admissions, completions, acknowledgements and renderer settlements; no owner/epoch
+mismatch or classified mutation failure occurred. Timing includes observer cost.
+
+Candidate failures were explicit false native probes on relaunch: thread exchange
+38/345/7 and history exchange 10/21/22, before the failed instance's paging observer.
+They are tracked separately as #2204 (Backlog, low priority); #2190's existing
+absent-versus-false classification remains intact. Neither failure supplies paging
+attribution or a prerequisite. No dependencies changed; #2153 stays blocked by #2191.
+
+`index-comparison-summary.json` retains counts, actual overlap, every build/bundle
+hash, unchanged input checksums/capture provenance, guards, per-input progress and
+SQL/yield totals. SHA-256:
+`a0079f891e766d77a7f8b86bc2d8e87a44ff06c0cf056dc6df90c2c65e60dd94`.
+Same-stem logs/result folders retain both original reports and all failures. The
+historical protected-paging and saved-only report hashes were rechecked unchanged.
+
+Removed the temporary candidate with a patch: the final production diff is empty.
+The comparison demonstrates removed index work, not the historical failing boundary.
+No paging causal regression/correction, post-correction 20/20 or full acceptance
+is claimed. Further unchanged batches cannot close that evidence gap. All build,
+native preparation and replay jobs ran sequentially; no job remains running.
+
+Final preservation checks after main `f8e4e508f0a2`: `index-final-pre-verify.log`
+passes all five checks and 4/4 transform tests; `index-final-targeted.log` passes
+145/145 other affected tests. Client-test typecheck and `index-final-build.log`
+pass; normal bundles contain no checkpoint hooks. Final scope: under 800 written
+lines, five exported test helpers, no production change. The paging cause and
+all post-correction acceptance remain unfinished builder work; no repair PR opened.

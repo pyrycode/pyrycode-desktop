@@ -47,3 +47,9 @@ Keep bounded Playwright failures and ownership exceptions visible. No sleeps, re
 ## Open Questions
 
 - Does the controlled optimistic-to-authoritative publication detach the observed bubble, and does the existing barrier suffice? Record observations before PR.
+
+## Revisions
+
+2026-10-20: The controlled held-echo schedule confirms replacement: the optimistic bubble was connected inside the thread without a numeric read-row; after the existing publication barrier completed, that exact element was disconnected with no thread ancestor. Inspecting its ancestor with the original ownership guard threw `the bubble is not inside a thread scroll region`. The native-writer prerequisite passed; the named control failed at that guard (2 executed, 1 passed, 1 failed, no skips/retries/report errors). App teardown exited 0 without failures. This demonstrates a controlled stale-node boundary, not the unrecorded historical schedule.
+
+Reuse the merged barrier unchanged. The named case now also asserts the retired-node observation and the fresh bubble's connected membership in the active thread, numeric direct-child identity and final-child membership, with no image yet present. Its original overlapping-row, bottom, decode, drawn-height and growth assertions remain. A local callback after optimistic presence releases the held echo; defaults preserve the other two cases. No duplicate readiness implementation or product repair is needed. Question resolved; final passing evidence follows below.

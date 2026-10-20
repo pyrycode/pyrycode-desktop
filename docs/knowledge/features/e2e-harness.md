@@ -221,6 +221,35 @@ cannot duplicate delivery. A second reset fails after two attempts. Every other
 class fails immediately, including HTTP rejections and Noise loading errors;
 existing teardown still drains the forwarder.
 
+The owning forwarder binds its HTTP listener with `http.listen(0, '127.0.0.1')`,
+matching the advertised IPv4 dial. On macOS a wildcard listener can coexist with
+an exact IPv4 listener on the same port, letting the latter receive that dial.
+`setupDiagnostics().listenerMatchesDial` checks the actual bound address and
+family and retains only a boolean. Preserve the explicit bind when changing
+HTTP/WebSocket server ownership; an ephemeral port alone does not establish
+ownership of the advertised address. See the [forwarder's observation contract](fake-relay-forwarder.md#setup-observation-and-listener-ownership).
+
+Before each dial, the setup helper snapshots that forwarder's counters. It
+synchronously records one content-free attempt after success or rejection, at
+most two records because only the first reset can retry. Each record carries
+`attempt`, `outcome` (`opened`, `retry-reset`, `failed`), the sanitized
+`failureClass`, `listenerMatchesDial`, parser/upgrade/rejection/connection delta
+booleans, a fixed parser class and GET/Upgrade/key/version validity booleans.
+`responder` is `http-parser` when a parser error was observed, otherwise
+`websocket-upgrade` for an observed upgrade rejection, `opened` for an observed
+connection, or `unobserved`. Even a successful dial stays `unobserved` if its
+owning forwarder observed no connection; an HTTP status alone cannot identify
+the responder. No raw request, error, URL, header, key or frame is retained.
+
+`startFakeServer` attaches these records in `finally`, before Electron launch,
+as JSON named `fake-daemon-setup-<setupOrdinal>-<forwarderStep>-<attempt>`.
+The setup ordinal advances even on failure and is separate from the later
+Electron launch ordinal; step names are fixture-owned constants. Registering a
+successful daemon's teardown before awaiting attachment I/O prevents an
+attachment failure from stranding it or being classified as a dial failure.
+Failed dials already release their socket and Noise state; fixture teardown
+closes the forwarder's WebSocket server and explicitly owned HTTP listener.
+
 `fakeDaemonSetup.test.ts` destroys the first real loopback HTTP upgrade socket,
 accepts the second and checks exactly two attempts, a usable handle and cleanup of
 both handshake states, with failed-state cleanup asserted before the next state
@@ -239,6 +268,33 @@ This proves the setup-stage classification, not the cause of the intermittent 40
 seen in the host-edit drive, nor any new recurrence — a classified suffix on a
 future flake only narrows which of these paths to chase; that original responder
 remains unidentified.
+
+Controlled ownership regressions recreate the legacy wildcard listener with a
+competing IPv4 responder for HTTP 400, 404 and 501. Each rejects once, records an
+unobserved owner, and proves socket close and Noise free before constructing a
+fresh explicitly bound owner and completing an encrypted exchange. Darwin uses
+its actual wildcard shadowing; other platforms use an IPv6-only negative control
+without skipped cases. The exact-bind regression rejects a competing listener
+with `EADDRINUSE`, and concurrent-forwarder tests prove independent counters and
+opaque exchanges. Parser/upgrade regressions compare response bytes against an
+uninstrumented server and prove subsequent usability. These establish the
+repairable ownership boundary, without identifying the historical HTTP 400/404/501
+responders or attributing a mute-command product failure.
+
+At reviewed revision `9d8ed3efbce3cdb01d2b157d803c484521f7aaca` on macOS arm64,
+the unchanged `a setConversationMuted command reaches only the owning host and
+settles once` scenario passed ten consecutive executions with retries disabled:
+10 executed/passed, zero failed/skipped/retried, all 20 setup records opened with
+`listenerMatchesDial: true`. The complete configured four-worker gate recorded
+530 executed/passed, zero failed, two existing skips and zero retries;
+the named scenario is present and passed. Owning-host dispatch, confirmed/rejected
+settlement, unclaimed-ID rejection and list-refresh assertions remain intact.
+The [accepted evidence](../../specs/architecture/1983-fake-daemon-rejection-capture.md#accepted-verifier-evidence-2026-10-20)
+records commands, report/log paths, skip reasons and the later closure of #2150,
+and supersedes earlier pending-gate statements. Earlier failed captures remain
+failed and retained in that plan. Other operating systems are outside this
+ticket's verification scope; these are recorded results, with no new provider or
+live-daemon acceptance claim.
 
 ### Reconnect delivery evidence
 

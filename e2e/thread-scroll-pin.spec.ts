@@ -1,6 +1,6 @@
 import { capturePairedApp } from './fixtures/capturePairedApp'
 import { createHash } from 'node:crypto'
-import type { ElectronApplication, Locator, Page } from '@playwright/test'
+import type { ElectronApplication, Locator, Page, TestInfo } from '@playwright/test'
 import { test, expect, seedConversationsFrame, SEEDED_ROW, FIRST_SERVER_ID } from './fixtures/launchPairedApp'
 import { bubbleTextExactly } from './fixtures/bubbleText'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
@@ -1075,8 +1075,8 @@ const pushCompletedUpload = (app: ElectronApplication, uploadId: string): Promis
     }
   )
 
-/** Send one message carrying one image attachment, and wait for its optimistic echo. The fake answers a
- *  send with no frames (the module-level builder's non-primer arm), so the echo is the whole mutation. */
+/** The withheld-thumbnail builder returns a daemon echo. Its supplied numeric read-row identity
+ *  distinguishes completed publication from the optimistic bubble that appears before it. */
 async function sendWithThumbnail(
   page: Page,
   app: ElectronApplication,
@@ -1087,6 +1087,88 @@ async function sendWithThumbnail(
   await page.getByPlaceholder('Message…').fill(text)
   await page.getByRole('button', { name: 'Send' }).click()
   await expect(thumbnailBubble(page, text)).toHaveCount(1)
+  await expect(page.locator('.conversation__thread > [data-read-row]', {
+    has: thumbnailBubble(page, text)
+  })).toHaveAttribute('data-read-row', /^\d+$/)
+}
+
+/** Geometry, processing and intent are separate readiness facts. Keep the metadata-focus control
+ *  that failed the old setup, then settle focus before trusted input and ONE exact park. */
+async function parkThumbnailReader(page: Page, info: TestInfo) {
+  const thread = page.locator('.conversation__thread')
+  const observations: unknown[] = []
+  await thread.evaluate(el => {
+    const lifetime = new AbortController()
+    el.dataset.thumbnailScrolls = '0'
+    // React installed its target scroll listener when the thread mounted, before this observer.
+    el.addEventListener('scroll', () => {
+      el.dataset.thumbnailScrolls = String(Number(el.dataset.thumbnailScrolls) + 1)
+      el.dataset.thumbnailTop = String(el.scrollTop)
+    }, { signal: lifetime.signal })
+    el.addEventListener('thumbnail-reader-stop', () => {
+      lifetime.abort()
+      delete el.dataset.thumbnailScrolls
+      delete el.dataset.thumbnailTop
+    }, { once: true })
+  })
+  const observe = async (phase: string) => {
+    const result = await thread.evaluate((el, timeout) => new Promise<{
+      settled: boolean
+      samples: { scrollTop: number; scrollHeight: number; clientHeight: number; clientWidth: number;
+        focused: boolean; processed: number; processedTop: number }[]
+    }>(resolve => {
+      const samples: { scrollTop: number; scrollHeight: number; clientHeight: number; clientWidth: number;
+        focused: boolean; processed: number; processedTop: number }[] = []
+      const deadline = performance.now() + timeout
+      let identical = 0
+      const sample = (): void => {
+        const next = { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight,
+          clientHeight: el.clientHeight, clientWidth: el.clientWidth, focused: document.activeElement === el,
+          processed: Number(el.dataset.thumbnailScrolls), processedTop: Number(el.dataset.thumbnailTop ?? -1) }
+        identical = JSON.stringify(next) === JSON.stringify(samples.at(-1)) ? identical + 1 : 0
+        samples.push(next)
+        if (samples.length > 40) samples.shift()
+        if (identical >= 20 || performance.now() >= deadline) resolve({ settled: identical >= 20, samples })
+        else requestAnimationFrame(sample)
+      }
+      requestAnimationFrame(sample)
+    }), STREAM_TIMEOUT_MS)
+    observations.push({ phase, ...result })
+    expect(result.settled).toBe(true)
+    return result.samples.at(-1)!
+  }
+  try {
+    await page.mouse.move(0, 0)
+    const focus = await thumbnailBubble(page, ABOVE_TEXT).locator('..').getByRole('button').first().evaluate(action => {
+      const el = action.closest('.conversation__thread')!
+      const before = el.scrollHeight
+      action.focus({ preventScroll: true })
+      return { before, after: el.scrollHeight }
+    })
+    observations.push({ phase: 'metadata-focus', ...focus })
+    expect(focus.after).toBeGreaterThan(focus.before)
+    await observe('focus-layout-processed')
+    await thread.evaluate(el => el.focus({ preventScroll: true }))
+    const settled = await observe('before-upward-input')
+    expect(settled.focused).toBe(true)
+    await expectPinnedToBottom(page)
+    await page.keyboard.press('ArrowUp')
+    const moved = await observe('after-upward-input')
+    expect(moved.scrollTop).toBeLessThan(settled.scrollTop)
+    expect(moved.scrollTop).toBeGreaterThan(0)
+    const parked = Math.round(settled.scrollHeight * 0.4)
+    await thread.evaluate((el, top) => { el.scrollTop = top }, parked)
+    const before = await observe('before-thumbnail-release')
+    expect(before.processed).toBeGreaterThan(moved.processed)
+    expect(before.processedTop).toBe(parked)
+    expect(before.focused).toBe(true)
+    return { parked, before }
+  } finally {
+    await thread.evaluate(el => el.dispatchEvent(new Event('thumbnail-reader-stop')))
+    await info.attach('thumbnail-reader-setup', {
+      body: JSON.stringify(observations), contentType: 'application/json'
+    })
+  }
 }
 
 /** The user bubble carrying one of the two pictures, addressed by its OWN message text.
@@ -1233,7 +1315,7 @@ test('a thumbnail resolving above a bottom-resting reader leaves the thread at t
 
 test('a thumbnail resolving leaves a scrolled-up reader where they were, above them or below them', async ({
   launchPairedApp
-}) => {
+}, info) => {
   const withheld = withheldThumbnails()
   const { page, app, daemon } = await launchPairedApp({
     buildReplyFrames: withheld.buildReplyFrames
@@ -1246,20 +1328,11 @@ test('a thumbnail resolving leaves a scrolled-up reader where they were, above t
   await primeOverflowingThread(page)
   await sendWithThumbnail(page, app, ID_BELOW, BELOW_TEXT)
 
-  // Park part-way up — programmatic for the reasons the tests above give (it fires the same DOM `scroll`
-  // event the production handler listens to, with no hover position and no smooth-scroll timing), at 40%
-  // rather than at the top. Zero is the ONE offset at which scroll anchoring does not run at all, so
-  // parking there would make the picture-above arm below vacuous in the exact direction that matters.
-  const settled = await readThreadMetrics(page)
-  const parked = Math.round(settled.scrollHeight * 0.4)
-  await page.locator('.conversation__thread').evaluate((el, top) => {
-    el.scrollTop = top
-  }, parked)
-  await settleScrollEvent(page)
+  // A nonzero 40% target keeps native anchoring active and both withheld pictures offscreen.
+  const { parked, before } = await parkThumbnailReader(page, info)
 
   // The preconditions: the reader really is where the test put them, that place is neither the top nor
   // anywhere near the bottom, and each picture really is on the side of them this test claims.
-  const before = await readThreadMetrics(page)
   expect(before.scrollTop).toBe(parked)
   expect(before.scrollTop).toBeGreaterThan(0)
   expect(distanceFromBottom(before)).toBeGreaterThan(before.clientHeight)

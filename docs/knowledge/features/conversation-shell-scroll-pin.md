@@ -250,6 +250,36 @@ confirmed by the [verifier verdict](https://github.com/pyrycode/pyrycode-desktop
 These runs exercised the built Electron app with fake-daemon streaming; physical
 trackpad gestures and live-Claude streaming were not exercised.
 
+### Thumbnail reader setup
+
+The late-image held-reader case in [`thread-scroll-pin.spec.ts`](../../../e2e/thread-scroll-pin.spec.ts)
+must establish released intent before either withheld image resolves. `sendWithThumbnail`
+waits for a numeric `data-read-row` on the direct-child supplied wrapper containing
+the bubble; the optimistic bubble or its inner row cannot certify completed daemon
+echo publication. `parkThumbnailReader` keeps the pointer outside, deliberately
+reveals metadata through Copy focus with `preventScroll`, settles that geometry,
+then focuses the thread and settles again. Trusted ArrowUp must actually move upward
+from the bottom before one exact assignment to 40% of the settled content height.
+Programmatic parking during metadata reflow can leave following armed even after
+every echo has arrived.
+
+A spec-local target listener registered after React records processed scroll count
+and offset. Before release, require a newer processed event at the parked target
+and 20 unchanged frame comparisons of offset, content height, viewport width/height,
+thread focus and processing state. The helper removes its listeners and attaches
+`thumbnail-reader-setup` phase samples in `finally`, including failed readiness.
+This observation acknowledges the park rather than merely flushing two frames.
+
+Keep the exact parked-offset precondition, positive nonzero offset, more than one
+viewport of bottom distance and above/below row-placement guards. The pre-release
+baseline stays immutable: decoded below-reader growth leaves its offset unchanged;
+decoded above-reader growth compensates by that growth while preserving the visible
+reference row and remaining away from bottom. Image decoding, drawn height and
+positive growth checks, plus both bottom-resting thumbnail cases, remain required.
+The [controlled diagnosis and counted Linux runs](development-verification-layout-and-input.md#thumbnail-reader-setup-verification)
+distinguish echo, focus/layout and processed input readiness without attributing the
+controlled schedule to the historical failure or changing production behavior.
+
 ### Inline permission reader verification
 
 A stable offset alone can be an overwritten bottom endpoint. A programmatic park during
@@ -432,6 +462,77 @@ contains no full verifier-gate pass. This is fake-transport supplied-renderer
 evidence; live Claude was not required.
 
 ### Deferred expansion verification
+
+Completion observers can dominate the work they measure. In the installed Playwright,
+a failed missing-row scalar assertion such as `expect(row).toHaveText(...)` calls
+`InjectedScript.expect` → `_ariaSnapshotForExpect`, inspecting the entire document
+body when the target is absent. Repeated accessibility snapshots traverse the growing
+8,334-source thread on the renderer thread. A CPU profile attributed 55.3% of sampled
+time to these stacks; admission traces continued progressing. This demonstrates
+observer amplification without establishing a lost production admission timer.
+
+The held-item case in [`thread-items.spec.ts`](../../../e2e/thread-items.spec.ts)
+uses `expect.poll(() => row(8339).allTextContents(), { timeout: 120_000 })` with exact
+singleton arrays: `['Inert held row 8329']` initially and `['Revised while closed']`
+after reopening. The array asserts existence, uniqueness and complete text while
+reading only the target. The workload, 120-second deadlines, real keyboard/composer
+limit of 1000 ms during incomplete mounting, positive later progress, all 8,334 rows,
+closed-descendant deferral, expansion retention, visible-only reads and both collapse
+anchors remain required.
+
+The regression arms while the final row is absent and instruments `aria-hidden`
+reads on source-row wrappers in Playwright's isolated utility world through CDP.
+A main-world prototype probe cannot observe those reads and can falsely report zero.
+Require zero unrelated accessibility reads, restore the prototype in `finally`,
+detach the CDP session and retain the committed admission trace. The attachments
+`composer-during-expansion`, `completion-observer` and `expansion-progress` separate
+input, inspection overhead and committed mounting; static renderer tests cannot
+prove effect liveness.
+
+#### Completion-observer regression evidence
+
+The [accepted verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2185#issuecomment-6295268770)
+records Linux x64 on 2026-10-20, reviewed head
+`3e533963becd4f857a8e56cc9eaa7deebc7377cb`. Builder implementation
+`2306dfda13e42e380127d6cb16c1ab3c784e21b6` has the same test and production
+admission source. [Commands, report hashes and per-run measurements](../../specs/architecture/2184-held-expansion-completion.md#validation--2026-10-20)
+retain the exact clipboard selection, ten repetitions, disabled retries and full-file run.
+
+| Recorded run | Executed | Passed | Failed | Skipped | Retries |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Original scalar wait with utility-world probe | 1 | 0 | 1 | 0 | 0 |
+| Repaired standalone workload | 1 | 1 | 0 | 0 | 0 |
+| Exact named case repeated ten times | 10 | 10 | 0 | 0 | 0 |
+| Complete `thread-items.spec.ts` | 13 | 13 | 0 | 0 | 0 |
+| Configured application suite, including captured clients | 528 | 527 | 1 | 4 | 0 |
+
+The original scalar wait failed on 47,920 unrelated accessibility reads. All ten
+repaired repetitions observed the final row absent, then zero unrelated reads;
+input committed in 4–257 ms at 772–1,028 rows, followed by positive progress and
+8,334 mounted rows. All retention, read and anchor assertions passed with normal
+teardown. The named held-expansion case was present and passed in the complete
+application run: 4.8 ms input at 772 rows, zero unrelated reads, 8,334 final rows,
+normal exit and no teardown failure. Captured clients contributed 28 executed,
+27 passed, 1 failed, 1 skipped. That separate history-on-open failure remains
+tracked by #2153; its same-tree rerun with dependencies executed/passed 4,
+failed/skipped 0, retries 0. The accepted gate disposition retains the initial
+failure rather than converting the complete run into a failure-free report.
+
+Original macOS arm64 evidence remains separate: PR #2170 at
+`b29787073999a4ecf9a9adedc56a24b9e72656db` ran 532 executed, 531 passed,
+1 failed, 2 skipped; this named case timed out at row 8339 after 120 seconds
+despite successful input and later progress, with normal exit/teardown. Its exact
+same-tree retry executed/passed 1, failed/skipped 0, retries 0. Portable bundle
+`cbb63d3356b372eaa1b98e91808e261b1ea315e1eb41b9182ffa90540ba738d7`
+from #2163 retains `logs/verifier-gate__2163_6.log` and its handoff; its checksums
+were verified. The refinement record carries the retry provenance; that retry's
+raw report is not in the bundle. The original environmental schedule was not
+captured, so the controlled probe proves the amplification boundary rather than
+that timeout's exact cause. macOS is outside this Linux ticket's verification
+scope. No fresh provider/daemon acceptance is required; captured replay proves
+replay behavior only.
+
+#### Earlier presentation evidence
 
 The [accepted verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2131#issuecomment-6264353342)
 records Linux x64 at `4532a83c551ecd4a1661eb83f8d930a7a8c7ad62` on

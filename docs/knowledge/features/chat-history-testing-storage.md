@@ -71,8 +71,23 @@ misses this CPU cost: populating caches only during reads still reparsed constru
 nodes 3,349 times before the correction. The causal red/green runs each executed one
 test (78 filtered, none skipped): red failed, green passed. All 79 indexed-storage
 tests then executed/passed with zero failures/skips. See the
-[native comparison and counted Linux evidence](chat-history-testing-native.md#reopened-slow-drain-cause-and-correction)
+[native comparison and counted Linux evidence](chat-history-testing-writer-evidence.md#reopened-slow-drain-cause-and-correction)
 for unchanged storage-operation counts and real input/heartbeat acceptance.
+
+`bounds index SQL compilation per flush while preserving writes, yields, rollback and fresh owners`
+counts fixed index INSERT/DELETE compilations independently of their executions.
+Both shuffled 31-item insertion and 16-item removal require over 100 row executions
+and more than five real task turns (16 units per turn), while compiling at most ten
+statements across index families. An interrupted sequence flush must roll back
+exactly; later removal/reopen and a new flush through a fresh connection verify
+exact data and statement lifetime. Existing constructed-node proofs, disk-corruption
+rejection and authentication tests remain required beside this compilation bound.
+The retained macOS causal red executed/failed **1**, passed/skipped **0**, with
+**3,592 compilations** against ten; green executed/passed **1**, failed/skipped
+**0** (79 filtered in each). All **80** indexed tests then executed/passed with
+**0 failed/skipped**, including this named regression. See the
+[macOS comparison and native acceptance](chat-history-testing-writer-evidence.md#macos-flush-compilation-comparison)
+and [flush lifetime contract](chat-history-api.md#owned-authoritative-mutations).
 
 `e2e/daemon-item-cache.test.ts` compares separate, coalesced and held-failure saves
 through protected disk/reopen. It covers saved/pending repair and unfinished fences,

@@ -1169,7 +1169,7 @@ function CompactRow({ source, snapshot, expanded, toggle, changed }: {
     <ToolRow item={item} headerExpandable running={typeof source.active === 'boolean' ? source.active : undefined} expansion={{ expanded: open, onToggle: () => { setLaunchOpen(false); toggle(source.id) } }}
       suppliedOutcome={{ label: (typeof source.status === 'string' ? source.status : 'Status unknown') + count,
         failed: source.status === 'failed', denied: source.status === 'denied' }} />
-    {typeof source.error_summary === 'string' && <p role="status">{source.error_summary}</p>}
+    {typeof source.error_summary === 'string' && source.error_summary !== '' && <p role="status">{source.error_summary}</p>}
     {open && <>
       {source.kind === 'agent' && <button type="button" className="tool-row__chip tool-row__chip--toggle"
         aria-expanded={launchOpen} onClick={() => setLaunchOpen(value => !value)}>Launch body</button>}

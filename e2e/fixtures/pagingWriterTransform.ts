@@ -39,6 +39,24 @@ export function pagingTransactionTransform(source: string): string {
 }
 
 export function pagingProtectedReadTransform(source: string): string {
+  const flush = '    function* flushSteps(): Generator<void> {'
+  if (source.split(flush).length !== 3) throw Error('Paging checkpoint anchor changed')
+  source = source.replaceAll(flush, flush + `
+      const prepareIndexWrite = (sql: string) => {
+        const start = performance.now(), statement = db.prepare(sql)
+        globalThis.__observePagingSql?.('compiled', performance.now() - start)
+        return { run: (...args: unknown[]) => {
+          const start = performance.now()
+          try { return statement.run(...args) }
+          finally { globalThis.__observePagingSql?.('executed', performance.now() - start) }
+        } }
+      }`)
+  for (const sql of ['DELETE FROM thread_auth WHERE scope = ? AND tree = ? AND path = ?',
+    'INSERT OR REPLACE INTO thread_auth VALUES (?, ?, ?, ?)']) {
+    const anchor = `db.prepare('${sql}')`
+    if (source.split(anchor).length !== 3) throw Error('Paging checkpoint anchor changed')
+    source = source.replaceAll(anchor, `prepareIndexWrite('${sql}')`)
+  }
   const anchor = '    if (h.persistence) throw INVALID_CHAT_HISTORY'
   if (source.split(anchor).length !== 2) throw Error('Paging checkpoint anchor changed')
   return source.replace(anchor,

@@ -30,6 +30,13 @@ teardown through process lifetime. Forecast remains one durability behavior, und
 no signature migration and three observable criteria. Causal regression/correction
 selection remains contingent on Electron evidence.
 
+Implementation choice: extend the existing exact-anchor protected-read source
+transform with local index-write wrappers rather than patching SQLite prototypes.
+This limits measurement to the two flush loops and works identically with #2198's
+local statement reuse. The installed observer aggregates only during exact-owner
+admission. Ordinary builds contain no wrappers. The anchor assertions failed before
+implementation and passed afterward; this is instrumentation proof only.
+
 ## Files read
 
 - `src/renderer/src/store/chatHistoryWriter.ts` → `createChatHistoryWriter`, `mutationSteps`, `drain`: bounded acknowledged save cursor and task yields.

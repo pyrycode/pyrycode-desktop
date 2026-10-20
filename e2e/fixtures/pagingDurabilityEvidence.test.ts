@@ -4,7 +4,7 @@ import type { ElectronApplication } from '@playwright/test'
 import { installPagingDurabilityEvidence } from './pagingDurabilityEvidence'
 
 afterEach(() => {
-  for (const key of ['__pagingDurability', '__observePagingWriter', '__pagingWriterObservations', '__observeProtectedPaging', '__observePagingAdmission', '__observePagingTransactionTurn']) delete (globalThis as any)[key]
+  for (const key of ['__pagingDurability', '__observePagingWriter', '__pagingWriterObservations', '__observeProtectedPaging', '__observePagingAdmission', '__observePagingTransactionTurn', '__observePagingSql']) delete (globalThis as any)[key]
 })
 
 it('observes exact owners and split acknowledgements without exposing content or changing IPC', async () => {
@@ -16,6 +16,8 @@ it('observes exact owners and split acknowledgements without exposing content or
   const result = { status: 'ok' }
   const original = vi.fn(async (_event: unknown, request: unknown) => {
     ;(globalThis as any).__observePagingAdmission('admitted', request)
+    ;(globalThis as any).__observePagingSql('compiled', 2)
+    ;(globalThis as any).__observePagingSql('executed', 3)
     ;(globalThis as any).__observePagingTransactionTurn('yielded')
     ;(globalThis as any).__observePagingTransactionTurn('resumed')
     ;(globalThis as any).__observePagingAdmission('storage-completed', request, result)
@@ -69,6 +71,7 @@ it('observes exact owners and split acknowledgements without exposing content or
   expect(trace.filter((e: any) => e.stage === 'admitted').map((e: any) => [e.save, e.part])).toEqual([[1, 0], [1, 1]])
   expect(trace.filter((e: any) => e.stage === 'storage-completed').every((e: any) => e.status === 'ok' && e.sameOwner && e.sameEpoch)).toBe(true)
   expect(trace.filter((e: any) => e.stage === 'storage-completed').map((e: any) => e.turns)).toEqual([1, 1])
+  expect(trace.filter((e: any) => e.stage === 'storage-completed').map((e: any) => [e.compiled, e.compileMs, e.executed, e.executeMs])).toEqual([[1, 2, 1, 3], [1, 2, 1, 3]])
   // A previously accepted prefix replay cannot imply a new pending obligation.
   await handler({}, first)
   expect(trace.at(-1)).toMatchObject({ stage: 'acknowledged', pendingSaves: 0 })

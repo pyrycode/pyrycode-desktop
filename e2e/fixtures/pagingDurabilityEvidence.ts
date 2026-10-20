@@ -40,8 +40,14 @@ export async function installPagingDurabilityEvidence(
     const observations: unknown[] = []
     const saves = new Map<string, number>(), pending = new Set<number>(), completedSaves = new Set<number>()
     let epoch: string | undefined
-    let turn: { count: number; waitingMs: number; maxWaitMs: number; yieldedAt?: number } | undefined
+    let turn: { count: number; waitingMs: number; maxWaitMs: number; yieldedAt?: number;
+      compiled: number; compileMs: number; executed: number; executeMs: number } | undefined
     const record = (stage: string, fields: object = {}) => observations.push({ stage, ms: Date.now(), ...fields })
+    state.__observePagingSql = (stage: string, ms: number) => {
+      if (!turn) return
+      if (stage === 'compiled') { turn.compiled++; turn.compileMs += ms }
+      if (stage === 'executed') { turn.executed++; turn.executeMs += ms }
+    }
     state.__observePagingTransactionTurn = (stage: string) => {
       if (!turn) return
       if (stage === 'yielded') { turn.count++; turn.yieldedAt = Date.now() }
@@ -52,13 +58,15 @@ export async function installPagingDurabilityEvidence(
     }
     state.__observePagingAdmission = (stage: string, request: any, result: any) => {
       if (request?.operation !== 'mutateThread' || request.serverId !== owner.host || request.conversationId !== owner.chat) return
-      if (stage === 'admitted') turn = { count: 0, waitingMs: 0, maxWaitMs: 0 }
+      if (stage === 'admitted') turn = { count: 0, waitingMs: 0, maxWaitMs: 0,
+        compiled: 0, compileMs: 0, executed: 0, executeMs: 0 }
       const p = request.change.persistence
       record(stage, { save: p ? saves.get(p.id) : undefined, part: p?.part, parts: p?.parts,
         sameEpoch: epoch === request.change.metadata.epoch,
         sameOwner: request.change.metadata.hostId === owner.host && request.change.metadata.conversationId === owner.chat,
         status: result?.status, code: result?.code, ...(stage === 'storage-completed' && turn ? {
-          turns: turn.count, waitingMs: turn.waitingMs, maxWaitMs: turn.maxWaitMs } : {}) })
+          turns: turn.count, waitingMs: turn.waitingMs, maxWaitMs: turn.maxWaitMs,
+          compiled: turn.compiled, compileMs: turn.compileMs, executed: turn.executed, executeMs: turn.executeMs } : {}) })
       if (stage === 'storage-completed') turn = undefined
     }
     state.__observeProtectedPaging = (host: string, chat: string, header: any) => {

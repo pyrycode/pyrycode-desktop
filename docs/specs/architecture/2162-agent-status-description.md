@@ -55,3 +55,7 @@ Invalid JSON prefixes, missing/empty/non-string descriptions and incomplete stri
 ## Open Questions
 
 None. Keep the repair at composer label derivation rather than altering all tool row headlines.
+
+## Revisions
+
+2026-10-20: The mounted fixture must provide the bound `session_id` on its `turn_state` envelope. The admission guard in `src/renderer/src/store/threadLiveState.ts` → `createThreadLiveState` correctly ignores unscoped live readings; a legacy-style unscoped fixture left the status idle. The regression now supplies native provenance. Production design and selection rules are unchanged.

@@ -31,7 +31,8 @@ test('compact Agent status describes truncated input and follows live revisions'
   } })
   await expect(page.getByText('Agent status ready', { exact: true })).toBeVisible()
   expect(requests.find(request => request.type === 'thread_catch_up')?.payload.projection).toBe('compact-v1')
-  daemon.pushFrame(frame('turn_state', { conversation_id: SEEDED_ROW.id, state: 'responding' }))
+  daemon.pushFrame(encodeEnvelope({ id: 91, type: 'turn_state', ts: '2026-10-20T00:00:00Z', session_id: 'session',
+    payload: { conversation_id: SEEDED_ROW.id, state: 'responding' } }))
   const status = page.locator('.composer-status__label--tool')
   await expect(status).toHaveText('Running Agent: Diagnose desktop older-messages error…')
   await expect(status).toHaveCSS('text-overflow', 'ellipsis')

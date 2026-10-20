@@ -112,9 +112,8 @@ test('a real daemon lazily fills a served gap after more than 200 entries writte
         await clean.locator('.channel-list__row-open').filter({ hasText: channel }).click()
         const history = clean.locator('.conversation__thread')
         await expect(history).toContainText(closedPosts.at(-1)!, { timeout: 45_000 })
-        const coverage = (before?: number) => readHistoryCoverage(() => clean.evaluate(({ serverId, conversationId }) =>
-          window.pyry.chatHistory({ operation: 'readThread', serverId, conversationId }),
-        { serverId: daemon.pairFields.server, conversationId }), daemon.pairFields.server, conversationId, before)
+        const coverage = (before?: number) => readHistoryCoverage(request => clean.evaluate(request =>
+          window.pyry.chatHistory(request), request), daemon.pairFields.server, conversationId, before)
         const beforeHome = await coverage()
         const homeAsks = await mainRead(cleanApp, () => (globalThis as any).__threadPageAsks.filter((type: string) => type === 'thread_page').length)
         await history.press('Home')

@@ -1,5 +1,35 @@
 # Protected paging durability
 
+## Revisions — authenticated-index comparison, 2026-10-21
+
+Resume attribution at the third trusted page (historical request 27, before_order
+263), preserving every preceding request and paired three-worker execution. Measure
+SQL compilation/execution counts and time during each exact-owner admitted mutation,
+alongside existing publication, queue, protected-header and transaction-yield
+checkpoints. Wrap the existing SQLite prototype methods only in the isolated test
+app, delegate all arguments/results unchanged, and retain no SQL or arguments.
+Only fixed index INSERT/DELETE equality contributes to index counts. No profiler,
+extra workload, delay, retry, flush or completion is introduced.
+
+Compare #2198's pushed per-flush statement reuse after establishing the baseline;
+its native writer proof is not paging attribution. Overlap: #2198 changes both
+`flushSteps` blocks in `indexedThreadHistory`; reuse must preserve its exact repair
+and coordinate ownership before a production correction. #2153 changes only a
+different scenario block and remains dependent on this ticket. An actual paging
+failure with scoped pending/admission evidence remains necessary; passing overhead
+measurements alone cannot establish the historical failing boundary.
+
+Security re-review: PASS across all nine categories. Exact request ownership gates
+aggregation; fixed IPC validation/membership and encrypted transactions remain
+unchanged. No tokens, keys, content, raw owners, SQL arguments or exception details
+are exported. Existing Electron isolation, cryptography, network admission,
+cancellation and fail-closed reads remain authoritative. Test wrappers add no
+capability, persistent cache, task or storage path. Restore method wrappers at app
+teardown through process lifetime. Forecast remains one durability behavior, under
+800 written lines including retained diagnostics, no new exported type or helper,
+no signature migration and three observable criteria. Causal regression/correction
+selection remains contingent on Electron evidence.
+
 ## Files read
 
 - `src/renderer/src/store/chatHistoryWriter.ts` → `createChatHistoryWriter`, `mutationSteps`, `drain`: bounded acknowledged save cursor and task yields.

@@ -34,6 +34,8 @@ test('compact Agent status describes truncated input and follows live revisions'
   daemon.pushFrame(frame('turn_state', { conversation_id: SEEDED_ROW.id, state: 'responding' }))
   const status = page.locator('.composer-status__label--tool')
   await expect(status).toHaveText('Running Agent: Diagnose desktop older-messages error…')
+  await expect(status).toHaveCSS('text-overflow', 'ellipsis')
+  await expect(status).toHaveCSS('white-space', 'nowrap')
   await expect(status).not.toContainText('{')
   await expect(status).not.toContainText('prompt')
   await info.attach('agent-status-wide', { body: await capturePairedApp(app, page), contentType: 'image/png' })

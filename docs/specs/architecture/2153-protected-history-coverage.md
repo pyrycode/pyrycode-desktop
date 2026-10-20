@@ -257,15 +257,40 @@ bundled checksums and retain the original controlled red/green record. These
 supplement the original plan references; current passing results do not identify
 or erase the `de6e481a` or `b505bf0118` historical failures.
 
-Dispatcher handoff remains pending for this new candidate: run the configured
-application gate and retain both named cases passing without retry; verifier
-checks counted results separately from inherited failures. Earlier accepted
-gate evidence above belongs to the earlier candidate. No fresh provider/daemon
-or physical-effect result is claimed. macOS is outside this Linux verification.
+### Reopened dispatcher gate reconciliation
+
+The [accepted verifier review](https://github.com/pyrycode/pyrycode-desktop/pull/2177)
+(stage `711a01e64d19d1c402d48ee2fdce2f3f5378eed7848259b8975179b749e34d3b`)
+completed the dispatcher handoff on reviewed Linux head
+`9b02c253d59b06a608543734e12aa477ae943d47`, including later main changes.
+This candidate is distinct from clean builder replay build `c733774b` and the
+earlier accepted candidate above. The supplied dispatcher gate report records
+unit gate 4 (`unit-test-gate.py`): **9,908 executed/passed, 0 failed, 3 skipped**.
+Both `waits across split saves at baseline and after dispatch` and
+`bounded protected reads leave time for received paging progress` are explicitly
+present and passed. These totals use the supplied gate report rather than the
+verdict's differing 9,990 total; the verifier also confirmed all 28 observer tests
+passed on the reviewed candidate.
+
+Application gate 7 (`npx playwright test --reporter=json`) recorded
+**528 executed/passed, 0 failed, 4 skipped**. Both named history/thread cases
+executed/passed once, retries zero, with completed 32/63/0 and 45/378/0 exchanges
+(matched requests/emitted frames/remaining requests) and unchanged provenance.
+The reset-prompt case remains skipped. Independent verifier summary:
+`/tmp/verifier-2177/evidence-summary.json`. The verifier checked all 69 checksums
+in retained #2125/#2158 bundles and all 20 files in the earlier accepted verifier
+bundle. Neither historical failure is reclassified; neither trigger is established.
+
+These configured gate results complete the pending handoff separately from builder
+acceptance. No unit, application or live tests were rerun by documentation.
+No fresh provider/daemon or physical-effect result is claimed; macOS is outside
+this Linux verification.
 
 ## Documentation handoff
 
-Pending documentation stage: reconcile these fresh current-source results in
-`docs/knowledge/features/chat-history-testing.md` → Counted Linux coverage-observer
-validation, preserving the original failure/pass pairs, unknown historical
-triggers and the separate pending dispatcher application gate.
+Satisfied in [Counted Linux coverage-observer validation](../../knowledge/features/chat-history-testing.md#counted-linux-coverage-observer-validation):
+fresh current-source results and the completed dispatcher gate are reconciled
+with distinct build identities and counted named passes. Both historical
+failure/pass pairs, unknown triggers, controlled failing-before mechanisms,
+capture provenance and the reset-prompt exclusion remain preserved. Dispatch,
+publication and protected durability retain their separate proof requirements.

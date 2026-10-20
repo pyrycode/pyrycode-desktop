@@ -244,6 +244,81 @@ Keep the original failure separate from these diagnostic schedules and preserve
 all assertions/bounds/envelopes. No production hypothesis is adopted yet. This
 adds no authority or payload retention; the security verdict remains PASS.
 
+### Rework validation and dependency handoff — 2026-10-20
+
+macOS arm64, Node 25.8.0, Electron 33.4.11. Both verifier findings are fixed in
+`bf14bed8`: metadata cases reset the preload module and recorder/cache together,
+assert empty initial state, then distinguish the two host baselines from live
+stall delivery and unsubscribe; startup waits for a uniquely addressed read-only
+sentinel at the daemon before checking the unchanged opening-query count.
+The required numbered answers are in the publishing verdict-handoff folder.
+
+The exact original metadata selector failed 1 executed/1 failed (97 unselected)
+before correction: `rework/metadata-red.log`, SHA-256
+`026339fce917e7e7177fc25c95f95eb88a22a0cf24f63fe9498d2d84bb7a948f`.
+Prepared pre-verify passed all five checks and all 98 metadata cases on `bf14bed8`;
+`rework/units/unit-xav35peb/0.json`, SHA-256
+`60cca94ca5b46bd43ec81090d1f8f40ee990e9f3b70fe8f174e320d6023e7a97`.
+The nine existing status/model/observer/query files passed 151/151, zero skipped:
+`rework/focused-units.json`, SHA-256
+`da91556ed24ce2a4bc0e7e1403aaa4007a2086d57771af3140ae2f350ae1d7a6`.
+Client-test typecheck, docs guard and normal build passed; Node checks finished
+before Electron preparation. The approved helper passed its native-writer
+prerequisite and both startup cases (3/3, `rework/startup.log`). The explicit
+JSON startup run passed 2/2 with retries zero (`rework/startup.json`, SHA-256
+`10dbf60752686e6748c14da2f54bf965f4a0101f81efd875ab3e7d3ea0d512b2`).
+Both traces end in `observer-barrier-received`; delayed mounting preserves main
+acceptance → renderer receipt → resumed dispatch → received publication.
+
+Required counted acceptance is **not complete**. The first batch on clean
+`bf14bed8` recorded 4 executed/3 passed/1 failed, zero skipped/retries, three
+configured/overlapping workers. Its failed history exchange is 9/20/23
+(matched/emitted/remaining), saved-only at 45 seconds; no status receipt or
+main-acceptance observation was retained for that failure. Its cause remains
+unknown, and is not attributed to a missed status or to any historical trigger.
+
+The diagnostic batch on clean `1a8924dd` also recorded 4/3/1/0, retries zero,
+three configured/overlapping workers. Both resumed profiles received connected
+with thread/interactive capabilities, dispatched exactly one saved-version-2
+catch-up at main, received four replies and displayed baseline plus newest post.
+One subsequently failed the independent fresh-profile ArrowUp progress bound
+with protected `unreadable`, exchange **27/53/5**: the existing open #2191
+investigation covers this boundary and exact exchange shape. This is separate
+from the first batch's saved-only failure. No storage/query repair, retry, skip,
+sleep, longer timeout, forced flush or concurrency reduction was introduced.
+
+| Report under `/tmp/builder-2153/rework/` | Executed/passed/failed/skipped | SHA-256 |
+| --- | --- | --- |
+| `final-paired-1.json` | 4/3/1/0 | `0998dcb4a87aad5bf51a5bd6cf1bf4a84ebc4c56adaba7215e1976e6feec3358` |
+| `diagnostic-paired-1.json` | 4/3/1/0 | `73ffbe4b8dd84af1dc689e75f2dc3c986b311aa0220b0d7a4724d52553002257` |
+
+All four successful thread exchanges are 45/378/0; both successful history
+exchanges are 32/63/0. Both guards report zero forbidden launches and exit 1
+for the named scenario failure; normal build restoration succeeds. Full bundle
+maps, clean source/profile identities, original capture provenance, observations
+and counts remain in `rework/rework-counted-evidence.json`, SHA-256
+`f6a3ad93b46e32d2249cf865dc7341569d54ce131df646b652df9a154ec955f2`.
+Recording hashes remain unchanged at the history/thread values recorded above.
+Original diagnostic attachments retain synthetic fixture identities; subsequent
+attachments project the phase observer to capability booleans and counts only.
+
+Commands: the two batches use the existing guarded `node scripts/run-offline-replay.mjs
+--profile complete-thread --grep 'a real daemon lazily fills a served gap|daemon-built thread streams'
+--fully-parallel --workers=3 --repeat-each=2 --retries=0 --reporter=list,json`, with
+task-specific JSON/log/output paths. Startup JSON uses `npx playwright test
+e2e/saved-profile-startup.spec.ts --project=parallel --no-deps --retries=0
+--reporter=list,json`. All artifacts above are under `/tmp/builder-2153/`.
+
+Stop counted acceptance rather than rerunning until green. Link #2191 as the
+open dependency for the required protected-paging gate; its production repair is
+outside this ticket's explicit startup/status scope. Five consecutive passing
+batches and the subsequent full guarded suite remain pending, including explicit
+preservation of the reset-prompt fixme. The dispatcher application gate remains
+pending too. Previous passing evidence and historical failures above are retained
+separately, never reclassified by these results. Linux is outside this execution.
+Final main merge admits `75dcb379` (unrelated tests/plan only); closing Node/build
+checks are recorded below. Documentation handoff remains pending for its stage.
+
 ### 2026-10-20 — macOS production-delivery validation
 
 Final tested source: `33aa5fee23efd70365a829f908f6e736a8ada084`, including final

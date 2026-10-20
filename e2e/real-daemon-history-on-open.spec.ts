@@ -111,7 +111,7 @@ test('a real daemon lazily fills a served gap after more than 200 entries writte
       } finally {
         const observed = await Promise.allSettled([
           fresh.page.evaluate(() => (window as any).__resumeStages),
-          readPhaseReconnect(fresh.page),
+          readPhaseReconnect(fresh.page).then(({ connections, thread, interactive }) => ({ connections, thread, interactive })),
           readReplayMainProcess(fresh.app, () => (globalThis as any).__threadHistoryAsks)
         ])
         await testInfo.attach('resumed-startup-observations', { contentType: 'application/json',

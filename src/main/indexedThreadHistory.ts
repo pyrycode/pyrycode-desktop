@@ -170,10 +170,15 @@ export function createIndexedThreadHistory(deps: {
       const key = numericKey(n.value.ordinal), payload = JSON.stringify(n)
       pending.set('sequence:' + key, payload)
       for (const child of [n.left, n.right]) if (child.count) pending.set('parent:' + child.key, key)
-      return { hash: digest(key + payload), count: n.left.count + n.right.count + 1, key,
+      const ref = { hash: digest(key + payload), count: n.left.count + n.right.count + 1, key,
         height: Math.max(n.left.height, n.right.height) + 1,
         shown: (n.left.shown ?? 0) + (n.right.shown ?? 0) + Number(Boolean((n.value.flags ?? 0) & 1)),
         active: (n.left.active ?? 0) + (n.right.active ?? 0) + Number(Boolean((n.value.flags ?? 0) & 2)) }
+      // Reuse our own construction under its exact proof, within this operation only.
+      // Rotations may construct a temporary unbalanced node; it has no strict proof yet.
+      verified.set(JSON.stringify([ref, false]), n)
+      if (Math.abs(n.left.height - n.right.height) <= 1) verified.set(JSON.stringify([ref, true]), n)
+      return ref
     }
     function balance(n: Node): SequenceRef {
       if (n.left.height > n.right.height + 1) {
@@ -307,7 +312,9 @@ export function createIndexedThreadHistory(deps: {
         }
         const payload = JSON.stringify(n), hash = digest(path + payload)
         pending.set(path, payload)
-        return { hash, count }
+        const result = { hash, count }
+        verified.set(JSON.stringify([result, path]), n)
+        return result
       }
       return update(ref, '')
     }

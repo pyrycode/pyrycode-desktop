@@ -114,19 +114,26 @@ describe('protected chat history storage', () => {
   it.each(['turn', 'index', 'header'])('rolls back bounded %s failure without retry and retains explicit replay through a fresh owner', async mode => {
     const h = await setup()
     expect(await h.store.execute(mutation())).toEqual({ status: 'ok' })
-    let turns = 0
-    const store = createChatHistoryStore({ ...h, onMutationTurn: async () => { if (++turns === 8 && mode === 'turn') throw new Error('private-failure') } })
+    const attempts = vi.spyOn(h.database, 'transactionSteps'), turns: number[] = []
+    const store = createChatHistoryStore({ ...h, onMutationTurn: async units => {
+      turns.push(units)
+      if (turns.length === 8 && mode === 'turn') throw new Error('private-failure')
+    } })
     if (mode !== 'turn') h.database.transaction(db => db.exec(mode === 'index'
       ? "CREATE TRIGGER bounded_failure BEFORE INSERT ON thread_auth BEGIN SELECT RAISE(ABORT, 'private-failure'); END"
       : "CREATE TRIGGER bounded_failure BEFORE INSERT ON thread_records WHEN new.kind = 'header' BEGIN SELECT RAISE(ABORT, 'private-failure'); END"))
-    const request = mutation({ items: Array.from({ length: 80 }, (_, id) => ({ id, rev: 1, kind: 'future', text: 'private-failure' })),
+    // Index insertion fails before flush yields; the other faults include that bounded work.
+    const count = mode === 'index' ? 64 : 16
+    const request = mutation({ items: Array.from({ length: count }, (_, id) => ({ id, rev: 1, kind: 'future', text: 'private-failure' })),
       metadata: { ...mutation().change.metadata, version: 80, checkpoint: 80 }, completion: { fromVersion: 1, version: 80 } })
     expect(await store.execute(request)).toEqual({ status: 'error', code: 'write-failed' })
-    expect(turns).toBeGreaterThanOrEqual(8)
+    expect(attempts).toHaveBeenCalledTimes(1)
+    expect(turns.length).toBeGreaterThanOrEqual(8)
+    expect(turns.every(units => units === 16)).toBe(true)
     const read = { operation: 'readThread', serverId: 'a', conversationId: 'chat' }
-    expect(await h.fresh().execute(read)).toMatchObject({ status: 'stored', snapshot: { thread: { items: [], checkpoint: 1 } } })
-    if (mode !== 'turn') h.database.transaction(db => db.exec('DROP TRIGGER bounded_failure'))
     const retry = h.fresh()
+    expect(await retry.execute(read)).toMatchObject({ status: 'stored', snapshot: { thread: { items: [], checkpoint: 1 } } })
+    if (mode !== 'turn') h.database.transaction(db => db.exec('DROP TRIGGER bounded_failure'))
     expect(await retry.execute(request)).toEqual({ status: 'ok' })
     const admitted = await retry.execute(read)
     expect(admitted).toMatchObject({ status: 'stored', snapshot: { thread: { items: request.change.items, checkpoint: 80 } } })

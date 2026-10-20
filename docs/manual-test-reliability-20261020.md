@@ -40,3 +40,11 @@ The first attempted baseline had incomplete copied dependencies and the sandbox-
 ## Evidence
 
 Raw reports, commands, execution samples and controlled source copies are under `/private/tmp/desktop-manual-evidence-20261020/`. A durable vault attachment is created at handoff. The original reports remain separate from the later passing comparisons. Browser acceptance is recorded below after execution.
+
+## Complete application execution
+
+Clean candidate 4cac8bd7c0580e8f23684376eb2f9c099856aa2c compiled the normal application profile. The complete default application run used four workers and retries zero. It executed 531 cases: 529 passed, two failed, two existing skips, zero report-level errors. All six reply scenarios and the native storage prerequisite passed. Native storage used real OS protection, durably saved and exactly reopened all 8333 items, and completed in 12.35 seconds. Main-loop maximum gap was 51.6 ms, renderer gap 22.4 ms and keyboard commits 22.5/30.8/39.2 ms. All original responsiveness limits remain.
+
+The failures were the stable pending-read callback scenario already owned by 2186 and the recorded effort-default scenario after relaunch. One exact unchanged-source comparison selected only those two cases: both passed, zero failed/skipped/retried. The complete result remains failed; the selected comparison is not a replacement full-suite pass. The effort occurrence matched 36 requests, emitted 147 frames and left 60 requests. Its final diagnostic read found a closed page and masked the primary failure, so the cause remains unknown. Closed 1949 and 2069 addressed different assertions in that same scenario.
+
+PR 2182 merged after manual judgment with this explicit failure classification. No passing automated stage result was fabricated for the earlier interrupted builder. The historical Linux database pause remains unexplained. The separate original failure and all controlled comparisons remain available in the evidence attachment.

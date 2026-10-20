@@ -166,10 +166,21 @@ See [current replay/native evidence and historical live failures](chat-history-t
 Dispatch, renderer publication and protected durability are separate facts.
 [`readHistoryCoverage`](../../../e2e/fixtures/historyCoverage.ts) consumes complete
 `ChatHistoryResult` values instead of collapsing unavailable results to
-`undefined`. Before Home and each ArrowUp it retains the first actual numeric
-range start from a stored `daemon-items` snapshot with exact outer and inner
-host/conversation ownership. Zero is valid. The successful polling callback
-supplies the retained value; a second read could lose availability again.
+`undefined`. It constructs an exact-host/conversation `newestThreadPage` request
+with `limit: 1`; the scenario forwards it through the existing preload API.
+Before Home and each ArrowUp it validates page metadata ownership and retains
+the actual numeric start of the newest authenticated range (`ranges.at(-1)`).
+An older disconnected range cannot establish progress of the newest window.
+Stored `daemon-items` regression fixtures still require both outer and inner
+ownership and use their first range. Zero is valid. The successful polling
+callback supplies the retained value; a second read could lose availability again.
+
+Full protected transcript reads decrypt every retained item on main's serial
+storage queue, competing with the receipt/persistence they observe. Growing
+observation work can consume the progress deadline before ready page delivery
+runs. The one-item page bounds that work while retaining authenticated range
+evidence and the store's rejection of pending split saves. Continuation tokens,
+checkpoints and rendered rows supply no substitute for a protected range.
 
 After input, one five-second progress observation runs alongside the exact
 one-additional-`thread_page` assertion and requires a strictly smaller protected
@@ -186,7 +197,8 @@ handler, SQLite database and protected store with test encryption. It holds pref
 acknowledgement and final submission outside the handler queue, so reads actually
 return `unreadable` before baseline acquisition and after controlled publication.
 The old projection fails on those reads; the reader remains pending until final
-durability and retains starts 100 then 50. Controlled dispatch/publication markers
+durability and retains starts 100 then 50, now through the bounded page reader.
+Controlled dispatch/publication markers
 come from the existing owned-state fixture seam; the application scenario checks
 actual requests separately. The content-free trace is
 `/tmp/builder-2153/regression.log`; `unit-final/0.log` is only the final
@@ -196,11 +208,76 @@ cover terminal errors, rejection, each ownership coordinate, pending-to-terminal
 transition and successful zero without rereading. No writer flush, synthetic
 completion, repeated input, sleep, retry or longer timeout supplies progress.
 
+`bounded protected reads leave time for received paging progress` seeds 300
+items in real protected SQLite storage, restores the real item store and schedules
+received page publication after the initial read. Each observed decrypt advances
+only Vitest's fake monotonic clock by 10 ms; task delivery stays real, without
+wall-clock sleeps. The original full reader performs 603 decrypts and times out
+with `no-progress` at start 113 before publication. Bounded observations perform
+nine decrypts across the trace
+`query-dispatched → protected-read:113 → page-published → protected-read:error → range-durable → protected-read:63`.
+The error is the real pending split save; only the subsequent durable protected
+start 63 establishes progress. Page-owner controls and an unchanged newest range
+beside an older disconnected range prevent false progress. This establishes a
+contention mechanism, without attributing unrecorded host/keychain timings to
+the historical failures.
+
 The scenario retains saved-checkpoint catch-up, all 205 closed-app posts, trusted
 Home/ArrowUp input, exact request growth, bubble growth, baseline recovery, order,
 uniqueness and no legacy requests. Synchronous inspection, successful-profile
 retirement, full outgoing-envelope matching, causal checkpoints and final exchange
-completion remain required. See [owned persistence obligations](chat-history-api.md#owned-authoritative-mutations).
+completion remain required, as does connection ownership. See
+[owned persistence obligations](chat-history-api.md#owned-authoritative-mutations).
+
+### Counted Linux bounded-observation validation
+
+The [bounded-observation plan](../../specs/architecture/2158-bounded-protected-coverage.md#validation-evidence)
+retains commands, report hashes and build/input identities for Linux x64 on
+2026-10-20. Builder acceptance used clean normal build
+`a17ce88308917e07480fbe99c01ff61c25dc5aee`, containing main `1c001e0e`.
+Reviewed head `4d276367eb48b34e1bb2890fc240647c9d36286a` adds plan evidence only.
+These are recorded results, not documentation-stage executions.
+
+| Run | Executed / passed / failed / skipped | Evidence |
+| --- | --- | --- |
+| Original full-read causal regression | 1 / 0 / 1 / 27 unselected | `/tmp/builder-2158/causal-before-clock.log` |
+| Final observer regressions | 28 / 28 / 0 / 0 | `/tmp/builder-2158/units-final/unit-o3ppu_e3/0.json` |
+| Exact named guarded history case, normal build | 1 / 1 / 0 / 0 | `/tmp/builder-2158/named-final.json` |
+| Subsequent complete guarded replay, normal build | 29 / 29 / 0 / 1 | `/tmp/builder-2158/recorded-full-final.json` |
+| Supplied dispatcher unit gate 4 | 9874 / 9874 / 0 / 3 | Both causal and split-save tests explicitly present and passed |
+| Dispatcher application gate 7 | 518 / 516 / 2 / 5 | Named history case explicitly present and passed |
+
+`a real daemon lazily fills a served gap after more than 200 entries written while Electron is closed`
+is present and passed at retry 0 in both builder replay reports and the configured
+`npx playwright test --reporter=json` gate, as confirmed by the accepted verifier
+stage (`68cc9d585ffff8e22eba7ec9cb8eb817d206e3fd4eb5cbba445beddfe69e9cc0`).
+Each history exchange completed 32 matched requests / 63 emitted frames / zero
+remaining requests. Builder runs used one worker, retries zero, no flaky results
+and zero forbidden launches; all 29 complete-suite exchanges finished with zero
+remaining requests. The application gate's two unrelated thumbnail failures
+received the dispatcher's accepted same-tree rerun disposition; its original
+counts above retain those failures. The existing
+`real claude picks up a saved channel system prompt at Reset session` case was
+skipped in complete replay and application gate 7.
+
+Node checks finished before Electron native preparation. The plan retains both
+earlier preparation failures, which provide no acceptance proof. History recording
+bytes remain unchanged: SHA-256
+`de0b1166b6e05e0792228c07be25c20498b117914e673558222eac12cd4e6d2c`;
+capture Desktop `00ec821f9380b00cf2dfc0dd4817ee15584106a5`, daemon
+`58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`, binary SHA-256
+`5f5b3b9ce42eda74024637f4929dd720d36c1226ce6e370eb62fbe9e6b22f7c0`,
+capture time `2026-10-16T12:30:09.805Z`, Claude `not-spawned`.
+Captured-client acceptance establishes no fresh provider/daemon or physical-effect
+result. macOS is outside this Linux ticket's verification scope.
+
+The later historical failures found during #2155 verification remain retained in
+bundle `14df6631806c2588217566de95cd3eee953c694985c152a314a588117e8f300f`,
+retrieved under `/tmp/builder-2158/evidence-2155/`. Candidate `9189aa1a` and isolated
+main `64e0a66876fe` both failed with `no-progress`, 30 matched requests / 59 emitted
+frames / two remaining requests. The accepted verifier checked all 25 bundle
+hashes. Those failures remain distinct from the controlled mechanism and subsequent
+acceptance; their precise host scheduling conditions were not captured.
 
 ### Counted Linux coverage-observer validation
 

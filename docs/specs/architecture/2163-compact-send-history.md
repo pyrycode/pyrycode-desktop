@@ -81,3 +81,13 @@ Use existing `threadQueryFailed` reasons and content-free diagnostics. Do not su
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-20
+
+## Revisions
+
+2026-10-20: Pre-implementation v0.41.4 live reproduction (tag/source `4d43574874eec9450c97513adb571092de669d12`, isolated archive build `/tmp/builder-2163/pyry-0.41.4`, normal Desktop build from `2860189f` with test-only dirty files) executed 1, passed 0, failed 1, skipped 0. Owning host and all four accepted grants were true. Successful window checkpoint was 122; a malformed live rejection and malformed recovery failure preceded delivered echo interval (125,127], followed by contiguous intervals through 135. Evidence: `/tmp/builder-2163/live-0.41.4-before.json` and `.stderr`. This is not capability refusal.
+
+The concrete decoder mismatch is `logical`'s `rootItem`: it requires `order`, although the daemon `internal/protocol/thread.go` contract explicitly omits order for queued/dropped/lost sends until delivery. The existing shared DTO and `fullItem` already allow absent order, and compact sorting already treats it as zero. Admit those full non-tool/agent roots without inventing an order, retaining parent/root checks and every present numeric-field validation. Apply the same contract to live updates and query data. No recovery policy change is needed: malformed rejection was creating the spurious gap/recovery failure.
+
+The direct production-dispatch test with an omitted-order post-send root fails before this change; the original ordered contiguous control passes. Diagnostic tests separately fail on all three missing refusal classifications. The old dedicated 0.41.1 binary grants compact but resets after sends and cannot establish this current interval behavior: two attempted controls each executed 1/failed 1/passed 0/skipped 0 waiting for compact echoes. Its source is `a935bfb8db70ff5fd5cd47c2a05ab5bc1e83273f`. Both initial open questions are resolved by using the isolated exact v0.41.4 tag and repairing the demonstrated decoder contract. A test-only Buffer observation returned no shapes and is discarded from the scenario; it supplied no causal evidence.
+
+Security review addendum: absent order is an allowed wire representation, not malformed input. `fullItem` continues to validate any present order as a nonnegative safe integer; kind/parent restrictions remain in `rootItem`. No broader IPC or authentication admission changes.

@@ -53,8 +53,9 @@ function logical(type: string, p: unknown): ThreadUpdate | ThreadReply | ThreadC
   if (own(p, 'projection') && (p.projection !== 'compact-v1' || !epoch ||
       !['thread_items', 'thread_reset', 'thread_compact_update'].includes(type))) return null
   const projection = p.projection === 'compact-v1' ? { projection: 'compact-v1' as const } : {}
+  // Queued/dropped/lost sends omit order until delivery; fullItem validates it when present.
   const rootItem = (v: unknown): v is ThreadItem => fullItem(v) && v.kind !== 'tool_call' && v.kind !== 'agent' &&
-    number(v.order) && (v.parent === undefined || v.parent === 0)
+    (v.parent === undefined || v.parent === 0)
   const rootHeader = (v: unknown): v is ThreadSummary => summary(v) && v.parent === 0 && (v.kind === 'tool_call' || v.kind === 'agent')
   if (type === 'thread_compact_update') {
     if (p.projection !== 'compact-v1' || !epoch || !number(p.from_version) || p.from_version >= version || typeof p.progress !== 'boolean' ||

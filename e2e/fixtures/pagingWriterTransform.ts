@@ -31,6 +31,13 @@ export function pagingAdmissionTransform(source: string): string {
   return source
 }
 
+export function pagingTransactionTransform(source: string): string {
+  const anchor = 'await onTurn(units); units = 0'
+  if (source.split(anchor).length !== 2) throw Error('Paging checkpoint anchor changed')
+  return source.replace(anchor,
+    "globalThis.__observePagingTransactionTurn?.('yielded'); await onTurn(units); globalThis.__observePagingTransactionTurn?.('resumed'); units = 0")
+}
+
 export function pagingProtectedReadTransform(source: string): string {
   const anchor = '    if (h.persistence) throw INVALID_CHAT_HISTORY'
   if (source.split(anchor).length !== 2) throw Error('Paging checkpoint anchor changed')

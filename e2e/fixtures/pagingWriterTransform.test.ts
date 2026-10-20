@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { expect, it } from 'vitest'
-import { pagingWriterTransform, pagingProtectedReadTransform, pagingAdmissionTransform } from './pagingWriterTransform'
+import { pagingWriterTransform, pagingProtectedReadTransform, pagingAdmissionTransform, pagingTransactionTransform } from './pagingWriterTransform'
 
 it('instruments each actual writer boundary once and rejects source drift', () => {
   const source = readFileSync('src/renderer/src/store/chatHistoryWriter.ts', 'utf8')
@@ -19,6 +19,14 @@ it('observes serialized admission and storage completion without changing the ha
   expect(transformed).toContain('return result')
   expect(() => pagingAdmissionTransform('')).toThrow('Paging checkpoint anchor changed')
   expect(() => pagingAdmissionTransform(source + source)).toThrow('Paging checkpoint anchor changed')
+})
+
+it('measures existing transaction yields without replacing their scheduler', () => {
+  const source = readFileSync('src/main/historyDatabase.ts', 'utf8')
+  const transformed = pagingTransactionTransform(source)
+  expect(transformed).toContain("__observePagingTransactionTurn?.('yielded'); await onTurn(units); globalThis.__observePagingTransactionTurn?.('resumed')")
+  expect(() => pagingTransactionTransform('')).toThrow('Paging checkpoint anchor changed')
+  expect(() => pagingTransactionTransform(source + source)).toThrow('Paging checkpoint anchor changed')
 })
 
 it('observes the authenticated header before its unchanged pending-save rejection', () => {

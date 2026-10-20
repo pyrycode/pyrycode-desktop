@@ -40,14 +40,26 @@ export async function installPagingDurabilityEvidence(
     const observations: unknown[] = []
     const saves = new Map<string, number>(), pending = new Set<number>(), completedSaves = new Set<number>()
     let epoch: string | undefined
+    let turn: { count: number; waitingMs: number; maxWaitMs: number; yieldedAt?: number } | undefined
     const record = (stage: string, fields: object = {}) => observations.push({ stage, ms: Date.now(), ...fields })
+    state.__observePagingTransactionTurn = (stage: string) => {
+      if (!turn) return
+      if (stage === 'yielded') { turn.count++; turn.yieldedAt = Date.now() }
+      else if (turn.yieldedAt !== undefined) {
+        const elapsed = Date.now() - turn.yieldedAt
+        turn.waitingMs += elapsed; turn.maxWaitMs = Math.max(turn.maxWaitMs, elapsed); turn.yieldedAt = undefined
+      }
+    }
     state.__observePagingAdmission = (stage: string, request: any, result: any) => {
       if (request?.operation !== 'mutateThread' || request.serverId !== owner.host || request.conversationId !== owner.chat) return
+      if (stage === 'admitted') turn = { count: 0, waitingMs: 0, maxWaitMs: 0 }
       const p = request.change.persistence
       record(stage, { save: p ? saves.get(p.id) : undefined, part: p?.part, parts: p?.parts,
         sameEpoch: epoch === request.change.metadata.epoch,
         sameOwner: request.change.metadata.hostId === owner.host && request.change.metadata.conversationId === owner.chat,
-        status: result?.status, code: result?.code })
+        status: result?.status, code: result?.code, ...(stage === 'storage-completed' && turn ? {
+          turns: turn.count, waitingMs: turn.waitingMs, maxWaitMs: turn.maxWaitMs } : {}) })
+      if (stage === 'storage-completed') turn = undefined
     }
     state.__observeProtectedPaging = (host: string, chat: string, header: any) => {
       if (host !== owner.host || chat !== owner.chat) return

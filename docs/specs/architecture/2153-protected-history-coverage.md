@@ -53,7 +53,7 @@ None. A single observation helper is the smallest shape; no new generalized poll
 ## Validation evidence
 Linux x64, 2026-10-20. Tested implementation `172d3f959d6b1fb89368c7805885d95d44aa6076`, containing final merged main `845cf9a25196`. The subsequent evidence commit changes only this plan. All six guarded runs identify that clean implementation (`sourceDirty: false`), profile `complete-thread`, and identical bundle hashes. Main bundle SHA-256: `14964f03eb41095b9ee91af5f78d8a422a44c760386a9c8e498c33ff1865b69f`; renderer bundle SHA-256: `6a805af00d6ad979a615b7fc660d69ed81bfcd2ed5b81c4650f87e66098e02a9`. Full bundle maps remain in each run log and `/tmp/builder-2153/counted-evidence.json`.
 
-Controlled proof: the original one-shot projection failed with an actual pending protected save (1 executed, 1 failed, 21 unselected; `/tmp/builder-2153/original-regression.log`, SHA-256 `9ac0bc9838ab12fd5700bd42006400811aae32efabfb420749e09f9179fbe82f`). The real writer submitted a durable prefix; protected reads returned `unreadable` both before baseline acquisition and after controlled page publication. The repaired reader remained pending across the held prefix acknowledgement and held final submission. After the final durable commit/acknowledgement it retained starts 100 then 50. The content-free trace in `/tmp/builder-2153/unit-final/0.log` separates the controlled dispatch/publication markers at the existing owned-state fixture seam, protected read statuses, prefix/final durability, acknowledgements and retained numeric starts; actual application dispatch is independently checked by the unchanged guarded scenario and full envelope matching. This establishes the controlled mechanism, not the unknown historical trigger.
+Controlled proof: the original one-shot projection failed with an actual pending protected save (1 executed, 1 failed, 21 unselected; `/tmp/builder-2153/original-regression.log`, SHA-256 `9ac0bc9838ab12fd5700bd42006400811aae32efabfb420749e09f9179fbe82f`). The real writer submitted a durable prefix; protected reads returned `unreadable` both before baseline acquisition and after controlled page publication. The repaired reader remained pending across the held prefix acknowledgement and held final submission. After the final durable commit/acknowledgement it retained starts 100 then 50. The content-free trace in `/tmp/builder-2153/regression.log` separates the controlled dispatch/publication markers at the existing owned-state fixture seam, protected read statuses, prefix/final durability, acknowledgements and retained numeric starts; actual application dispatch is independently checked by the unchanged guarded scenario and full envelope matching. This establishes the controlled mechanism, not the unknown historical trigger. `unit-final/0.log` contains the final JSON-reporter notification, not this trace; `unit-final/0.json` contains the 23 passing regression results.
 
 The additional pending-to-unexpected-result control also failed before its correction (`terminal-transition-red.log`); final regressions cover immediate terminal classification after pending reads. Final Node-native preparation and pre-verify passed all five checks with 23 executed/passed, zero failed/skipped. Raw unit JSON: `/tmp/builder-2153/unit-final/0.json`, SHA-256 `8959f12c67359862dbfe2ea589fc736f216a00a1fd1faf7761e5c21c3c16bd0f`. Client-test typecheck, docs guard and `npm run build` passed after the final main merge. Node preparation finished before `npm run rebuild:electron`; no native rebuild competed with replay. Every profile run restored the normal build successfully.
 
@@ -87,3 +87,20 @@ Recording bytes are unchanged. History SHA-256: `de0b1166b6e05e0792228c07be25c20
 Historical outcomes remain retained by reference to the ticket's refinement evidence: the Linux failure at `de6e481a` (`/tmp/builder-2079/replay-fixed.json`, filed counts 29 executed / 28 passed / 1 failed / 1 existing skip), followed by an unchanged isolated pass (`replay-history.json`, 1 executed/passed). These are historical filed counts, not freshly inspected reports or evidence of the trigger. Neither that passing rerun nor these new passing replays reclassifies the old failure.
 
 Dispatcher handoff: run the configured application gate and retain counted no-retry passes for both named cases; verifier reviews that evidence separately from inherited failures. This builder does not claim that gate passed. No fresh provider/daemon or physical-effect acceptance is required or claimed. macOS is outside this Linux ticket's verification scope.
+
+### Dispatcher gate reconciliation
+
+The [accepted verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2156#issuecomment-6284779714)
+subsequently completed that handoff on reviewed head
+`894c381df2bb1d9da6edbc873aaf31fa214f1a51`. The supplied dispatcher gate report
+records Linux unit gate 4 (`python3 /work/Projects/pyrycode-desktop-agents/bin/unit-test-gate.py`):
+9,844 executed/passed, 0 failed, 3 skipped, with
+`waits across split saves at baseline and after dispatch` explicitly present and passed.
+These unit totals use the supplied gate report rather than the verdict's differing
+9,926 total. Application gate 7 (`npx playwright test --reporter=json`) recorded
+517 executed/passed, 0 failed, 5 skipped. Both named history/thread cases above
+are explicitly present and passed; the verifier confirmed each executed/passed
+once with retries zero and completed exchanges. The reset-prompt case remains
+skipped. These dispatcher results are separate from the builder's guarded runs;
+no gate or live test was rerun by documentation. The reconciled contract and
+evidence live in [protected history testing](../../knowledge/features/chat-history-testing.md#protected-paging-coverage-observation).

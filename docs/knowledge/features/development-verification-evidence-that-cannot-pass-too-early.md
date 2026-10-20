@@ -148,6 +148,18 @@ cannot settle this assertion. See the [recorded inventory](../../client-replay-m
 
 ## History page receipt and terminal demand
 
+Protected durability needs its own observation after dispatch and publication.
+The [history coverage reader and controlled regression](chat-history-testing.md#protected-paging-coverage-observation)
+retain actual numeric coverage before trusted input and require a strictly older
+protected start within five seconds afterward. A pending split save deliberately
+returns `unreadable`; collapsing that result to `undefined` loses the baseline,
+while rereading a successful baseline can lose it again. Keep result categories
+and the successful value, and start the progress poll alongside request-count
+checks so dispatch waiting adds no coverage deadline. The real-writer regression
+controls this mechanism; it does not identify the historical flaky run's trigger.
+See [counted Linux evidence](chat-history-testing.md#counted-linux-coverage-observer-validation)
+for separate builder and dispatcher results and retained historical outcomes.
+
 An observed history request proves neither reply admission nor React commit.
 In [`history-walk.spec.ts`](../../../e2e/history-walk.spec.ts), the spec-local
 `received` helper polls protected `readTimeline` for the exact received cursor and

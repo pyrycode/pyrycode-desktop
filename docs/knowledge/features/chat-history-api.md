@@ -253,6 +253,13 @@ retire an abandoned obligation; full replacement rotates persistence ownership e
 in the same epoch. Their internal validation may inspect the pending prefix, while
 public reads stay closed. Stale endings cannot clear another save's marker.
 
+Request dispatch and renderer publication can precede durable coverage. A paging
+test must retain an actual numeric protected range start for the exact outer and
+inner host/conversation before input, then observe a strictly older start; zero
+is valid. Pending-save `unreadable` is unavailable evidence, never coverage.
+Reobserve it within the existing bound without flushing the writer or bypassing
+the obligation. See the [coverage observer and controlled regression](chat-history-testing.md#protected-paging-coverage-observation).
+
 The writer advances its retained request cursor only after successful durable
 acknowledgement and a current queue/generation check. Failure preserves the exact
 request and persistence identity; the failed key is suppressed for the rest of that

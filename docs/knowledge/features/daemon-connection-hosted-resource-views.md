@@ -504,6 +504,28 @@ No live-Claude run is claimed; real daemon/relay/SQL proof remains #1929.
 
 ### Fetch verification
 
+For cancellation/navigation diagnosis, retain the first native view and its
+WebContents separately. `e2e/hosted-app-view.spec.ts` attaches `hosted-lifetime`
+observations of numeric content identity, state, destruction, main-frame navigation,
+debugger attachment and numbered evaluations. It retains neither script text nor
+origins/tokens/bodies. Evaluation failure attaches observations and rethrows the
+original error; reopening the view or replaying Fetch/IPC would replace the subject
+or repeat a mutation and invalidate the investigation.
+
+The [accepted macOS review](https://github.com/pyrycode/pyrycode-desktop/pull/2170#issuecomment-6300270962)
+inspected the complete native capture at `bad15d599b8a`: **533 executed/passed,
+0 failed, 2 skipped, 0 retries**, including all 23 hosted-view cases. `Fetch writes
+retained preferences and serializes bounded request bodies` preceded `Fetch
+cancellation and document replacement fence late completions and forged bridge
+calls`; both were present and passed. The latter's attachment held content ID 2
+through loading/ready transitions and replacement, with all 16 evaluations finding
+an available, undestroyed receiver and no destruction/debugger detach. This is
+observation evidence: the earlier undefined receiver remains unreproduced, with
+no claimed product lifetime repair. Forged-call/cancellation assertions remain
+intact. The [compact-history validation](thread-runtime-compact.md#post-send-history-and-current-daemon-acceptance)
+preserves earlier failed captures separately; this native fake-transport pass
+adds no real SQL/relay/provider acceptance.
+
 The [verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/1994#issuecomment-6189074574)
 at `139fa318` records **427 Playwright tests executed and passed, 0 failed,
 1 skipped**, including all **23 hosted-view cases present and passed**. Unit

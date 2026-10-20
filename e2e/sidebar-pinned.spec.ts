@@ -153,32 +153,3 @@ test('pins refresh per host, preserve attribution and folds, and survive an offl
   // Unreachable hosts may remain connecting while the supervisor retries. Cache visibility
   // is independent of that lifecycle; disconnected/error styling was asserted above.
 })
-
-// Reproduced without pins on main: https://github.com/pyrycode/pyrycode-desktop/issues/2089
-test.skip('blocked on #2089 — unpair an unreachable saved host after relaunch', async ({ launchPairedApp }) => {
-  const alpha = { ...SEEDED_ROW, name: 'Alpha', is_promoted: true }
-  const a = host(alpha), b = host({ ...alpha, name: 'Beta' })
-  const first = await launchPairedApp({ buildReplyFrames: a.reply }, { secondServer: { buildReplyFrames: b.reply } })
-  await first.page.locator('.channel-list__row-open').filter({ hasText: 'Beta' }).click()
-  a.set([alpha, { ...alpha, id: 'gamma', name: 'Gamma' }])
-  await first.servers[0].daemon.pushFrame(update(alpha))
-  await expect(first.page.locator('.channel-list__row-open')).toHaveText(['Alpha', 'Gamma', 'Beta'])
-  for (const server of first.servers) {
-    await expect.poll(() => first.page.evaluate(async serverId => {
-      const result = await window.pyry.chatHistory({ operation: 'readList', serverId })
-      return result.status === 'stored' && result.snapshot.kind === 'list'
-        ? result.snapshot.conversations.map(row => row.name) : null
-    }, server.serverId)).toEqual(server === first.servers[0] ? ['Alpha', 'Gamma'] : ['Beta'])
-  }
-  first.servers[1].forwarder.closeClientLeg(4401)
-  await expect(first.page.locator('.channel-list__host').nth(1)).toHaveClass(/channel-list__host--failed/)
-  await first.app.close()
-  for (const server of first.servers) { await server.daemon.close(); await server.forwarder.close() }
-  const reopened = await launchPairedApp({}, { reuseUserDataDir: first.userDataDir })
-  await expect(reopened.page.locator('.channel-list__row-open')).toHaveText(['Alpha', 'Gamma', 'Beta'])
-  await reopened.page.locator('.channel-list__host-edit').first().click()
-  const dialog = reopened.page.getByRole('dialog', { name: 'Edit host', exact: true })
-  await dialog.getByRole('button', { name: 'Unpair host', exact: true }).click()
-  await dialog.getByRole('button', { name: 'Confirm', exact: true }).click()
-  await expect(reopened.page.locator('.channel-list__row-open')).toHaveText(['Beta'])
-})

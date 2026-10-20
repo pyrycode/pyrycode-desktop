@@ -67,3 +67,29 @@ Retain #2153's static codes and immediate terminal errors. Only pending observat
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-20
+
+## Validation evidence
+Linux x64, 2026-10-20. Tested implementation `a17ce88308917e07480fbe99c01ff61c25dc5aee`, containing final merged main `1c001e0efff30ddb4260152cdbbaf28629332524`. The evidence-only commit after this run changes this plan. No production code, recording or assertion was changed after validation.
+
+| Check | Executed / passed / failed / skipped | Artifacts |
+| --- | --- | --- |
+| Original full-read causal regression, fake monotonic decrypt cost | 1 / 0 / 1 / 27 unselected | `/tmp/builder-2158/causal-before-clock.log`, SHA-256 `7d25e61ffbeb0062f7bb21baf8ea6b53fb02935517672d50ebd93c18d175ff0b` |
+| Final affected regression file through pre-verify | 28 / 28 / 0 / 0 | `/tmp/builder-2158/units-final/unit-o3ppu_e3/0.json`, SHA-256 `1dbeb9e373673d3a7a9b181c68acc60ec39616b052798ac65a7e5ec487e7f0fb` |
+| Exact named guarded history case, normal build | 1 / 1 / 0 / 0 | `/tmp/builder-2158/named-final.json`, SHA-256 `72d1df287dddbba869a29250e82fb6148fcd21d9ce76aefdd06da050d9e080dd` |
+| Subsequent complete guarded recorded suite, normal build | 29 / 29 / 0 / 1 | `/tmp/builder-2158/recorded-full-final.json`, SHA-256 `97c6c6c7253f3511b54d7dce6031f0a89a45cf4311aa36241e35006dd094fa97` |
+
+Pre-verify passed all five checks (`pre-verify-serial.log`); client-test typecheck (`client-typecheck-final.log`) and `npm run build` (`final-build.log`) passed. All Node checks completed before final `npm run rebuild:electron` (`final-electron-prep.log`). Earlier preparation failures are retained: an ABI-mismatched early test executed no valid causal proof, and overlapping pre-verify native rebuilds collided. Confirmed all earlier processes exited before the successful serial preparation/check; neither failed attempt counts as acceptance.
+
+The failing-before regression performed 603 protected decrypts and retained start 113 without reaching page publication. The repaired regression performed nine decrypts and traced `query-dispatched → protected-read:113 → page-published → protected-read:error → range-durable → protected-read:63`. Its error observation is the real pending split save. The existing held-prefix/final-acknowledgement regression also passed through the bounded reader, retaining starts 100 then 50. Existing terminal-error and full stored-result ownership controls remain intact, with added page ownership and disconnected-range controls.
+
+Commands, in order after the final normal build and Electron preparation:
+1. `PLAYWRIGHT_JSON_OUTPUT_NAME=/tmp/builder-2158/named-final.json node scripts/run-offline-replay.mjs --grep 'a real daemon lazily fills a served gap after more than 200 entries written while Electron is closed' --retries=0 --reporter=list,json`
+2. `PLAYWRIGHT_JSON_OUTPUT_NAME=/tmp/builder-2158/recorded-full-final.json node scripts/run-offline-replay.mjs --retries=0 --reporter=list,json`
+
+Both use one configured worker, retries zero, no flaky result, and `forbiddenLaunchAttempts: 0`. The exact history case is present/passed at retry 0 in both reports, each with 32 matched requests / 63 emitted frames / zero remaining requests. All 29 full-suite exchanges completed with zero remaining requests. The sole skipped case is the pre-existing `real claude picks up a saved channel system prompt at Reset session`; no new skip or retry was added.
+
+Both logs retain the complete executed-bundle SHA-256 map. Executed build provenance is `profile: normal`, `desktopRevision: a17ce88308917e07480fbe99c01ff61c25dc5aee`, `sourceDirty: false`; `out/main/build-provenance.json` SHA-256 is `e3c9d202b0e77680bf1e3a97cde7c2c48d6eff57565b88b21d963e2699ff666e`.
+
+The unchanged history input SHA-256 is `de0b1166b6e05e0792228c07be25c20498b117914e673558222eac12cd4e6d2c`. Both `replay-input` attachments retain capture Desktop `00ec821f9380b00cf2dfc0dd4817ee15584106a5`, daemon `58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`, daemon binary SHA-256 `5f5b3b9ce42eda74024637f4929dd720d36c1226ce6e370eb62fbe9e6b22f7c0`, capture time `2026-10-16T12:30:09.805Z`, Claude `not-spawned`.
+
+Dispatcher owns the subsequent complete configured application gate (`npx playwright test --reporter=json`); verifier checks the named retry-zero result. This is captured-client proof, with no fresh provider/daemon or physical-effect claim. macOS is outside this ticket's scope.

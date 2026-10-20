@@ -30,8 +30,26 @@ One serial drain submits at most 32 items/removals/ranges/progress observations 
 request and yields a MessageChannel task between submissions, even with paused
 renderer timers. Success advances only the current request cursor. Failure retains
 that exact request before newer queued work, subject to ownership fences, and
-suppresses its key for the rest of the drain. It schedules no immediate retry timer;
-a later explicit flush or received event retries with the same bounds.
+suppresses its key throughout the drain and its automatic continuations.
+
+Owned work can arrive after the final `replaceList` acknowledgement lets the drain
+finish but before its promise cleanup clears the running owner. Capture cannot
+schedule while that owner exists. Cleanup therefore clears the owner and schedules
+a continuation when an unpaused pending key is outside the failed-key set and the
+writer has not stopped. The continuation carries the same failure set: starting a
+fresh set whenever another key progresses would automatically retry retained failed
+cursors. Failed-only or paused-only work schedules no settlement timer.
+
+With no drain running, an explicit flush starts a fresh retry cycle and cancels
+any queued continuation.
+A later received event or failed-unpair resumption while no drain is running clears
+the queued continuation's failure suppression, preserving its existing timer and
+debounce. Otherwise a queued continuation could silently suppress a retry that the
+same event would permit while idle. Events received during an active drain retain
+that drain's suppression. Permitted retries submit the exact retained request before
+newer work at its key, with the same bounds. See the
+[settlement regressions and counted evidence](chat-history-testing.md#writer-settlement-handoff).
+
 Split saves retain a separate protected persistence obligation until all their
 parts and original ordered progress are durable. Interrupted full/page reads fail
 closed, even when the saved checkpoint already covers the incoming version. Exact

@@ -22,9 +22,10 @@ function harness(write = async (_request: ChatHistoryRequest): Promise<ChatHisto
   const save = vi.fn(write)
   let listener: (event: StampedDaemonEvent) => void = () => {}
   const offEvents = vi.fn(() => { listener = () => {} })
+  const schedule = vi.fn((run: () => void) => { scheduled = run; return () => { scheduled = undefined } })
   const writer = createChatHistoryWriter({ lists, threads, write: save, log,
     subscribeEvents: onEvent => { listener = onEvent; return offEvents },
-    receipt: () => receipt, schedule: (run) => { scheduled = run; return () => { scheduled = undefined } } })
+    receipt: () => receipt, schedule })
   const receive = (type: string, action: () => void, serverId: string | null = 'a') => {
     receipt = { type, serverId }
     try { action() } finally { receipt = null }
@@ -40,7 +41,8 @@ function harness(write = async (_request: ChatHistoryRequest): Promise<ChatHisto
         status: 'done', summary: '', content: { text: String((held?.items[0]?.content as { text: string } | undefined)?.text ?? '') + text } }
     } })
   }
-  return { lists, threads, writer, save, log, receive, list, delta, offEvents,
+  return { lists, threads, writer, save, log, receive, list, delta, offEvents, schedule,
+    hasScheduled: () => scheduled !== undefined,
     event: (event: StampedDaemonEvent) => listener(event), run: () => scheduled?.() }
 }
 
@@ -48,6 +50,155 @@ const threadRequests = (h: ReturnType<typeof harness>) => h.save.mock.calls
   .map(([request]) => request).filter(request => request.operation === 'mutateThread')
 
 describe('chat history recording', () => {
+  it('schedules owned work captured during final list settlement exactly once', async () => {
+    let release: (result: ChatHistoryResult) => void = () => {}
+    const acknowledged: ChatHistoryRequest[] = []
+    const h = harness(request => request.operation === 'replaceList'
+      ? new Promise(resolve => { release = result => { acknowledged.push(request); resolve(result) } })
+      : Promise.resolve().then(() => { acknowledged.push(request); return { status: 'ok' } }))
+    try {
+      h.list()
+      const draining = h.writer.flush()
+      expect(h.save).toHaveBeenCalledOnce()
+      release({ status: 'ok' })
+      // The drain continuation is queued first; this publication precedes its finally cleanup.
+      queueMicrotask(() => h.delta('settlement'))
+      await draining
+      expect(h.schedule).toHaveBeenCalledTimes(2)
+      expect(h.hasScheduled()).toBe(true)
+      expect(threadRequests(h)).toHaveLength(0)
+      h.run()
+      await vi.waitFor(() => expect(acknowledged.filter(r => r.operation === 'mutateThread')).toHaveLength(2))
+      // Wait through the cursor's task yield and settlement without flushing it ourselves.
+      await vi.waitFor(() => expect(h.log).toHaveBeenCalledTimes(4))
+      expect(threadRequests(h).map(r => r.change.items)).toEqual([
+        [], [expect.objectContaining({ id: 1, rev: 1, content: { text: 'settlement' } })]
+      ])
+      expect(h.hasScheduled()).toBe(false)
+      expect(h.schedule).toHaveBeenCalledTimes(2)
+    } finally { h.save.mockResolvedValue({ status: 'ok' }); release({ status: 'ok' }); await h.writer.stop() }
+  })
+
+  it.each(['flush', 'received'] as const)('keeps failed cursors suppressed across settlement continuations until %s', async retry => {
+    let release: (result: ChatHistoryResult) => void = () => {}
+    let fail = true
+    const acknowledged: ChatHistoryRequest[] = []
+    const h = harness(request => {
+      if (request.operation === 'replaceList') return new Promise(resolve => {
+        release = result => { acknowledged.push(request); resolve(result) }
+      })
+      if (request.operation === 'mutateThread' && request.conversationId === 'failed' && fail)
+        return Promise.resolve({ status: 'error', code: 'write-failed' })
+      return Promise.resolve().then(() => { acknowledged.push(request); return { status: 'ok' } })
+    })
+    try {
+      h.delta('failed', 'failed'); h.list()
+      const draining = h.writer.flush()
+      await vi.waitFor(() => expect(h.save.mock.calls.at(-1)?.[0].operation).toBe('replaceList'))
+      const failed = threadRequests(h)[0]
+      release({ status: 'ok' })
+      queueMicrotask(() => {
+        h.delta(' newer', 'failed')
+        h.delta('first eligible', 'good')
+        h.list(['continuation'])
+      })
+      await draining
+      expect(h.hasScheduled()).toBe(true)
+      h.run()
+      await vi.waitFor(() => expect(h.save.mock.calls.filter(([r]) => r.operation === 'replaceList')).toHaveLength(2))
+      expect(threadRequests(h).filter(r => r.conversationId === 'failed')).toEqual([failed])
+      release({ status: 'ok' })
+      queueMicrotask(() => { h.delta('second eligible', 'next'); h.list(['terminal']) })
+      // A task barrier allows both the queued publication and promise cleanup to finish.
+      await new Promise<void>(resolve => realTimeout(resolve, 0))
+      expect(h.hasScheduled()).toBe(true)
+      h.run()
+      // A final list submission proves the item cursors and their task yields finished.
+      await vi.waitFor(() => expect(h.save.mock.calls.filter(([r]) => r.operation === 'replaceList')).toHaveLength(3))
+      expect(acknowledged.filter(r => r.operation === 'mutateThread')).toHaveLength(4)
+      release({ status: 'ok' })
+      await new Promise<void>(resolve => realTimeout(resolve, 0))
+      expect(threadRequests(h).filter(r => r.conversationId === 'failed')).toEqual([failed])
+      expect(h.schedule).toHaveBeenCalledTimes(3)
+      expect(h.hasScheduled()).toBe(false)
+      fail = false
+      if (retry === 'flush') await h.writer.flush()
+      else {
+        h.delta('later event', 'trigger')
+        h.run()
+        await vi.waitFor(() => expect(acknowledged.filter(r => r.operation === 'mutateThread' && r.conversationId === 'trigger')).toHaveLength(2))
+      }
+      const retried = threadRequests(h).filter(r => r.conversationId === 'failed')
+      expect(retried).toHaveLength(4)
+      expect(retried[1]).toEqual(failed)
+      expect(retried.slice(2).flatMap(r => r.change.items)).toEqual([
+        expect.objectContaining({ content: { text: 'failed' } }),
+        expect.objectContaining({ content: { text: 'failed newer' } })
+      ])
+    } finally { h.save.mockResolvedValue({ status: 'ok' }); release({ status: 'ok' }); await h.writer.stop() }
+  })
+
+  it('does not schedule paused-only work captured during settlement', async () => {
+    let release: (result: ChatHistoryResult) => void = () => {}
+    const h = harness(() => new Promise(resolve => { release = resolve }))
+    let resume = (_removed: boolean) => {}
+    try {
+      h.list()
+      const draining = h.writer.flush()
+      resume = beginChatHistoryRemoval('b')
+      release({ status: 'ok' })
+      queueMicrotask(() => h.delta('paused', 'chat', 'b'))
+      await draining
+      expect(h.hasScheduled()).toBe(false)
+      expect(h.schedule).toHaveBeenCalledOnce()
+      expect(h.save).toHaveBeenCalledOnce()
+    } finally { resume(true); await h.writer.stop() }
+  })
+
+  it.each(['received event', 'failed unpair'])('allows a later %s to retry before a settlement continuation runs', async trigger => {
+    let release: (result: ChatHistoryResult) => void = () => {}
+    let fail = true
+    const h = harness(request => request.operation === 'replaceList'
+      ? new Promise(resolve => { release = resolve })
+      : Promise.resolve(fail && request.operation === 'mutateThread' && request.conversationId === 'failed'
+        ? { status: 'error', code: 'write-failed' } : { status: 'ok' }))
+    try {
+      h.delta('retained', 'failed'); h.list()
+      const draining = h.writer.flush()
+      await vi.waitFor(() => expect(h.save.mock.calls.at(-1)?.[0].operation).toBe('replaceList'))
+      const failed = threadRequests(h)[0]
+      release({ status: 'ok' })
+      queueMicrotask(() => h.delta('eligible', 'good'))
+      await draining
+      expect(h.hasScheduled()).toBe(true)
+      fail = false
+      if (trigger === 'failed unpair') beginChatHistoryRemoval('a')(false)
+      // For the unpair case this later publication happens during the resumed drain,
+      // so it cannot independently turn the queued continuation into a retry cycle.
+      if (trigger === 'failed unpair') h.run()
+      h.delta('later received event', 'trigger')
+      if (trigger === 'received event') h.run()
+      await vi.waitFor(() => expect(threadRequests(h).filter(r => r.conversationId === 'trigger')).toHaveLength(2))
+      expect(threadRequests(h).filter(r => r.conversationId === 'failed')[1]).toEqual(failed)
+    } finally { h.save.mockResolvedValue({ status: 'ok' }); release({ status: 'ok' }); await h.writer.stop() }
+  })
+
+  it('does not schedule after stop in the settlement gap', async () => {
+    let release: (result: ChatHistoryResult) => void = () => {}
+    const h = harness(request => request.operation === 'replaceList'
+      ? new Promise(resolve => { release = resolve }) : Promise.resolve({ status: 'ok' }))
+    h.list()
+    const draining = h.writer.flush()
+    let stopping: Promise<void> | undefined
+    release({ status: 'ok' })
+    queueMicrotask(() => { h.delta('before stop'); stopping = h.writer.stop() })
+    await draining
+    await stopping
+    expect(h.hasScheduled()).toBe(false)
+    expect(h.schedule).toHaveBeenCalledOnce()
+    expect(threadRequests(h)).toHaveLength(2)
+  })
+
   it('flushes and stops a bounded backlog while the renderer clock stays paused', async () => {
     const h = harness()
     h.delta('seed'); await h.writer.flush(); h.save.mockClear()

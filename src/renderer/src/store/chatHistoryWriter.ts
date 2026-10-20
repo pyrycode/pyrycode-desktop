@@ -85,9 +85,17 @@ export function createChatHistoryWriter(deps: {
   let stopped = false
   let cancel: (() => void) | undefined
   let running: Promise<void> | undefined
+  let scheduledFailures: Set<string> | undefined
   const report = (code: string) => deps.log({ event: 'history-writer-result', code })
   const keyFor = (s: Snapshot) => JSON.stringify([s.serverId, s.kind, null])
-  const hasReady = () => [...pending.values()].some(snapshot => !paused.has(snapshot.serverId))
+  const hasReady = (failed: ReadonlySet<string> = new Set()) => [...pending].some(([key, snapshot]) =>
+    !failed.has(key) && !paused.has(snapshot.serverId))
+  function scheduleReceived(): void {
+    if (running !== undefined) return
+    // A later received event permits retries even if a continuation is already queued.
+    scheduledFailures?.clear()
+    if (cancel === undefined) cancel = deps.schedule(() => { void flush() })
+  }
   function capture(value: Snapshot): void {
     const removed = deleted.get(value.serverId)
     if (value.kind === 'list' && removed !== undefined) {
@@ -101,7 +109,7 @@ export function createChatHistoryWriter(deps: {
     if (seen.get(key) === encoded) return
     seen.set(key, encoded)
     pending.set(key, snapshot)
-    if (cancel === undefined && running === undefined) cancel = deps.schedule(() => { void flush() })
+    scheduleReceived()
   }
 
   function captureChange(host: string, id: string, slice: ThreadItemStore['hosts'] extends ReadonlyMap<string, ReadonlyMap<string, infer S>> ? S : never): void {
@@ -116,11 +124,10 @@ export function createChatHistoryWriter(deps: {
       if (combined) { prior.tail.request = combined; prior.tail.steps = mutationSteps(combined) }
       else { prior.tail.next = node; prior.tail = node }
     } else pending.set(key, { serverId: host, head: node, tail: node })
-    if (cancel === undefined && running === undefined) cancel = deps.schedule(() => { void flush() })
+    scheduleReceived()
   }
 
-  async function drain(): Promise<void> {
-    const failed = new Set<string>()
+  async function drain(failed: Set<string>): Promise<void> {
     while (pending.size > 0) {
       const entries = pending.entries()
       let next = entries.next()
@@ -183,10 +190,20 @@ export function createChatHistoryWriter(deps: {
     }
   }
   function flush(): Promise<void> {
+    return startDrain(new Set())
+  }
+  function startDrain(failed: Set<string>): Promise<void> {
     cancel?.()
     cancel = undefined
-    if (running === undefined) running = drain().finally(() => {
+    scheduledFailures = undefined
+    if (running === undefined) running = drain(failed).finally(() => {
       running = undefined
+      // Captures can arrive after drain finishes but before this cleanup. Keep failed
+      // cursors suppressed throughout automatic continuations, including at other keys.
+      if (!stopped && hasReady(failed) && cancel === undefined) {
+        scheduledFailures = failed
+        cancel = deps.schedule(() => { void startDrain(failed) })
+      }
     })
     return running
   }
@@ -219,7 +236,7 @@ export function createChatHistoryWriter(deps: {
       if ('kind' in snapshot && snapshot.serverId === serverId && snapshot.kind === 'list') capture(snapshot)
     }
     pending.set(key, { operation: 'removeConversation', serverId, conversationId: id })
-    if (cancel === undefined && running === undefined) cancel = deps.schedule(() => { void flush() })
+    scheduleReceived()
   })
   const offRemoval = subscribeChatHistoryRemoval(serverId => {
     paused.set(serverId, (paused.get(serverId) ?? 0) + 1)
@@ -246,7 +263,7 @@ export function createChatHistoryWriter(deps: {
       else paused.set(serverId, remaining)
       removals.delete(settlement)
       done()
-      if (!stopped && hasReady() && cancel === undefined && running === undefined) cancel = deps.schedule(() => { void flush() })
+      if (!stopped && hasReady()) scheduleReceived()
     }
   })
   deps.log({ event: 'history-writer-started' })

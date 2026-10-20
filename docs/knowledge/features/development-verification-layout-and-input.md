@@ -29,14 +29,16 @@ allow queued events to run; they do not acknowledge a particular scroll handler.
 Held-reader checks additionally need stable offset, content height and viewport height
 after the corresponding rendered effect.
 
-For thumbnail readers, require the daemon echo's numeric supplied-wrapper identity,
+For held thumbnail readers, require the daemon echo's numeric supplied-wrapper identity,
 settle pointer/focus and geometry, then prove trusted upward movement before one exact
 nonzero park. A listener registered after React must observe a newer processed scroll
 at that target. Require 20 unchanged frame comparisons of geometry, focus and processing
 before release; neither an optimistic bubble nor stable geometry proves released intent.
 Keep the baseline immutable and retain failed phase observations. See
 [the thumbnail readiness contract](conversation-shell-scroll-pin.md#thumbnail-reader-setup)
-and [controlled Linux evidence](#thumbnail-reader-setup-verification).
+and [controlled Linux evidence](development-verification-thumbnail-readers.md#thumbnail-reader-setup-verification).
+Bottom-resting last-row checks separately establish
+[committed row ownership](development-verification-thumbnail-readers.md#last-row-thumbnail-ownership-verification).
 
 For streaming message copy, settle the attached send's completed assistant reply
 before injecting an independent delta. Locate the intended source explicitly and
@@ -434,58 +436,9 @@ the fake responses.
 
 ### Thumbnail reader setup verification
 
-The [plan's controls and artifact manifest](../../specs/architecture/2183-thumbnail-reader-setup.md#validation-evidence)
-and [verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/2187#issuecomment-6295685469)
-record Linux x64/Xvfb evidence on 2026-10-20, reviewed at `90fd2c8e`.
-After all three authoritative user rows (`1`, `2`, `123`) arrived, focusing the first
-thumbnail's Copy action with `preventScroll` and reading layout increased content
-height 3149 → 3177 (viewport 733). The original park immediately read back 1260,
-but scroll/resize processing restored bottom offset 2444 before image release.
-An echo barrier alone still failed. The repair retains this focus intervention,
-settles focus/layout, then trusted ArrowUp moves 2416 → 2376. One exact park produces
-a newer processed event at 1260 and at least 21 identical observations before release.
-This diagnoses a controlled setup boundary without establishing the historical
-unrecorded schedule; no production change shipped.
-
-| Recorded run | Executed | Passed | Failed | Skipped |
-| --- | ---: | ---: | ---: | ---: |
-| Original setup with concurrent metadata focus | 2 | 1 | 1 | 0 |
-| Same control with positive echo barrier | 2 | 1 | 1 | 0 |
-| Repaired control | 2 | 2 | 0 | 0 |
-| Ten consecutive focused invocations | 20 | 20 | 0 | 0 |
-| Complete `thread-scroll-pin.spec.ts` | 23 | 23 | 0 | 0 |
-| Complete configured application gate | 528 | 528 | 0 | 4 |
-
-Each focused invocation executed/passed the exact case `a thumbnail resolving leaves
-a scrolled-up reader where they were, above them or below them` once plus native writer
-once. All three thumbnail cases passed in the complete spec. Builder browser reports
-used four configured workers and one effective slot, zero retries and report errors,
-with no skips. Compiled source was clean `ecab6253`; later builder commits changed only
-plan evidence. Commands, combined stdout/stderr, build/spec hashes, failed controls and
-`thumbnail-reader-setup` phase samples remain under `/tmp/builder-2183/` as indexed by
-the plan. The verifier checked all 44 manifest hashes and matching compiled bundles.
-
-Dispatcher gate 7 ran `npx playwright test --reporter=json` after a separate build,
-rather than the requested `npm run e2e -- --reporter=list,json`. The invocation/reporting
-difference preserved complete selection. The exact named case executed/passed once;
-all 22 scroll cases and all 29 captured-client cases passed. Four configured/actual
-workers, zero retries/flaky results and zero report errors were retained. Existing
-skips were two macOS badge cases, macOS window reopening and the system-prompt Reset
-fixme. Report SHA-256: `3b62325962e4faa18670340aa58362ae5d92b666e15212edc539cbf0c47a299a`;
-JSON and separate stderr paths are in the linked verdict. This is mounted fake-daemon
-and captured-client evidence, not fresh provider/daemon or physical-effect acceptance;
-see [replay limits](../../recorded-tests.md#live-checks-remain-required). No fresh live
-run was required; macOS is outside this Linux ticket's verification scope.
-
-Historical #2173 evidence remains failed: 529 executed, 528 passed, 1 failed,
-4 skipped, zero retries, three configured/actual workers; this case expected 1260
-and observed 2416 before release. Unchanged focused comparison passed 2/2 with no
-failures/skips; a full comparison passed this case but recorded 529 executed,
-528 passed, 1 separate failure owned by #2184 and 4 skips. The
-[refinement evidence](https://github.com/pyrycode/pyrycode-desktop/issues/2183#issuecomment-6294684015)
-retains original commands, identities, report hashes and source-computer paths.
-Those green comparisons prove intermittency only. Earlier #2158 thumbnail failures
-remain separate [bounded-observation evidence](chat-history-testing.md#counted-linux-bounded-observation-validation).
+See [thumbnail reader verification](development-verification-thumbnail-readers.md)
+for the separate held-reader focus/input and last-row ownership controls, counted
+Linux results, historical failure provenance and replay limits.
 
 ### Visible-tail focus reliability
 

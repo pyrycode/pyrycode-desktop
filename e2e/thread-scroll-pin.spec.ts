@@ -1,6 +1,6 @@
 import { capturePairedApp } from './fixtures/capturePairedApp'
 import { createHash } from 'node:crypto'
-import type { ElectronApplication, Locator, Page, TestInfo } from '@playwright/test'
+import type { ElectronApplication, ElementHandle, Locator, Page, TestInfo } from '@playwright/test'
 import { test, expect, seedConversationsFrame, SEEDED_ROW, FIRST_SERVER_ID } from './fixtures/launchPairedApp'
 import { bubbleTextExactly } from './fixtures/bubbleText'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
@@ -1007,6 +1007,7 @@ interface WithheldThumbnails {
   buildReplyFrames: (inbound: Uint8Array) => Uint8Array[]
   /** The correlated chunk for one recorded ask, once that ask has actually reached the daemon. */
   serve: (attachmentId: string) => Promise<Uint8Array>
+  serveMessageEcho: () => Promise<Uint8Array>
 }
 
 /**
@@ -1027,15 +1028,19 @@ interface WithheldThumbnails {
  * silence. Keyed by attachment id and overwritten on each ask, so a re-mounted leaf's newer request id
  * wins.
  */
-function withheldThumbnails(): WithheldThumbnails {
+function withheldThumbnails(holdMessageEcho = false): WithheldThumbnails {
   const asks = new Map<string, { requestId: number; ask: RequestAttachmentPayload }>()
+  let messageEcho: Uint8Array | undefined
   return {
     buildReplyFrames: (inbound) => {
       const envelope = decodeEnvelope(inbound)
       if (envelope.type === 'send_message' && (envelope.payload as SendMessagePayload).attachment_ids?.length) {
         const sent = envelope.payload as SendMessagePayload
-        return [encodeEnvelope({ id: 800, type: 'message', ts: FIXED_TS, payload: { ...sent, role: 'user',
-          attachments: sent.attachment_ids!.map(attachment_id => ({ attachment_id, filename: THUMBNAIL_FILENAME })) } })]
+        const echo = encodeEnvelope({ id: 800, type: 'message', ts: FIXED_TS, payload: { ...sent, role: 'user',
+          attachments: sent.attachment_ids!.map(attachment_id => ({ attachment_id, filename: THUMBNAIL_FILENAME })) } })
+        if (!holdMessageEcho) return [echo]
+        messageEcho = echo
+        return []
       }
       if (envelope.type === 'request_attachment') {
         const ask = envelope.payload as RequestAttachmentPayload
@@ -1043,6 +1048,13 @@ function withheldThumbnails(): WithheldThumbnails {
         return []
       }
       return buildReplyFrames(inbound)
+    },
+    serveMessageEcho: async () => {
+      await expect.poll(() => messageEcho !== undefined, { timeout: STREAM_TIMEOUT_MS }).toBe(true)
+      if (messageEcho === undefined) throw new Error('the held message echo is missing')
+      const echo = messageEcho
+      messageEcho = undefined
+      return echo
     },
     serve: async (attachmentId) => {
       await expect
@@ -1081,12 +1093,14 @@ async function sendWithThumbnail(
   page: Page,
   app: ElectronApplication,
   uploadId: string,
-  text: string
+  text: string,
+  beforePublication?: () => Promise<void>
 ): Promise<void> {
   await pushCompletedUpload(app, uploadId)
   await page.getByPlaceholder('Message…').fill(text)
   await page.getByRole('button', { name: 'Send' }).click()
   await expect(thumbnailBubble(page, text)).toHaveCount(1)
+  await beforePublication?.()
   await expect(page.locator('.conversation__thread > [data-read-row]', {
     has: thumbnailBubble(page, text)
   })).toHaveAttribute('data-read-row', /^\d+$/)
@@ -1400,8 +1414,8 @@ test('a thumbnail resolving leaves a scrolled-up reader where they were, above t
 
 test('a thumbnail resolving in the last row leaves a bottom-resting reader at the bottom', async ({
   launchPairedApp
-}) => {
-  const withheld = withheldThumbnails()
+}, info) => {
+  const withheld = withheldThumbnails(true)
   const { page, app, daemon } = await launchPairedApp({
     buildReplyFrames: withheld.buildReplyFrames
   })
@@ -1411,7 +1425,45 @@ test('a thumbnail resolving in the last row leaves a bottom-resting reader at th
   // bytes are withheld, so the row it mounts draws nothing and reserves nothing while the reader rests
   // beneath it.
   await primeOverflowingThread(page)
-  await sendWithThumbnail(page, app, ID_LAST, LAST_TEXT)
+  const held: { optimistic: ElementHandle<HTMLElement | SVGElement> | null } = { optimistic: null }
+  const ownership: unknown[] = []
+  try {
+    await sendWithThumbnail(page, app, ID_LAST, LAST_TEXT, async () => {
+      held.optimistic = await thumbnailBubble(page, LAST_TEXT).elementHandle()
+      if (held.optimistic === null) throw new Error('the optimistic thumbnail bubble is missing')
+      const before = await held.optimistic.evaluate(element => ({ connected: element.isConnected,
+        inThread: element.closest('.conversation__thread') !== null,
+        row: element.closest('[data-read-row]')?.getAttribute('data-read-row') }))
+      ownership.push({ phase: 'held-echo', ...before })
+      expect(before.connected).toBe(true)
+      expect(before.inThread).toBe(true)
+      expect(before.row ?? '').not.toMatch(/^\d+$/)
+      daemon.pushFrame(await withheld.serveMessageEcho())
+    })
+    const retired = await held.optimistic!.evaluate(element => ({ connected: element.isConnected,
+      inThread: element.closest('.conversation__thread') !== null }))
+    ownership.push({ phase: 'retired-optimistic', ...retired })
+    expect(retired).toEqual({ connected: false, inThread: false })
+    // Presence alone admitted the retired optimistic node. The existing publication barrier
+    // must instead leave a connected, authoritative direct child in the active thread.
+    const committed = await thumbnailBubble(page, LAST_TEXT).evaluate(element => {
+      const thread = document.querySelector('.conversation__thread')
+      const row = element.closest('[data-read-row]')
+      return { connected: element.isConnected, inActiveThread: thread !== null && thread.contains(element),
+        directChild: thread !== null && row?.parentElement === thread,
+        lastChild: thread !== null && row === thread.lastElementChild,
+        row: row?.getAttribute('data-read-row') }
+    })
+    ownership.push({ phase: 'committed', ...committed })
+    expect(committed).toEqual({ connected: true, inActiveThread: true, directChild: true,
+      lastChild: true, row: expect.stringMatching(/^\d+$/) })
+    await expect(thumbnailBubble(page, LAST_TEXT).locator('img.bubble__image')).toHaveCount(0)
+  } finally {
+    await held.optimistic?.dispose()
+    await info.attach('thumbnail-row-ownership', {
+      body: JSON.stringify(ownership), contentType: 'application/json'
+    })
+  }
 
   // The preconditions. The reader is genuinely resting at the bottom (the primer's overflow gate has already
   // proved the thread can scroll at all), and the picture is genuinely in the FINAL row — which, with the
@@ -1443,6 +1495,10 @@ test('a thumbnail resolving in the last row leaves a bottom-resting reader at th
   // this closes is exactly the window before something unrelated snaps the reader back. Against `main` this
   // reads 172px; the observer takes it to zero.
   await expectPinnedToBottom(page)
+  await info.attach('thumbnail-bottom-growth', {
+    body: JSON.stringify({ before, after, growth: after.scrollHeight - before.scrollHeight,
+      bottomDistance: distanceFromBottom(after) }), contentType: 'application/json'
+  })
 })
 
 // ---------------------------------------------------------------------------------------------------

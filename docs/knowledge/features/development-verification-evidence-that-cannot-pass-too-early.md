@@ -107,6 +107,100 @@ asserting zero body/children/page/history requests; an immediate zero count
 would not prove that either header reached the composer. See
 [Agent label derivation](conversation-shell-working-indicator.md#agent-descriptions-from-compact-headers).
 
+## Received but uncommitted read evidence
+
+The `stable callbacks exclude hidden, queued and received but uncommitted tails`
+case in [`visible-tail-read.spec.ts`](../../../e2e/visible-tail-read.spec.ts) must
+hold application through both scheduler paths. The runtime races the **same drain
+function** through an animation frame and a **50 ms timer**. Holding frames alone
+lets the timer commit the supposedly pending text. Match timer callbacks by
+identity to retained frame callbacks, leaving unrelated timers and callback/IPC
+processing live. Native wrappers count actual frame and timer opportunities
+without invoking the retained application callbacks.
+
+Keep the hidden-document, hidden-row and queued checks. For the pending append,
+opt into thread updates on the real preload subscription and positively observe
+receipt, then both native opportunities and the retained 100 ms challenge. Require
+“Awaiting commit” to remain absent and the latest read target to stay 4. Dispatch
+focus and scroll, then send `requestContextUsage` on the same ordered outbound
+path. Wait for that new command at the fake daemon before comparing the exact
+read-target sequence and text absence again; evaluation completion alone can
+miss delayed publication. Keep the hold active through the sentinel receipt.
+
+In `finally`, restore the exact `requestAnimationFrame`, `cancelAnimationFrame`,
+`setTimeout` and `clearTimeout` identities and unsubscribe before releasing retained
+callbacks. Cancel native handles and clear retained maps; runtime cancellation
+and its scheduling token fence the losing drain. Final assertions require the
+same append to become visible and publish target 5. This tests resumed progress
+as well as exclusion. See the [runtime read contract](thread-runtime.md#live-controls-and-read-publication).
+
+### Counted Linux validation
+
+These are retained builder/dispatcher results accepted by the
+[PR #2189 verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/2189#issuecomment-6296990392)
+on 2026-10-20, not documentation-stage test runs. Builder browser evidence used
+candidate `c449934ff692110a56a7e542a5253fa1627b2ecb`; the accepted verifier reviewed
+`3ce46e4b19ecb2ef7f57af6783f2fbfde9367ad8`, with the same repaired test.
+
+| Run/report | Executed | Passed | Failed | Skipped | Retries |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Controlled original frame-only hold, `before.json` | 1 | 0 | 1 | 0 | 0 |
+| Repaired hold, `after.json` | 1 | 1 | 0 | 0 | 0 |
+| Ten consecutive named repetitions, `repeat.json` | 10 | 10 | 0 | 0 | 0 |
+| Complete visible-tail spec, `spec.json` | 7 | 7 | 0 | 0 | 0 |
+| Builder complete default suite, `default.json` | 528 | 527 | 1 | 4 | 0 |
+| Complete configured verifier application/replay gate 7 | 528 | 528 | 0 | 4 | 0 |
+
+The controlled failure rendered “Awaiting commit” at the intended absence assertion
+after a native 100 ms opportunity. The repaired named case is present and passed
+in the after run, all ten repetitions, the complete spec and both complete-suite
+runs; all seven visible-tail cases passed in each complete suite. Repaired
+`pending-read-barrier` attachments record receipt 1, frame/timer opportunities 1
+each, targets `[1,2,3,4]` and the received context-usage sentinel. Passing final
+assertions establish released text and target 5.
+
+Builder reports/result directories remain under `/tmp/builder-2186/`; the
+[plan](../../specs/architecture/2186-pending-read-barrier.md#final-linux-validation)
+retains commands, report hashes and pre-verify/build evidence. Repetitions used
+`--project parallel --no-deps --repeat-each 10 --workers 1 --retries 0`; the full
+default run retained the original projects and two workers. Its last-row thumbnail
+case failed when `rowPosition` reported that the bubble was outside a thread scroll
+region, tracked separately in [#2188](https://github.com/pyrycode/pyrycode-desktop/issues/2188).
+That run remains failed; no unchanged-main attribution is established. The current
+complete green gate includes that case and all seven visible-tail cases, each
+passed, with zero flaky outcomes, two workers and all three projects. Its four
+existing skips are two macOS badge cases, macOS last-window reopening and the
+recorded system-prompt-reset fixme. Accepted verifier stage
+`b754f2c76dec91777846d087d6f72e6d70eae755ec803d128728e0b83c4decbd`
+retains the verdict and dispatcher gate references.
+
+### Separate historical macOS provenance
+
+The recovered bundle for owning ticket **#2176 / PR #2180**,
+`ffc78e067a57e1446e74fe49f96444dc69e4f2be953f438bd475591d094889ac`,
+preserves these earlier outcomes separately:
+
+| Historical run | Executed | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| Original complete macOS gate | 531 | 529 | 2 | 2 |
+| Unchanged exact retry, recorded verifier handoff | 2 | 1 | 1 | 0 |
+
+The original `logs/verifier-gate__2176_6.log` contains this named stable-callback
+failure with the pending text rendered; its verified SHA-256 is
+`f5917e8f8ed50c180f3116b6c6c8dd3df1075189352d9833e5ab4aaeeae2acc3`.
+The bundle's `handoff/verifier-2176.md` records the same named case passing in the
+unchanged retry, with zero retries, while the separate reply-source case failed
+(#2173). The original raw `retry.json` is absent from the recovered bundle:
+the named retry outcome is handoff evidence, not a raw JSON inspection. The
+builder recovered the bundle under `/tmp/builder-2186/evidence-2176/`; the verifier
+checked its log hash and relevant manifest entries. Original scratch paths
+`/tmp/verifier-2180/review-bf3131b5/original-playwright.log` and `retry.json`
+belong to the originating Mac and are not replaced by Linux reports.
+
+Current macOS execution is outside this Linux ticket's verification scope.
+These fake-transport and captured-client results establish no fresh provider or
+live-daemon acceptance; none was required for the test-only repair.
+
 ## Question-answer interpretation and freshness
 
 Selected-label mention order cannot establish answer delivery: correct contrastive prose

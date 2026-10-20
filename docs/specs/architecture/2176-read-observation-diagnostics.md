@@ -224,3 +224,9 @@ Its owning continuation must retrieve/inspect the full counts and artifacts and
 commit its evidence. Fresh normal verifier judgment and documentation remain pending.
 Subsequent plan-only receipts do not change the executable or tests from that candidate.
 Original and controlled failures remain failed; other operating systems are outside scope.
+
+Handoff status: the managed task is running on `macbook`, run
+`f0cbb629d400b347695902f975cf2d20e6de139d7a104eae43265603983b362e`.
+Retrieve it to `/tmp/builder-2176/sync-repair/mac-gate/`; inspect revision/configuration,
+full JSON/list reports, counts, retries, skips and fake-daemon-setup attachments,
+then commit the receipt before fresh verifier judgment. No full-gate pass is claimed.

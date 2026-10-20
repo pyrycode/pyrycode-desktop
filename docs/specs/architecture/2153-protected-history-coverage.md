@@ -187,6 +187,132 @@ Preserve historical failures/passes, unknown Linux trigger, existing causal proo
 capture provenance and reset-prompt exclusion; record dispatcher results separately
 from builder results. Update this plan's pending handoff when that evidence arrives.
 
+### 2026-10-20 — macOS production-delivery validation
+
+Final tested source: `33aa5fee23efd70365a829f908f6e736a8ada084`, including final
+merged main `3fd12cc640d4`, macOS arm64, Node 25.8.0, Electron 33.4.11. This
+following evidence commit changes only the plan. Pre-verify passed all five checks
+after that merge (`/tmp/builder-2153/pre-verify-merged.log`); normal build,
+client-test typecheck and docs guard passed. All nine focused Node files passed
+**151/151**, zero failed/skipped (`units-merged-prepared.log`): preload status,
+app-update, live-window, remembered-model and its boundary controls, all 28 history
+coverage controls, query-observer installation, query coordinator and runtime.
+An initial broader Node check started before the gate's Node-native preparation
+finished and failed two protected-storage controls; the sequential prepared run
+above passes. All Node work finished before final Electron preparation; no native
+rebuild overlapped any replay. Every profile run restored the normal build.
+
+Controlled startup proof: six preload regressions failed before the correction
+(`status-red.log`, SHA-256 `164eee9bb139ca1588090209d08d72ff29c9f74ddfa684a75cb676ec40fcaa4e`).
+The native startup comparison against byte-identical main production preload
+passed normal bootstrap and failed delayed mount with zero status receipts
+(`startup-causal-red.log`, SHA-256 `f835ecbbfabd0992218e44001a660dfbbdf9606cf6b317952d2ba9833b70c7a9`);
+the prerequisite writer control also passed. A preceding script-development run
+used an invalid continuation and failed baseline certification; `startup-red.log`
+is retained but is not causal evidence. Corrected final native controls passed
+**2/2**, zero failed/skipped (`startup-final.json`, SHA-256
+`719294443f3615958a119a330cb3d1acd1ee4a59c467add3ec75cf3515715a3b`).
+Delayed trace: saved profile exited → resumed handshake → main accepted connection
+→ document loaded before React → renderer received status → resumed request
+dispatched → received publication rendered. Assertions require one handshake,
+one selection, exact owning catch-up at saved version 1, baseline plus newest
+publication, enabled Send and no legacy requests. Original diagnostic
+`resume/startup-boundary.json` remains separate, SHA-256
+`a9489c619c482dbaed85b034025ee499062be2cd487342c71d8d5510e82a65a1`.
+Neither controlled schedule establishes the historical Linux trigger.
+
+Model-recall compatibility proof: the new baseline/reconnect unit failed before
+the consumer correction (`model-recall-red.log`, 27 passed/1 failed), then passed
+with all 28 remembered-model tests. Its unchanged recorded scenario passed 1/1,
+43 matched requests / 150 emitted frames / zero remaining (`model-final.json`,
+SHA-256 `7cee41967d97b1d983e8132347372cdf53a782e443c24346d70f9457a4bb7787`).
+
+Final commands from the worktree root; artifacts below use `/tmp/builder-2153/`:
+```sh
+python3 "$AGENTS_REPO_PATH/bin/pre-verify-check" --test-file src/renderer/src/store/rememberedModel.test.ts
+npm run build
+npm run typecheck:client-tests
+npm run check:docs
+npm run rebuild:electron
+PLAYWRIGHT_JSON_OUTPUT_NAME=/tmp/builder-2153/startup-final.json npx playwright test e2e/saved-profile-startup.spec.ts --project=parallel --no-deps --retries=0 --reporter=list,json --output=/tmp/builder-2153/startup-final-results
+# Five consecutive batches, N=1..5:
+PLAYWRIGHT_JSON_OUTPUT_NAME=/tmp/builder-2153/final-paired-N.json node scripts/run-offline-replay.mjs --profile complete-thread --grep 'a real daemon lazily fills a served gap|daemon-built thread streams' --fully-parallel --workers=3 --repeat-each=2 --retries=0 --reporter=list,json --output=/tmp/builder-2153/final-paired-N-results
+PLAYWRIGHT_JSON_OUTPUT_NAME=/tmp/builder-2153/final-recorded-full.json node scripts/run-offline-replay.mjs --profile complete-thread --retries=0 --reporter=list,json --output=/tmp/builder-2153/final-recorded-full-results
+```
+
+| Report | Executed/passed/failed/skipped | Configured/peak actual workers | SHA-256 |
+| --- | --- | --- | --- |
+| `final-paired-1.json` | 4/4/0/0 | 3/3 | `7c9572a40cd6ebfdd4f405bffff8a5fc4608d9883183428af0becfa263a6ad6a` |
+| `final-paired-2.json` | 4/4/0/0 | 3/3 | `1d683f937e6614b1160d0ec6d5067248bc9e3fa5f7b60c784a0fc0b94eca8c3a` |
+| `final-paired-3.json` | 4/4/0/0 | 3/3 | `cf6499b97e81c37b8c8af486c8d82fc4ea7ec6fb5095dbcf954f03bf5212c2fa` |
+| `final-paired-4.json` | 4/4/0/0 | 3/3 | `223107c25cca0ed82d1112c8979c9c04e1afd8e391213a3e44852eb410ba12ff` |
+| `final-paired-5.json` | 4/4/0/0 | 3/3 | `2d3289769edc63dce16701efade0071cb3df286e2e547e1988c6d2cec72d3240` |
+| `final-recorded-full.json` | 29/29/0/1 | 1/1 | `b8b1990ca3daa08e9e7d5dd9e570607e5288035b1612be556d22e5d8373ba6aa` |
+
+Each named history/thread case passed twice per final batch (**20 passes**), then
+once in full replay. All retries zero, no flaky results/report errors; actual peak
+overlap is three in every batch. Every guard reports zero forbidden launches.
+Every successful history exchange is **32/63/0**, thread **45/378/0** (matched /
+emitted / remaining). All 29 full exchanges total **773/3216/0**. The sole skip
+is `real claude picks up a saved channel system prompt at Reset session`.
+`summarize-status.py` asserts multiplicity, retry zero, actual overlap, guard
+outcomes, identical clean build maps, input checksums and every exchange remainder.
+Its retained output is `validation-status-summary.log`; full counted evidence is
+`counted-status-evidence.json`, SHA-256
+`e9402ae70a20597fa73e06191250dc7e8da75bb513fe8021b4ec3149f64bc152`.
+All six builds report `sourceDirty: false`, profile `complete-thread`, revision
+`33aa5fee`. Main bundle SHA-256 `0392503cdc7b6934daebc336f9ec6d5aa3cac5f4f6a24678b29c5e165efdf12c`;
+preload `53308858d05c0214442e57352e65e79b7fef59670546a02eec4b4d1e08317080`;
+renderer `142d47acd92837310fbeb0f552d7704a9928dc2b7b475f4b2ffe8c75562b061b`.
+Full bundle maps and original capture provenance remain in each log/attachment.
+History/thread recording hashes remain `de0b1166b6e05e0792228c07be25c20498b117914e673558222eac12cd4e6d2c`
+and `53a3db11cfab2d5041b511d7be4d030ab5b2b8449b7fdb3ea1d7e5e3db552ae3`;
+capture Desktop `00ec821f9380b00cf2dfc0dd4817ee15584106a5`, daemon
+`58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`, binary SHA-256
+`5f5b3b9ce42eda74024637f4929dd720d36c1226ce6e370eb62fbe9e6b22f7c0`.
+
+Earlier current-run failures remain failed evidence, all on `1dd48a53`:
+- `paired-1/2.json` each passed 4/4; `paired-3.json` failed a relaunch native
+  prerequisite (3 passed/1 failed, 10/21/22 exchange), tracked in #2190. Report
+  SHA-256 `41b903683f4b93c565de362f65936c797284486ab38bf21f243fe603a3f7f338`.
+- After native re-preparation, `accepted-paired-1.json` passed 4/4;
+  `accepted-paired-2.json` failed fresh-profile ArrowUp protected `unreadable`
+  (3 passed/1 failed, 27/53/5), tracked in #2191, SHA-256
+  `85603ed8c9e1391c5e561f4005728c2df465187f3a8ba95e683e2baf87c43c12`.
+  Byte-identical main production comparison passed 4/4 (`main-baseline.json`,
+  SHA-256 `3aa541480bcdd9859cf532a3632e45498483b4e5908ad614b0c92cd22885a15a`).
+  Its checkout provenance is intentionally dirty `1dd48a53`, with production
+  preload restored to main. This passing comparison establishes no trigger or
+  inheritance. Both investigations remain open; final acceptance does not claim
+  to repair their unknown causes or erase those failed reports.
+- `recorded-full.json` recorded 28 passed/1 failed/1 existing skip; its model
+  recall failure is this repair's regression, corrected and causally tested above.
+
+Historical `de6e481a` and `b505bf01` failure/unchanged-pass pairs and both prior
+causal repairs remain above. The distinct `3e533963` Linux failure remains as
+refiner-inspected evidence: 528 executed/527 passed/1 failed/4 skipped, history
+saved-only at 45 seconds with 9/20/23; selected unchanged rerun 4/4, history32/63/0.
+Full-report SHA-256 `f1d1f633f3de3774383e74aaf515616c19ee0c3bee28bb3968aff5dd4eb95982`,
+rerun `c45c5219a54fce7024e78f3ab9a4ac2d263254118da19074a84a8b12b84b5e10`;
+retained bundle `resume/evidence-2184/9d46d83e031db1ea8b9d7ea972fbc5a1c6a0c08c5a151f8dd6ccb28b2812c905/`.
+No new inspection or reproduction of that Linux trigger is claimed here.
+
+Dispatcher owns the subsequent configured application gate, including both named
+cases without retry; verifier checks its counted evidence separately. No fresh
+provider/daemon, encryption or physical-effect run was required or claimed.
+Linux is outside this macOS execution's verification scope.
+
+## Documentation handoff
+
+Pending documentation stage: reconcile the production subscriber-readiness
+contract and counted execution-OS evidence in `docs/knowledge/features/live-window.md`,
+`docs/knowledge/features/daemon-connection-lifecycle.md` and
+`docs/knowledge/features/chat-history-testing.md`. Distinguish document load,
+accepted main status, renderer subscription, request dispatch and publication.
+Preserve historical failures/passes, unknown Linux trigger, existing causal proofs,
+capture provenance and reset-prompt exclusion; record dispatcher results separately
+from builder results. Update this plan's pending handoff when that evidence arrives.
+
 ## Security review
 
 **Verdict:** PASS

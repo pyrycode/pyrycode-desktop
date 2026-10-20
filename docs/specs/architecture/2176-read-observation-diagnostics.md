@@ -50,6 +50,7 @@ No new failure or error state. Existing refusals retain their return values and 
 No publisher send/sync diagnostics are added.
 
 ## Testing strategy
+- The mounted diagnostic case is `read observation explains each committed refusal, reuse and receiver delivery` in `e2e/thread-items.spec.ts`.
 - Unit matrix isolates each target guard and verifies exactly one static record, precedence and silent success.
 - Extend the existing spec-local mounted fixture with a controlled hook consumer; retain observer callbacks to exercise stale callback branches without a DOM test environment or shared harness.
 - Count setup and callback events separately, verify reuse and cleanup, and forward a genuine refused observation through the default pipe to main stdout.
@@ -58,3 +59,20 @@ No publisher send/sync diagnostics are added.
 ## Open Questions
 None. Estimated total written work: 600 lines; no new exported types/components/stores,
 no consumer migrations, three acceptance behaviors, no new state machine.
+
+## Revisions
+2026-10-20: Target diagnostics distinguish unavailable owning scope from a mismatched
+scope. Reuse avoids the old eager target calculation, leaving the retained callback
+as the sole target evaluator for that phase; eligibility and send behavior are unchanged.
+The spec-local mounted consumer counts active observers, listeners and list subscriptions
+and retains disposed callbacks to exercise committed-input replacement directly.
+
+## Verification evidence
+macOS arm64, 2026-10-20; final main merge was already up to date at `2d8a7e32`.
+- Test-first target matrix: 21 failed / 5 passed before implementation (missing records).
+- Final pre-verify: 5 checks passed, affected units 27 executed/passed, 0 failed/skipped. Evidence copied to `/tmp/builder-2176/final-units/`.
+- `npm run build` passed after that merge and pre-verify.
+- After explicit `native-preparation.py electron`, native-writer control: 1 executed/passed, 0 failed/skipped/flaky; `/tmp/builder-2176/native-writer-prepared.json`.
+- Final `node node_modules/@playwright/test/cli.js test --config=playwright.config.ts e2e/thread-items.spec.ts --no-deps --grep "read observation explains|publishes only committed|defers 8333" --reporter=json`: 4 executed/passed, 0 failed/skipped/flaky, one actual worker. Report: `/tmp/builder-2176/final-read-observation.json`. Includes default-pipe receiver delivery and listener/subscription reuse/cleanup.
+- Earlier unprepared dependency run failed readiness (1 failed, 14 not run); follow-up #2179 was resolved/closed after the prepared control passed. An earlier direct full-file run had 13 passed / 1 expansion timeout while native rebuilds competed; the unchanged expansion control passed in the final sequential run. Preserve these as failed evidence, not a product reliability repair. The earlier artifacts are under `/tmp/builder-2176/thread-items-first-run/`.
+No live provider test was required or claimed. The dispatcher owns complete-suite acceptance; other operating systems are outside this ticket's verification scope.

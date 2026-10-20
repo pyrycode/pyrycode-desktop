@@ -6,6 +6,7 @@ import { build, loadConfigFromFile, preview } from 'vite'
 import type { ThreadTaskInputs } from '../src/renderer/src/screens/conversation/threadTaskPresentation'
 import type { ThreadItem, ThreadUpdate } from '../src/shared/wire/thread'
 import type { ConversationSummary } from '../src/shared/wire/types'
+import type { ThreadReadInputs } from '../src/renderer/src/store/conversationReadPublisher'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import { ATTACHMENT_RETRIEVAL_CHANNEL, ATTACHMENT_RETRIEVAL_EVENT_CHANNEL } from '../src/shared/ipc/attachmentRetrieval'
 import { ATTACHMENT_BYTES_CHANNEL, ATTACHMENT_BYTES_EVENT_CHANNEL } from '../src/shared/ipc/attachmentBytes'
@@ -145,14 +146,63 @@ function ThreadFixture() {
   </div></div> : <App />;
 }
 `
-async function rendererFixture(realComposer = false) {
+// Spec-local consumer: real React commits/effects and DOM, controlled observer delivery.
+const readDiagnosticSource = `
+import { useRef } from 'react';
+import { useReadObservation } from './store/conversationReadPublisher';
+const readRecords = [], readCallbacks = [], readObservers = [];
+const readListeners = [], readSubscriptions = new Set();
+const diagnosticLog = record => readRecords.push(record);
+function ReadDiagnosticConsumer({ config }) {
+  const pane = useRef(null), thread = useRef(null);
+  useReadObservation(config.inputs, pane, thread, config.defaultLog ? undefined : diagnosticLog);
+  return <div ref={config.pane ? pane : undefined}><div ref={config.region ? thread : undefined}>
+    {config.tail && <div data-read-row={config.tailId}>DOM_CONTENT_SECRET</div>}
+  </div></div>;
+}
+function ReadDiagnosticFixture() {
+  const [config, setConfig] = useState({ mounted: false, generation: 0, pane: true, region: true, tail: true, tailId: 7 });
+  window.readProbe = { records: readRecords, callbacks: readCallbacks, observers: readObservers,
+    active() { return { observers: readObservers.filter(o => !o.disposed).length,
+      listeners: readListeners.length, subscriptions: readSubscriptions.size }; },
+    render(patch) { flushSync(() => setConfig(value => ({ ...value, ...patch }))); },
+    route(epoch) { conversationReadRouteStore.getState().select('HOST_SECRET', 'CHAT_SECRET', epoch); },
+    install() {
+      const add = EventTarget.prototype.addEventListener, remove = EventTarget.prototype.removeEventListener;
+      EventTarget.prototype.addEventListener = function(type, listener, options) {
+        if (type === 'scroll' || type === 'focus' || type === 'visibilitychange') readListeners.push({ target: this, type, listener });
+        return add.call(this, type, listener, options);
+      };
+      EventTarget.prototype.removeEventListener = function(type, listener, options) {
+        const index = readListeners.findIndex(held => held.target === this && held.type === type && held.listener === listener);
+        if (index >= 0) readListeners.splice(index, 1);
+        return remove.call(this, type, listener, options);
+      };
+      const subscribe = conversationListStore.subscribe;
+      conversationListStore.subscribe = listener => {
+        readSubscriptions.add(listener); const off = subscribe(listener);
+        return () => { readSubscriptions.delete(listener); off(); };
+      };
+      window.ResizeObserver = class {
+        constructor(callback) { this.disposed = false; this.targets = []; readObservers.push(this); readCallbacks.push(callback); }
+        observe(element) { this.targets.push(element); }
+        disconnect() { this.disposed = true; this.targets = []; }
+      };
+      Object.defineProperty(document, 'hasFocus', { configurable: true, value: () => true });
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    }
+  };
+  return config.mounted ? (config.hidden ? null : <ReadDiagnosticConsumer key={config.generation} config={config} />) : <App />;
+}
+`
+async function rendererFixture(realComposer = false, readDiagnostics = false) {
   const loaded = await loadConfigFromFile({ command: 'build', mode: 'production' }, resolve('electron.vite.config.ts'))
   const renderer = loaded!.config.renderer
   const outDir = await mkdtemp(join(tmpdir(), 'builder-1904-renderer-'))
   await build({ ...renderer, configFile: false, root: resolve('src/renderer'), base: './',
     plugins: [...renderer.plugins, { name: 'thread-items-fixture', enforce: 'pre', transform(code: string, id: string) {
-      if (id.endsWith('/src/renderer/src/main.tsx')) return code.replace('<App />', '<ThreadFixture />') +
-        fixtureSource.replace('const useRealComposer = false;', `const useRealComposer = ${realComposer};`)
+      if (id.endsWith('/src/renderer/src/main.tsx')) return code.replace('<App />', readDiagnostics ? '<ReadDiagnosticFixture />' : '<ThreadFixture />') +
+        fixtureSource.replace('const useRealComposer = false;', `const useRealComposer = ${realComposer};`) + (readDiagnostics ? readDiagnosticSource : '')
       if (realComposer && id.endsWith('/screens/conversation/threadItemPresentation.ts')) return code.replace(
         'export function threadItemPresentation(source: Held, body: boolean): ThreadItem | null {',
         `export function threadItemPresentation(source: Held, body: boolean): ThreadItem | null {
@@ -169,6 +219,117 @@ async function rendererFixture(realComposer = false) {
 }
 const item = (id: number, kind: string, content: unknown, fields: Partial<ThreadItem> = {}): ThreadItem => ({
   id, rev: id, kind, order: id, status: 'done', active: false, shown: true, summary: `summary ${id}`, content, ...fields
+})
+
+test('read observation explains each committed refusal, reuse and receiver delivery', async ({ launchPairedApp }) => {
+  const server = await rendererFixture(false, true)
+  try {
+    const { page, app } = await launchPairedApp({ threadMode: 'native' }, { rendererUrl: server.resolvedUrls!.local[0] })
+    const received: Record<string, unknown>[] = []
+    let pending = ''
+    const collect = (chunk: Buffer) => {
+      pending += chunk.toString()
+      const lines = pending.split('\n'); pending = lines.pop() ?? ''
+      for (const line of lines) if (line.startsWith('{')) {
+        const record = JSON.parse(line) as Record<string, unknown>
+        if (record.event === 'read-observer') received.push(record)
+      }
+    }
+    app.process().stdout?.on('data', collect)
+    try {
+      const results = await page.evaluate(() => {
+        type Record = { event: string; code: string }
+        const p = (window as unknown as { readProbe: {
+          records: Record[]; callbacks: (() => void)[]; observers: { disposed: boolean; targets: Element[] }[];
+          render: (patch: object) => void; install: () => void; route: (epoch: string) => void;
+          active: () => { observers: number; listeners: number; subscriptions: number }
+        } }).readProbe
+        p.install(); p.route('EPOCH_SECRET')
+        const input: ThreadReadInputs = { snapshot: { hostId: 'HOST_SECRET', conversationId: 'CHAT_SECRET', epoch: 'EPOCH_SECRET',
+          version: 10, checkpoint: 10, repair: null, ranges: [{ start: 1, end: 8 }], items: [
+            { id: 7, rev: 9, kind: 'assistant_message', order: 7, status: 'done', shown: true, content: { text: 'CONTENT_SECRET' } }
+          ] }, row: { id: 'CHAT_SECRET', serverId: 'HOST_SECRET', read_up_to: 0, last_shown_version: 10 },
+          completeThrough: 10, publisher: { observe() {}, sync() {}, forget() {} } }
+        const results: { name: string; records: Record[]; expected: Record[] }[] = []
+        const record = (event: string, code: string) => ({ event, code })
+        const check = (name: string, action: () => void, expected: Record[]) => {
+          p.records.length = 0; action(); results.push({ name, records: [...p.records], expected })
+        }
+        let generation = 0
+        const fresh = () => {
+          p.route('EPOCH_SECRET')
+          p.render({ mounted: true, hidden: false, generation: ++generation, inputs: input,
+            pane: true, region: true, tail: true, tailId: 7, defaultLog: false })
+          return p.callbacks.at(-1)!
+        }
+        const setup = (code: string) => [record('read-observer-setup', code)]
+        const observed = (code: string) => [record('read-observer', code)]
+        check('setup without inputs', () => p.render({ mounted: true }), setup('inputs-unavailable'))
+        check('delegated setup refusal', () => p.render({ inputs: { ...input, completeThrough: 0 } }), [record('read-target', 'completion-insufficient')])
+        check('setup target calculation keeps precedence', () => p.render({ inputs: { ...input, completeThrough: 0, readerOpen: true } }),
+          [record('read-target', 'completion-insufficient')])
+        check('setup reader overlay', () => p.render({ inputs: { ...input, readerOpen: true } }), setup('reader-open'))
+        for (const missing of ['pane', 'region']) check('setup missing ' + missing,
+          () => p.render({ inputs: input, pane: true, region: true, [missing]: false }), setup('dom-unavailable'))
+        check('setup missing tail DOM', () => p.render({ pane: true, region: true, tail: false }), setup('tail-dom-unavailable'))
+        check('fresh setup succeeds', () => { fresh() }, [])
+        const observerCount = p.observers.length, callback = p.callbacks.at(-1)!
+        check('successful setup reuse', () => p.render({ inputs: { ...input } }), setup('reused'))
+        if (p.observers.length !== observerCount || p.observers.at(-1)?.disposed) throw new Error('reuse replaced observer')
+        if (JSON.stringify(p.active()) !== JSON.stringify({ observers: 1, listeners: 3, subscriptions: 1 })) throw new Error('reuse changed listener/subscription lifetime')
+        check('reuse delegates rejection once', () => p.render({ inputs: { ...input, completeThrough: 0 } }),
+          [...setup('reused'), record('read-target', 'completion-insufficient')])
+        check('callback delegates rejection once', callback, [record('read-target', 'completion-insufficient')])
+        p.render({ inputs: undefined })
+        check('retained callback without inputs', callback, observed('inputs-unavailable'))
+        for (const [name, inputs, code] of [
+          ['reader before target rejection', { ...input, readerOpen: true, completeThrough: 0 }, 'reader-open'],
+          ...['hostId', 'conversationId', 'epoch'].map(field => [field, { ...input, snapshot: { ...input.snapshot, [field]: 'REPLACEMENT_SECRET' } }, 'scope-stale']),
+          ['new tail', { ...input, snapshot: { ...input.snapshot, items: [...input.snapshot.items, { ...input.snapshot.items[0], id: 8, order: 8 }] } }, 'tail-stale']
+        ] as [string, ThreadReadInputs, string][]) {
+          const retained = fresh(); p.render({ inputs })
+          check('retained callback ' + name, retained, observed(code))
+        }
+        const observe = fresh()
+        p.route('REPLACEMENT_SECRET')
+        check('stale route', observe, observed('route-stale')); p.route('EPOCH_SECRET')
+        Object.defineProperty(document, 'hasFocus', { configurable: true, value: () => false })
+        check('document blur', observe, observed('document-unfocused'))
+        Object.defineProperty(document, 'hasFocus', { configurable: true, value: () => true })
+        Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+        check('document hidden', observe, observed('document-hidden'))
+        Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+        const tail = document.querySelector<HTMLElement>('[data-read-row="7"]')!, parent = tail.parentElement!
+        tail.remove(); check('tail disconnected', observe, observed('tail-disconnected')); parent.append(tail)
+        parent.hidden = true; check('hidden ancestor', observe, observed('tail-hidden')); parent.hidden = false
+        tail.classList.add('message-row--queued'); check('queued DOM', observe, observed('tail-queued')); tail.classList.remove('message-row--queued')
+        parent.getBoundingClientRect = () => ({ top: 0, bottom: 500 }) as DOMRect
+        for (const [height, bottom, code] of [[0, 100, 'viewport-empty'], [20, 0, 'viewport-above'], [20, 501, 'viewport-below']] as const) {
+          tail.getBoundingClientRect = () => ({ height, bottom }) as DOMRect
+          check(code, observe, observed(code))
+        }
+        tail.getBoundingClientRect = () => ({ height: 20, bottom: 500 }) as DOMRect
+        check('visible trailing edge succeeds', observe, [])
+        const prior = p.observers.length
+        p.render({ hidden: true })
+        if (p.observers.slice(0, prior).some(o => !o.disposed || o.targets.length)) throw new Error('observer cleanup failed')
+        if (JSON.stringify(p.active()) !== JSON.stringify({ observers: 0, listeners: 0, subscriptions: 0 })) throw new Error('listener/subscription cleanup failed')
+        check('remount after cleanup', () => { fresh() }, [])
+        // Default production sink, from a genuinely rejected observation, through main's logger.
+        Object.defineProperty(document, 'hasFocus', { configurable: true, value: () => false })
+        p.render({ generation: ++generation, defaultLog: true })
+        return results
+      })
+      for (const result of results) expect(result.records, result.name).toEqual(result.expected)
+      expect(results.length).toBeGreaterThan(20)
+      await expect.poll(() => received.filter(r => r.code === 'document-unfocused').length).toBeGreaterThan(0)
+      for (const record of received) {
+        expect(Object.keys(record).sort()).toEqual(['code', 'event', 'seq', 'ts'])
+        expect(record).toMatchObject({ event: 'read-observer', code: 'document-unfocused' })
+      }
+      expect(JSON.stringify(received)).not.toContain('SECRET')
+    } finally { app.process().stdout?.removeListener('data', collect) }
+  } finally { await server.httpServer.close() }
 })
 
 for (const width of [1280, 800]) test(`publishes only committed visible authoritative read evidence at ${width}`, async ({ launchPairedApp }) => {

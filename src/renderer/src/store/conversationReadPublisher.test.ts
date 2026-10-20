@@ -1,6 +1,49 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createReadPublisher, readTargetFor } from './conversationReadPublisher'
+import { createReadPublisher, readTargetFor, type ThreadReadInputs } from './conversationReadPublisher'
 import { createThreadItemStore } from './threadItemStore'
+
+describe('read target diagnostics', () => {
+  const valid = (): ThreadReadInputs => ({ snapshot: {
+    hostId: 'HOST_SECRET', conversationId: 'CHAT_SECRET', epoch: 'EPOCH_SECRET',
+    version: 10, checkpoint: 10, items: [{ id: 900, rev: 999, kind: 'assistant_message',
+      order: 5, shown: true, status: 'done', active: false, summary: 'CONTENT_SECRET', content: { text: 'CONTENT_SECRET' } }],
+    ranges: [{ start: 5, end: 6 }], repair: null
+  }, completeThrough: 10, row: { id: 'CHAT_SECRET', serverId: 'HOST_SECRET', read_up_to: 0, last_shown_version: 10 } })
+  const cases: [string, (input: ThreadReadInputs) => void][] = [
+    ['scope-unavailable', t => { t.row.serverId = undefined }],
+    ['scope-unavailable', t => { t.row.serverId = null }],
+    ['scope-mismatch', t => { t.row.serverId = 'other' }],
+    ['scope-mismatch', t => { t.row.id = 'other' }],
+    ['read-metadata-unavailable', t => { t.row.read_up_to = undefined }],
+    ['read-metadata-unavailable', t => { t.row.last_shown_version = undefined }],
+    ...[-1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1].map(n =>
+      ['target-invalid', (t: ThreadReadInputs) => { t.row.last_shown_version = n }] as [string, (t: ThreadReadInputs) => void]),
+    ['checkpoint-insufficient', t => { t.snapshot = { ...t.snapshot, checkpoint: 9 } }],
+    ['completion-insufficient', t => { t.completeThrough = NaN }],
+    ['completion-insufficient', t => { t.completeThrough = 9 }],
+    ['repair-pending', t => { t.snapshot = { ...t.snapshot, repair: { fromVersion: 9, throughVersion: 12 } } }],
+    ['tail-unavailable', t => { t.snapshot = { ...t.snapshot, items: [] } }],
+    ['tail-unavailable', t => { t.snapshot = { ...t.snapshot, items: t.snapshot.items.map(i => ({ ...i, status: 'queued' })) } }],
+    ['coverage-insufficient', t => { t.snapshot = { ...t.snapshot, ranges: [] } }],
+    ...[{ status: 'queued' }, { order: undefined }, { order: 0 }].map(fields =>
+      ['shown-tail-pending', (t: ThreadReadInputs) => { t.snapshot = { ...t.snapshot,
+        items: [...t.snapshot.items, { ...t.snapshot.items[0], id: 901, ...fields }] } }] as [string, (t: ThreadReadInputs) => void])
+  ]
+  it.each(cases)('emits one static %s rejection', (code, change) => {
+    const input = valid(), log = vi.fn()
+    change(input)
+    expect(readTargetFor(input, log)).toBeUndefined()
+    expect(log.mock.calls).toEqual([[{ event: 'read-target', code }]])
+  })
+  it('preserves guard precedence and keeps success silent', () => {
+    const input = valid(), log = vi.fn()
+    expect(readTargetFor(input, log)).toBe(10)
+    expect(log).not.toHaveBeenCalled()
+    input.row.serverId = undefined; input.row.last_shown_version = -1; input.completeThrough = 0
+    expect(readTargetFor(input, log)).toBeUndefined()
+    expect(log.mock.calls).toEqual([[{ event: 'read-target', code: 'scope-unavailable' }]])
+  })
+})
 
 it('pairs shown targets with completed immutable thread progress, never ids or held versions', () => {
   const store = createThreadItemStore().getState()

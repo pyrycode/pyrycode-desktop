@@ -303,6 +303,14 @@ traversal stays lazy (`windowSteps`, one leaf at a time) and index flushing stay
 incremental, so one incoming range merging many saved ranges, or a large pending
 backlog, cannot shift the cost into another synchronous phase instead of shrinking it.
 
+Each sequence/radix `flushSteps` invocation lazily compiles its fixed INSERT and
+DELETE at most once each, rebinding every row's parameters on execution. Every
+pending row still executes and yields one unit. Statement references belong only
+to that generator invocation; they do not cross flushes, operations or closed
+connections. Reusing compiled SQL adds no node/payload cache and changes neither
+authentication nor transaction ownership/rollback. Counting row executions alone
+would miss repeated compilation; see the [separate compilation regression](chat-history-testing-storage.md#owned-mutation-regressions-and-counted-validation).
+
 One `BEGIN IMMEDIATE` transaction stays open for the whole mutation across every
 yield: `COMMIT` runs only once the generator completes, and any thrown error —
 including one raised while suspended on a yield — rolls the transaction back, so
@@ -400,7 +408,7 @@ sequence proofs include the reference and balance requirement. Rotations can bui
 a temporarily unbalanced sequence node, so construction caches its relaxed proof
 and adds a strict proof only when its balance invariant holds. Cache lifetime never
 crosses operations, commits or fresh owners; disk nodes still require authentication.
-See the [causal regression and native comparison](chat-history-testing-native.md#reopened-slow-drain-cause-and-correction).
+See the [causal regression and native comparison](chat-history-testing-writer-evidence.md#reopened-slow-drain-cause-and-correction).
 Selected payload and evidence decoding is cached too. Bounded payload work alone
 can conceal thousands of repeated structural SQL/JSON reads; proof caching avoids
 that repetition without trusting plaintext hints or a proof from an earlier root.

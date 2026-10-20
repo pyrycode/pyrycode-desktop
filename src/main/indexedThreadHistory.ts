@@ -253,10 +253,11 @@ export function createIndexedThreadHistory(deps: {
       return result
     }
     function* flushSteps(): Generator<void> {
+      let insert: Database.Statement | undefined, remove: Database.Statement | undefined
       for (const [address, payload] of pending) {
         const [name, key] = address.split(':')
-        if (payload === null) db.prepare('DELETE FROM thread_auth WHERE scope = ? AND tree = ? AND path = ?').run(identity, name, key)
-        else db.prepare('INSERT OR REPLACE INTO thread_auth VALUES (?, ?, ?, ?)').run(identity, name, key, payload)
+        if (payload === null) (remove ??= db.prepare('DELETE FROM thread_auth WHERE scope = ? AND tree = ? AND path = ?')).run(identity, name, key)
+        else (insert ??= db.prepare('INSERT OR REPLACE INTO thread_auth VALUES (?, ?, ?, ?)')).run(identity, name, key, payload)
         yield
       }
       pending.clear()
@@ -341,9 +342,10 @@ export function createIndexedThreadHistory(deps: {
       return result
     }
     function* flushSteps(): Generator<void> {
+      let insert: Database.Statement | undefined, remove: Database.Statement | undefined
       for (const [path, payload] of pending) {
-        if (payload === null) db.prepare('DELETE FROM thread_auth WHERE scope = ? AND tree = ? AND path = ?').run(identity, name, path)
-        else db.prepare('INSERT OR REPLACE INTO thread_auth VALUES (?, ?, ?, ?)').run(identity, name, path, payload)
+        if (payload === null) (remove ??= db.prepare('DELETE FROM thread_auth WHERE scope = ? AND tree = ? AND path = ?')).run(identity, name, path)
+        else (insert ??= db.prepare('INSERT OR REPLACE INTO thread_auth VALUES (?, ?, ?, ?)')).run(identity, name, path, payload)
         yield
       }
       pending.clear()

@@ -189,11 +189,25 @@ const replay = base.extend<ReplayFixtures>({
     const relay = await startFakeRelayForwarder()
     try { await use(relay) } finally { await relay.close() }
   },
-  daemon: async ({ relay, recording, exchange }, use) => {
-    exchange.setTransportCloseObserver(({ code, afterServerFrames }) => relay.closeClientAfterServerFrames(afterServerFrames, code))
+  daemon: async ({ relay, recording, exchange }, use, info) => {
+    const trace: unknown[] = []
+    const record = (event: string, extra = {}) => {
+      const entry = { event, at: Date.now(), ...exchange.boundary(), ...extra }
+      if (trace.length < 256) trace.push(entry)
+      else if (event === 'exchange-error') trace[255] = entry
+    }
+    exchange.setTransportCloseObserver(({ code, afterServerFrames }) => {
+      record('recorded-close', { code, afterServerFrames })
+      relay.closeClientAfterServerFrames(afterServerFrames, code)
+    })
+    const run = (event: string, action: () => Uint8Array[]) => {
+      record(event)
+      try { return action() } catch (error) { record('exchange-error'); throw error }
+    }
     const daemon = await startFakeDaemonForTest({ url: relay.url, helloAck: { capabilities: recording.capabilities },
-      buildInitialFrames: () => exchange.start(), buildReconnectFrames: () => exchange.reconnect(),
-      buildReplyFrames: bytes => exchange.reply(bytes) })
+      buildInitialFrames: () => run('authenticated-initial', () => exchange.start()),
+      buildReconnectFrames: () => run('authenticated-reconnect', () => exchange.reconnect()),
+      buildReplyFrames: bytes => run('request', () => exchange.reply(bytes)) })
     state = { inputs: recording.scenario.inputs!, source: recording.source, checkpoint: async name => {
       for (const frame of await exchange.checkpointWhenReady(name)) daemon.pushFrame(frame)
     } }
@@ -203,7 +217,10 @@ const replay = base.extend<ReplayFixtures>({
       workdir: recording.scenario.workspace ?? '/recorded/workspace',
       mintPairing: async () => ({ server: 'fake-daemon', token: 'dummy-token-not-a-real-credential',
         server_static_pubkey: Buffer.from(daemon.staticPublicKey).toString('base64') }) })
-    } finally { state = undefined; await daemon.close() }
+    } finally {
+      state = undefined; await daemon.close()
+      await info.attach('reconnect-boundary', { contentType: 'application/json', body: Buffer.from(JSON.stringify(trace)) })
+    }
   },
   _clientReplay: [async ({ daemon, exchange, recording, relay }, use, info) => {
     void daemon

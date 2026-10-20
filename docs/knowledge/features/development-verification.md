@@ -211,6 +211,106 @@ mismatches and compatibility-only failures remain failed in the linked plan.
 These Linux results establish offline correctness only, with no fresh provider or
 physical transport acceptance. macOS is outside this ticket's verification scope.
 
+## Recorded reconnect phase ownership
+
+A captured retryable close can authenticate its replacement while a scenario is
+awaiting its settled reply. Taking the baseline afterward and unconditionally
+requesting reconnect can introduce a third handshake while reset work still
+belongs to connection 2. A teardown mismatch alone cannot distinguish this from
+lost prefix progress or an observer failure.
+
+The shared thread scenario takes its connection baseline before submitting the
+first turn. At the existing post-reply dispatch point,
+[`reconnectPhase`](../../../e2e/fixtures/phaseReconnectEvidence.ts) reads the
+observer and decides in one page task: dispatch only if the baseline connection
+remains current. An already delivered authenticated replacement satisfies that
+phase; a later phase takes a fresh baseline. Only delivered `connected` events
+advance the observer, never dispatch completion. The original 45-second
+count-advance assertion, stream/agent preservation, reset and saved-reopen checks
+still run. Production transport and strict exchange ownership are unchanged.
+
+[`phaseReconnectOrdering.test.ts`](../../../e2e/fixtures/phaseReconnectOrdering.test.ts)
+executes the actual page observer body and consumed helper with a real strict
+`RecordedExchange`. It completes connection-2 reset work after an automatic
+replacement without dispatching again. Controls retain explicit dispatch when
+needed, actual-event-only advancement, sticky incomplete/wrong-connection rejection,
+dispatch-error identity and a fresh later-phase baseline. An observer-only mock
+without the strict exchange would miss the extra handshake's consequence.
+
+Replay attaches `reconnect-boundary` on success and failure: at most 256 adapter
+entries, with an error slot retained at capacity. Read-only `boundary()` snapshots
+include index, current/next connection, next raw close, matched/emitted/remaining
+counts and the sticky first static exchange error. Entries timestamp authenticated
+initial/reconnect callbacks, requests and scheduled closes, including close code
+and forwarding-prefix count. The scenario's `scenario-reconnect-dispatch`
+annotation adds baseline, actual delivered count, dispatch decision and time;
+the observer retains at most 64 connection timestamps. Correlate these records
+to separate dispatch, authentication, renderer delivery and prefix progress.
+They retain no payload, daemon text, device identity, credentials or handshake
+bytes and do not advance replay or release checkpoints.
+
+`PYRY_THREAD_RECONNECT_CONTROL=after-authentication` on the exact thread case
+waits for the captured automatic replacement before the normal dispatch decision.
+This is an explicit causal control, separate from passive diagnostics; leave it
+unset for ordinary paired/full acceptance. It uses the existing 45-second bound.
+
+### Counted Linux reconnect validation
+
+These are retained Linux amd64 results from the
+[PR #2203 verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2203#issuecomment-6303169092),
+not documentation-stage runs. The [plan's final acceptance](../../specs/architecture/2201-recorded-thread-reconnect.md#final-linux-acceptance--2026-10-20)
+retains commands, report hashes, worker timing and separate build/input provenance
+under `/tmp/builder-2201/`.
+
+| Check | Executed / passed / failed / skipped |
+| --- | --- |
+| Pre-fix causal units | 3 / 2 / 1 / 0 |
+| Post-fix affected observer/exchange/lifecycle units | 51 / 51 / 0 / 0 |
+| Controlled Electron before correction | 1 / 0 / 1 / 0 |
+| Final controlled Electron | 1 / 1 / 0 / 0 |
+| Five consecutive guarded paired batches | 20 / 20 / 0 / 0; each 4 / 4 / 0 / 0 |
+| Subsequent complete guarded recorded suite | 29 / 29 / 0 / 1 existing fixme |
+| Supplied dispatcher unit gate 4 | 9994 / 9994 / 0 / 3 |
+| Supplied dispatcher application gate 7 | 536 / 536 / 0 / 4 |
+
+Both exact ticket cases are present and passed twice per paired batch, then once
+in the complete replay and configured application gate:
+`a real daemon lazily fills a served gap after more than 200 entries written while Electron is closed`
+and `daemon-built thread streams, places an agent, reconnects, resets and reopens saved items`.
+Paired runs use `--profile complete-thread --fully-parallel --workers 3
+--repeat-each 2 --retries 0`. All three slots overlap in every batch; worker process
+identities are respectively `0,1,2`; `0,1,2,3`; `0,1,2`; `0,1,2,3`; `0,1,2,3`.
+Process 3 reuses a slot. Each thread exchange completes 45 matched / 378 emitted /
+0 remaining; history completes 32/63/0. The final control completes 45/378/0 with
+baseline 1, actual count 2 and `dispatched: false`. All builder replay guards report
+zero forbidden launches. Full replay completes 773/3216/0; its sole skip remains
+`real claude picks up a saved channel system prompt at Reset session`, also skipped
+in application gate 7 alongside three macOS-only cases.
+
+Controlled failure traversed the exact 23/124/22 connection-2 prefix at index 147,
+then dispatched after automatic authentication and renderer delivery. Two more
+background requests completed before the extra handshake failed at index 151,
+25/126/20, still before reset. This establishes duplicate dispatch with prefix
+progress and observer agreement. The supplied historical macOS batch remains
+4 executed / 3 passed / 1 failed / 0 skipped; its scheduling trigger is unknown.
+The controlled failure, ABI-prerequisite batch (4/0/4/0), zero-selection attempt
+and passive passing pair remain separate artifacts; later passes erase none of them.
+
+Final replay builds identify clean implementation
+`dcc0a895d47ebe8d482399656db588949ba5ce13`, Node 25.8.0 and Electron 33.4.11.
+Paired/control runs use complete-thread; the subsequent suite uses normal output.
+The linked plan retains separate seven-bundle hash maps and
+`acceptance-summary.jsonl` (SHA-256
+`49be9a2e37b0116abc822c5681e3d16882f13290cbbe76658bb24e13da87d60b`).
+Unchanged input SHA-256 values are thread
+`53a3db11cfab2d5041b511d7be4d030ab5b2b8449b7fdb3ea1d7e5e3db552ae3`
+and history `de0b1166b6e05e0792228c07be25c20498b117914e673558222eac12cd4e6d2c`.
+Both retain capture Desktop `00ec821f9380b00cf2dfc0dd4817ee15584106a5`, daemon
+`58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf` and binary SHA-256
+`5f5b3b9ce42eda74024637f4929dd720d36c1226ce6e370eb62fbe9e6b22f7c0`.
+These are captured-client results with no fresh provider/daemon or physical
+transport acceptance. macOS is outside this Linux ticket's verification scope.
+
 ## Replay native storage prerequisite
 
 Each opened replay process must return explicit `true` from the native

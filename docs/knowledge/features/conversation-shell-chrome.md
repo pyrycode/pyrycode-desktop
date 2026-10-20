@@ -172,7 +172,7 @@ button; usage warnings and permission-resolution notices acquire the layer acros
 the pill while their X remains the dismiss action. Non-dismissible usage and
 session-error notices remain inert with their resting paint. Pointer exit removes
 the image; keyboard focus alone does not add it. See the
-[Top overlay occupants](conversation-shell.md#what-it-does) for state and dismissal.
+[Top overlay occupants](conversation-shell-behavior.md#what-it-does) for state and dismissal.
 
 ### Chrome hover evidence
 

@@ -28,7 +28,7 @@ Drop and Send now use the supplied item's exact positive-safe-integer
 handle. Truncation, inactive/hidden state, missing callback, disconnected host or
 missing Send now capability suppress the corresponding action. Changes become
 visible through daemon item revisions, never local row deletion. See
-[queue presentation and actions](conversation-shell.md#what-it-does).
+[queue presentation and actions](conversation-shell-behavior.md#what-it-does).
 
 ### Data flow
 

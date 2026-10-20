@@ -126,3 +126,18 @@ Earlier diagnostics remain failed: both 0.41.1 controls were 1 executed/0 passed
 ### Lessons for documentation
 
 Compact full roots use the same optional-order contract as full items: send admission can precede delivery order. Rejecting the absent field turns a valid live interval into a false gap and can also reject the recovery data containing that root. Test the pre-delivery and delivered representations through the main receiver, not only ordered compact fixtures. A positive delivered echo plus request-correlated final page marker prevents an optimistic bubble or an unrelated reply from passing acceptance early.
+
+
+### Manual merge recovery — 2026-10-20
+
+Merged current `origin/main` (`200fecb0750e235d7b420a6b83f8815c39eb28ce`) into the retained candidate `b4b22dff`, producing merge commit `5438aba032a9b2cb1fa80395644fb18cb5980b19`. The only conflict was independently inserted tests at the top of `e2e/compact-demand.spec.ts`. Kept both original send/gap cases byte-for-byte and all current main content byte-for-byte; verified removing just those two added cases reproduces main's file exactly. No additional production change or assertion relaxation.
+
+Execution OS: macOS arm64. Evidence root: `/Users/juhanailmoniemi/Documents/Codex/2026-10-20/why-did-desktop-ticket-2163-error/work/`.
+
+- `unit-final.log`: 265 executed/passed, 0 failed/skipped, covering production-path send/recovery, receiver/query admission and current main's read publisher.
+- `pre-verify.log`: all five checks passed after the committed merge; its structured affected-file gate executed/passed 173 tests, 0 failed/skipped. Security labels were supplied from the authenticated workflow read. Main integration and committed security review passed.
+- `build-final.log`, `client-types.log`, `docs-check-final.log`: build, client-test typecheck and docs guard passed on the merged source. The build preceded the merge commit but used the identical merged production/test files. The first build used an incomplete copied dependency directory and failed; installing the locked dependencies resolved setup without source changes. The first docs invocation lacked `AGENTS_REPO_PATH`; the configured rerun passed.
+- `compact-electron.log`: native-writer prerequisite passed (1 executed/passed). The initial mounted run then recorded 1 teardown failure, 1 interrupted case and 9 unrun cases. It is not a passing suite. The pre-verifier's Node native preparation overlapped this run, so the run was stopped and preparation/test phases were separated.
+- `electron-native-final.log`, `compact-final.log`, `compact-final.json`: after completed pre-verification and Electron native preparation, all 11 compact scenarios executed/passed, 0 failed/skipped, retries 0, no runner errors. Used `npx playwright test e2e/compact-demand.spec.ts --project=parallel --no-deps --retries=0 --reporter=list,json`; the already-passed native prerequisite is reported separately. Both original send/Older/genuine-gap cases and every current-main compact read/layout/status/recovery case passed.
+
+These are fresh merge-validation results. The earlier current-daemon before/after evidence remains unchanged; no new live-daemon execution is claimed for this merge-only recovery. Full dispatcher acceptance and review remain required.

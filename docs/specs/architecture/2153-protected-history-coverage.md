@@ -319,6 +319,15 @@ separately, never reclassified by these results. Linux is outside this execution
 Final main merge admits `75dcb379` (unrelated tests/plan only); closing Node/build
 checks are recorded below. Documentation handoff remains pending for its stage.
 
+Closing checks after the `75dcb379` main merge: pre-verify passed all five
+checks and 98/98 metadata tests, zero failed/skipped (`rework/pre-verify-final.log`,
+`rework/final-units/unit-0osgdv26/0.json`, SHA-256
+`b0c712377f2d9435adc77a7a5f6fcaca06fce437983234198b3aecd83d7dd4be`).
+Client-test typecheck, docs guard and `npm run build` passed on the final code
+(`rework/build-merged.log`, clean built revision `210eaddc`). Subsequent changes
+are evidence only. #2191 is linked as a blocker; no passing counted sequence or
+full recorded suite is claimed for this rework run.
+
 ### 2026-10-20 — macOS production-delivery validation
 
 Final tested source: `33aa5fee23efd70365a829f908f6e736a8ada084`, including final

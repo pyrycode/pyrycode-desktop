@@ -10,6 +10,10 @@ const useReadLayoutEffect = typeof document === 'undefined' ? useEffect : useLay
 const sendReadDiagnostic = (event: RendererDiagnosticEvent): void => {
   if (typeof window !== 'undefined') window.pyry?.sendDiagnostic?.(event)
 }
+const emitReadDiagnostic = (log: (event: RendererDiagnosticEvent) => void, event: RendererDiagnosticEvent): void => {
+  try { log(event) }
+  catch { /* Best-effort diagnostics must not change read observation or publication. */ }
+}
 
 type ReadRow = { id: string; serverId?: string | null; read_up_to?: number; latest_entry_id?: number; last_shown_version?: number }
 type ReadCommand = Extract<RendererCommand, { type: 'markConversationRead' }>
@@ -77,7 +81,7 @@ export function readTargetFor(thread: ThreadReadInputs, log = sendReadDiagnostic
   const reject = (code: 'scope-unavailable' | 'scope-mismatch' | 'read-metadata-unavailable' | 'target-invalid' |
     'checkpoint-insufficient' | 'completion-insufficient' | 'repair-pending' | 'tail-unavailable' |
     'coverage-insufficient' | 'shown-tail-pending' | 'compact-snapshot-mismatch' | 'compact-stale' |
-    'compact-completion-insufficient' | 'compact-tail-uncovered'): undefined => { log({ event: 'read-target', code }); return undefined }
+    'compact-completion-insufficient' | 'compact-tail-uncovered'): undefined => { emitReadDiagnostic(log, { event: 'read-target', code }); return undefined }
   if (row.serverId === undefined || row.serverId === null) return reject('scope-unavailable')
   if (s.hostId !== row.serverId || s.conversationId !== row.id) return reject('scope-mismatch')
   if (row.read_up_to === undefined || target === undefined) return reject('read-metadata-unavailable')
@@ -135,22 +139,22 @@ export function useReadObservation(inputs: ThreadReadInputs | undefined,
     const held = setup.current
     if (held && key === held.key && region === held.region && covered === held.covered &&
       !inputs?.readerOpen && held.tail.isConnected) {
-      log({ event: 'read-observer-setup', code: 'reused' }); held.observe(); return
+      emitReadDiagnostic(log, { event: 'read-observer-setup', code: 'reused' }); held.observe(); return
     }
     held?.dispose(); setup.current = undefined
-    if (!inputs) { log({ event: 'read-observer-setup', code: 'inputs-unavailable' }); return }
+    if (!inputs) { emitReadDiagnostic(log, { event: 'read-observer-setup', code: 'inputs-unavailable' }); return }
     const target = readTargetFor(inputs, log)
     if (target === undefined || !newest || !key) return // Target rejection already logged; success guarantees newest/key.
-    if (inputs.readerOpen) { log({ event: 'read-observer-setup', code: 'reader-open' }); return }
-    if (!region || !covered) { log({ event: 'read-observer-setup', code: 'dom-unavailable' }); return }
+    if (inputs.readerOpen) { emitReadDiagnostic(log, { event: 'read-observer-setup', code: 'reader-open' }); return }
+    if (!region || !covered) { emitReadDiagnostic(log, { event: 'read-observer-setup', code: 'dom-unavailable' }); return }
     const tail = region.querySelector<HTMLElement>(`[data-read-row="${newest.id}"]`)
-    if (!tail) { log({ event: 'read-observer-setup', code: 'tail-dom-unavailable' }); return }
+    if (!tail) { emitReadDiagnostic(log, { event: 'read-observer-setup', code: 'tail-dom-unavailable' }); return }
     const { hostId, conversationId, epoch } = inputs.snapshot
     const observe = () => {
       const current = committed.current
       const stop = (code: 'inputs-unavailable' | 'reader-open' | 'scope-stale' | 'tail-stale' | 'route-stale' |
         'document-unfocused' | 'document-hidden' | 'tail-disconnected' | 'tail-hidden' | 'tail-queued' |
-        'viewport-empty' | 'viewport-above' | 'viewport-below'): void => log({ event: 'read-observer', code })
+        'viewport-empty' | 'viewport-above' | 'viewport-below'): void => emitReadDiagnostic(log, { event: 'read-observer', code })
       if (!current) return stop('inputs-unavailable')
       if (current.readerOpen) return stop('reader-open')
       if (current.snapshot.hostId !== hostId || current.snapshot.conversationId !== conversationId || current.snapshot.epoch !== epoch) return stop('scope-stale')

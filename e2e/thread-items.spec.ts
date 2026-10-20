@@ -152,7 +152,8 @@ import { useRef } from 'react';
 import { useReadObservation } from './store/conversationReadPublisher';
 const readRecords = [], readCallbacks = [], readObservers = [];
 const readListeners = [], readSubscriptions = new Set();
-const diagnosticLog = record => readRecords.push(record);
+let throwDiagnostic = false;
+const diagnosticLog = record => { readRecords.push(record); if (throwDiagnostic) throw new Error('diagnostic failure'); };
 function ReadDiagnosticConsumer({ config }) {
   const pane = useRef(null), thread = useRef(null);
   useReadObservation(config.inputs, pane, thread, config.defaultLog ? undefined : diagnosticLog);
@@ -163,6 +164,12 @@ function ReadDiagnosticConsumer({ config }) {
 function ReadDiagnosticFixture() {
   const [config, setConfig] = useState({ mounted: false, generation: 0, pane: true, region: true, tail: true, tailId: 7 });
   window.readProbe = { records: readRecords, callbacks: readCallbacks, observers: readObservers,
+    throwLog(value) { throwDiagnostic = value; },
+    publisher(row) {
+      const commands = [];
+      return { commands, publisher: createReadPublisher({ rows: () => [row], connected: () => true,
+        epoch: () => conversationReadRouteStore.getState().epochFor(row.serverId, row.id), send: command => commands.push(command) }) };
+    },
     active() { return { observers: readObservers.filter(o => !o.disposed).length,
       listeners: readListeners.length, subscriptions: readSubscriptions.size }; },
     render(patch) { flushSync(() => setConfig(value => ({ ...value, ...patch }))); },
@@ -242,6 +249,8 @@ test('read observation explains each committed refusal, reuse and receiver deliv
         const p = (window as unknown as { readProbe: {
           records: Record[]; callbacks: (() => void)[]; observers: { disposed: boolean; targets: Element[] }[];
           render: (patch: object) => void; install: () => void; route: (epoch: string) => void;
+          throwLog: (value: boolean) => void;
+          publisher: (row: ThreadReadInputs['row']) => { commands: unknown[]; publisher: NonNullable<ThreadReadInputs['publisher']> };
           active: () => { observers: number; listeners: number; subscriptions: number }
         } }).readProbe
         p.install(); p.route('EPOCH_SECRET')
@@ -315,6 +324,42 @@ test('read observation explains each committed refusal, reuse and receiver deliv
         if (p.observers.slice(0, prior).some(o => !o.disposed || o.targets.length)) throw new Error('observer cleanup failed')
         if (JSON.stringify(p.active()) !== JSON.stringify({ observers: 0, listeners: 0, subscriptions: 0 })) throw new Error('listener/subscription cleanup failed')
         check('remount after cleanup', () => { fresh() }, [])
+        const compact: ThreadReadInputs = { ...input, compact: { snapshot: input.snapshot, through: 10,
+          roots: new Set([7]), routeEpoch: 'EPOCH_SECRET', current: () => true } }
+        check('compact setup succeeds', () => p.render({ generation: ++generation, inputs: compact }), [])
+        const compactCallback = p.callbacks.at(-1)!
+        check('compact callback delegates stale authority', () => p.render({ inputs: { ...compact,
+          compact: { ...compact.compact!, current: () => false } } }),
+          [...setup('reused'), record('read-target', 'compact-stale')])
+        check('compact callback rejection is single', compactCallback, [record('read-target', 'compact-stale')])
+        p.route('REPLACEMENT_SECRET')
+        p.render({ inputs: { ...compact, compact: { ...compact.compact!, routeEpoch: 'REPLACEMENT_SECRET' } } })
+        check('retained compact callback rejects new route epoch', compactCallback, observed('route-stale'))
+        p.route('EPOCH_SECRET')
+        p.throwLog(true)
+        check('throwing setup sink', () => p.render({ generation: ++generation, inputs: undefined }), setup('inputs-unavailable'))
+        check('throwing delegated setup sink', () => p.render({ inputs: { ...input, completeThrough: 0 } }),
+          [record('read-target', 'completion-insufficient')])
+        p.render({ inputs: input })
+        const throwingCallback = p.callbacks.at(-1)!
+        Object.defineProperty(document, 'hasFocus', { configurable: true, value: () => false })
+        check('throwing callback sink', throwingCallback, observed('document-unfocused'))
+        check('throwing reuse and delegated sinks', () => p.render({ inputs: { ...input, completeThrough: 0 } }),
+          [...setup('reused'), record('read-target', 'completion-insufficient')])
+        check('throwing delegated callback sink', throwingCallback, [record('read-target', 'completion-insufficient')])
+        const publication = p.publisher(input.row)
+        p.render({ inputs: { ...input, publisher: publication.publisher } }) // Focus still excludes publication.
+        const beforeReuse = p.observers.length
+        Object.defineProperty(document, 'hasFocus', { configurable: true, value: () => true })
+        check('throwing reuse still publishes', () => p.render({ inputs: { ...input, publisher: publication.publisher } }), setup('reused'))
+        check('throwing reuse deduplicates', () => p.render({ inputs: { ...input, publisher: publication.publisher } }), setup('reused'))
+        if (p.observers.length !== beforeReuse || p.observers.at(-1)?.disposed) throw new Error('throwing reuse replaced observer')
+        const expected = [{ type: 'markConversationRead', serverId: 'HOST_SECRET', payload: { conversation_id: 'CHAT_SECRET', up_to: 10 } }]
+        if (JSON.stringify(publication.commands) !== JSON.stringify(expected)) throw new Error('throwing diagnostics changed exact publication')
+        p.throwLog(false)
+        p.render({ hidden: true })
+        if (JSON.stringify(p.active()) !== JSON.stringify({ observers: 0, listeners: 0, subscriptions: 0 })) throw new Error('throwing diagnostic cleanup failed')
+        fresh()
         // Default production sink, from a genuinely rejected observation, through main's logger.
         Object.defineProperty(document, 'hasFocus', { configurable: true, value: () => false })
         p.render({ generation: ++generation, defaultLog: true })

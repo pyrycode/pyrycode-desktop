@@ -116,3 +116,31 @@ macOS arm64, 2026-10-20; final main merge was already up to date at `2d8a7e32`.
 - Final `node node_modules/@playwright/test/cli.js test --config=playwright.config.ts e2e/thread-items.spec.ts --no-deps --grep "read observation explains|publishes only committed|defers 8333" --reporter=json`: 4 executed/passed, 0 failed/skipped/flaky, one actual worker. Report: `/tmp/builder-2176/final-read-observation.json`. Includes default-pipe receiver delivery and listener/subscription reuse/cleanup.
 - Earlier unprepared dependency run failed readiness (1 failed, 14 not run); follow-up #2179 was resolved/closed after the prepared control passed. An earlier direct full-file run had 13 passed / 1 expansion timeout while native rebuilds competed; the unchanged expansion control passed in the final sequential run. Preserve these as failed evidence, not a product reliability repair. The earlier artifacts are under `/tmp/builder-2176/thread-items-first-run/`.
 No live provider test was required or claimed. The dispatcher owns complete-suite acceptance; other operating systems are outside this ticket's verification scope.
+
+### Repair verification, macOS arm64, 2026-10-20
+Final main integration is `e83ec64f`; merge resolution committed as `e3d05900`.
+Raw repair evidence is retained under `/tmp/builder-2176/repair-20261020/`.
+- Before the exception boundary, with new regressions on `ff771067`: units 41 executed,
+  29 failed / 12 passed, 0 skipped (`units-before.log`); mounted run 2 executed,
+  1 native-writer passed / 1 hook setup failed on `diagnostic failure`, 0 skipped
+  (`electron-before.json`, `electron-before.stderr.log`, `electron-before-results/`).
+- Initial pre-verify failed test-helper type inference; fixed with an explicit compact
+  evidence return type. Its failed log remains `pre-verify.log`.
+- Final pre-verify: 5/5 checks passed, units 41 executed/passed, 0 failed/skipped;
+  `pre-verify-final.log`, with full unit reports/JUnit copied to `final-units/`.
+- `npm run build` and `npm run check:docs` passed: `build-final.log`, `docs-check.log`.
+- Both native preparations passed the unchanged provenance probe and rebuild;
+  `preparation-before.log`, `preparation-final.log`, `native-preparation-final.json`.
+- Final `thread-items.spec.ts` selection `read observation explains|publishes only committed|defers 8333`:
+  5 executed/passed including its normal native-writer dependency, 0 failed/skipped/flaky;
+  `thread-after.json`, `thread-after.stderr.log`, `thread-after-results/`.
+- `visible-tail-read.spec.ts` selection `read setup is reused|committed folded tails`,
+  run sequentially with `--no-deps` after that dependency passed: 2 executed/passed,
+  0 failed/skipped/flaky; `visible-tail.json`, `visible-tail.stderr.log`, `visible-tail-results/`.
+The mounted test retains genuine default-bridge/main-receiver proof, checks compact
+authority/route exclusions and throwing setup/callback/delegated/reuse emissions,
+and requires exactly one eligible command despite repeated throwing reuse diagnostics.
+Controlled document focus proves reason selection; it adds no native focus claim.
+These focused results do not replace complete macOS dispatcher unit/replay gates or
+fresh verifier judgment, both pending with their owning stages. Documentation handoff
+is pending. No fresh provider/daemon or physical-effect acceptance is required.

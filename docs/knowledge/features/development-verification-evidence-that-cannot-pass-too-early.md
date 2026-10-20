@@ -96,6 +96,17 @@ The footer needs a session-settings snapshot before its controls can render.
 Check the current refresh trigger. A lone idle event does not produce a transition
 from running to idle. Drive the prerequisite transition when the fixture requires it.
 
+Compact status fixtures also need admitted live-state provenance. In
+[`compact-demand.spec.ts`](../../../e2e/compact-demand.spec.ts), the Agent-label
+regression supplies the bound `session_id` on its `turn_state` envelope, which
+has no envelope-level conversation routing. Without that session, the live-state
+guard correctly refuses the event and the status stays idle despite a rendered
+active header. Preserve the guard and fix the fixture's ownership facts. Wait
+for the initial description and same-item revised description to commit before
+asserting zero body/children/page/history requests; an immediate zero count
+would not prove that either header reached the composer. See
+[Agent label derivation](conversation-shell-working-indicator.md#agent-descriptions-from-compact-headers).
+
 ## Question-answer interpretation and freshness
 
 Selected-label mention order cannot establish answer delivery: correct contrastive prose
@@ -147,6 +158,18 @@ the ensuing `system/init` announces the new model. The first new announcement al
 cannot settle this assertion. See the [recorded inventory](../../client-replay-migration.md#question-answer-proof).
 
 ## History page receipt and terminal demand
+
+Protected durability needs its own observation after dispatch and publication.
+The [history coverage reader and controlled regression](chat-history-testing.md#protected-paging-coverage-observation)
+retain actual numeric coverage before trusted input and require a strictly older
+protected start within five seconds afterward. A pending split save deliberately
+returns `unreadable`; collapsing that result to `undefined` loses the baseline,
+while rereading a successful baseline can lose it again. Keep result categories
+and the successful value, and start the progress poll alongside request-count
+checks so dispatch waiting adds no coverage deadline. The real-writer regression
+controls this mechanism; it does not identify the historical flaky run's trigger.
+See [counted Linux evidence](chat-history-testing.md#counted-linux-coverage-observer-validation)
+for separate builder and dispatcher results and retained historical outcomes.
 
 An observed history request proves neither reply admission nor React commit.
 In [`history-walk.spec.ts`](../../../e2e/history-walk.spec.ts), the spec-local

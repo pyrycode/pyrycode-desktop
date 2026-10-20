@@ -2002,7 +2002,9 @@ button.top-overlay-pill:hover,
    equal-specificity modifier precedence over the pending opacity. tool-row--resolved lifts the pending
    dimming for BOTH outcomes (the success state is the mock's chip with dimming lifted — no accent
    added). Failed rows use a small error icon and keep the plain border. */
-.tool-row--resolved {
+/* Supplied active agents keep full emphasis while ordinary pending tools stay dimmed. */
+.tool-row--resolved,
+.tool-row--active-agent {
   opacity: 1;
 }
 

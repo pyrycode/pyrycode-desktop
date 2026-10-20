@@ -67,7 +67,7 @@ test('real claude session checkbox grants repeated Bash use only in the current 
       if (event.type === 'runConfigReceived' && event.sessionId) drive.sessions.set(event.conversationId, {
         id: event.sessionId, received: (drive.sessions.get(event.conversationId)?.received ?? 0) + 1
       })
-    })
+    }, true)
     ;(window as DriveWindow).permissionDrive = drive
   })
   try {

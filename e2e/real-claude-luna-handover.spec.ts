@@ -26,7 +26,7 @@ type ProofWindow = Window & {
 async function observe(page: Page) {
   await page.evaluate(() => {
     const target = window as unknown as ProofWindow & {
-      pyry: { onDaemonEvent: (listener: (event: StampedDaemonEvent) => void) => () => void }
+      pyry: { onDaemonEvent: (listener: (event: StampedDaemonEvent) => void, content?: boolean) => () => void }
     }
     target.__handoverEvents = []
     target.__stopHandoverProof = target.pyry.onDaemonEvent(event => {
@@ -36,7 +36,7 @@ async function observe(page: Page) {
           event.type === 'threadUpdate' || event.type === 'threadReply') {
         target.__handoverEvents.push(event)
       }
-    })
+    }, true)
   })
   // Observe existing UI dispatch without replacing the immutable preload bridge.
   const cdp = await page.context().newCDPSession(page)

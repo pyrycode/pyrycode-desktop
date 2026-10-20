@@ -45,7 +45,7 @@ async function connected(serverId = 'host') {
 }
 afterEach(() => { electron.listeners.clear(); vi.useRealTimers() })
 it('delivers completed updates through shared IPC and preload; legacy translators ignore them', async () => {
-  const received: StampedDaemonEvent[] = [], off = api.onDaemonEvent(e => received.push(e))
+  const received: StampedDaemonEvent[] = [], off = api.onDaemonEvent(e => received.push(e), true)
   const h = await connected(), f = frames()
   h.emit(f[0]); expect(received.filter(e => e.type === 'threadUpdate')).toHaveLength(0)
   h.emit(f[1])
@@ -57,7 +57,7 @@ it('delivers completed updates through shared IPC and preload; legacy translator
   h.connection.stop()
 })
 it.each(['thread_item_added', 'thread_item_changed', 'thread_text_append'])('forwards ordinary and oversized %s through the existing preload subscription', async type => {
-  const received: StampedDaemonEvent[] = [], off = api.onDaemonEvent(e => received.push(e)), h = await connected()
+  const received: StampedDaemonEvent[] = [], off = api.onDaemonEvent(e => received.push(e), true), h = await connected()
   const logical = (text: string) => ({ conversation_id: 'c', epoch: 'e', version: 7,
     ...(type === 'thread_item_added' ? { item: { id: 0, rev: 7, kind: 'unknown-kind', status: 'unknown-status',
       active: true, shown: false, summary: text, session: 'recorded', content: JSON.parse('{"__proto__":{"safe":true},"future":[null,false]}') } } :

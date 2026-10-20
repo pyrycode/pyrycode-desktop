@@ -579,7 +579,7 @@ test('restore overlapping live content retains complete progress across an inter
     if (event.type === 'threadUpdate') (globalThis as any).overlapReceived = true
     if (event.type === 'threadReply' && event.reply.type === 'thread_items' && !event.reply.payload.final && event.reply.payload.version === 30)
       (globalThis as any).unfinishedReceipts++
-  }) })
+  }, true) })
   overlapped = true
   daemon.pushFrame(frame('thread_item_added', { conversation_id: SEEDED_ROW.id, epoch: 'epoch', version: 21,
     item: { ...item(10, 'New live revision during restore'), rev: 2 } }))

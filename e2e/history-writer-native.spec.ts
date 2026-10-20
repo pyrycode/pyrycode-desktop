@@ -5,6 +5,7 @@ import { build, loadConfigFromFile, preview } from 'vite'
 import { test, expect, FIRST_SERVER_ID, SEEDED_ROW, seedConversationsFrame, emptyThreadWindow } from './fixtures/launchPairedApp'
 import { decodeEnvelope } from '../src/main/transport/codec'
 import { writerWorkloadDuration } from './historyWriterTiming'
+import { startWriterDiagnostics } from './historyWriterDiagnostics'
 
 // Isolate storage from renderer admission and whole-conversation presentation. No product UI changes.
 const source = `
@@ -13,6 +14,7 @@ import { createStore } from 'zustand/vanilla';
 import { createChatHistoryWriter } from './store/chatHistoryWriter';
 import { createConversationListStore } from './store/conversationListStore';
 const evidence = { persisted: 0, submitted: 0, admitted: 0, admittedAt: null, completedAt: null,
+  ipcMs: 0, ipcMax: 0, ipcSamples: [],
   maxGap: 0, beats: 0, done: false, commit: 0, committed: '', errors: [] };
 let observing = false, last = performance.now(), expected, writer;
 setInterval(() => { const now = performance.now();
@@ -45,7 +47,10 @@ function StorageProbe() {
     const threads = createStore(() => ({ hosts: new Map() }));
     writer = createChatHistoryWriter({ threads, lists: createConversationListStore(), receipt: () => null,
       schedule: () => () => {}, log: event => { if (event.code && event.code !== 'ok') evidence.errors.push(event.code); },
-      write: async request => { evidence.submitted++; const result = await window.pyry.chatHistory(request);
+      write: async request => { evidence.submitted++; const start = performance.now();
+        const result = await window.pyry.chatHistory(request); const ms = performance.now() - start;
+        evidence.ipcMs += ms; evidence.ipcMax = Math.max(evidence.ipcMax, ms);
+        if (evidence.ipcSamples.length < 300) evidence.ipcSamples.push(ms);
         if (result.status === 'ok' && request.operation === 'mutateThread') evidence.persisted += request.change.items.length;
         return result; } });
     window.pyry.onChatHistoryFlush(() => writer.stop());
@@ -99,6 +104,7 @@ test('finite protected writer backlog preserves native keyboard and both event l
       return { backend, versions: process.versions, platform: process.platform, arch: process.arch }
     })
     const started = performance.now()
+    await app.evaluate(startWriterDiagnostics)
     const evidence = () => page.evaluate(() => ({ ...(window as any).storageProbe.evidence,
       observedAt: performance.now() }))
     const mainEvidence = () => app.evaluate(() => {
@@ -147,7 +153,8 @@ test('finite protected writer backlog preserves native keyboard and both event l
       expect(main.maxGap).toBeLessThanOrEqual(1000)
       await page.evaluate(() => (window as any).storageProbe.flush())
     } finally {
-      const [renderer, main] = await Promise.allSettled([evidence(), mainEvidence()])
+      const [renderer, main, storage] = await Promise.allSettled([evidence(), mainEvidence(),
+        app.evaluate(() => (globalThis as any).finishWriterDiagnostics())])
       const final = renderer.status === 'fulfilled' ? renderer.value : null
       await info.attach('native-storage-input', { body: JSON.stringify({ runtime,
         configuredWorkers: info.config.workers, actualWorkers: info.config.metadata.actualWorkers,
@@ -156,8 +163,10 @@ test('finite protected writer backlog preserves native keyboard and both event l
         workloadDuration: final?.completedAt === null || final?.admittedAt == null ? null
           : final.completedAt - final.admittedAt,
         final, main: main.status === 'fulfilled' ? main.value : null, inputs,
+        storage: storage.status === 'fulfilled' ? storage.value : null,
         diagnosticErrors: [renderer.status === 'rejected' ? 'renderer-read-failed' : null,
-          main.status === 'rejected' ? 'main-read-failed' : null].filter(Boolean)
+          main.status === 'rejected' ? 'main-read-failed' : null,
+          storage.status === 'rejected' ? 'storage-read-failed' : null].filter(Boolean)
       }), contentType: 'application/json' })
     }
     const expected = await page.evaluate(() => (window as any).storageProbe.expected())

@@ -8,6 +8,7 @@ import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './f
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 import { NOT_YET_AVAILABLE } from './fixtures/mainProcessRead'
 import { readReplayMainProcess } from './fixtures/replayNativeStorage'
+import { readHistoryCoverage } from './fixtures/historyCoverage'
 
 import { installHistoryQueryEvidence } from './fixtures/historyQueryEvidence'
 import { watchPhaseReconnect, readPhaseReconnect } from './fixtures/phaseReconnectEvidence'
@@ -111,15 +112,17 @@ test('a real daemon lazily fills a served gap after more than 200 entries writte
         await clean.locator('.channel-list__row-open').filter({ hasText: channel }).click()
         const history = clean.locator('.conversation__thread')
         await expect(history).toContainText(closedPosts.at(-1)!, { timeout: 45_000 })
+        const coverage = (before?: number) => readHistoryCoverage(request => clean.evaluate(request =>
+          window.pyry.chatHistory(request), request), daemon.pairFields.server, conversationId, before)
+        const beforeHome = await coverage()
+        const homeAsks = await mainRead(cleanApp, () => (globalThis as any).__threadPageAsks.filter((type: string) => type === 'thread_page').length)
         await history.press('Home')
-        await expect.poll(() => mainRead(cleanApp, () => (globalThis as any).__threadPageAsks.includes('thread_page'))).toBe(true)
+        await Promise.all([
+          expect.poll(() => readReplayMainProcess(cleanApp, () => (globalThis as any).__threadPageAsks.includes('thread_page'))).toBe(true),
+          expect.poll(() => readReplayMainProcess(cleanApp, () => (globalThis as any).__threadPageAsks.filter((type: string) => type === 'thread_page').length)).toBe(homeAsks + 1),
+          coverage(beforeHome)
+        ])
         await expect(history.getByRole('status').filter({ hasText: 'Loading messages…' })).toHaveCount(0)
-        const coverage = () => clean.evaluate(async ({ serverId, conversationId }) => {
-          const result = await window.pyry.chatHistory({ operation: 'readThread', serverId, conversationId })
-          return result.status === 'stored' && result.snapshot.kind === 'daemon-items'
-            ? result.snapshot.thread.ranges[0]?.start : undefined
-        }, { serverId: daemon.pairFields.server, conversationId })
-        await expect.poll(coverage).toBeDefined()
         // Queries default to 50 public rows; these posts also create divider rows.
         // One older page cannot cover all 205 posts. Each trusted upward input
         // must make progress; no automatic paging or retry can satisfy this walk.
@@ -129,8 +132,10 @@ test('a real daemon lazily fills a served gap after more than 200 entries writte
           const asks = await mainRead(cleanApp, () => (globalThis as any).__threadPageAsks.filter((type: string) => type === 'thread_page').length)
           await history.evaluate(el => { el.scrollTop = 0 })
           await history.press('ArrowUp')
-          await expect.poll(() => mainRead(cleanApp, () => (globalThis as any).__threadPageAsks.filter((type: string) => type === 'thread_page').length)).toBe(asks + 1)
-          await expect.poll(coverage).toBeLessThan(before!)
+          await Promise.all([
+            expect.poll(() => readReplayMainProcess(cleanApp, () => (globalThis as any).__threadPageAsks.filter((type: string) => type === 'thread_page').length)).toBe(asks + 1),
+            coverage(before)
+          ])
           await expect.poll(() => history.locator('.bubble').count()).toBeGreaterThan(beforeCount)
         }
         await expect(history).toContainText(baseline, { timeout: 45_000 })

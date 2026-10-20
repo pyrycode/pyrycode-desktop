@@ -233,6 +233,19 @@ sanitization: use static categories or derived booleans in controls. See the
 [relaunch inspection contract](development-verification-replay-native-storage.md#replay-inspection-after-profile-relaunch)
 and [counted regression evidence](development-verification-replay-native-storage.md#counted-linux-native-observation-validation).
 
+## Effort replay proof across profile handoff
+
+An awaited relaunch can close the old page and reject before replacement handles
+return. Leaving the old proof assigned lets final diagnostics read that closed
+page, mask the primary failure and skip disposal. The effort scenario's local
+`withEffortScenarioProof` boundary retires observer ownership before awaiting
+replacement and attempts capture, disposal and attachment independently. A required
+operation still fails when no earlier error exists; cached proof is diagnostic-only.
+See the [process/availability contract and counted macOS evidence](development-verification-replay-native-storage.md#effort-scenario-proof-ownership)
+for the actual-path regressions, complete 96-request/396-frame replay, separate
+historical failure and unchanged pass. The historical relaunch trigger remains
+unknown; successful replay supplies no fresh provider/daemon proof.
+
 ## Actual submitted-turn reply evidence
 
 The daemon-built scenario in

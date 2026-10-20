@@ -230,3 +230,42 @@ Handoff status: the managed task is running on `macbook`, run
 Retrieve it to `/tmp/builder-2176/sync-repair/mac-gate/`; inspect revision/configuration,
 full JSON/list reports, counts, retries, skips and fake-daemon-setup attachments,
 then commit the receipt before fresh verifier judgment. No full-gate pass is claimed.
+
+### Completed macOS gate and merge receipt, 2026-10-20
+The preceding running-task handoff is now resolved. Retrieved task
+`985ed4b1f04d6fcab6ff20b5bcc65a968eb88eefb676156ce2519d3dde491744`
+to `/tmp/builder-2176/merge-20261020/mac-gate/`; its completed run is
+`f0cbb629d400b347695902f975cf2d20e6de139d7a104eae43265603983b362e`.
+Inspected all six returned artifacts, including the complete JSON/list reports,
+execution log, captured configuration and every fake-daemon setup attachment.
+
+- Exact candidate: `b5afdda75ff8c0a6c23b411cfe6ca7cc55eb7f09`, macOS arm64.
+  Complete configured application gate: 532 executed/passed, 0 failed/flaky/retried,
+  2 skipped. Native-writer, clipboard and parallel projects retained four configured
+  workers and zero configured retries. Captured config matches both candidate and
+  merged worktree: SHA-256 `0d1fb967aa3b3d66275b736ec63bc55142dff69708eb297cce6ff3d4898d2643`.
+- All six reply, seven visible-tail and fourteen mounted thread cases passed,
+  including the actual diagnostic receiver, lifecycle/reuse and pending-read checks.
+  Recorded clients: 28 passed and the existing reset-system-prompt fixme skipped.
+  The other skip is `an independent input-enabled cover preserves isolated hover`:
+  `a never-shown window receives no pointer from the display`.
+- All 584 fake-daemon setup attachments report `opened`, attempt 1, retry 0,
+  no failure class, matching listener/dial, observed connection and accepted upgrade.
+  Full report SHA-256: `6204e73dd7a4f797eb96712b7b08c70e5f76bf74d70de52504d4751844f7df27`.
+- Finished the pending main merge as `94798117`, retaining main's initial no-code
+  assertion and exact suffix barrier alongside the branch's delivered-but-held
+  drain regression and cursor settlement. No application code changed in the merge
+  resolution; main's changes outside the conflict blocks were retained unchanged.
+- After integration of main `743f0a66`, build and client-test typecheck passed;
+  approved `pyrycode-desktop-test` on `e2e/message-reply.spec.ts` executed/passed
+  7 tests including the native prerequisite, 0 failed/skipped/retried. Native
+  preparation passed. Final pre-verify passed all five checks with 41 publisher
+  units executed/passed, 0 failed/skipped. The subsequent build passed with clean
+  normal provenance at `94798117`. Logs, focused test output and copied unit
+  evidence are under `/tmp/builder-2176/merge-20261020/`.
+
+The complete gate above covers its exact pre-merge candidate; post-merge focused
+checks are recorded separately. Historical FAILs and missing original raw before
+evidence remain unchanged. Fresh normal verifier judgment and the documentation
+handoff remain pending with their owning stages. No live-provider or second-OS
+result is claimed.

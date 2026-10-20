@@ -55,10 +55,9 @@ export async function assertReplayNativeStorage(app: ElectronApplication): Promi
   const deadline = Date.now() + 5_000
   for (;;) {
     const ready = await readReplayMainProcess(app, probeReplayNativeStorage)
-    if (ready !== NOT_YET_AVAILABLE) {
-      if (!ready) throw new Error('Replay requires working Electron SQLite; run npm run rebuild:electron before replay.')
-      return
-    }
+    // The generic reader preserves empty values; only booleans conclude this probe.
+    if (ready === true) return
+    if (ready === false) throw new Error('Replay requires working Electron SQLite; run npm run rebuild:electron before replay.')
     if (Date.now() >= deadline) throw new Error('Replay main-process inspection unavailable')
     await new Promise(resolve => setTimeout(resolve, 100))
   }

@@ -35,7 +35,7 @@ Gives the composition root **one factory** — `createDaemonConnection(deps): Da
   hash; malformed frames emit neither IPC nor a diagnostic record, and decoder
   errors contain only categories/field names. Raw ids, codes, messages and extras
   never enter logs. The [timeline](conversation-timeline-store.md#what-it-does)
-  owns the transient notice and [fixed display copy](conversation-shell.md#what-it-does).
+  owns the transient notice and [fixed display copy](conversation-shell-behavior.md#what-it-does).
 - **Every non-clean outcome** — no paired record, a malformed record, a bad/wrong-length server key, a rejected keychain read, a malformed `hello_ack`, a driver `error`, or a fatal `terminal` — surfaces as a `failed{error}` event with a **static category code**, never a crash or an unhandled rejection.
 - **`stop()`** tears the driver down idempotently and **suppresses** the clean-stop `terminal` (the window is going away on quit, so there is nothing to report).
 - **On the driver's `relay-link-up`/`relay-link-down{code}`** ([#328](../codebase/328.md)), it emits a `relayLinkChanged{status}` event carrying the relay-**socket** leg — distinct from the combined session status above. This is the single point that classifies the relay-controlled raw close `code` into the closed `RelayLinkStatus` enum (`connected`/`offline`/`daemon-absent`, `4404` → `daemon-absent`); the code itself never crosses IPC. Ships **dormant** (see the driver-event mapping table below).

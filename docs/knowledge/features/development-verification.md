@@ -10,6 +10,7 @@ Check current code before applying an observation about a particular implementat
 | [Evidence that cannot pass too early](development-verification-evidence-that-cannot-pass-too-early.md#evidence-that-cannot-pass-too-early) | Positive processing barriers and nonvacuous absence assertions. |
 | [Layout and input](development-verification-layout-and-input.md#layout-and-input) | Measured layout, native input, focus and capture verification. |
 | [Live-test diagnosis](development-verification-live-test-diagnosis.md#live-test-diagnosis) | Executable identity, credential ownership and counted live evidence. |
+| [Replay native storage and inspection](development-verification-replay-native-storage.md) | Boolean prerequisites, synchronous inspection, saved-profile controls and counted replay evidence. |
 
 ## Source and contract checks
 
@@ -212,114 +213,25 @@ physical transport acceptance. macOS is outside this ticket's verification scope
 
 ## Replay native storage prerequisite
 
-Node and Electron require different `better-sqlite3` native addon ABIs. Rebuild
-for Electron after installation or a Node rebuild before replay; the
-[replay contract](../../recorded-tests.md#replay-contract) describes the command
-and startup diagnostic. A missing Electron addon can look like captured-contract
-drift: unavailable history storage makes a restarted profile send a fresh
-`thread_catch_up` cursor. Diagnose native storage before changing recorded
-requests or query ordering. The replay fixture checks an in-memory database in
-each opened Electron main process, including relaunches, before device binding.
-The probe proves addon load/open/query/close, not protected-profile persistence.
-History IPC cannot substitute for this pre-pair check because it requires paired
-host membership.
-
-Finish pre-verify's Node rebuild before Electron-native preparation and browser
-checks; running them concurrently can change the addon underneath a launched app.
-The [#2097 repair evidence](https://github.com/pyrycode/pyrycode-desktop/pull/2105)
-retains seven storage failures from that overlap in `rework-specs.json`. After
-sequential native preparation, `rework-final.json` recorded 37 executed/passed,
-0 failed/skipped, covering the complete thread-activation, whitespace and reader-menu
-specs. These reports are under `/tmp/builder-2097/`; the failed run remains failed.
-See [saved traversal diagnostics](e2e-harness-context-recovery.md#saved-traversal-diagnostics)
-for the separate listener-confirmation repair and accepted configured-gate evidence.
-
-The [effort-default verifier evidence](https://github.com/pyrycode/pyrycode-desktop/pull/2071#issuecomment-6220345807)
-records Linux x64 results for #2069. Failed unchanged-main evidence remains failed:
-**1 executed, 0 passed, 1 failed, 0 skipped**, zero forbidden launches. At request
-41 on connection 2, actual `thread_catch_up` used epoch `""` / version 0 instead
-of the recorded saved epoch / version 14, followed by worker exit 7. Rebuilding
-SQLite for Electron made the identical archived app/capture pass: **1 executed,
-1 passed, 0 failed, 0 skipped**, zero forbidden launches. The
-[plan's evidence paths](../../specs/architecture/2069-replay-native-storage.md#validation-evidence)
-retain `baseline-native.log`, `historical-main-recorded.log` and the successful
-`native-ready.log` under `/tmp/builder-2069/`.
-
-The original focused effort-default scenario was present and passed:
-**1 executed, 1 passed, 0 failed, 0 skipped** (`candidate-focused.log`). Complete
-guarded replay recorded **29 executed, 29 passed, 0 failed, 1 existing
-system-prompt-reset fixme**, zero retries and zero forbidden launches
-(`recorded-final.log` / `recorded-final.json` in the same evidence directory).
-Effort-default, model-recall and daemon-session-settings were present and passed;
-all 29 exchanges had zero remaining requests. Effort-default matched all 96
-requests and emitted 396 frames with the capture, original assertions, strict
-matcher and causal barriers unchanged. These are recorded offline Linux results;
-current provider behavior and live physical effects are not established, and
-macOS is outside this ticket's verification scope.
+Each opened replay process must return explicit `true` from the native
+load/open/query/close probe before device binding. Explicit `false` immediately
+produces the static SQLite diagnostic; other observations poll every 100 ms for
+up to five seconds, then report inspection unavailable. Finish Node checks before
+Electron-native preparation, with no native rebuild overlapping replay. See the
+[native prerequisite contract](development-verification-replay-native-storage.md#replay-native-storage-prerequisite)
+and [counted Linux causal, Electron and replay evidence](development-verification-replay-native-storage.md#counted-linux-native-observation-validation)
+for provenance and artifact paths. The separately retained historical macOS
+failure's trigger remains unknown.
 
 ## Replay inspection after profile relaunch
 
-Bounded `app.evaluate` polling cannot recover persistent inspector await-promise
-loss. At unchanged main `5c0793c7`, controlled inspection of `__threadHistoryAsks`
-failed six consecutive times with `Runtime.callFunctionOn: Promise was collected`.
-Even an awaited constant failed while the same-process synchronous history read
-succeeded with `awaitPromise: false`; scheduling a Node turn did not restore it.
-The original #2069 failures at `340f6a961a` retained only Playwright's rewritten
-destroyed-context error: thread lost `assertReplayNativeStorage` after relaunch
-(6 requests remaining), and history exhausted `mainRead` (14 remaining).
-The unchanged rerun passed both with zero remaining; #2068 hit the same history
-boundary. The controlled reproduction establishes the mechanism at that boundary;
-the original reports do not expose their underlying protocol errors.
-
-[`readReplayMainProcess`](../../../e2e/fixtures/replayNativeStorage.ts) bypasses
-the awaited path only for the SQLite prerequisite and history's synchronous
-`mainRead` observations. Public `evaluateHandle` also forces `awaitPromise` and
-is not an alternative. The adapter obtains the current app's local inspector
-session on every call; it never caches a session across relaunch. Playwright's
-internal `_connection.toImpl(app)._nodeSession` access is isolated here and depends
-on the lockfile-pinned implementation. Dependency upgrades must retain the
-synchronous-inspection regressions and both relaunch replay checks. See the
-[inspection contract](e2e-harness-context-recovery.md#persistent-awaited-inspector-loss)
-for valid empty values, bounded unavailability and mutation boundaries.
-
-The [verifier evidence](https://github.com/pyrycode/pyrycode-desktop/pull/2073#issuecomment-6221253088)
-records Linux x64 on 2026-10-16, implementation `db6c6bb9`, reviewed head
-`20fd3f8b`, main `5c0793c7`. These are retained results, not documentation reruns:
-
-- Controlled regression `checks storage when the inspector loses every
-  awaitPromise acknowledgement`: original **6 executed, 5 passed, 1 failed,
-  0 skipped**; repaired targeted run **23 executed/passed, 0 failed/skipped**,
-  including that case and all four observer-registration cases.
-- Five consecutive focused guarded runs each used two actual workers,
-  `--fully-parallel --workers 2 --retries 0`: **2 executed/passed, 0 failed/skipped**
-  per run, **10 executed/passed, 0 failed/skipped** total. Both named scenarios
-  were present and passed in every run:
-  `daemon-built thread streams, places an agent, reconnects, resets and reopens saved items`
-  and `a real daemon lazily fills a served gap after more than 200 entries written while Electron is closed`.
-  Every thread exchange matched 45 requests/emitted 378 frames; history matched
-  32/emitted 63. All ten had zero remaining requests and zero forbidden launches.
-- Subsequent complete guarded `npm run e2e:recorded` used one worker, retries zero:
-  **29 executed/passed, 0 failed, 1 skipped**. Both named cases were present and
-  passed; all 29 exchanges had zero remaining requests, with zero forbidden launches.
-  The explicit skip remains `real claude picks up a saved channel system prompt at Reset session`.
-- Configured application gate used two actual workers, retries zero:
-  **492 executed, 491 passed, 1 failed, 4 skipped**. Both named cases passed on
-  their first attempt with the same complete exchanges above; all 29 replay
-  exchanges had zero remaining requests. The unrelated visible-tail failure is
-  tracked in #2074; its separate rerun was **2 executed/passed, 0 failed/skipped**.
-  This does not turn the original full gate into a failure-free run. Skips were
-  three macOS-only cases and the system-prompt-reset fixme.
-
-Capture bytes, assertions, strict matching and causal barriers are unchanged:
-Desktop source `00ec821f9380b00cf2dfc0dd4817ee15584106a5`, daemon source
-`58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`, binary SHA256
-`5f5b3b9ce42eda74024637f4929dd720d36c1226ce6e370eb62fbe9e6b22f7c0`.
-The [plan's evidence paths](../../specs/architecture/2072-replay-inspection.md#validation-evidence)
-retain diagnostics, red/green regression reports and `focused-1` through
-`focused-5` plus `recorded-full` reports under `/tmp/builder-2072/`.
-Offline replay establishes no fresh provider/daemon or physical-effect evidence;
-macOS is outside this Linux ticket's verification scope. The SQLite ABI
-prerequisite above still applies independently of inspection availability.
+Synchronous `readReplayMainProcess` preserves generic `false`, zero, null,
+undefined, empty strings and empty collections; only the native prerequisite
+requires boolean conclusions. It rejects promise results and selects the current
+process's inspector session on every call. Raw inspector assertions can bypass
+sanitization: use static categories or derived booleans in controls. See the
+[relaunch inspection contract](development-verification-replay-native-storage.md#replay-inspection-after-profile-relaunch)
+and [counted regression evidence](development-verification-replay-native-storage.md#counted-linux-native-observation-validation).
 
 ## Actual submitted-turn reply evidence
 

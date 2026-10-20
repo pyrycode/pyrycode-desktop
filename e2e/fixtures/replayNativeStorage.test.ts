@@ -76,6 +76,65 @@ describe('replay native storage prerequisite', () => {
       .resolves.toBeUndefined()
   })
 
+  const inconclusive = [{}, { value: undefined }, { value: null }, { value: 0 },
+    { value: '' }, { value: [] }, { value: {} }, { value: 'true' }, { value: 1 }]
+
+  it.each(inconclusive)('waits for a conclusive boolean after an absent or non-boolean observation: %j', async result => {
+    vi.useFakeTimers()
+    try {
+      const send = vi.fn().mockResolvedValueOnce({ result }).mockResolvedValue({ result: { value: true } })
+      const ready = assertReplayNativeStorage(inspectedApp(send))
+      await Promise.all([vi.advanceTimersByTimeAsync(100), expect(ready).resolves.toBeUndefined()])
+      expect(send).toHaveBeenCalledTimes(2)
+    } finally { vi.useRealTimers() }
+  })
+
+  it.each(inconclusive)('bounds non-boolean inspection without diagnosing SQLite: %j', async result => {
+    vi.useFakeTimers()
+    try {
+      const send = vi.fn().mockResolvedValue({ result })
+      const outcome = assertReplayNativeStorage(inspectedApp(send)).catch(error => error)
+      await vi.advanceTimersByTimeAsync(4_999)
+      expect(send).toHaveBeenCalledTimes(50)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(await outcome).toEqual(new Error('Replay main-process inspection unavailable'))
+      expect(send).toHaveBeenCalledTimes(51)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('rejects conclusive false immediately after absence', async () => {
+    vi.useFakeTimers()
+    try {
+      const send = vi.fn().mockResolvedValueOnce({ result: {} }).mockResolvedValue({ result: { value: false } })
+      const result = assertReplayNativeStorage(inspectedApp(send))
+      await Promise.all([vi.advanceTimersByTimeAsync(100), expect(result)
+        .rejects.toThrow(/^Replay requires working Electron SQLite; run npm run rebuild:electron before replay\.$/)])
+      expect(send).toHaveBeenCalledTimes(2)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('propagates fatal prerequisite errors without polling', async () => {
+    const fatal = new Error('Target closed')
+    const send = vi.fn().mockRejectedValue(fatal)
+    await expect(assertReplayNativeStorage(inspectedApp(send))).rejects.toBe(fatal)
+    expect(send).toHaveBeenCalledOnce()
+  })
+
+  it('rejects conclusive false without polling', async () => {
+    const send = vi.fn().mockResolvedValue({ result: { value: false } })
+    await expect(assertReplayNativeStorage(inspectedApp(send))).rejects.toThrow('Replay requires working Electron SQLite')
+    expect(send).toHaveBeenCalledOnce()
+  })
+
+  it('reports native close failure as false', () => {
+    class Database {
+      prepare() { return { get: () => 1 } }
+      close() { throw new Error('PRIVATE_CLOSE_FAILURE') }
+    }
+    expect(probeReplayNativeStorage(electron, () => Database)).toBe(false)
+  })
+
   it('bounds persistent inspection loss without claiming the addon is unavailable', async () => {
     vi.useFakeTimers()
     try {
@@ -103,7 +162,7 @@ describe('replay native storage prerequisite', () => {
 })
 
 describe('synchronous replay inspection', () => {
-  it.each([false, 0, null, undefined, []].map(value => [value]))('preserves a valid blank result: %j', async value => {
+  it.each([false, 0, null, undefined, '', [], {}].map(value => [value]))('preserves a valid blank result: %j', async value => {
     const send = vi.fn(async () => ({ result: { value } }))
     expect(await readReplayMainProcess(inspectedApp(send), () => null)).toEqual(value)
     expect(send).toHaveBeenCalledWith('Runtime.evaluate', expect.objectContaining({

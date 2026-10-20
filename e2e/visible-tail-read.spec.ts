@@ -295,6 +295,7 @@ test('stable callbacks exclude hidden, queued and received but uncommitted tails
     await page.waitForTimeout(100)
     await expect(page.locator('.bubble').last()).not.toContainText('Awaiting commit')
     const prior = targets(commands)
+    expect(prior).toEqual([1, 2, 3, 4])
     expect(prior.at(-1)).toBe(4)
     const contextAsks = commands.filter(c => c.type === 'request_context_usage').length
     await page.evaluate(conversationId => {
@@ -315,7 +316,7 @@ test('stable callbacks exclude hidden, queued and received but uncommitted tails
     expect(await page.evaluate(() => window.pendingReadFrame.release())).toBe(true)
   }
   await expect(page.locator('.bubble').last()).toContainText('Awaiting commit')
-  await expect.poll(() => targets(commands).at(-1)).toBe(5)
+  await expect.poll(() => targets(commands)).toEqual([1, 2, 3, 4, 5])
 })
 
 declare global { interface Window { pendingReadFrame: {

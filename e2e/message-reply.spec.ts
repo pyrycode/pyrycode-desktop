@@ -33,6 +33,8 @@ async function expectDraftEnd(input: Locator, value: string): Promise<void> {
     [node.selectionStart, node.selectionEnd])).toEqual([value.length, value.length])
 }
 
+declare global { interface Window { heldReplyDrain: { received: () => number; release: () => boolean } } }
+
 test('held suffix distinguishes visible partial content from current-source readiness', async ({ launchPairedApp }, info) => {
   const { page, daemon } = await launchPairedApp({
     buildReplyFrames: conversationStateFake({ conversations: [SEEDED_ROW] })
@@ -44,30 +46,71 @@ test('held suffix distinguishes visible partial content from current-source read
   const input = page.locator('.composer__input')
   await expect(markdown.locator('p')).toHaveText('A "literal" quote')
   await expect(markdown.locator('code')).toHaveCount(0)
-
-  // The former barrier passes even though the suffix has not been delivered.
-  await expect(markdown).toBeVisible()
-  await reply.focus()
-  await page.keyboard.press('Enter')
-  await expectDraftEnd(input, quote('Assistant', PARTIAL))
-  const oldQuote = await input.inputValue()
-  await input.fill('')
-
-  // Start the repaired barrier while delivery is held, then release the suffix.
+  await expect(row.locator('.bubble__cursor')).toBeVisible()
+  // Extend #2173's held-delivery comparison to actual preload receipt with a held drain.
+  await page.evaluate(() => {
+    const browser: Window = window
+    const request = browser.requestAnimationFrame, cancel = browser.cancelAnimationFrame
+    const timeout = browser.setTimeout, clear = browser.clearTimeout
+    const frames = new Map<number, FrameRequestCallback>(), timers = new Map<number, () => void>()
+    let received = 0
+    const off = window.pyry.onDaemonEvent(event => {
+      if (event.type === 'threadUpdate' && event.update.type === 'thread_text_append') received++
+    }, true)
+    browser.requestAnimationFrame = callback => {
+      const handle = request.call(window, () => {})
+      frames.set(handle, callback); return handle
+    }
+    browser.cancelAnimationFrame = handle => { frames.delete(handle); cancel.call(window, handle) }
+    browser.setTimeout = (callback, delay, ...args) => {
+      if (typeof callback !== 'function' || ![...frames.values()].some(frame => frame === callback))
+        return timeout.call(window, callback, delay, ...args)
+      const handle = timeout.call(window, () => {}, delay)
+      timers.set(handle, () => callback(...args)); return handle
+    }
+    browser.clearTimeout = handle => { if (handle !== undefined) timers.delete(handle); clear.call(window, handle) }
+    window.heldReplyDrain = { received: () => received, release: () => {
+      browser.requestAnimationFrame = request; browser.cancelAnimationFrame = cancel
+      browser.setTimeout = timeout; browser.clearTimeout = clear; off()
+      const callbacks = [...frames.values()], drains = [...timers.values()]
+      for (const handle of frames.keys()) cancel.call(window, handle)
+      for (const handle of timers.keys()) clear.call(window, handle)
+      frames.clear(); timers.clear()
+      callbacks.forEach(callback => callback(performance.now())); drains.forEach(drain => drain())
+      return browser.requestAnimationFrame === request && browser.cancelAnimationFrame === cancel &&
+        browser.setTimeout === timeout && browser.clearTimeout === clear
+    } }
+  })
+  let oldQuote = ''
   let sourceReady = false
-  const ready = expect(markdown.locator('pre code')).toHaveText('const x = 1\n')
-    .then(() => { sourceReady = true })
   try {
-    await page.evaluate(() => new Promise<void>(resolve =>
-      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
-    await expect(markdown.locator('pre code')).toHaveCount(0)
-    expect(sourceReady).toBe(false)
-    await expect(input).toHaveValue('')
-  } finally {
     daemon.pushFrame(assistant(SUFFIX, 1))
     daemon.pushFrame(turnEnd())
-    await ready
+    await expect.poll(() => page.evaluate(() => window.heldReplyDrain.received())).toBe(1)
+    await page.waitForTimeout(100) // Challenge the runtime's 50 ms timer fallback too.
+    await expect(markdown).toBeVisible()
+    await reply.focus()
+    await page.keyboard.press('Enter')
+    await expectDraftEnd(input, quote('Assistant', PARTIAL))
+    oldQuote = await input.inputValue()
+    await input.fill('')
+    // The content-specific boundary stays pending even after real suffix receipt.
+    const ready = expect(markdown.locator('pre code')).toHaveText('const x = 1\n')
+      .then(() => { sourceReady = true })
+    try {
+      await page.waitForTimeout(100)
+      await expect(markdown.locator('pre code')).toHaveCount(0)
+      await expect(row.locator('.bubble__cursor')).toBeVisible()
+      expect(sourceReady).toBe(false)
+      await expect(input).toHaveValue('')
+    } finally {
+      expect(await page.evaluate(() => window.heldReplyDrain.release())).toBe(true)
+      await ready
+    }
+  } finally {
+    expect(await page.evaluate(() => window.heldReplyDrain.release())).toBe(true)
   }
+  await expect(row.locator('.bubble__cursor')).toHaveCount(0)
   await reply.focus()
   await page.keyboard.press('Enter')
   await expectDraftEnd(input, quote('Assistant', SOURCE))
@@ -106,6 +149,7 @@ test('pointer and keyboard replies append current source, focus once, and send t
   daemon.pushFrame(assistant(SUFFIX, 1))
   daemon.pushFrame(turnEnd())
   await expect(assistantRow.locator('.bubble__markdown pre code')).toHaveText('const x = 1\n')
+  await expect(assistantRow.locator('.bubble__cursor')).toHaveCount(0)
   await reply.focus()
   await page.keyboard.press('Enter')
   draft += quote('Assistant', SOURCE)

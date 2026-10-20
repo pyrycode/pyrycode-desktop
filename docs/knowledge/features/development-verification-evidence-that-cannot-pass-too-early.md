@@ -121,7 +121,7 @@ without invoking the retained application callbacks.
 Keep the hidden-document, hidden-row and queued checks. For the pending append,
 opt into thread updates on the real preload subscription and positively observe
 receipt, then both native opportunities and the retained 100 ms challenge. Require
-“Awaiting commit” to remain absent and the latest read target to stay 4. Dispatch
+“Awaiting commit” to remain absent and the exact target sequence `[1,2,3,4]`. Dispatch
 focus and scroll, then send `requestContextUsage` on the same ordered outbound
 path. Wait for that new command at the fake daemon before comparing the exact
 read-target sequence and text absence again; evaluation completion alone can
@@ -131,8 +131,22 @@ In `finally`, restore the exact `requestAnimationFrame`, `cancelAnimationFrame`,
 `setTimeout` and `clearTimeout` identities and unsubscribe before releasing retained
 callbacks. Cancel native handles and clear retained maps; runtime cancellation
 and its scheduling token fence the losing drain. Final assertions require the
-same append to become visible and publish target 5. This tests resumed progress
+same append to become visible and the exact sequence `[1,2,3,4,5]`. A last-target-only
+check could miss duplicate or out-of-order publications. This tests resumed progress
 as well as exclusion. See the [runtime read contract](thread-runtime.md#live-controls-and-read-publication).
+
+Reconcile later sightings against the executed source before treating them as a
+regression. The Linux failures on [#2165](https://github.com/pyrycode/pyrycode-desktop/issues/2165)
+and [#2190](https://github.com/pyrycode/pyrycode-desktop/issues/2190) used identical
+old frame-only specs; neither revision contained repair `3098f90f` from
+[PR #2189](https://github.com/pyrycode/pyrycode-desktop/pull/2189), despite the later
+wall-clock #2190 sighting. The [source comparison and retained receipt](../../specs/architecture/2197-visible-tail-evidence.md#evidence-receipt--2026-10-20)
+identify both original failures and their unchanged reruns: each rerun had
+3 executed/passed, 0 failed/skipped/flaky, with this named case passed at retry 0.
+The receipt compared main `ebe063cf` with accepted candidate `3ce46e4b` and found
+byte-identical repaired specs. These reruns do not replace the original failures.
+The controlled red below establishes the timer bypass mechanism; neither
+occurrence log traces its exact timer interleaving.
 
 ### Counted Linux validation
 
@@ -200,6 +214,55 @@ belong to the originating Mac and are not replaced by Linux reports.
 Current macOS execution is outside this Linux ticket's verification scope.
 These fake-transport and captured-client results establish no fresh provider or
 live-daemon acceptance; none was required for the test-only repair.
+
+### Read and reply synchronization on macOS
+
+The separate #2176 integration preserves the paired frame/timer hold above and
+requires the complete mark sequence before and after release. Reply readiness
+has a related trap: a visible Markdown container can hold only a partial source,
+even after the suffix reaches preload. In `e2e/message-reply.spec.ts`, await the
+exact rendered code-fence suffix and absence of the streaming cursor before
+activating the retained Reply control. Keep the initial no-code assertion so
+the later suffix observation cannot pass on the opening source.
+
+`held suffix distinguishes visible partial content from current-source readiness`
+retains actual preload receipt while holding both runtime drain paths by callback
+identity. The old container-visible barrier still quotes only PARTIAL; the
+content-specific barrier stays pending until release and then quotes the complete
+source. This establishes React commit separately from receipt. Both controls
+restore scheduling APIs and subscriptions in `finally`; original quote, focus,
+caret, edited-send and clipboard assertions remain. These are controlled ordering
+proofs, not reconstructions of historical schedules.
+
+Retained macOS arm64 evidence, 2026-10-20, under
+`/tmp/builder-2176/sync-repair/`, is recorded in the
+[plan](../../specs/architecture/2176-read-observation-diagnostics.md#synchronization-reproduction-macos-arm64)
+and [accepted verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2180#issuecomment-6298117359):
+
+| Run | Executed | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| Original named pair plus native prerequisite, `original.json` | 3 | 2 | 1 | 0 |
+| Controlled old barriers, `controlled-before.json` | 3 | 1 | 2 | 0 |
+| Repaired barriers, `controlled-after.json` | 4 | 4 | 0 | 0 |
+| Earlier managed complete gate, candidate `b5afdda7` | 532 | 532 | 0 | 2 |
+| Reviewed-head complete application gate, `7aa73aa6` | 532 | 532 | 0 | 2 |
+
+The original pair failed the reply suffix check while pending-read passed. The
+controlled-before run failed both barriers: partial quoting and a timer-committed
+“Awaiting commit” row. The controlled-after run passed both named controls; its
+attachments retain receipt 1, actual frame/timer opportunities 1 each, exact
+pre-release marks and the ordered context sentinel. These failures stay failed.
+
+The reviewed-head gate's retained log confirms the held-suffix case, `pointer and
+keyboard replies append current source, focus once, and send the edited quote
+intact`, and `stable callbacks exclude hidden, queued and received but uncommitted
+tails` were present and passed. Both complete gates had zero retries; their two
+skips are the never-shown-window pointer case and existing reset-system-prompt
+fixme. The earlier managed gate covers its exact candidate only. The
+[diagnostic reference](conversation-shell.md#diagnostic-verification) records the
+genuine hook-to-main receiver and observer lifetime evidence from the reviewed
+head. No native focus recovery or fresh live provider behavior is established;
+other operating systems are outside this macOS ticket's verification scope.
 
 ## Question-answer interpretation and freshness
 

@@ -33,6 +33,50 @@ async function expectDraftEnd(input: Locator, value: string): Promise<void> {
     [node.selectionStart, node.selectionEnd])).toEqual([value.length, value.length])
 }
 
+test('held suffix distinguishes visible partial content from current-source readiness', async ({ launchPairedApp }, info) => {
+  const { page, daemon } = await launchPairedApp({
+    buildReplyFrames: conversationStateFake({ conversations: [SEEDED_ROW] })
+  })
+  daemon.pushFrame(assistant(PARTIAL))
+  const row = page.locator('.message-row--daemon').filter({ hasText: 'literal' })
+  const markdown = row.locator('.bubble__markdown')
+  const reply = row.getByRole('button', { name: 'Reply to message' })
+  const input = page.locator('.composer__input')
+  await expect(markdown.locator('p')).toHaveText('A "literal" quote')
+  await expect(markdown.locator('code')).toHaveCount(0)
+
+  // The former barrier passes even though the suffix has not been delivered.
+  await expect(markdown).toBeVisible()
+  await reply.focus()
+  await page.keyboard.press('Enter')
+  await expectDraftEnd(input, quote('Assistant', PARTIAL))
+  const oldQuote = await input.inputValue()
+  await input.fill('')
+
+  // Start the repaired barrier while delivery is held, then release the suffix.
+  let sourceReady = false
+  const ready = expect(markdown.locator('pre code')).toHaveText('const x = 1\n')
+    .then(() => { sourceReady = true })
+  try {
+    await page.evaluate(() => new Promise<void>(resolve =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+    await expect(markdown.locator('pre code')).toHaveCount(0)
+    expect(sourceReady).toBe(false)
+    await expect(input).toHaveValue('')
+  } finally {
+    daemon.pushFrame(assistant(SUFFIX, 1))
+    daemon.pushFrame(turnEnd())
+    await ready
+  }
+  await reply.focus()
+  await page.keyboard.press('Enter')
+  await expectDraftEnd(input, quote('Assistant', SOURCE))
+  await info.attach('held-suffix-comparison', {
+    body: JSON.stringify({ oldQuote, sourceReady, currentQuote: await input.inputValue() }),
+    contentType: 'application/json'
+  })
+})
+
 test('pointer and keyboard replies append current source, focus once, and send the edited quote intact', async ({ launchPairedApp }) => {
   const fake = conversationStateFake({ conversations: [SEEDED_ROW] })
   const sent: SendMessagePayload[] = []
@@ -61,7 +105,7 @@ test('pointer and keyboard replies append current source, focus once, and send t
   // The same mounted control must read the latest streamed source at activation.
   daemon.pushFrame(assistant(SUFFIX, 1))
   daemon.pushFrame(turnEnd())
-  await expect(assistantRow.locator('.bubble__markdown')).toBeVisible()
+  await expect(assistantRow.locator('.bubble__markdown pre code')).toHaveText('const x = 1\n')
   await reply.focus()
   await page.keyboard.press('Enter')
   draft += quote('Assistant', SOURCE)

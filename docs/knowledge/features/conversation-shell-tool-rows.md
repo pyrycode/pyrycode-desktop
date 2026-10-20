@@ -35,9 +35,11 @@ message bubble. `Timeline`'s array-index key strategy is untouched; `toolUseId` 
 unread here, reserved for [#206](https://github.com/pyrycode/pyrycode-desktop/issues/206)'s result
 correlation.
 
-This is the **pending** (`result: null`, no `denial`) treatment only — the whole `.tool-row`
-sits at 50% opacity,
-the unresolved-state dimming. #206 (later split into transport #229 + render #230) fills `result` and
+Ordinary **pending** (`result: null`, no `denial`) tool rows sit at 50% opacity.
+Active supplied agents use a separate full-opacity modifier on compact and complete
+delivery; supplied kind/activity, rather than the display name, owns that exception.
+See [saved content and activity](conversation-shell-timeline-render.md#saved-content-and-activity).
+\#206 (later split into transport #229 + render #230) fills `result` and
 owns lifting (or overriding) that dimming plus the success/error visual; this ticket's chip styling
 stays untouched by that follow-up. Every value in the three new `.tool-row*` CSS rules is a token
 (`--font-mono`, `--color-tertiary`, `--color-surface-container`, `--color-outline-variant`,

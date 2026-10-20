@@ -5,6 +5,14 @@ See [development verification](development-verification.md) for the topic map.
 
 ## Layout and input
 
+Opacity compounds through ancestors: a label's computed opacity can be 1 while
+its enclosing row still fades everything to 0.5. Class strings and static markup
+cannot establish the painted emphasis. Measure the visible label and every ancestor
+through the document root in mounted Electron, with an ordinary pending-tool control
+at 0.5. Exercise compact omitted-detail headers and complete items independently,
+inside expanded tool runs and ungrouped, then repeat after collapse/reopen. See
+[agent opacity coverage and counted Linux evidence](conversation-shell-timeline-render.md#supplied-item-verification).
+
 Message metadata [collapses at rest](conversation-shell-message-bubble.md#the-meta-row),
 so fixture row counts that once overflowed can become too short for held-reader or
 history-demand checks. Measure `scrollHeight > clientHeight` and the required distance

@@ -110,3 +110,38 @@ Completion intervals run from the first expanded 260-row commit through the comm
 Retained reports: `exact-ten.json` SHA-256 `b062660165cc06281101172ff0d32d82815952a8abd7199ec2e0878092bc4487`; `full-thread-items.json` SHA-256 `238e906c3d0644be99040aca2c8c1ce07e65251d8f9274de0a359b7497373b98`. Both include composer, completion-observer, commit-progress and launch-fate attachments. The original failed bundle's `SHA256SUMS` verified completely; it remains separate from candidate evidence. `baseline.json` selected zero tests with an anchored selector and is excluded as passing evidence; the corrected baseline executed/passed one.
 
 Existing header presentation was inspected at 1280×773 against Figma node `155:553`; captures are `/tmp/builder-2184/held-expanded-1280.png` and `held-collapsed-1280.png`. No production visuals or assets changed. The complete configured application suite, including captured clients, remains verifier/dispatcher-owned acceptance. No fresh-provider or other-OS acceptance is claimed.
+
+## Configured application acceptance — 2026-10-20
+
+The [accepted verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2185#issuecomment-6295268770)
+reviews `3e533963becd4f857a8e56cc9eaa7deebc7377cb` on Linux x64.
+Authoritative stage records accept the exact-candidate PASS and dispatcher gate
+disposition. The held-expansion test and production admission source are unchanged
+from the builder's tested implementation above. These are recorded verifier/dispatcher
+results, not fresh documentation-stage test runs.
+
+| Recorded command or subset | Executed | Passed | Failed | Skipped | Retries |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `python3 '/work/Projects/pyrycode-desktop-agents/bin/unit-test-gate.py'` | 9918 | 9918 | 0 | 3 | N/A |
+| `npx playwright test --reporter=json` | 528 | 527 | 1 | 4 | 0 |
+| Captured-client subset of that application run | 28 | 27 | 1 | 1 | 0 |
+| Same-tree rerun of the failed recorded client and dependencies | 4 | 4 | 0 | 0 | 0 |
+
+The complete application command retained normal project dependencies and four
+workers. The exact named held-expansion case was present and passed: composer input
+committed in 4.8 ms at 772 source rows, the observer recorded zero unrelated
+accessibility reads, all 8,334 rows mounted, and launch exited normally without
+teardown failure. The run had zero runner errors. The sole failure was the separate
+recorded `daemon-history-on-open` case, `a real daemon lazily fills a served gap after
+more than 200 entries written while Electron is closed`, tracked by #2153; the
+dispatcher accepted its same-tree rerun including dependencies. That disposition
+does not erase the complete run's failure. Its four skips are three macOS-only cases
+and the existing system-prompt Reset fixme. The unit run supplies no mounted proof.
+
+The verifier authenticated the original macOS failure bundle and builder report
+hashes, including the discriminating failed probe and all ten repaired repetitions.
+The historical timeout remains failed evidence, and its unrecorded schedule remains
+unknown. macOS is outside this Linux ticket's verification scope. No fresh
+provider/daemon acceptance is required for this local renderer repair; captured
+clients establish replay behavior only. The durable observer lesson and counted
+evidence are indexed through [deferred expansion verification](../../knowledge/features/conversation-shell-scroll-pin.md#deferred-expansion-verification).

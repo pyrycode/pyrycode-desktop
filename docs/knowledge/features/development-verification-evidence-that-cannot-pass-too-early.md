@@ -96,6 +96,17 @@ The footer needs a session-settings snapshot before its controls can render.
 Check the current refresh trigger. A lone idle event does not produce a transition
 from running to idle. Drive the prerequisite transition when the fixture requires it.
 
+Compact status fixtures also need admitted live-state provenance. In
+[`compact-demand.spec.ts`](../../../e2e/compact-demand.spec.ts), the Agent-label
+regression supplies the bound `session_id` on its `turn_state` envelope, which
+has no envelope-level conversation routing. Without that session, the live-state
+guard correctly refuses the event and the status stays idle despite a rendered
+active header. Preserve the guard and fix the fixture's ownership facts. Wait
+for the initial description and same-item revised description to commit before
+asserting zero body/children/page/history requests; an immediate zero count
+would not prove that either header reached the composer. See
+[Agent label derivation](conversation-shell-working-indicator.md#agent-descriptions-from-compact-headers).
+
 ## Question-answer interpretation and freshness
 
 Selected-label mention order cannot establish answer delivery: correct contrastive prose

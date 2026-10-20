@@ -102,6 +102,42 @@ for (const width of [800, 1280]) test(`compact tool stacks join every visible se
   expect(requests.filter(request => request.type === 'thread_read_tool_body' || request.type === 'thread_read_children')).toHaveLength(0)
 })
 
+test('compact Agent status describes truncated input and follows live revisions', async ({ launchPairedApp }, info) => {
+  const requests: Envelope[] = [], route = { conversation_id: SEEDED_ROW.id, epoch: 'agent-status' }
+  const agent = (rev: number, description: string): ThreadSummary => ({ ...header(2, 0, 'agent'), rev,
+    active: true, status: 'running', subtree_version: rev,
+    headline: `Agent: {"description":"${description}","subagent_type":"general-purpose","model":"sonnet","prompt":"Read-only investigation. Do not edit code, s…` })
+  const { page, app, daemon } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities }, buildReplyFrames: bytes => {
+    const request = decodeEnvelope(bytes); requests.push(request)
+    if (request.type === 'list_conversations') return [seedConversationsFrame({ ...SEEDED_ROW, current_session_id: 'session' })]
+    if (request.type === 'thread_catch_up') return [
+      frame('thread_items', { ...route, projection: 'compact-v1', version: 1, items: [full(1, 'Agent status ready')],
+        headers: [agent(1, 'Diagnose desktop older-messages error')], final: false }, request.id),
+      frame('thread_items', { ...route, projection: 'compact-v1', version: 1, items: [], final: true,
+        lower_order: 0, upper_order: 3, continuation: 0, older_exists: false }, request.id)]
+    return []
+  } })
+  await expect(page.getByText('Agent status ready', { exact: true })).toBeVisible()
+  expect(requests.find(request => request.type === 'thread_catch_up')?.payload.projection).toBe('compact-v1')
+  daemon.pushFrame(encodeEnvelope({ id: 91, type: 'turn_state', ts: '2026-10-20T00:00:00Z', session_id: 'session',
+    payload: { conversation_id: SEEDED_ROW.id, state: 'responding' } }))
+  const status = page.locator('.composer-status__label--tool')
+  await expect(status).toHaveText('Running Agent: Diagnose desktop older-messages error…')
+  await expect(status).toHaveCSS('text-overflow', 'ellipsis')
+  await expect(status).toHaveCSS('white-space', 'nowrap')
+  await expect(status).not.toContainText('{')
+  await expect(status).not.toContainText('prompt')
+  await info.attach('agent-status-wide', { body: await capturePairedApp(app, page), contentType: 'image/png' })
+  daemon.pushFrame(frame('thread_compact_update', { ...route, projection: 'compact-v1', from_version: 1, version: 2,
+    progress: false, header: agent(2, 'Inspect revised status') }))
+  await expect(status).toHaveText('Running Agent: Inspect revised status…')
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(800, 800))
+  await expect(status).toBeVisible()
+  await info.attach('agent-status-minimum', { body: await capturePairedApp(app, page), contentType: 'image/png' })
+  // Both received descriptions have committed before excluding demand from label derivation.
+  expect(requests.filter(request => ['thread_read_children', 'thread_read_tool_body', 'thread_page', 'history'].includes(request.type))).toEqual([])
+})
+
 for (const retained of [false, true]) test(`compact recovery and closed-parent live tasks, retained complete=${retained}`, async ({ launchPairedApp }) => {
   test.setTimeout(90000)
   const grants = retained ? ['interactive', 'thread', 'stop_background_task'] : [...capabilities, 'stop_background_task']

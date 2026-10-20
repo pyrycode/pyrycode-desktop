@@ -11,8 +11,61 @@ const snapshot = (items: ThreadSnapshot['items']): ThreadSnapshot => ({ hostId: 
 const banner = (id: number, fields = {}) => item(id, 'notice', { text: 'hook refused', level: 'warning', stops_turn: true }, { subtype: 'banner', ...fields })
 const end = (id: number, fields = {}) => item(id, 'turn_end', { stop_reason: 'max_tokens', outcome: 'error',
   is_error: true, terminal_reason: 'prompt_too_long' }, { turn: 'turn', ...fields })
+const agentHeader = (headline: string, fields = {}) => ({ id: 1, rev: 1, order: 1, kind: 'agent',
+  active: true, status: 'running', shown: true, session: 'current', detail_omitted: true, headline, ...fields })
 
 describe('authoritative composer reports', () => {
+  it.each([
+    ['Agent: {"description":"Diagnose desktop older-messages error","prompt":"Read-only investigation, s…', 'Agent: Diagnose desktop older-messages error'],
+    ['Agent {"description":"Complete input","prompt":"private"}', 'Agent: Complete input'],
+    ['Agent: {"nested":{"description":"decoy"},"prompt":"quoted \\"description\\": \\"decoy\\"","description":"Top level","tail":"cut…', 'Agent: Top level'],
+    ['Agent: {"descr\\u0069ption":"Read \\"quoted\\" \\u003ctext\\u003e \\\\ path","tail":"cut…', 'Agent: Read "quoted" <text> \\ path'],
+    ['Agent: Investigate workspace', 'Agent: Investigate workspace'],
+    ['Agent Investigate workspace', 'Agent Investigate workspace'],
+    ['Inspect workspace', 'Inspect workspace'],
+    ['Bash: {"description":"unchanged"}', 'Bash: {"description":"unchanged"}']
+  ])('derives display facts from %s', (headline, expected) => {
+    const source = Object.freeze(agentHeader(headline))
+    expect(threadComposerReports(snapshot([source]), 'current').tool?.name).toBe(expected)
+    expect(source.headline).toBe(headline)
+  })
+
+  it.each([
+    '{}', '{"prompt":"only"}', '{"description":""}', '{"description":"   "}',
+    '{"description":42}', '{"description":null}', '{"description":{"description":"nested"}}',
+    '{"nested":{"description":"decoy"}}', '{"prompt":"\\"description\\": \\"decoy\\""}',
+    '{"description":"cut…', '{"description":"bad\\q"}', '{bad,"description":"invalid"}',
+    '{"nested":[},"description":"invalid"}', '{"description" "missing colon"}',
+    '{"description":"cut escape\\', '[{"description":"array"}]'
+  ])('falls back without exposing unusable input %s', json => {
+    expect(threadComposerReports(snapshot([agentHeader(`Agent: ${json}`)]), 'current').tool?.name).toBe('Agent')
+  })
+
+  it('uses complete structured Agent descriptions and preserves elapsed seconds', () => {
+    for (const kind of ['agent', 'tool_call']) {
+      const source = item(1, kind, { name: 'Agent', input: { description: 'Investigate build', prompt: 'private' },
+        elapsed_seconds: 72 }, { status: 'running', active: true })
+      expect(threadComposerReports(snapshot([source]), 'current').tool).toEqual({ name: 'Agent: Investigate build', elapsedSeconds: 72 })
+    }
+    for (const description of [undefined, '', '   ', 42]) {
+      const source = item(1, 'agent', { name: 'Agent', input: { description } }, { status: 'running', active: true })
+      expect(threadComposerReports(snapshot([source]), 'current').tool?.name).toBe('Agent')
+    }
+    const source = item(1, 'tool_call', { name: 'Read', input: { description: 'ignored' } }, { status: 'running', active: true })
+    expect(threadComposerReports(snapshot([source]), 'current').tool?.name).toBe('Read')
+  })
+
+  it('keeps Agent labels within existing foreground selection', () => {
+    const own = agentHeader('Agent: {"description":"Foreground"}')
+    const ignored = [agentHeader('Agent: child', { id: 2, order: 2, parent: 1 }),
+      agentHeader('Agent: previous', { id: 3, order: 3, session: 'previous' }),
+      agentHeader('Agent: inactive', { id: 4, order: 4, active: false }),
+      item(5, 'tool_call', { name: 'Agent', input: { description: 'background' }, tool_use_id: 'call', task_id: 'task',
+        task_link: { task_id: 'task', tool_call_id: 'call' } }, { active: true, status: 'running' })]
+    expect(threadComposerReports(snapshot([own, ...ignored]), 'current').tool?.name).toBe('Agent: Foreground')
+    expect(threadComposerReports(snapshot([own]), null).tool).toBeUndefined()
+  })
+
   it('uses the current session and clears transient reports without removing saved items', () => {
     const s = snapshot([banner(1, { session: 'previous' }), banner(2)])
     expect(threadComposerReports(s, 'current').banner?.text).toBe('hook refused')

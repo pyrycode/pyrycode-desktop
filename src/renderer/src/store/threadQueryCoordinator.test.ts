@@ -35,6 +35,22 @@ function setup(onComplete?: (host: string, conversation: string, epoch: string, 
 afterEach(() => vi.useRealTimers())
 
 describe('supplied thread query coordination', () => {
+  it.each(['host', 'conversation', 'request', 'incomplete', 'projection'])(
+    'keeps the outstanding slot after %s terminal receipt', mismatch => {
+      const f = setup(); f.sync()
+      f.coordinator.observeTerminal({ type: 'threadReply', serverId: mismatch === 'host' ? 'other' : 'h',
+        conversationId: mismatch === 'conversation' ? 'other' : 'c', correlation: { id: 1, ts: '' },
+        requestId: mismatch === 'request' ? 'other' : f.commands[0].requestId,
+        reply: { type: 'thread_items', payload: { conversation_id: 'c', epoch: 'e', version: 20,
+          ...(mismatch === 'incomplete' ? { items: [], final: false } : { items: [], final: true,
+            lower_order: 0, upper_order: 21, continuation: 0, older_exists: false }),
+          ...(mismatch === 'projection' ? { projection: 'compact-v1' as const } : {}) } } })
+      f.sync('next'); expect(f.commands).toHaveLength(1)
+      f.window(); expect(f.commands).toHaveLength(2)
+      expect(f.snapshot()).toBeNull()
+      f.coordinator.dispose()
+    })
+
   it('notifies completed progress once after publishing a coherent live batch, and never certifies repair', () => {
     const completed = vi.fn(), f = setup(completed)
     f.sync(); f.batch(); f.window(); completed.mockClear()

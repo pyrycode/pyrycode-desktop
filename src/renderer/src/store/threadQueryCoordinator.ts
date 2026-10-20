@@ -26,7 +26,7 @@ type Scope = { id: string; restorePending: boolean; catchUp: boolean; older: boo
   ready: boolean; exhausted: boolean; state: ThreadQueryState; initialize?: boolean }
 type Pending = { scope: Scope; requestId: string; query: Exclude<ThreadQuery, { type: 'thread_read_tool_body' | 'thread_read_children' }>; generation: symbol | undefined;
   recovery: boolean; resetRecovery: boolean; cancelled: boolean; sent: boolean; captured?: { epoch: string; version: number };
-  batch?: NonNullable<ReturnType<ThreadItemStore['beginBatch']>>; timer?: ReturnType<typeof setTimeout> }
+  terminalReceived?: boolean; batch?: NonNullable<ReturnType<ThreadItemStore['beginBatch']>>; timer?: ReturnType<typeof setTimeout> }
 type Host = { connected: boolean; scope?: Scope; pending?: Pending }
 
 /** Supplied-input only: production subscription and capability selection belong to #1908. */
@@ -178,7 +178,7 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
         if (h.pending && !h.pending.cancelled) {
           h.pending.cancelled = true; h.pending.batch?.abandon()
           const pending = h.pending
-          if (!pending.sent) release(h, pending)
+          if (!pending.sent || pending.terminalReceived) release(h, pending)
           present(host, pending.scope, { type: 'idle' })
         }
         h.scope = value.conversationId === null ? undefined : { id: value.conversationId,
@@ -242,7 +242,16 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
     if (h?.scope) present(host, h.scope, { type: 'idle' })
   }
   // cancelHost is connection teardown; navigation instead retains an unfinished host slot.
-  return { input, cancelHost, batch(run: () => void): void {
+  return { input, cancelHost,
+    observeTerminal(event: Extract<StampedDaemonEvent, { type: 'threadReply' | 'threadQueryFailed' }>): void {
+      const p = event.serverId === null ? undefined : hosts.get(event.serverId)?.pending
+      if (!p || p.requestId !== event.requestId || p.scope.id !== event.conversationId) return
+      if (event.type === 'threadReply' && ('projection' in event.reply.payload ||
+          event.reply.payload.conversation_id !== p.scope.id || !(event.reply.type === 'thread_reset' ||
+          event.reply.type === 'thread_items' && event.reply.payload.final))) return
+      // Receipt permits cancelled-slot cleanup only; application still owns completion evidence.
+      p.terminalReceived = true
+    }, batch(run: () => void): void {
     if (completions) { run(); return }
     const notifications = new Map<string, () => void>()
     completions = notifications

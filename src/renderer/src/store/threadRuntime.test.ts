@@ -232,6 +232,38 @@ describe('production thread composition', () => {
       } finally { r.dispose(); vi.useRealTimers() }
     })
 
+  it.each([['reply', 'navigate'], ['reply', 'cancel-reopen'], ['failure', 'navigate'], ['failure', 'cancel-reopen']] as const)(
+    'retires received %s bookkeeping on %s with paused frames', async (terminal, action) => {
+      vi.useFakeTimers()
+      const send = vi.fn(), callbacks: (() => void)[] = []
+      const r = createThreadRuntime({ send, read: async () => ({ status: 'missing' }), log: vi.fn(),
+        frame: { request: callback => callbacks.push(callback), cancel: () => {} } })
+      try {
+        r.event(connected('one', true))
+        const opening = r.open('one', 'A'); await opening.done
+        const request = send.mock.calls[0][0]
+        for (let id = 1; id <= 300; id++) r.event({ type: 'threadUpdate', serverId: 'one', conversationId: 'A',
+          correlation: { id, ts: '' }, update: { type: 'thread_item_added', payload: { conversation_id: 'A', epoch: 'e', version: id,
+            item: { id, rev: 1, kind: 'assistant_message', status: 'finished', shown: true, active: false, summary: '', content: {} } } } })
+        if (terminal === 'reply') r.event({ type: 'threadReply', serverId: 'one', conversationId: 'A', requestId: request.requestId,
+          correlation: { id: 301, ts: '' }, reply: { type: 'thread_items', payload: { conversation_id: 'A', epoch: 'e', version: 300,
+            items: [], final: true, lower_order: 0, upper_order: 301, continuation: 0, older_exists: false } } })
+        else r.event({ type: 'threadQueryFailed', serverId: 'one', conversationId: 'A', requestId: request.requestId,
+          inReplyTo: 301, reason: 'expired' })
+        expect(send).toHaveBeenCalledOnce()
+        if (action === 'cancel-reopen') opening.cancel()
+        const destination = action === 'navigate' ? 'B' : 'A'
+        await r.open('one', destination).done
+        expect(send).toHaveBeenCalledTimes(2)
+        expect(send.mock.calls[1][0]).toMatchObject({ query: { payload: { conversation_id: destination, version: 0 } } })
+        callbacks.forEach(callback => callback())
+        await vi.advanceTimersByTimeAsync(29999)
+        expect(send).toHaveBeenCalledTimes(2)
+        expect(r.items.getState().snapshot('one', 'A')?.items ?? []).toEqual([])
+        expect(r.state.getState().complete.size).toBe(0)
+      } finally { r.dispose(); vi.useRealTimers() }
+  })
+
   it('publishes each affected conversation and settles sends once per bounded drain before controls', async () => {
     vi.useFakeTimers()
     const send = vi.fn(), r = createThreadRuntime({ send, read: async () => ({ status: 'missing' }),

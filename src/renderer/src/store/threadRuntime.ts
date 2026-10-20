@@ -312,6 +312,7 @@ export function createThreadRuntime(deps: {
     event(event: StampedDaemonEvent) {
       if (disposed || event.serverId === null) return
       if (deps.frame && (event.type === 'threadUpdate' || held.length > 0)) {
+        if (event.type === 'threadReply' || event.type === 'threadQueryFailed') query.observeTerminal(event)
         // Keep received attribution and FIFO ordering, including control boundaries. Receipt never
         // drains synchronously: each scheduled task has a finite application budget.
         let owner: { generation?: symbol } | undefined

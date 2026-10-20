@@ -48,6 +48,9 @@ On the complete route expansion uses items already held locally. Production sele
 visible tool expansion leases its body, while agent expansion leases only direct-child
 summaries, with separate launch-body demand and explicit cursor paging. Grouped-run
 expansion reveals headers only. Summary rows never become invented full messages.
+Active supplied agents keep full opacity on both delivery routes, including inside
+expanded tool runs; ordinary pending tools remain dimmed. See
+[agent emphasis](conversation-shell-timeline-render.md#saved-content-and-activity).
 Questions, approvals, actionable errors, delivery feedback, task status and
 current-session controls keep their independently owned availability. Composer
 reports use selected facts independently of local expansion; compact live task

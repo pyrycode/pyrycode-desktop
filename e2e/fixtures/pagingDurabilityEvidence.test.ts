@@ -78,6 +78,12 @@ it('observes exact owners and split acknowledgements without exposing content or
   expect(trace).toHaveLength(count)
   for (const value of ['host-secret', 'chat-secret', 'epoch-secret', 'persistence-secret', 'content-secret'])
     expect(JSON.stringify([trace, rendererTrace])).not.toContain(value)
+  const changed = { ...first, change: { ...first.change, metadata: { ...first.change.metadata, epoch: 'replacement-epoch-secret' } } }
+  observe('published', changed)
+  expect(rendererTrace.at(-1)).toMatchObject({ sameEpoch: false })
+  contents.send('pyry:daemon-event', { ...reply, reply: { ...reply.reply, payload: { ...reply.reply.payload, epoch: 'replacement-epoch-secret' } } })
+  await handler({}, changed)
+  expect(trace.filter((e: any) => e.stage === 'submitted').at(-1)).toMatchObject({ sameEpoch: false })
 })
 
 it.each([false, true])('retains a classified failure and committed prefix=%s without retrying a mutation', async prefix => {

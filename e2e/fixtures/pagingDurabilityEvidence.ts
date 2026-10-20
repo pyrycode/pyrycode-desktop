@@ -20,7 +20,7 @@ export async function installPagingDurabilityEvidence(
       const metadata = request.change?.metadata
       const p = request.change?.persistence
       if (p && !saves.has(p.id)) saves.set(p.id, saves.size + 1)
-      if (stage === 'published') epoch = metadata?.epoch
+      if (stage === 'published') epoch ??= metadata?.epoch
       observations.push({ stage, ms: Date.now(), sameEpoch: epoch !== undefined && epoch === metadata?.epoch,
         sameOwner: metadata?.hostId === owner.host && metadata?.conversationId === owner.chat,
         items: request.change?.items.length, ranges: request.change?.ranges?.length,
@@ -121,7 +121,7 @@ export async function installPagingDurabilityEvidence(
       contents.send = (channel, ...args) => {
         const event = args[0]
         if (event?.type === 'threadReply' && event.serverId === owner.host && event.conversationId === owner.chat) {
-          epoch = event.reply.payload.epoch
+          epoch ??= event.reply.payload.epoch
           record('received', { type: event.reply.type, final: event.reply.payload.final,
             sameOwner: event.reply.payload.conversation_id === owner.chat })
         }

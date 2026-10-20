@@ -57,3 +57,36 @@ Readiness fails the existing bounded Playwright assertions. No new application f
 The repair retains that focus intervention, settles focus geometry, transfers focus to the thread with pointer outside, and settles again. Trusted ArrowUp then proves actual upward movement (2416 → 2376). One exact park follows; the observer registered after React records a newer processed scroll at 1260, with 20 unchanged frame comparisons covering offset, content/viewport dimensions, focus and processing. Its pre-release snapshot remains immutable through the original assertions. Each setup phase is attached as `thumbnail-reader-setup`, including failed observations. All listeners are removed before release.
 
 The repaired controlled run passed 2/2 including native writer; the reader case retained both above/below growth oracles. An initial diagnostic looked for the authoritative identity on the inner message row and failed there; corrected observation uses the existing direct-child supplied wrapper. No product defect or product change was needed. No remote feature branch overlaps this spec. Written scope remains below 300 lines, with zero production files or exported abstractions.
+
+Additional source reads: `e2e/fixtures/scriptedThread.ts` → message publication supplies the authoritative row; `ThreadItemsView` and `MessageActions` in `ConversationScreen.tsx` → outer supplied wrapper and Copy focus reveal. Final main merge brought #1983's additive fake-daemon diagnostics, which were retained unchanged.
+
+## Validation evidence
+
+Linux x64/Xvfb, kernel `7.0.0-38-generic`, Node `25.8.0`, Electron `33.4.11`. Final normal build compiled clean `ecab62531156cbda4959d406e6d67257122f8f30`, containing main `3d890c0e7eae`. Subsequent commits add plan evidence only. `final-build-provenance.json` and `final-build.sha256` under `/tmp/builder-2183/` retain compilation identity and output hashes; hashes were checked again after browser acceptance. Spec SHA-256: `1b55e95b98a03df9eb91534ed0658220bc910485714758ffa194ce6502abb616`.
+
+| Check | Executed / passed / failed / skipped |
+| --- | --- |
+| Original setup + concurrent metadata focus, `control-before.json` | 2 / 1 / 1 / 0 |
+| Same control with positive echo barrier, `control-echo-ready.json` | 2 / 1 / 1 / 0 |
+| Repaired control, `control-repaired.json` | 2 / 2 / 0 / 0 |
+| Ten consecutive final invocations, `focused-1.json` through `focused-10.json` | 20 / 20 / 0 / 0 |
+| Complete scroll spec, `scroll-spec.json` | 23 / 23 / 0 / 0 |
+| Pre-verify affected unit file | 15 / 15 / 0 / 0 |
+
+All browser reports used four configured workers and one effective execution slot, normal projects and the native-writer dependency, zero retries and zero report-level errors. Each focused invocation executed the exact named reader case once plus the prerequisite once. No skip reasons exist because none skipped. All three thumbnail cases passed in the complete spec. All 30 fake-daemon setup attachments in the ten final invocations report first-attempt `opened`, with no setup failure/retry. The separate `control-echo-complete.json` diagnostic recorded 2 / 1 / 1 / 0 at the initially incorrect inner-row observation; it did not reach the park and supplies no causal proof.
+
+Focused/control command (each with a distinct run name and combined stdout/stderr saved as `<run>.log`):
+
+```sh
+PLAYWRIGHT_JSON_OUTPUT_NAME=/tmp/builder-2183/<run>.json npx playwright test e2e/thread-scroll-pin.spec.ts --grep 'a thumbnail resolving leaves a scrolled-up reader where they were, above them or below them' --retries=0 --reporter=list,json --output=/tmp/builder-2183/<run>-results
+```
+
+The complete spec used the same command without `--grep`, with run name `scroll-spec`. No worker override, workload reduction, sleep, retry, skip, deadline relaxation or repeated park was introduced. `thumbnail-reader-setup` attachments retain focus growth and the final 40 samples of each phase; failed controls retain their expected/actual offsets and contexts. Controls used the original production build from plan commit `7b99661d` (dirty only for test instrumentation), whose provenance/hashes and exact controlled spec copies are retained separately.
+
+`pre-verify.log` records all five checks green after final main merge, including the issue label read, typecheck and `threadScrollPosition.test.ts` (15 passing cases). `unit-final/` retains its structured unit evidence. `build-final.log` and `check-docs.log` passed. Native preparation used `npm run rebuild:electron` after the Node unit gate. No fresh provider/daemon live acceptance is required or claimed; macOS is outside this Linux ticket's scope.
+
+Report SHA-256: original control `ebb0a7cf7211fb5282e5454244fb218f1b0a874c93a7c596029e7ea9c88960b8`; echo-ready control `255b7b646142368a5eae300d53d9a9546fbb490feda0023a37ef4f9ea4886a28`; repaired control `e6c8ef6fe17ef7f0ac09d08f13fbd5c514d90376021a85332a35baf20927e57d`; full spec `bffb66781cef93dd1eaafac4627452fa4f78311c82fedc1c728d67e99193f777`. Counted per-report summary with all ten focused hashes and phase endpoints: `/tmp/builder-2183/summary.json`, SHA-256 `4efdbca4c86331c74619c0070a5b06c6f78c7e30a32e85509c0d65bdb113b8ea`. `/tmp/builder-2183/SHA256SUMS` inventories reports, logs, controlled source and build identities.
+
+Historical evidence remains separate: #2173's original 529 executed / 528 passed / 1 failed / 4 skipped report at `dd069c67` had SHA-256 `03c6cf0b3d1c08b516529d00d616e3f64a2feda0a1bef33349c9ec848221535a`; unchanged focused comparison passed 2/2, and full comparison passed this case while another failure belonged to #2184. Their source-computer paths and hashes remain in the issue comments. Retrieved builder bundle `396b1c9d43491efb01e9a8f866bd3e42c0b6994eebe2c3e88520356fe93ca6ff` under `historical-2173/` verified all three checksums; it contains the original agent log/metadata, not standalone reports. Stage lookup returned no records. #2158 observations are not attributed to this controlled schedule.
+
+Handoff: verifier/dispatcher owns the complete configured `npm run e2e -- --reporter=list,json` application suite, including captured clients, and must identify the named case's outcome. That full application gate has not been run by this builder.

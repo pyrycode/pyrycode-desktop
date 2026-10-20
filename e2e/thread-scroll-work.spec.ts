@@ -93,14 +93,23 @@ test('scroll lookup and same-row growth stay bounded on short and long threads',
       if (type !== 'send_message') return []
       return Array.from({ length: size }, (_, i) => [delta(`row-${i}`, 0, `History row ${i}`), end(`row-${i}`)]).flat()
     } }, { onLaunched: async app => instrument(await app.firstWindow()) })
+    const feedStarted = Date.now()
     await page.locator('.composer__input').fill('seed')
     await page.getByRole('button', { name: 'Send', exact: true }).click({ timeout: 60_000 })
-    await expect(page.locator('[data-thread-role="assistant"]').last()).toContainText(`History row ${size - 1}`, { timeout: 15_000 })
+    const assistants = page.locator('[data-thread-role="assistant"]')
+    // The intact 400-row burst can commit after 15 seconds. Observe all ordered, completed
+    // history before adding Growing; initial readiness is outside measured hook work.
+    await expect(assistants.locator('.bubble__markdown')).toHaveText(
+      Array.from({ length: size }, (_, i) => `History row ${i}`), { timeout: 60_000 })
+    await expect(assistants.locator('.bubble__cursor')).toHaveCount(0)
+    const rendered = await assistants.locator('.bubble__markdown').allTextContents()
+    await test.info().attach(`history-readiness-${size}`, { body: JSON.stringify({
+      elapsedMs: Date.now() - feedStarted, count: rendered.length, tail: rendered.at(-1)
+    }), contentType: 'application/json' })
     const growingStarted = Date.now()
     daemon.pushFrame(delta('growing', 0, 'Growing row\n'))
     // A pushed row can arrive after the default assertion window on the long thread. Establish
-    // committed input before measuring hook work, with the same allowance as the initial feed.
-    const assistants = page.locator('[data-thread-role="assistant"]')
+    // committed input before measuring hook work, with a bounded local allowance.
     await expect(assistants.last()).toContainText('Growing row', { timeout: 15_000 })
     await expect(assistants).toHaveCount(size + 1)
     await test.info().attach(`growing-readiness-${size}`, { body: JSON.stringify({

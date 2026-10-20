@@ -2,15 +2,14 @@ import type { ElectronApplication, Page } from '@playwright/test'
 import { test, expect, SEEDED_ROW, SECOND_SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
 import { installHeldThreadRead } from './fixtures/heldThreadRead'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
-import { DAEMON_EVENT_CHANNEL, type StampedDaemonEvent } from '../src/shared/ipc/events'
+import type { StampedDaemonEvent } from '../src/shared/ipc/events'
+import { confirmConnectionPillStatus } from './fixtures/connectionPillStatus'
 import { CONNECTION_BANNER_COPY, DAEMON_UPDATE_REQUIRED_COPY } from '../src/renderer/src/screens/conversation/composerSend'
 
 // The existing main/preload boundary supplies typed lifecycle events. Real recovery dispatch is
 // independently observed in unpair-repair; these controlled events make intermediate states stable.
-async function status(app: ElectronApplication, event: StampedDaemonEvent) {
-  await app.evaluate(({ BrowserWindow }, { channel, event }) => {
-    BrowserWindow.getAllWindows()[0].webContents.send(channel, event)
-  }, { channel: DAEMON_EVENT_CHANNEL, event })
+async function status(app: ElectronApplication, page: Page, event: StampedDaemonEvent) {
+  await confirmConnectionPillStatus(app, page, event)
 }
 
 const connected = (serverId: string): StampedDaemonEvent => ({ type: 'connected', serverId,
@@ -51,18 +50,18 @@ for (const mode of ['empty', 'hidden', 'saved']) test(`connection pills clear an
     await expect.poll(() => page.evaluate(() => innerWidth)).toBe(width)
     const baseline = await geometry(page)
     for (const type of ['disconnected', 'connecting'] as const) {
-      await status(app, { type, serverId })
+      await status(app, page, { type, serverId })
       await expect(feedback).toContainText(CONNECTION_BANNER_COPY)
       await expect(feedback).toHaveCount(1)
       await expect(feedback.getByText('Offline. Showing saved messages.', { exact: true })).toHaveCount(saved ? 1 : 0)
       await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled()
       expect(await geometry(page)).toEqual(baseline)
     }
-    await status(app, { type: 'failed', serverId, cause: 'daemon',
+    await status(app, page, { type: 'failed', serverId, cause: 'daemon',
       error: { code: 'update-required', message: 'PRIVATE', retryable: true } })
     await expect(feedback).toContainText(DAEMON_UPDATE_REQUIRED_COPY)
     await expect(feedback).not.toContainText('Showing saved messages')
-    await status(app, { type: 'failed', serverId, error: { code: 'transport', message: 'PRIVATE', retryable: true } })
+    await status(app, page, { type: 'failed', serverId, error: { code: 'transport', message: 'PRIVATE', retryable: true } })
     await expect(feedback).toContainText(CONNECTION_BANNER_COPY)
     await expect(page.locator('.conversation__banner')).toHaveCount(0)
     await expect(page.locator('.composer-status__error')).toHaveCount(0)
@@ -93,7 +92,7 @@ for (const mode of ['empty', 'hidden', 'saved']) test(`connection pills clear an
       await page.mouse.wheel(0, -150)
       await expect.poll(() => thread.evaluate(el => el.scrollTop)).toBeLessThan(before)
     }
-    await status(app, connected(serverId))
+    await status(app, page, connected(serverId))
     await expect(feedback).toHaveCount(0)
     await expect(page.locator('.top-overlay-pill--default')).toBeVisible()
     await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
@@ -107,14 +106,14 @@ test('empty saved read loading is independent of connection and settles silently
   const feedback = page.locator('.conversation__top-overlay [role="status"]')
   await expect(feedback).toContainText('Loading saved messages…')
   await expect.poll(() => app.evaluate(() => (globalThis as any).heldThreadReads)).toBe(1)
-  await status(app, { type: 'disconnected', serverId: servers[0].serverId })
+  await status(app, page, { type: 'disconnected', serverId: servers[0].serverId })
   await expect(feedback).toContainText(CONNECTION_BANNER_COPY)
   await expect(feedback).not.toContainText('Showing saved messages')
-  await status(app, connected(servers[0].serverId))
+  await status(app, page, connected(servers[0].serverId))
   await expect(feedback).toHaveText(' Loading saved messages…')
   await app.evaluate(({ ipcMain }) => ipcMain.emit('test:release-thread-read'))
   await expect(feedback).toHaveCount(0)
-  await status(app, { type: 'connecting', serverId: servers[0].serverId })
+  await status(app, page, { type: 'connecting', serverId: servers[0].serverId })
   await expect(feedback).toContainText(CONNECTION_BANNER_COPY)
   await expect(feedback).not.toContainText('Showing saved messages')
 })

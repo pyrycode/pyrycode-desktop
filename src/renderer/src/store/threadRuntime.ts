@@ -5,7 +5,7 @@ import type { RendererCommand } from '@shared/ipc/commands'
 import type { StampedDaemonEvent } from '@shared/ipc/events'
 import type { RendererDiagnosticEvent } from '@shared/ipc/diagnostics'
 import type { ConversationSummary } from '@shared/wire/types'
-import { createThreadItemStore } from './threadItemStore'
+import { createThreadItemStore, type ThreadSnapshot } from './threadItemStore'
 import { createThreadSendStore } from './threadSendStore'
 import { createThreadLiveState, selectThreadReadings, threadLiveFamily } from './threadLiveState'
 import { createThreadQueryCoordinator, type ThreadQueryState } from './threadQueryCoordinator'
@@ -16,6 +16,8 @@ import { subscribeChatHistoryRemoval } from './chatHistoryRemoval'
 import { replySuggestionStore } from './replySuggestionStore'
 import { createThreadTaskStops } from '../screens/conversation/threadTaskPresentation'
 import { createThreadRefusalActions, threadComposerReports } from '../screens/conversation/threadComposerReports'
+import { createThreadBodies } from './threadBodies'
+import { createThreadCompact } from './threadCompact'
 
 const key = (host: string, chat: string) => JSON.stringify([host, chat])
 const MAX_HELD_APPENDS = 256
@@ -48,12 +50,14 @@ export function createThreadRuntime(deps: {
     localQueries: ReadonlyMap<string, ThreadQueryState>
     complete: ReadonlyMap<string, { epoch: string; version: number }>
     restoring: ReadonlySet<string>
+    selection?: { host: string; chat: string; projection: 'compact-v1' | 'complete'; generation: symbol }
   }>(() => ({ liveRevision: 0, linked: new Set(), saved: new Set(), queries: new Map(), localQueries: new Map(), complete: new Map(), restoring: new Set() }))
   const lives = new Map<string, ReturnType<typeof createThreadLiveState>>()
   // Unpaired hosts read one inert, unregistered store until a new connection, so rows still listed
   // after removal (badge recount, projection) cannot recreate departed live state.
   const departed = new Set<string>()
   let inert: ReturnType<typeof createThreadLiveState> | undefined
+  const compactHosts = new Map<string, boolean>()
   const isLinked = (host: string): boolean => state.getState().linked.has(host)
   const setLinked = (host: string, linked: boolean): void => {
     if (isLinked(host) === linked) return
@@ -62,7 +66,23 @@ export function createThreadRuntime(deps: {
   let disposed = false
   let held: StampedDaemonEvent[] = [], frameHandle: number | undefined
   let selected: { host: string; chat: string; generation: symbol; cancel?: () => void; configurationRefreshSession?: string;
+    projection?: 'compact-v1'; automatic?: boolean; initialize?: boolean;
     local?: { generation: symbol; cancel: () => void } } | undefined
+  const compact = createThreadCompact({ send: deps.send, log: deps.log,
+    failure: event => handle(event),
+    detailEvent: event => bodies.event(event), admitDispatch: command => bodies.admitDispatch(command),
+    invalidate: (host, chat, row) => bodies.invalidate(host, chat, row), changed: () => bodies.reconcile() })
+  const bodies = createThreadBodies({ send: compact.send, log: deps.log, scope(host, chat) {
+    if (selected?.projection && selected.host === host && selected.chat === chat) {
+      const s = compact.snapshot(host, chat)
+      return s ? { epoch: s.epoch, generation: s.generation, selection: selected.generation, selected: true,
+        minimumVersion: s.rows.reduce((version, row) => typeof row.subtree_version === 'number' ? Math.max(version, row.subtree_version) : version, s.consumed),
+        revision: (id: number) => s.rows.find(row => row.id === id)?.rev } : undefined
+    }
+    const slice = items.getState().hosts.get(host)?.get(chat)
+    return slice ? { epoch: slice.snapshot.epoch, generation: slice.generation, selection: selected?.generation,
+      selected: selected?.host === host && selected.chat === chat } : undefined
+  } })
   function localState(host: string, chat: string, value: ThreadQueryState): void {
     state.setState(s => ({ localQueries: new Map(s.localQueries).set(key(host, chat), value) }))
   }
@@ -74,6 +94,7 @@ export function createThreadRuntime(deps: {
   function demandLocal(type: 'older' | 'retry', host: string): boolean {
     const target = selected
     if (disposed || !target || target.host !== host) return false
+    if (target.projection) return compact.query(type, host)
     const slice = items.getState().hosts.get(host)?.get(target.chat)
     const status = state.getState().localQueries.get(key(host, target.chat))
     if (target.local || state.getState().restoring.has(key(host, target.chat))) return false
@@ -125,7 +146,7 @@ export function createThreadRuntime(deps: {
     lives.set(id, store)
     return store
   }
-  const query = createThreadQueryCoordinator({ store: items, sendCommand: deps.send,
+  const query = createThreadQueryCoordinator({ store: items, sendCommand: compact.send,
     requestId: () => crypto.randomUUID(), log: { event: deps.log },
     onState(host, chat, value) {
       state.setState(s => ({ queries: new Map(s.queries).set(key(host, chat), value) }))
@@ -135,8 +156,10 @@ export function createThreadRuntime(deps: {
     } })
   function sync(): void {
     if (!selected) return
+    if (selected.projection) return
     const { host, chat } = selected
     query.input({ type: 'sync', serverId: host, conversationId: chat, connected: isLinked(host),
+      initialize: selected.initialize,
       restorePending: state.getState().restoring.has(key(host, chat)) })
   }
   async function restore(target: NonNullable<typeof selected>): Promise<void> {
@@ -159,24 +182,43 @@ export function createThreadRuntime(deps: {
     sync()
   }
   const offItems = items.subscribe(() => {
+    bodies.reconcile()
     if (selected?.local && items.getState().hosts.get(selected.host)?.get(selected.chat)?.generation !== selected.local.generation)
       cancelLocal()
     for (const [host, chats] of items.getState().hosts) for (const chat of chats.keys()) {
       const snapshot = items.getState().snapshot(host, chat)
       if (!snapshot || !isThread(host, chat)) continue
+      if (selected?.projection && selected.host === host && selected.chat === chat) continue
       sends.getState().settle(snapshot); taskStops.getState().settle(snapshot)
       observeReports(host, chat)
       if (conversationReadRouteStore.getState().epochFor(host, chat) !== snapshot.epoch)
         conversationReadRouteStore.getState().select(host, chat, snapshot.epoch)
     }
   })
+  // Display facts carry zero complete-history evidence and never enter the canonical writer.
+  function presentation(host: string, chat: string): ThreadSnapshot | null {
+    if (!selected?.projection || selected.host !== host || selected.chat !== chat) return items.getState().snapshot(host, chat)
+    const s = compact.snapshot(host, chat)
+    return s ? { hostId: host, conversationId: chat, epoch: s.epoch, items: s.rows.map(row => ({ ...row })),
+      version: 0, checkpoint: 0, ranges: [], repair: null, olderAvailable: s.older } : null
+  }
+  const offCompact = compact.state.subscribe(() => {
+    if (!selected?.projection) return
+    const { host, chat } = selected, snapshot = presentation(host, chat)
+    if (!snapshot) return
+    // The mounted compact presentation settles Stops with its independently admitted live identities.
+    sends.getState().settle(snapshot)
+    observeReports(host, chat)
+  })
   function observeReports(host: string, chat: string): void {
-    const snapshot = items.getState().snapshot(host, chat)
+    const snapshot = presentation(host, chat)
     const session = lives.get(key(host, chat))?.getState().binding?.sessionId ?? null
     const offer = snapshot && threadComposerReports(snapshot, session).refusal
     if (offer) refusals.getState().observe(offer)
   }
   function remove(host: string, chat: string): void {
+    bodies.retire(host, chat, true)
+    compact.retire(host, chat, true)
     if (selected?.host === host && selected.chat === chat) { cancelLocal(); selected.cancel?.(); selected = undefined; query.cancelHost(host) }
     items.getState().deleteConversation(host, chat); sends.getState().deleteConversation(host, chat); refusals.getState().remove(host, chat); taskStops.getState().remove(host, chat)
     lives.get(key(host, chat))?.getState().dispatch({ type: 'dispose' }); lives.delete(key(host, chat))
@@ -190,6 +232,9 @@ export function createThreadRuntime(deps: {
     })
   }
   function removeHost(host: string): void {
+    compactHosts.delete(host)
+    bodies.retire(host, undefined, true)
+    compact.retire(host, undefined, true)
     if (selected?.host === host) { cancelLocal(); selected.cancel?.(); selected = undefined }
     query.cancelHost(host)
     departed.add(host)
@@ -211,7 +256,10 @@ export function createThreadRuntime(deps: {
   }
   const offRemoval = subscribeChatHistoryRemoval(host => removed => { if (removed) removeHost(host) })
   return {
-    items, sends, refusals, taskStops, state, live, isThread,
+    items, sends, refusals, taskStops, state, live, isThread, bodies, compact, presentation,
+    children: { demand(request: Omit<Parameters<typeof bodies.demand>[0], 'kind'>, listener?: Parameters<typeof bodies.demand>[1]) {
+      return bodies.demand({ ...request, kind: 'children' }, listener)
+    } },
     acceptsLifecycle(event: StampedDaemonEvent): boolean {
       if (this.acceptsSession(event)) return true
       if (!selected || event.serverId !== selected.host) return false
@@ -236,14 +284,23 @@ export function createThreadRuntime(deps: {
       if (isLinked(host)) live(host, row.id).getState().dispatch({ type: 'summary', serverId: host, summary: row })
       observeReports(host, row.id)
     },
-    open(host: string, chat: string) {
+    open(host: string, chat: string, options?: { projection: 'compact-v1' | 'auto' }) {
+      if (selected) bodies.retire(selected.host, selected.chat)
+      compact.close()
       cancelLocal()
       selected?.cancel?.()
       if (selected) query.input({ type: 'sync', serverId: selected.host, conversationId: null, connected: isLinked(selected.host) })
-      const target: NonNullable<typeof selected> = { host, chat, generation: Symbol() }
+      const automatic = options?.projection === 'auto'
+      const projection = options?.projection === 'compact-v1' || automatic && compactHosts.get(host) === true ? 'compact-v1' : undefined
+      const target: NonNullable<typeof selected> = { host, chat, generation: Symbol(), automatic, projection }
       selected = target
-      return { done: restore(target), cancel() {
+      state.setState({ selection: { host, chat, projection: projection ?? 'complete', generation: target.generation } })
+      if (target.projection) compact.open(host, chat)
+      else target.initialize = compact.complete(host, chat)
+      return { done: target.projection ? Promise.resolve() : restore(target), cancel() {
         if (selected !== target) return
+        bodies.retire(host, chat)
+        compact.close()
         cancelLocal()
         target.cancel?.(); selected = undefined
         query.input({ type: 'sync', serverId: host, conversationId: null, connected: isLinked(host) })
@@ -266,6 +323,8 @@ export function createThreadRuntime(deps: {
       handle(event)
     },
     suspend() {
+      bodies.suspend()
+      compact.suspend()
       flush()
       cancelLocal()
       selected?.cancel?.(); selected = undefined
@@ -277,11 +336,13 @@ export function createThreadRuntime(deps: {
       }
     },
     dispose() {
+      bodies.dispose()
+      compact.dispose()
       cancelLocal()
       disposed = true
       if (frameHandle !== undefined) deps.frame?.cancel(frameHandle)
       frameHandle = undefined; held = []
-      selected?.cancel?.(); selected = undefined; query.dispose(); offItems(); offRemoval()
+      selected?.cancel?.(); selected = undefined; query.dispose(); offItems(); offCompact(); offRemoval()
       for (const [host, chats] of items.getState().hosts) for (const chat of chats.keys()) conversationReadRouteStore.getState().select(host, chat, null)
       for (const store of lives.values()) store.getState().dispatch({ type: 'dispose' })
       lives.clear(); departed.clear(); state.setState({ linked: new Set(), localQueries: new Map() }); items.getState().clearAll(); sends.getState().dispose()
@@ -294,6 +355,29 @@ export function createThreadRuntime(deps: {
   }
   function handle(event: StampedDaemonEvent): void {
     if (disposed || event.serverId === null) return
+    if (event.type === 'connected') {
+      // Install the accepted connection before an automatic view change can issue its first query.
+      compact.event(event)
+      const supported = event.ack.server_id === event.serverId && ['interactive', 'thread', 'thread_expansion', 'thread_compact']
+        .every(capability => event.ack.capabilities.includes(capability))
+      compactHosts.set(event.serverId, supported)
+      const target = selected
+      if (target?.automatic && target.host === event.serverId && Boolean(target.projection) !== supported) {
+        bodies.retire(target.host, target.chat); compact.close(); cancelLocal(); target.cancel?.()
+        query.cancelHost(target.host)
+        target.projection = supported ? 'compact-v1' : undefined
+        target.generation = Symbol()
+        state.setState({ selection: { host: target.host, chat: target.chat, projection: target.projection ?? 'complete', generation: target.generation } })
+        if (supported) compact.open(target.host, target.chat)
+        else {
+          target.initialize = compact.complete(target.host, target.chat)
+          // Recovery owns the same cancellable selection; restore cannot outlive it.
+          void restore(target)
+        }
+      }
+    }
+    if (event.type !== 'connected' && compact.event(event)) return
+    if (bodies.event(event)) return
     refusals.getState().event(event); taskStops.getState().event(event)
     const host = event.serverId
     if (event.type === 'connected') {

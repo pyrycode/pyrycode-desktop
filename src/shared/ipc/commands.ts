@@ -30,6 +30,7 @@ import type {
   ChangeWorkspacePayload,
   SetSystemPromptPayload,
   SetConversationMutedPayload,
+  SetConversationPinnedPayload,
   CreateWorkspaceFolderPayload,
   RenameWorkspacePayload,
   SetSessionSettingsPayload,
@@ -338,6 +339,7 @@ export const COMMAND_CHANNEL = 'pyry:command' as const
  * the boundary.
  */
 export type RendererCommand = (
+  | { type: 'cancelThreadQuery'; serverId: string; requestId: string }
   | { type: 'queryThread'; serverId: string; requestId: string; query: ThreadQuery }
   | { type: 'requestHostSystemPrompt'; serverId: string; requestId: string }
   | { type: 'setHostSystemPrompt'; serverId: string; requestId: string; payload: SetHostSystemPromptPayload }
@@ -368,6 +370,7 @@ export type RendererCommand = (
   // Routed by conversation (#1595). The client-only attemptId is required and correlates exactly one
   // content-free conversationMuteResult; it never reaches the wire.
   | { type: 'setConversationMuted'; payload: SetConversationMutedPayload; attemptId: string }
+  | { type: 'setConversationPinned'; serverId: string; payload: SetConversationPinnedPayload }
   | { type: 'markConversationRead'; serverId: string; payload: { conversation_id: string; up_to: number } }
   | { type: 'createWorkspaceFolder'; payload: CreateWorkspaceFolderPayload; serverId?: string }
   | { type: 'renameWorkspace'; payload: RenameWorkspacePayload; serverId?: string; attemptId?: string }
@@ -512,6 +515,9 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
   if ('payload' in value && typeof value.payload === 'object' && value.payload !== null &&
       ('conversation_id' in value.payload || 'session_id' in value.payload) && !hasValidThreadHost(value)) return false
   switch (value.type) {
+    case 'cancelThreadQuery':
+      return 'serverId' in value && typeof value.serverId === 'string' && value.serverId.length > 0 && value.serverId.length <= 1024 &&
+        'requestId' in value && typeof value.requestId === 'string' && value.requestId.length > 0 && value.requestId.length <= 1024
     case 'queryThread': {
       const text = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 1024
       const number = (v: unknown): boolean => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
@@ -520,7 +526,29 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       const q = value.query
       if (!('type' in q) || !('payload' in q) || typeof q.payload !== 'object' || q.payload === null || Array.isArray(q.payload)) return false
       const p = q.payload
-      return 'conversation_id' in p && text(p.conversation_id) && (!('limit' in p) || number(p.limit)) &&
+      if (q.type === 'thread_read_children') {
+        if (!('conversation_id' in p) || !text(p.conversation_id) || !('epoch' in p) || !text(p.epoch) ||
+            !('item_id' in p) || typeof p.item_id !== 'number' || !number(p.item_id) || p.item_id === 0 ||
+            !('expected_rev' in p) || typeof p.expected_rev !== 'number' || !number(p.expected_rev) || p.expected_rev === 0 ||
+            ('limit' in p && !number(p.limit)) ||
+            Object.keys(p).some(k => !['conversation_id', 'epoch', 'item_id', 'expected_rev', 'limit', 'cursor'].includes(k))) return false
+        if (!('cursor' in p)) return true
+        const c = p.cursor
+        return typeof c === 'object' && c !== null && !Array.isArray(c) &&
+          'conversation_id' in c && c.conversation_id === p.conversation_id && 'epoch' in c && c.epoch === p.epoch &&
+          'item_id' in c && c.item_id === p.item_id && 'rev' in c && c.rev === p.expected_rev &&
+          'version' in c && number(c.version) && 'order' in c && number(c.order) &&
+          'id' in c && typeof c.id === 'number' && number(c.id) && c.id > 0 && Object.keys(c).length === 7
+      }
+      if (q.type === 'thread_read_tool_body') return 'conversation_id' in p && text(p.conversation_id) &&
+        'epoch' in p && text(p.epoch) && 'item_id' in p && number(p.item_id) && typeof p.item_id === 'number' && p.item_id > 0 &&
+        'expected_rev' in p && number(p.expected_rev) && typeof p.expected_rev === 'number' && p.expected_rev > 0 &&
+        Object.keys(p).every(k => ['conversation_id', 'epoch', 'item_id', 'expected_rev'].includes(k))
+      return (!('projection' in p) || p.projection === 'compact-v1') &&
+        (!('projection' in p) || q.type !== 'thread_page' || ('epoch' in p && text(p.epoch))) &&
+        Object.keys(p).every(k => (q.type === 'thread_catch_up' ? ['conversation_id', 'epoch', 'version', 'limit', 'projection'] :
+          ['conversation_id', 'before_order', 'limit', 'projection', 'epoch']).includes(k)) &&
+        'conversation_id' in p && text(p.conversation_id) && (!('limit' in p) || number(p.limit)) &&
         (q.type === 'thread_catch_up' ? 'epoch' in p && typeof p.epoch === 'string' && p.epoch.length <= 1024 && 'version' in p && number(p.version) :
           q.type === 'thread_page' && 'before_order' in p && number(p.before_order))
     }
@@ -612,6 +640,10 @@ export function isRendererCommand(value: unknown): value is RendererCommand {
       return 'payload' in value && isSetConversationMutedPayload(value.payload) &&
         'attemptId' in value && typeof value.attemptId === 'string' &&
         value.attemptId.length > 0 && value.attemptId.length <= 128
+    case 'setConversationPinned':
+      return 'serverId' in value && typeof value.serverId === 'string' &&
+        value.serverId.length > 0 && value.serverId.length <= 1024 &&
+        'payload' in value && isSetConversationPinnedPayload(value.payload)
     case 'createWorkspaceFolder':
       return (
         'payload' in value && isCreateWorkspaceFolderPayload(value.payload) && hasValidServerId(value)
@@ -1173,6 +1205,14 @@ function isSetConversationMutedPayload(value: unknown): value is SetConversation
   if (keys.length !== 2 || !('conversation_id' in value) || !('muted' in value)) return false
   if (typeof value.conversation_id !== 'string' || value.conversation_id.length === 0) return false
   return value.muted === true || value.muted === false
+}
+
+function isSetConversationPinnedPayload(value: unknown): value is SetConversationPinnedPayload {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const keys = Reflect.ownKeys(value)
+  return keys.length === 2 && keys.includes('conversation_id') && keys.includes('pinned') &&
+    'conversation_id' in value && typeof value.conversation_id === 'string' && value.conversation_id.length > 0 &&
+    'pinned' in value && (value.pinned === true || value.pinned === false)
 }
 
 /** The untrusted renderer→main boundary guard for the newSession payload (#1217). The

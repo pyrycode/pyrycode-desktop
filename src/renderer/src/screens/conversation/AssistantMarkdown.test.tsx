@@ -30,6 +30,66 @@ const lines = (...src: string[]): string => src.join('\n')
  */
 const count = (markup: string, pattern: RegExp): number => [...markup.matchAll(pattern)].length
 
+describe.each([
+  ['default', {}],
+  ['workspace navigation', { onOpenMarkdownPath: () => {} }],
+  ['workspace and hosted navigation', { onOpenMarkdownPath: () => {}, onOpenHostedApp: () => {} }]
+] as const)('whole inline-code URL links with %s', (_name, navigation) => {
+  const renderCode = (text: string): string =>
+    renderToStaticMarkup(<AssistantMarkdown text={text} {...navigation} />)
+
+  it.each([
+    ['obsidian://open?vault=Second%20Brain&file=Plan', 'obsidian://open?vault=Second%20Brain&amp;file=Plan'],
+    ['http://example.com', 'http://example.com'],
+    ['HTTPS://Example.com/a?x=1&y=2', 'HTTPS://Example.com/a?x=1&amp;y=2'],
+    ['https://example.com/日本?q="<note>"&x=1', 'https://example.com/日本?q=&quot;&lt;note&gt;&quot;&amp;x=1']
+  ])('links %s while retaining parsed code padding', (url, escaped) => {
+    for (const [padding, retained] of [['', ''], [' ', ''], ['  ', ' ']]) {
+      expect(renderCode('`' + padding + url + padding + '`')).toBe(
+        `<p><a href="${escaped}" target="_blank" rel="noreferrer"><code>${retained}${escaped}${retained}</code></a></p>`
+      )
+    }
+  })
+
+  it.each([
+    'https://example.com plus words', 'https://one.example https://two.example',
+    'https://example.com\twords', 'https://example.com\nwords',
+    'javascript:alert(1)', 'file:///etc/passwd', 'mailto:a@example.com',
+    'obsidian://new?vault=v&file=n', 'obsidian://append?vault=v&file=n',
+    'obsidian://open?vault=v&file=n&append=text', 'obsidian://open?file=x.hta',
+    'pyrycode://hosts/11111111-1111-4111-8111-111111111111/apps/22222222-2222-4222-8222-222222222222',
+    'notes/Plan.md', 'const value = 1', 'https:example.com', 'data:text/html,hello'
+  ])('keeps nonqualifying code inert: %j', value => {
+    const label = value.replace(/\n/g, ' ').replace(/&/g, '&amp;')
+    expect(renderCode('`' + value + '`')).toBe(`<p><code>${label}</code></p>`)
+  })
+
+  it.each(['inline', 'reference', 'collapsed', 'shortcut'])('never nests a link inside an existing %s link', style => {
+    for (const emphasized of [false, true]) {
+      const code = '`https://inner.example`'
+      const label = emphasized ? `*${code}*` : code
+      const expected = emphasized ? '<em><code>https://inner.example</code></em>' : '<code>https://inner.example</code>'
+      for (const outer of ['https://outer.example', 'javascript:alert(1)']) {
+        const source = style === 'inline' ? `[${label}](${outer})`
+          : style === 'reference' ? `[${label}][ref]\n\n[ref]: ${outer}`
+            : `[${label}]${style === 'collapsed' ? '[]' : ''}\n\n[${label}]: ${outer}`
+        const markup = renderCode(source)
+        expect(markup).toBe(outer.startsWith('https:')
+          ? `<p><a href="${outer}" target="_blank" rel="noreferrer">${expected}</a></p>`
+          : `<p>${expected}</p>`)
+      }
+    }
+  })
+
+  it.each(['```\nhttps://example.com\n```', '```txt\nhttps://example.com\n```', '    https://example.com'])
+  ('leaves URL-only code blocks unchanged: %j', source => {
+    const markup = renderCode(source)
+    expect(markup).toContain('<pre class="code-block__body"><code')
+    expect(markup).toContain('https://example.com\n</code></pre>')
+    expect(markup).not.toMatch(/<a\b|href=|markdown-link/)
+  })
+})
+
 describe('AssistantMarkdown', () => {
   it('adds a native copy button to each code block, but not inline code', () => {
     const markup = render(lines(

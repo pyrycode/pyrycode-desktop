@@ -3,7 +3,7 @@
 Split out of [Channel List — the row's desktop geometry](channel-list-desktop-row-geometry.md), the map
 page for this row's geometry history, once that page grew past the doc-guard's 50000-byte cap
 (`npm run check:docs`). Read the map page first for the surrounding context. This page is the shared home
-for `.channel-list__control-name`, worn by all eight sidebar controls that carry it: the row's own
+for `.channel-list__control-name`, shared by sidebar controls including the row's own
 Rename/Save-as-channel pair (#1172, this ticket), the Chats tree's own Edit-chat pen
 (`.channel-list__chat-edit`, #1441), the workspace row's plus (#1181), the host row's pen and
 plus (#1190), and the section header's plus (#1304) — see
@@ -12,9 +12,11 @@ plus (#1190), and the section header's plus (#1304) — see
 [Channel List — the section header's pair-new-host control](channel-list-section-header-pair-control.md)
 for those controls' own geometry.
 
-Since [#1171](channel-list-row-hover-control.md) each trailing control is a bare 12px glyph, invisible until the row's hover reveals it. This
-names it: hovering (or keyboard-focusing) **the control itself, never the row** shows a Pill (Figma
-`347:6617`) reading `Rename` or `Save as channel`, restated as `.channel-list__control-name` in this file
+The edit/save controls use bare 12px glyphs revealed on row hover or keyboard focus;
+[pin/unpin](channel-list.md#pin-and-unpin-actions) stays visible at rest. Hovering or keyboard-focusing
+**the enabled control itself, never the row** shows a Pill (Figma `347:6617`) with its accessible
+action name, such as `Edit channel`, `Save as channel` or `Pin channel`. This is restated as
+`.channel-list__control-name` in this file
 rather than lifted from [`.composer__attachment-name`](composer-attach-name-pill.md) (#1265, shipped
 first). Two reasons, not one: verbatim duplication for these two controls is already this file's shipped
 idiom (`.channel-list__rename` restates `.channel-list__save` declaration for declaration), and a BEM lift
@@ -159,6 +161,17 @@ precedes the pen in DOM order since [#1441](channel-list-row-hover-control.md#14
 It parks at `dx: 12` rather than the 4px its siblings use: the pen's and the chevron's boxes overlap by
 8px, so a point in the pen's own left 8px would resolve to the pen only by sibling order, not by being
 clear of the other control.
+
+## Channel pin pill verification
+
+Pin/Unpin uses the same pointer/focus placement and escaped client-owned label, while disabled
+controls reveal no pointer pill. A Channels row now has two pills, so tests must scope each lookup
+to its pin or edit button: `pills.first()` silently selects the new pin pill when checking Edit.
+The mounted name-pill spec counts both controls, reads pin text/placement on hover and focus,
+and walks **open → pin → edit** with Tab while retaining edit reveal, clipping and dialog checks.
+Changing only the pill count would leave the old one-Tab-to-edit assumption broken. Pin and pen
+have adjacent 28×24px hit areas; the overlapping Chats chevron/pen geometry above remains specific
+to Chats. See [pin-action evidence](channel-list.md#pin-action-verification).
 
 ## Host Edit pill verification
 

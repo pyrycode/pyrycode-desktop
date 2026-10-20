@@ -65,19 +65,11 @@ describe.skipIf(process.platform !== 'linux' || !xvfbOnPath())('startRunDisplay'
     for (const { display } of [a, b]) expect(await listening(display)).toBe(false)
   })
 
-  it('global setup points the run at its own display and its teardown stops it', async () => {
+  it('global setup validates configuration without acquiring a display shared by every worker', async () => {
     process.env.DISPLAY = ':99'
     delete process.env[RUN_DISPLAY_ENV_FLAG]
-    const teardown = await globalSetup()
-    const display = process.env.DISPLAY
-    try {
-      expect(teardown).toBeTypeOf('function')
-      expect(display).not.toBe(':99')
-      expect(await listening(display!)).toBe(true)
-    } finally {
-      await teardown?.()
-    }
-    expect(await listening(display!)).toBe(false)
+    expect(await globalSetup()).toBeUndefined()
+    expect(process.env.DISPLAY).toBe(':99')
   })
 
   it('global setup changes nothing under the opt-out', async () => {

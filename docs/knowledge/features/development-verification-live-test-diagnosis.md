@@ -19,8 +19,10 @@ Search existing bug tickets before creating another.
 
 The real suite can exit successfully while every test skipped.
 Read executed counts, skip reasons and failure evidence.
-The automatic dispatcher gate remains the acceptance check for live behaviour.
-Follow the Desktop harness and current role instructions for credentials and runs.
+Desktop's automatic gate uses captured client replay. Explicit live acceptance
+requires counted builder/operator evidence accepted by the verifier; replay cannot
+supply current provider behavior. Follow the Desktop harness and current role
+instructions for credentials and runs.
 Do not import the daemon repository's Go-specific live-test commands.
 
 Capability-gated failures can share a setup cause even when their bodies exercise different features.
@@ -98,3 +100,78 @@ show the old frozen observation failing and the shared bounded poll succeeding o
 evidence arrives, with negative deadline cases for obsolete/unrelated-only replies and wrong labels.
 See [effort proof and bootstrap prerequisites](composer-effort-menu.md#testing-the-default-apply-1169)
 and [counted focused and full live results](live-e2e-runbook.md#current-real-claude-gate-state).
+
+## Question-answer Linux acceptance
+
+The [verifier PASS for #2137](https://github.com/pyrycode/pyrycode-desktop/pull/2142#issuecomment-6269316902)
+accepted the [correlated answer and freshness proof](development-verification-evidence-that-cannot-pass-too-early.md#question-answer-interpretation-and-freshness)
+on 2026-10-19 at Desktop `9e0e6e75f85e763d615693beecddf5287dda3437`.
+The helper, controls, scenario and recording were unchanged from tested implementation
+`7052f041059cdd26b03ab793952226d67252df52`, which includes main `85358d02c328`.
+These are retained Linux builder results reviewed by the verifier; verification and
+documentation did not perform an independent live run. macOS is outside this ticket's scope.
+
+All three scenario reports below contain the exact named case
+`real claude changes model during a question and resumes with the original answer`,
+present and passed. Configured retries and attempt retry were both zero.
+Reports and stderr remain under `/tmp/builder-2137/`:
+
+| Run / report | Executed | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| Supported real capture, `capture-4.json` | 1 | 1 | 0 | 0 |
+| Final normal-build live acceptance, `pre-submit-live.json` | 1 | 1 | 0 | 0 |
+| Final guarded `claude-question-answer` replay, `pre-submit-replay.json` | 1 | 1 | 0 | 0 |
+| Final deterministic controls, `pre-submit-controls-green.log` | 47 | 47 | 0 | 0 |
+
+Live/replay attachments retain public host/conversation/batch/turn identity, every
+positive answer-evidence gate and the changed resolved-model announcement
+`claude-opus-5-5`. Guarded replay matched 29 requests, emitted 136 frames, left
+0 requests outstanding and recorded 0 forbidden launches. Pre-verify's five checks,
+client-test typecheck and normal build passed; Electron SQLite preparation followed
+the completed Node gate before replay. The
+[plan's final validation](../../specs/architecture/2137-question-answer-evidence.md#second-rework-validation)
+retains exact log, provenance and checksum paths.
+
+Keep the live executable and fixture capture provenance separate:
+
+| Evidence | Desktop source | Isolated clean Linux daemon source | Binary SHA-256 |
+| --- | --- | --- | --- |
+| Final live acceptance (`/tmp/builder-2137/pyry`) | `7052f041059cdd26b03ab793952226d67252df52` | `664305939d73e5a146457503081d8232fcca5407` | `ba2831b24dd8f880c0a707fb694bab8b99cfe2535d76eaa6129dbf11e4d0b869` |
+| Committed capture-4 (`/tmp/builder-2137/pyry-capture`) | `5788a683ab580647008eaf2b292631607c407ab8` | `58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf` | `ec471608fa0e9cd68bc23d714f3433a26473db6824c350f4d5e9dd133df194fa` |
+
+Capture used Claude `2.1.280`. The capture-4 authenticated capabilities are
+`interactive`, `multi_agent`, `stop_background_task`, `thread`. The newer live
+binary's same-binary capture-3 evidence also retains `thread_expansion` and
+`thread_compact`. The verifier checked clean Go VCS metadata and binary checksums.
+The committed `e2e/recordings/claude-question-answer.json` is byte-identical to the
+successful capture-4 artifact, SHA-256
+`6de35feed0dcf02764da0765a4af03234314ff691a29cc975bf82c3e8d498d6b`.
+Its confirmation input equals answer index 1 and is absent from the initial prompt;
+its original source stamp, authenticated capabilities and closure provenance remain intact.
+The recording was unchanged by both freshness repairs.
+
+Earlier failed captures and replays remain failed. The superseded `66430593`
+capture-3 report contains the same named scenario, 1 executed/passed, 0 failed/skipped,
+retry 0, but its exchange closed connection 1 at wire index 47 before three trailing
+requests assigned to that connection. Historical `replay.json` remains failed:
+1 executed, 0 passed, 1 failed, 0 skipped, retry 0; strict replay refused reconnect
+with 9 matched requests, 38 emitted frames, 29 remaining and 0 forbidden launches.
+The separate close-ordering repair now has
+[combined retained-input acceptance](development-verification.md#captured-close-client-tails):
+the unchanged capture-3 passed on clean current source with complete-thread
+selection, 1 executed/passed, 0 failed/skipped, 38 matched / 201 emitted /
+0 remaining and zero forbidden launches. That offline pass preserves the original
+close chronology, strict matcher and capture bytes; it adds no fresh live proof.
+The older clean daemon produced the independently successful capture-4 above.
+Red freshness controls, interrupted-install/native-preparation failures and exploratory
+capture failures remain separately retained in the plan; none is a successful fixture.
+The last pre-submission reproducer run recorded 47 executed, 44 passed, 3 failed and
+0 skipped before repair. The verifier's two stale-content reproductions both passed
+after repair: 2 executed/passed, 0 failed/skipped in
+`/tmp/verifier-2142/review-9e0e6e75/pre-submit-replay.log`.
+
+The dispatcher additionally recorded 9,746 unit tests executed/passed, 0 failed and
+3 skipped. Its original application gate recorded 509 executed, 508 passed, 1 failed
+and 5 skipped, with the named question-answer replay present and passed. The verifier
+accepted the unrelated history-writer flake's same-tree rerun, tracked on #2125;
+that acceptance does not rewrite the original failed run or turn replay into live proof.

@@ -123,6 +123,22 @@
   --text-title-medium-tracking: 0.15px;
   --text-title-medium-weight: 500;
 
+  /* Markdown heading scale, Figma 892:13442. H3 reuses title-medium. */
+  --text-markdown-h1-size: 20px;
+  --text-markdown-h1-line: 28px;
+  --text-markdown-h1-tracking: 0px;
+  --text-markdown-h1-weight: 500;
+
+  --text-markdown-h2-size: 18px;
+  --text-markdown-h2-line: 26px;
+  --text-markdown-h2-tracking: 0px;
+  --text-markdown-h2-weight: 500;
+
+  --text-markdown-h4-h6-size: 14px;
+  --text-markdown-h4-h6-line: 20px;
+  --text-markdown-h4-h6-tracking: 0.25px;
+  --text-markdown-h4-h6-weight: 700;
+
   --text-title-small-size: 14px;
   --text-title-small-line: 20px;
   --text-title-small-tracking: 0.1px;

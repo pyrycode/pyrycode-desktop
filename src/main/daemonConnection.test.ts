@@ -996,7 +996,7 @@ describe('createDaemonConnection', () => {
     const assertHello = (hello: Uint8Array): void => {
       expect(decodeEnvelope(hello).payload).toMatchObject({
         client_features: expected,
-        capabilities: ['interactive', 'thread', 'multi_agent', 'stop_background_task', 'hosted_apps_v1']
+        capabilities: ['interactive', 'thread', 'thread_expansion', 'thread_compact', 'multi_agent', 'stop_background_task', 'hosted_apps_v1']
       })
     }
     assertHello(drivers[0].config.session.hello)
@@ -1019,7 +1019,7 @@ describe('createDaemonConnection', () => {
     // buildClientHello in isolation, so this pins the production wiring, not the codec default.
     const envelope = decodeEnvelope(drivers[0].config.session.hello)
     const payload = envelope.payload as Record<string, unknown>
-    expect(payload.capabilities).toEqual(['interactive', 'thread', 'multi_agent', 'stop_background_task', 'hosted_apps_v1'])
+    expect(payload.capabilities).toEqual(['interactive', 'thread', 'thread_expansion', 'thread_compact', 'multi_agent', 'stop_background_task', 'hosted_apps_v1'])
   })
 
   it('decodes server_static_pubkey to the raw 32-byte key', async () => {
@@ -12601,6 +12601,45 @@ describe('workspace rename attempt results', () => {
       ['offline', 'send-failed', 'build-failed'].map(attemptId => ({
         type: 'workspaceRenameResult', attemptId, outcome: 'rejected'
       })))
+    connection.stop()
+  })
+})
+
+describe('channel pin writes', () => {
+  it('requires authentication, rebuilds exact fields and sends each action once', async () => {
+    const { connection, drivers } = build()
+    const payload = { conversation_id: 'conv-42', pinned: false, serverId: 'smuggled' }
+    connection.setConversationPinned(payload)
+    connection.start(); await tick()
+    connection.setConversationPinned(payload)
+    expect(drivers[0].sent).toHaveLength(0)
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    for (const pinned of [true, true, false]) connection.setConversationPinned({ ...payload, pinned })
+    expect(drivers[0].sent.map(bytes => decodeEnvelope(bytes))).toEqual([true, true, false].map((pinned, i) => ({
+      id: i + 2, ts: FIXED_TS, type: 'set_conversation_pinned', payload: { conversation_id: 'conv-42', pinned }
+    })))
+    drivers[0].emit({ type: 'relay-link-down', code: 1006 })
+    connection.setConversationPinned(payload)
+    expect(drivers[0].sent).toHaveLength(3)
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    connection.setConversationPinned(payload)
+    expect(drivers[0].sent).toHaveLength(4)
+    connection.stop()
+    connection.setConversationPinned(payload)
+    expect(drivers[0].sent).toHaveLength(4)
+  })
+  it('contains encode and send failures without an authoritative mutation or leaked payload', async () => {
+    const { log, records } = captureLog()
+    const { connection, drivers, sink } = build({ throwOnSend: true, diagnosticLog: log })
+    connection.start(); await tick()
+    drivers[0].emit({ type: 'handshake-complete', helloAck: validHelloAck() })
+    expect(() => connection.setConversationPinned({ conversation_id: 'secret', pinned: true })).not.toThrow()
+    expect(() => connection.setConversationPinned({ conversation_id: 'x'.repeat(MAX_PLAINTEXT_BYTES), pinned: true })).not.toThrow()
+    expect(emitted(sink).filter(e => e.type === 'conversationUpdated' || e.type === 'conversationsReceived')).toEqual([])
+    expect(records.filter(r => r.event === 'conversation-pin-failed')).toEqual([
+      { event: 'conversation-pin-failed', code: 'local-send' }, { event: 'conversation-pin-failed', code: 'local-send' }
+    ])
+    expect(JSON.stringify(records)).not.toContain('secret')
     connection.stop()
   })
 })

@@ -23,6 +23,7 @@ import { useAppBadge } from './store/appBadgeBridge'
 import { useConversationLastRead } from './store/conversationLastReadBridge'
 import { activateConversation, type ActivateConversationDeps } from './activateConversation'
 import { applyPairingChange, type PairingChangeDeps } from './applyPairingChange'
+import { threadOpenOptions } from '@renderer/threadDeliveryPolicy'
 import {
   clearPairingScopedState,
   type ClearPairingScopedStateDeps
@@ -484,7 +485,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
     const owned = serverId === undefined ? created : { ...created, serverId }
     activateConversation(activateDeps, owned)
     if (serverId !== undefined) {
-      localRead.current = threadRuntime.open(serverId, created.id)
+      localRead.current = threadRuntime.open(serverId, created.id, threadOpenOptions)
     }
     cancelCreatedInitialization.current = initializeCreatedConversationAfterList(
       created.id, serverId, activateDeps.requestConversationConfig
@@ -554,7 +555,7 @@ export function PairedShell({ onUnpaired }: { onUnpaired: () => void }): JSX.Ele
     activateConversation(activateDeps, conversation)
     if ('serverId' in conversation && typeof conversation.serverId === 'string') {
       setSavedTimelineTarget({ serverId: conversation.serverId, conversationId: conversation.id })
-      localRead.current = threadRuntime.open(conversation.serverId, conversation.id)
+      localRead.current = threadRuntime.open(conversation.serverId, conversation.id, threadOpenOptions)
     }
     setPaneKey(JSON.stringify([
       'serverId' in conversation && typeof conversation.serverId === 'string' ? conversation.serverId : null,

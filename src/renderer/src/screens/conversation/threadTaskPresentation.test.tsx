@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import type { ThreadSnapshot } from '../../store/threadItemStore'
 import { BackgroundTaskPanelView } from './BackgroundTaskPanel'
 import { ComposerTaskCount } from './ConversationScreen'
-import { threadTaskPresentations, type ThreadTaskInputs } from './threadTaskPresentation'
+import { createThreadTaskStops, threadTaskPresentations, type ThreadTaskInputs } from './threadTaskPresentation'
 
 const scope = { hostId: 'host', conversationId: 'chat', epoch: 'epoch' }
 const connected = { type: 'connected', ack: { server_id: 'host', conn_id: 'conn', protocol_version: '2', capabilities: ['stop_background_task'] } } as const
@@ -20,6 +20,30 @@ const render = (s: ThreadSnapshot, live = inputs) => renderToStaticMarkup(create
   { suppliedTasks: threadTaskPresentations(s, live), onStopTask() {}, onClose() {} }))
 
 describe('supplied task controls', () => {
+  it('admits compact live task identities without borrowing a header handle', () => {
+    const s = snapshot([item(1, { content: undefined, detail_omitted: true })])
+    const live = { ...inputs, liveTasks: [{ ...reading, progress }] }
+    expect(threadTaskPresentations(s, inputs)).toEqual([])
+    expect(threadTaskPresentations(s, live)[0]).toMatchObject({ taskId: 'raw-task', toolCallId: null,
+      taskType: '', active: true, canStop: true, progress })
+    const stops = createThreadTaskStops()
+    expect(stops.getState().begin(s, 'raw-task')).toBe(false)
+    expect(stops.getState().begin(s, 'raw-task', live)).toBe(true)
+    expect(stops.getState().begin(s, 'raw-task', live)).toBe(false)
+    stops.getState().settle(s, live)
+    expect(stops.getState().entries).toHaveLength(1)
+    expect(threadTaskPresentations(s, { ...live, stops: stops.getState().entries })[0].pending).toBe(true)
+    for (const fields of [{ hostId: 'other' }, { conversationId: 'other' }, { epoch: 'other' },
+      { session: undefined }, { agent: undefined }, { taskId: '' }]) {
+      const isolated = { ...inputs, liveTasks: [{ ...reading, ...fields, progress }] }
+      expect(threadTaskPresentations(s, isolated)).toEqual([])
+      expect(createThreadTaskStops().getState().begin(s, 'raw-task', isolated)).toBe(false)
+    }
+    expect(threadTaskPresentations(s, { ...inputs, liveTasks: [{ ...reading, agent: 'codex', progress }] })[0].canStop).toBe(false)
+    expect(threadTaskPresentations(snapshot([item(1, { active: false, status: 'stopped' })]), live)).toMatchObject([{ active: false, canStop: false, progress: null }])
+    stops.getState().settle(s)
+    expect(stops.getState().entries).toEqual([])
+  })
   it('draws only supplied tasks, including the empty body, without a roster projection', () => {
     const html = renderToStaticMarkup(createElement(BackgroundTaskPanelView, {
       suppliedTasks: [], onClose() {}

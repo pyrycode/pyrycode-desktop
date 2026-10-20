@@ -107,11 +107,19 @@ function header(value: unknown, server: string, conversation: string, legacy = f
   if (itemCount > MAX_CHAT_HISTORY_ITEMS || rangeCount > MAX_CHAT_HISTORY_ITEMS || typeof v.hasArrival !== 'boolean') throw INVALID_CHAT_HISTORY
   if (!legacy && (typeof v.generation !== 'string' || !/^[0-9a-f-]{36}$/.test(v.generation))) throw INVALID_CHAT_HISTORY
   const parsed = { metadata, itemCount, rangeCount, hasArrival: v.hasArrival,
+    ...(v.persistenceOwner === undefined ? {} : { persistenceOwner: resetIdentity(v.persistenceOwner) }),
+    ...(v.persistence === undefined ? {} : { persistence: pendingSave(v.persistence) }),
     ...(v.resetId === undefined ? {} : { resetId: resetIdentity(v.resetId) }),
     ...(v.availabilityStart === undefined ? {} : { availabilityStart: natural(v.availabilityStart) }),
     ...(v.mutable === undefined ? {} : { mutable: mutable(v.mutable) }),
     ...(!legacy && typeof v.generation === 'string' ? { generation: v.generation } : {}) }
   if (!same(parsed, value)) throw INVALID_CHAT_HISTORY
+  return parsed
+}
+function pendingSave(value: unknown): { id: string; next: number; parts: number } {
+  const v = object(value), parsed = { id: resetIdentity(v.id), next: natural(v.next), parts: natural(v.parts) }
+  if (!same(parsed, value) || !parsed.id || parsed.parts < 2 || parsed.next < 1 || parsed.next >= parsed.parts)
+    throw INVALID_CHAT_HISTORY
   return parsed
 }
 
@@ -350,6 +358,8 @@ export function createIndexedThreadHistory(deps: {
   }
   function writeHeader(db: Database.Database, identity: string, h: ReturnType<typeof header>): void {
     const value = { metadata: h.metadata, itemCount: h.itemCount, rangeCount: h.rangeCount, hasArrival: h.hasArrival,
+      ...(h.persistenceOwner === undefined ? {} : { persistenceOwner: h.persistenceOwner }),
+      ...(h.persistence === undefined ? {} : { persistence: h.persistence }),
       ...(h.resetId === undefined ? {} : { resetId: h.resetId }),
       ...(h.availabilityStart === undefined ? {} : { availabilityStart: h.availabilityStart }),
       ...(h.mutable ? { mutable: h.mutable } : {}), generation: h.generation }
@@ -383,13 +393,14 @@ export function createIndexedThreadHistory(deps: {
     if (typeof row.identity !== 'string' || !/^[0-9a-f-]{36}$/.test(row.identity)) throw INVALID_CHAT_HISTORY
     return row.identity
   }
-  function load(db: Database.Database, server: string, conversation: string, legacy = false) {
+  function load(db: Database.Database, server: string, conversation: string, legacy = false, allowPending = false) {
     const identity = scope(db, server, conversation)
     if (identity === null) return null
     const rows = db.prepare<[string], Row>(`SELECT ${columns} FROM thread_records WHERE scope = ? ORDER BY kind, ordinal`).all(identity)
     const first = rows.find(r => r.kind === 'header')
     if (!first) throw INVALID_CHAT_HISTORY
     const h = header(decode(first, identity), server, conversation, legacy)
+    if (h.persistence && !allowPending) throw INVALID_CHAT_HISTORY
     if (h.mutable) {
       const m = h.mutable
       if ((m.sequence ?? m.roots.order).count !== h.itemCount || m.roots.ranges.count !== h.rangeCount) throw INVALID_CHAT_HISTORY
@@ -507,6 +518,23 @@ export function createIndexedThreadHistory(deps: {
       scope TEXT NOT NULL REFERENCES thread_scopes(identity) ON DELETE CASCADE,
       tree TEXT NOT NULL, path TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(scope, tree, path)); PRAGMA user_version = 7`)
     const c = request.change, metadata = c.metadata
+    const p = c.persistence
+    if (p && db.pragma('user_version', { simple: true }) === 7) db.exec(`CREATE TABLE history_save_parts (
+      id TEXT NOT NULL, part INTEGER NOT NULL, payload BLOB NOT NULL, PRIMARY KEY(id, part)); PRAGMA user_version = 8`)
+    function receipt(part: number): unknown {
+      if (!p) return undefined
+      const row = db.prepare<[string, number], { payload: unknown }>('SELECT payload FROM history_save_parts WHERE id = ? AND part = ?').get(p.id, part)
+      if (!row) return undefined
+      if (!(row.payload instanceof Uint8Array)) throw INVALID_CHAT_HISTORY
+      const value = object(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(encryption.decrypt(row.payload))))
+      if (!same(value, { id: p.id, part, value: value.value })) throw INVALID_CHAT_HISTORY
+      return value.value
+    }
+    function acknowledge(part: number, value: unknown): void {
+      if (!p) return
+      db.prepare('INSERT INTO history_save_parts VALUES (?, ?, ?)').run(p.id, part,
+        Buffer.from(encryption.encrypt(Buffer.from(JSON.stringify({ id: p.id, part, value })))))
+    }
     let identity = scope(db, request.serverId, request.conversationId)
     let h: ReturnType<typeof header> | undefined
     if (identity !== null) {
@@ -514,6 +542,20 @@ export function createIndexedThreadHistory(deps: {
       if (!row) throw INVALID_CHAT_HISTORY
       h = header(decode(row, identity), request.serverId, request.conversationId)
       yield
+    }
+    const known = receipt(-1)
+    const binding = () => ({ scope: identity, owner: h?.persistenceOwner, serverId: request.serverId,
+      conversationId: request.conversationId, epoch: metadata.epoch, resetId: c.resetId ?? null, parts: p?.parts })
+    if (known !== undefined) {
+      // Check the exact protected lifecycle before a replay can exercise acceptEpoch/reset.
+      if (!h || !same(known, binding())) throw INVALID_CHAT_HISTORY
+      const accepted = p && receipt(p.part)
+      if (accepted !== undefined) {
+        if (accepted !== digest(JSON.stringify(request))) throw INVALID_CHAT_HISTORY
+        return
+      }
+    }
+    if (h && identity !== null) {
       if (h.metadata.epoch !== metadata.epoch || c.resetId !== undefined && c.resetId !== h.resetId) {
         if (!c.acceptEpoch) throw INVALID_CHAT_HISTORY
         // Empty the old owner's children incrementally so FK cascades cannot hide a backlog.
@@ -541,6 +583,15 @@ export function createIndexedThreadHistory(deps: {
           sequence: emptySequence(), nodes: 0 } }
     }
     if (!h) throw INVALID_CHAT_HISTORY
+    if (h.persistence && (!p || h.persistence.id !== p.id || h.persistence.parts !== p.parts || h.persistence.next !== p.part))
+      throw INVALID_CHAT_HISTORY
+    if (p) {
+      if (known === undefined) {
+        if (p.part !== 0 || h.persistence) throw INVALID_CHAT_HISTORY
+        h.persistenceOwner ??= randomUUID()
+        acknowledge(-1, binding())
+      } else if (!h.persistence) throw INVALID_CHAT_HISTORY
+    }
     let m = h.mutable
     if (!m || m.roots.endings === undefined) {
       const snapshot = load(db, request.serverId, request.conversationId)
@@ -692,6 +743,10 @@ export function createIndexedThreadHistory(deps: {
     h.mutable = m; h.hasArrival = true; h.generation = randomUUID(); h.itemCount = m.roots.ids.count; h.rangeCount = m.roots.ranges.count
     if (h.itemCount > MAX_CHAT_HISTORY_ITEMS || h.rangeCount > MAX_CHAT_HISTORY_ITEMS) throw INVALID_CHAT_HISTORY
     yield* ids.flushSteps(); yield* ordered.flushSteps(); yield* ranges.flushSteps(); yield* sorted.flushSteps(); yield* endings.flushSteps()
+    if (p) {
+      acknowledge(p.part, digest(JSON.stringify(request)))
+      h.persistence = p.part + 1 === p.parts ? undefined : { id: p.id, next: p.part + 1, parts: p.parts }
+    }
     writeHeader(db, owner, h)
     yield
   }
@@ -800,6 +855,7 @@ export function createIndexedThreadHistory(deps: {
     const row = db.prepare<[string], Row>(`SELECT ${columns} FROM thread_records WHERE scope = ? AND kind = 'header' AND ordinal = 0`).get(identity)
     if (!row) throw INVALID_CHAT_HISTORY
     const h = header(decode(row, identity), server, conversation)
+    if (h.persistence) throw INVALID_CHAT_HISTORY
     if (recovery && (!token || recovery.format !== 'daemon-items-rebase' || Object.keys(recovery).length !== 5 ||
       recovery.owner !== identity || recovery.epoch !== digest(h.metadata.epoch) ||
       recovery.token !== digest(JSON.stringify(token)))) throw INVALID_CONTINUATION
@@ -813,7 +869,7 @@ export function createIndexedThreadHistory(deps: {
       // A retained scope converts once, transactionally, without progress or owned-save authority.
       const saved = load(db, server, conversation)
       if (!saved) throw INVALID_CHAT_HISTORY
-      db.exec(`CREATE TABLE IF NOT EXISTS thread_auth (scope TEXT NOT NULL REFERENCES thread_scopes(identity) ON DELETE CASCADE,
+      if (db.pragma('user_version', { simple: true }) === 6) db.exec(`CREATE TABLE IF NOT EXISTS thread_auth (scope TEXT NOT NULL REFERENCES thread_scopes(identity) ON DELETE CASCADE,
         tree TEXT NOT NULL, path TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(scope, tree, path)); PRAGMA user_version = 7`)
       h.mutable = activate(db, identity, h, saved.thread); h.hasArrival = true
       h.availabilityStart ??= saved.thread.ranges[0]?.start
@@ -902,11 +958,11 @@ export function createIndexedThreadHistory(deps: {
           if (request.operation === 'removeServer') {
             for (const s of db.prepare<[Buffer], { conversation: unknown }>('SELECT conversation FROM thread_scopes WHERE server = ?').all(server)) {
               if (!Buffer.isBuffer(s.conversation) || s.conversation.length % 2 !== 0) throw INVALID_CHAT_HISTORY
-              load(db, request.serverId, s.conversation.toString('utf16le'))
+              load(db, request.serverId, s.conversation.toString('utf16le'), false, true)
             }
           } else if ('conversationId' in request) {
             if (paging) return readPage(db, request.serverId, request.conversationId, paging.limit, token, paging.opening, recovery)
-            const snapshot = load(db, request.serverId, request.conversationId)
+            const snapshot = load(db, request.serverId, request.conversationId, false, request.operation !== 'readThread')
             previous = snapshot?.thread ?? null
             if (request.operation === 'readThread') return snapshot ? { status: 'stored', snapshot } : { status: 'missing' }
           }

@@ -2,7 +2,8 @@
 
 Split out of [Daemon connection correlation](daemon-connection-correlation.md) for size. Diagnostic
 logging, then the request-response correlation stores for conversation creation, agent switching,
-attachment upload and retrieval, run-configuration reads, and the retired history boundary.
+attachment upload and retrieval, run-configuration reads, bounded thread bodies and child pages,
+and the retired history boundary.
 
 # Diagnostic logging ([#128](../codebase/128.md))
 
@@ -264,6 +265,156 @@ would misattribute the same way it would for `pendingSettings`.
 `runConfigReceived.sessionId` to index session → server; an uncorrelatable reply now teaches it nothing
 either, which is accepted as correct rather than a regression — a session id this client cannot tie to
 a request it sent is exactly the input that index must not accept.
+
+# Compact projection queries and live delivery
+
+The hello advertises `thread_compact`; main admits explicit `compact-v1` queries
+only after the owning accepted handshake also includes `interactive`, `thread`
+and `thread_expansion`. Capability advertisement alone never changes delivery.
+Ordinary complete queries keep their existing contract. Runtime selection,
+`queryThread`, command dispatch, the named connection and typed preload delivery
+preserve the projection. Main revalidates direct query callers and reconstructs
+outbound fields by name. Unknown projections/extra query fields refuse;
+compact `thread_page` additionally requires a nonempty epoch, while version-zero
+`thread_catch_up` can initialize with an empty epoch.
+
+Compact `thread_items` accepts full ordered non-tool/agent roots and optional
+tool/agent `headers` validated with the child-summary guard, restricted to parent
+zero. Duplicate IDs across the mixed data payload fail. Headers carry
+`detail_omitted: true`; headline/error summary limits and absent optional facts
+retain the child contract. The separate successful marker has empty `items` and
+no `headers`. Correlation checks the sent projection, conversation, capture
+epoch/version and supplied envelope routing. Compact page replies match the
+requested epoch; scoped reset preserves projection and requires a nonempty epoch.
+Malformed summaries, mismatches and refused reads settle through existing static,
+content-free classifications without fallback.
+
+`thread_compact_update` becomes host-stamped `threadCompactUpdate` through the
+production connection/preload bridge. It requires `projection: 'compact-v1'`, a
+nonempty epoch, increasing `from_version`/`version` and exactly one eligible full
+root, header, or hidden-only `progress: true` with neither item nor header.
+Supplied envelope conversation must match the payload. Unrelated renderer bridges
+explicitly ignore this separately owned event.
+
+Fragments preserve projection and compact interval metadata in assembly identity;
+the existing whole-payload digest, contiguous offsets, UTF-8 validation, 8 MiB
+logical/16 MiB aggregate bounds, eight assemblies and 30-second expiry still
+apply. Assembly final cannot certify query success. In compact mode, locally
+cancelling obsolete detail does not free the daemon's unfinished-query slot:
+the [runtime lane](thread-runtime-compact.md#demanded-detail-refresh-and-retirement)
+waits for terminal delivery/expiry, settles the detail owner first and rechecks
+failure admission immediately before the next wire dispatch. See
+[independent compact evidence](thread-runtime-compact.md#root-facts-and-independent-evidence)
+and [counted received-frame validation](thread-runtime-compact.md#validation-evidence).
+
+# Bounded thread body reads
+
+`loadDialConfig` advertises `thread_expansion` alongside `interactive` and `thread`.
+Both main and the [shared runtime expansion owner](thread-runtime.md#on-demand-bodies)
+require all three in the current accepted handshake, with `ack.server_id` matching
+the owning host. Another host's acceptance or a previous connection's capabilities
+cannot authorize a body or child read. Complete conversation queries retain their
+existing `thread` route when expansion is unsupported.
+
+`queryThread` carries an explicit `serverId` and opaque `requestId` through the
+validated preload/command bridge to `dispatchThreadQuery` and the named connection.
+For `thread_read_tool_body`, `isRendererCommand` requires nonempty host, request,
+conversation and epoch strings of at most 1024 characters, positive safe-integer
+`item_id` and `expected_rev`, and exactly those four query payload fields. Main
+rechecks admission for direct callers and reconstructs the outbound payload by
+name. Unavailable/unsupported connections and send failures settle through static,
+host-stamped `threadQueryFailed` classifications; peer error text is never forwarded.
+
+The receiver correlates `thread_tool_body` by the sent envelope's `in_reply_to`.
+Success requires exactly one object-valued `content` payload with `final: false`,
+then a separate `final: true` marker without a `content` property. The data must
+match the requested conversation, epoch, item and revision. The marker must match
+the data's captured epoch/version, item/revision, `tool_call` or `agent` kind and
+envelope session/conversation metadata; a supplied envelope conversation must
+also agree with the payload. The runtime independently checks its requested kind.
+Unknown object fields remain inert JSON. Successful empty input/output is content;
+an absent object or a marker arriving without data is a failure. Malformed,
+mismatched and refused replies use content-free failure handling.
+
+Body fragments omit `base_rev`, `content`, `kind` and logical `final`. Their
+SHA-256 digest is over `thread_tool_body`, a NUL byte and the reconstructed JSON
+bytes. Contiguous indices/byte offsets, stable metadata, final length, digest,
+UTF-8 and reconstructed identity are checked before delivery. A fragment's
+`continuation.final` completes assembly only: it cannot replace the separate
+success marker. Fragment assembly retains the existing 8 MiB logical limit,
+16 MiB aggregate buffer, eight pending assemblies and 30-second expiry. Each
+connection admits at most 32 registered body/child reads combined with a 30-second
+deadline covering the entire read, including a missing-marker wait.
+
+`cancelThreadQuery` validates the explicit host and nonempty request ID through
+the same bridge. It removes local correlation ownership, clears its deadline and
+releases all partial assemblies for that request, settling it as `interrupted`.
+It sends no daemon cancellation message. Connection retirement resets the
+receiver's pending work and assembly timers; unknown or retired correlations are
+dropped. The optional connection cancellation method preserves scalar test
+doubles. Body replies travel as typed, host-stamped events and never enter
+canonical batch application, coverage or read-receipt publication. See the
+[body plan](../../specs/architecture/2101-tool-body-demand.md) and
+[counted validation](thread-runtime.md#on-demand-body-validation).
+
+# Bounded thread child reads
+
+`thread_read_children` uses the same accepted expansion capabilities, explicit
+host/request routing and validated local `cancelThreadQuery` bridge as body reads.
+`isRendererCommand` permits only `conversation_id`, `epoch`, `item_id`,
+`expected_rev` and optional `limit`/`cursor` in the query payload. Scope strings
+are nonempty and bounded; parent ID/revision are positive safe integers. Limit
+must be a nonnegative safe integer, defaults to 50 when omitted or zero, and
+clamps to 256. Main revalidates direct callers and reconstructs the outbound
+payload. A cursor has exactly seven fields: `conversation_id`, `epoch`, `item_id`,
+`rev`, `version`, `order`, `id`; it must match query scope and revision, with safe
+nonnegative version/order and positive item/revision/child IDs. Missing, null,
+wrong-type, unsafe or extra cursor fields fail admission.
+
+`parseInboundPayload` routes `thread_children` to `createThreadUpdateReceiver`,
+which correlates by `in_reply_to` before typed host-stamped preload delivery. A
+page permits at most one `final: false` data envelope with `children` and no
+`more`/`cursor`, then a separate `final: true` marker with empty `children` and
+boolean `more`. Marker-only empty success is valid with `more: false`. Matching
+conversation, epoch, parent/revision, capture version and supplied envelope
+session/conversation routing must remain consistent. A supplied envelope
+conversation must also match the payload. Child count cannot exceed the requested
+normalized limit. Continuation replies must retain the cursor's consumed-history
+version and advance strictly after its `(order, id)` tuple. `more: true` requires
+an exact scoped cursor naming the last delivered child; `more: false` forbids a
+cursor. An empty or short data envelope cannot establish exhaustion by itself.
+
+Summary validation preserves optional-field presence. Required fields are
+positive safe-integer `id`/`rev`, nonnegative safe-integer `order`/`parent`, open
+string `kind`/`status`, boolean `active`/`shown`, bounded `headline` and
+`detail_omitted: true`. Every child names the requested parent. Within a page,
+tuples strictly ascend and child IDs are unique; the runtime also rejects repeated
+IDs across retained pages. `headline` and optional `error_summary` allow empty
+text, cap at 200 Unicode code points and reject control/line-separator characters.
+Optional `ended_order` is positive; supplied `session`, `agent`, `turn` and
+`subtype` are nonempty strings; supplied `no_child` must be true.
+`public_child_count` and `subtree_version` are nonnegative safe integers, while
+`has_public_children` is boolean. A supplied count requires a consistent existence
+boolean (`count > 0`); absence remains unknown. The field allowlist rejects bodies,
+descendant inventory and other extra fields rather than admitting full items as
+summaries.
+
+Data and marker together must fit **65,519 stamped bytes**. Main passes original
+plaintext bytes to the receiver, which counts their received length plus reserved
+maximum-width protocol-stamp overhead for each envelope. Counting only normalized
+DTO JSON would lose whitespace and escape spellings and accept an oversized page.
+Raw bytes remain in main. Child replies never use fragment assembly: any
+`continuation` field fails closed. Malformed data, mismatched captures/markers,
+duplicate data and budget violations settle with static failure classifications;
+daemon error text is neither interpreted nor logged. Unknown/retired correlations
+are dropped, and cancellation/connection teardown clears pending deadlines.
+
+The runtime consumes child replies before complete-query admission. Summaries
+cannot mutate canonical items, grant coverage, certify complete-thread progress,
+advance receipts or enter detail persistence. See [child leases, retry and shared
+cache bounds](thread-runtime.md#on-demand-child-pages), the
+[plan](../../specs/architecture/2102-direct-child-pages.md) and
+[counted synthetic validation](thread-runtime.md#on-demand-child-validation).
 
 # Retired conversation-history correlation
 

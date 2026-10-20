@@ -34,7 +34,7 @@ export function completedHandoverReply(events: readonly (StampedDaemonEvent | Re
     }
     if (update.type === 'thread_item_added') put(update.payload.item)
     else if (update.type === 'thread_items') update.payload.items.forEach(put)
-    else if (update.type !== 'thread_reset') {
+    else if (update.type === 'thread_item_changed' || update.type === 'thread_text_append') {
       const item = held.get(update.payload.item_id)?.item
       if (!item || item.rev !== update.payload.base_rev || update.payload.rev <= item.rev) continue
       if (update.type === 'thread_item_changed') put({ ...item, ...update.payload.changes, rev: update.payload.rev })

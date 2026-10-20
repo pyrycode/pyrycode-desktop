@@ -18,6 +18,7 @@ export function translateTimelineEvent(
     case 'threadReply':
     case 'threadQueryFailed':
     case 'threadUpdate':
+    case 'threadCompactUpdate':
     case 'threadRepairNeeded':
       return null // The daemon-built thread consumer owns these additive events.
     case 'messageDelivery':

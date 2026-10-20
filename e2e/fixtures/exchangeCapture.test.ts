@@ -47,3 +47,19 @@ it('captures the observed transport close at its exact application-message prefi
   expect(result.closures).toEqual([{ before: 1, connection: 1, code: 4413 }])
   expect(result.connections).toBe(2)
 })
+
+it('retains calls observed after link-down on their actual session without moving the close', () => {
+  const capture = createExchangeCapture(); capture.begin()
+  const first = capture.openConnection()
+  capture.observe('daemon', bytes('conversations', { conversations: [] }), first)
+  capture.closeConnection(4413)
+  // Mirrors captureNoiseSession: observing a call is not confirmation of a socket write.
+  capture.observe('client', bytes('request_session_settings'), first)
+  const second = capture.openConnection()
+  capture.observe('client', bytes('list_conversations'), second)
+  const result = capture.takeConnections()
+  expect(result.closures).toEqual([{ before: 1, connection: first, code: 4413 }])
+  expect(result.wire.map(entry => [entry.direction, entry.message.type, entry.connection])).toEqual([
+    ['daemon', 'conversations', first], ['client', 'request_session_settings', first], ['client', 'list_conversations', second]
+  ])
+})

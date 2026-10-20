@@ -11,6 +11,9 @@ import type { ConnectionStatus } from '../../store/sessionStore'
 import type { MessageAttachment, ThreadEvent } from '../../store/threadTimeline'
 import type { createThreadSendStore } from '../../store/threadSendStore'
 
+// The daemon intercepts these tokens and only acks; no user_message will settle a local row.
+const INTERCEPTED_RESET_COMMAND = /^\/(?:clear|reset)(?:\p{White_Space}|$)/u
+
 /**
  * One send's claim on the composer's pending attachments (#1055): the set it took, and the undo that
  * puts them back. The two travel together so a caller cannot hold one without the other.
@@ -40,7 +43,8 @@ export interface ComposerSendDeps {
 }
 
 /**
- * Retain one locally unaccepted send before crossing the bridge, so synchronous feedback can find it.
+ * Retain ordinary unaccepted sends before the bridge, so synchronous feedback can find them.
+ * Intercepted reset commands have no authoritative user item and need no local retention.
  * A bridge exception preserves recoverable text, marks local feedback and rolls attachments back.
  * Acceptance and exact host/device/message settlement belong to the authoritative send store.
  */
@@ -64,10 +68,12 @@ export function submitMessage(
     try { deps.diagnose?.({ event, messageId: message_id, conversationId }) } catch { /* Observe only. */ }
   }
   diagnose('message-queued')
-  // Both identities exist before the bridge can synchronously report delivery.
-  const echo: ThreadEvent = { type: 'userText', text: trimmed, messageId: message_id,
-    createdAt: deps.now?.(), attachments: named }
-  threadSend.store.getState().retain(host, conversationId, threadSend.deviceId, echo)
+  if (!INTERCEPTED_RESET_COMMAND.test(trimmed)) {
+    // Both identities exist before the bridge can synchronously report delivery.
+    const echo: ThreadEvent = { type: 'userText', text: trimmed, messageId: message_id,
+      createdAt: deps.now?.(), attachments: named }
+    threadSend.store.getState().retain(host, conversationId, threadSend.deviceId, echo)
+  }
   try {
     deps.sendCommand(sendMessageCommand(payload, deps.serverId))
     threadSend.store.getState().clearReports(host, conversationId, threadSend.version ?? 0)

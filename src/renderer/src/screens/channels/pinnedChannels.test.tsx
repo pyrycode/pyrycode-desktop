@@ -48,10 +48,48 @@ function markup(conversations: readonly ConversationSummary[], extra: Partial<Co
     hostLabels={new Map([['a', '<Host>']])} openConversationId="same" openServerId="a"
     onOpen={noop} onOpenSettings={noop} onOpenArchive={noop} onPairNewHost={noop}
     onCreateChat={noop} onCreateChannel={noop} onEditWorkspace={noop} onEditHost={noop}
-    onAddWorkspace={noop} onSaveAsChannel={noop} onRename={noop} onEditChannel={noop} {...extra} />)
+    onAddWorkspace={noop} onSaveAsChannel={noop} onRename={noop} onEditChannel={noop} onSetPinned={noop} {...extra} />)
 }
 
+describe('host-scoped conversation selection', () => {
+  for (const layout of ['channels', 'chats', 'pinned/tree'] as const) {
+    const rows = ['a', 'b'].map(serverId => ({
+      ...row('same', layout === 'pinned/tree' && serverId === 'b' ? '' : null, serverId),
+      name: serverId === 'a' ? 'Alpha' : 'Beta', is_promoted: layout !== 'chats'
+    }))
+    it.each(['a', 'b'])(`selects only host %s in ${layout} with shared IDs`, openServerId => {
+      const html = markup(rows, { openServerId, pane: { type: 'closed', generation: 0 } })
+      const selected = [...html.matchAll(/<button\b[^>]*aria-current="true"[^>]*>([\s\S]*?)<\/button>/g)]
+      expect(selected).toHaveLength(1)
+      expect(selected[0][1]).toContain(openServerId === 'a' ? 'Alpha' : 'Beta')
+    })
+    it(`suppresses selection with missing identity or an open pane in ${layout}`, () => {
+      for (const openServerId of ['a', 'b']) {
+        expect(markup(rows, { openServerId, openConversationId: 'other' })).not.toContain('aria-current="true"')
+        expect(markup(rows, { openServerId, pane: {
+          type: 'ready', generation: 1, serverId: openServerId, appId: 'app', hostLabel: 'Host', appLabel: 'App'
+        } })).not.toContain('aria-current="true"')
+      }
+      expect(markup(rows, { openServerId: null })).not.toContain('aria-current="true"')
+      expect(markup(rows, { openServerId: 'other' })).not.toContain('aria-current="true"')
+      expect(markup(rows, { openConversationId: null })).not.toContain('aria-current="true"')
+    })
+  }
+})
+
 describe('pinned row markup', () => {
+  it('renders pin/unpin before the pen and never on chats', () => {
+    const html = markup([row('pin'), row('normal', null), { ...row('chat', null), is_promoted: false }])
+    expect(html.match(/aria-label="Pin channel"/g)).toHaveLength(1)
+    expect(html.match(/aria-label="Unpin channel"/g)).toHaveLength(1)
+    expect(html.indexOf('aria-label="Unpin channel"')).toBeLessThan(html.indexOf('class="channel-list__rename"'))
+  })
+  it.each(['connecting', 'disconnected', 'error'] as const)('disables both actions while %s', type => {
+    const status: ConnectionStatus = type === 'error'
+      ? { type, error: { code: 'transport', message: 'Offline', retryable: true } } : { type }
+    const html = markup([row('pin'), row('normal', null)], { statuses: new Map([['a', status]]) })
+    expect(html.match(/class="channel-list__pin"[^>]*disabled=""/g)).toHaveLength(2)
+  })
   it('renders one global section before hosts with escaped suffix, fallbacks, selection and connected-only pens', () => {
     const html = markup([row('same'), { ...row('same', '', 'b'), name: null }])
     expect(html.indexOf('>Pinned<')).toBeLessThan(html.indexOf('channel-list__host'))

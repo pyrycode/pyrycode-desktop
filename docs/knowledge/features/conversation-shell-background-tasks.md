@@ -5,8 +5,10 @@ Part of [Turn status surfaces](conversation-shell-turn-status.md).
 ## Background-task panel (#581, cap and cut display since #582, latest patch since #583)
 
 `ThreadItemsTimeline` supplies the production drawer with task presentations from
-immutable [thread snapshots](thread-item-store.md#identity-placement-and-full-items)
-and optional `ThreadTaskInputs`. `BackgroundTaskPanelView` requires
+the selected complete/compact presentation and optional `ThreadTaskInputs`.
+Recorded full items retain their
+[immutable authority](thread-item-store.md#identity-placement-and-full-items).
+`BackgroundTaskPanelView` requires
 `suppliedTasks: readonly SuppliedBackgroundTask[]`, plus `onClose`, optional
 `onStopTask` and optional `turnRunning` for keyboard arbitration. It has no store
 subscription. The roster-connected `BackgroundTaskPanel` and its `entry`,
@@ -17,13 +19,22 @@ supply drawer membership, empty-state copy or a fallback for a host without `thr
 
 **Supplied membership and identity.**
 [`threadTaskPresentations`](../../../src/renderer/src/screens/conversation/threadTaskPresentation.ts)
-projects only `shown === true` task-linked `agent` and `tool_call` items, including
-settled work. Shared `taskLinked`/`usable` rules require nonempty usable
+projects recorded membership from `shown === true` task-linked `agent` and
+`tool_call` items, including settled work. Shared `taskLinked`/`usable` rules require nonempty usable
 `content.task_id` and `content.tool_use_id`, with matching `task_id`/`tool_call_id`
 in a direct `content.task_link` or one of its `tasks` rows. Identity fields marked
 truncated or dropped are unusable; hidden, unlinked and identity-damaged items have
 no row or count. Names, `run_in_background` and launch-result text cannot establish
-membership.
+recorded membership. Compact headers alone cannot supply these handles.
+
+Compact production may additionally supply `ThreadTaskInputs.liveTasks` from
+independently admitted current-session progress: an actual task ID, matching
+host/conversation/epoch and envelope session, and the owning summary's explicit
+agent. These create live task rows with unknown tool linkage (`toolCallId: null`)
+and generic Background task/Running presentation, even with the parent closed.
+Missing identities create no row. A matching recorded full item takes precedence,
+including its terminal lifecycle; complete-route membership is unchanged. See
+[live presentation admission](conversation-shell-turn-status.md#session-scoped-live-presentation).
 
 Rows deduplicate by host, conversation, epoch, recorded session, recorded agent and
 task id. The first linked item in snapshot order supplies display, activity and
@@ -34,8 +45,8 @@ membership. The composite `rowKey` is separate from the raw Stop target: putting
 composite id into the raw command target would lose routing. Recorded attribution
 must not inherit the current conversation's agent.
 
-**Supplied activity and outcomes.** Only `active === true` determines the Running
-group and `ComposerTaskCount`; all other admitted rows belong to Finished. The pill
+**Supplied activity and outcomes.** For recorded full items, only `active === true`
+determines the Running group and `ComposerTaskCount`; other recorded rows belong to Finished. The pill
 disappears at zero, while a fixed Background tasks opener retains access to settled
 rows. Only supplied `status` determines the outcome: `finished` displays Completed,
 with distinct Failed, Denied, Stopped and Stopping labels; `ended_with_session`
@@ -70,14 +81,17 @@ pending controls. A matching `pending: true` disables repeat activation; matchin
 The injected owner supplies these readings; the view does not claim or settle a
 stop wait itself.
 
-Stop requires an active linked item, a usable raw `content.task_id`, an injected
-callback, recorded `agent === 'claude'` and the connected owning host passing
+Stop requires an active full linked item with usable raw `content.task_id`, or an
+independently admitted compact live task identity, plus an injected callback,
+explicit `agent === 'claude'` and the connected owning host passing
 `backgroundTaskStopSupported` with `stop_background_task` capability. Missing,
 unknown or Codex agent attribution grants no eligibility. Activation calls
 `onStopTask(hostId, conversationId, taskId)` with the snapshot's owning coordinates
-and raw content task id, never the item id, launch tool id or composite row key.
+and raw admitted task id, never the item id, launch tool id or composite row key.
 Acceptance has no acknowledgement and introduces no optimistic Stopping or finish;
-only subsequent item updates change lifecycle.
+recorded item updates retain lifecycle precedence. The mounted compact presentation
+settles pending claims against the same full/live inputs; an unrelated compact
+revision cannot clear a pending Stop for a still-active admitted live task.
 
 The thread view keys row expansion and refs by host/conversation/epoch. Drawer
 visibility is separate: production uses `PairedShell`'s lifted open state for the
@@ -150,7 +164,8 @@ button. An update/progress cut list cannot remove an otherwise valid raw target.
 `threadTaskPresentations` supplies `canStop` and `pending` per scoped task. The view
 passes `task.taskId` to its callback, and `ThreadItemsView` resolves that row to the
 snapshot host/conversation before calling the injected owner. Eligibility requires
-recorded Claude attribution, an active linked item, a usable raw task id, an
+explicit Claude attribution, an active linked full item or admitted compact live
+identity, a usable raw task id, an
 injected callback and the owning connected host's `stop_background_task` capability.
 `backgroundTaskStopSupported` remains shared; another host's status grants nothing.
 
@@ -158,7 +173,9 @@ The [thread runtime](thread-runtime.md) owns production claims and command dispa
 the view neither calls `beginTaskStop` nor subscribes to roster pending sets.
 Injected pending/refused readings disable/re-enable the matching control without
 changing lifecycle. There is no acknowledgement, optimistic Stopping or finish:
-subsequent supplied item revisions determine the row's outcome and group. Composer
+recorded supplied item revisions determine the row's outcome and group. Production
+rechecks selected presentation and current live identity at activation; parent
+expansion and detail reads grant no eligibility. Composer
 Stop/Escape still interrupts the foreground turn, separately from background Stop.
 
 ### Stop task testing

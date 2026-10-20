@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { createHash } from 'node:crypto'
 import { test, expect, type PairedApp } from './launchPairedApp'
 import { pairFromUnpairedLaunch } from './pairingArrival'
 import { RecordedExchange, parseRecording, type Recording } from './recordedExchange'
@@ -9,10 +10,14 @@ export const recordedTest = test.extend<{
   recording: Recording
   recordedApp: PairedApp
 }>({
-  recording: async ({}, use) => {
+  recording: async ({}, use, info) => {
     // An explicit candidate lets verification exercise new captures without replacing the committed fixture.
     const file = process.env.PYRY_RECORDING_FILE ?? resolve('e2e/recordings/permission-allow.json')
-    await use(parseRecording(readFileSync(file, 'utf8')))
+    const input = readFileSync(file), recording = parseRecording(input.toString('utf8'))
+    await info.attach('replay-input', { contentType: 'application/json', body: Buffer.from(JSON.stringify({
+      scenario: recording.scenario.id, inputSha256: createHash('sha256').update(input).digest('hex'), captureSource: recording.source
+    })) })
+    await use(recording)
   },
   recordedApp: async ({ launchPairedApp, recording }, use, info) => {
     const replay = new RecordedExchange(recording)

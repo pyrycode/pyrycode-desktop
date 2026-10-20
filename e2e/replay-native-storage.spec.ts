@@ -3,11 +3,13 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { appWindow, attachLaunchFate, createLaunchFateLog, launchIsolatedApp } from './fixtures/desktopIsolation'
-import { assertReplayNativeStorage } from './fixtures/replayNativeStorage'
+import { assertReplayNativeStorage, readReplayMainProcess } from './fixtures/replayNativeStorage'
 
 function assertSuccessfulNativeProbe(response: { exceptionDetails?: unknown; result: { value?: unknown } }): void {
   if (response.exceptionDetails !== undefined) throw new Error('Native prerequisite control inspection failed')
-  if (response.result.value !== true) throw new Error('Native prerequisite control did not observe successful SQLite probe')
+  const value = response.result.value
+  if (!value || typeof value !== 'object' || !('ready' in value) || value.ready !== true ||
+    !('stage' in value) || value.stage !== 'complete') throw new Error('Native prerequisite control did not observe successful SQLite probe')
 }
 
 for (const { name, response, category } of [
@@ -53,6 +55,7 @@ test('missing inspector values do not diagnose native failure on launch or profi
   const directory = await mkdtemp(join(tmpdir(), 'pyry-native-observation-'))
   const fate = createLaunchFateLog()
   const observations: { launch: number; sqliteReady: boolean; missingResult: boolean }[] = []
+  const originalProbe: string[] = []
   const env = { ...process.env }
   delete env.ELECTRON_RENDERER_URL
   try {
@@ -61,6 +64,17 @@ test('missing inspector values do not diagnose native failure on launch or profi
       const child = app.process()
       try {
         await appWindow(app)
+        // Historical algorithm, before classification: establish whether it also fails here.
+        // Keep its genuine operations and boolean result, with no native exception text.
+        const originalReady = await readReplayMainProcess(app, ({ app }) => {
+          try {
+            const Database = process.getBuiltinModule('module').createRequire(`${app.getAppPath()}/package.json`)('better-sqlite3')
+            const database = new Database(':memory:')
+            try { database.prepare('SELECT 1').get(); return true }
+            finally { database.close() }
+          } catch { return false }
+        })
+        originalProbe.push(originalReady === true ? 'complete' : originalReady === false ? 'native-false' : 'unavailable')
         // One client-owned marker proves that the second process reads the saved profile.
         expect(await app.evaluate(({ app }, reopening) => {
           const fs = require('node:fs'), path = require('node:path')
@@ -78,7 +92,7 @@ test('missing inspector values do not diagnose native failure on launch or profi
             const response = await session.send(method, params)
             assertSuccessfulNativeProbe(response)
             const missingResult = reads++ === 0
-            observations.push({ launch, sqliteReady: response.result.value === true, missingResult })
+            observations.push({ launch, sqliteReady: true, missingResult })
             return missingResult ? { ...response, result: {} } : response
           }
         } }) } } as unknown as ElectronApplication
@@ -93,10 +107,12 @@ test('missing inspector values do not diagnose native failure on launch or profi
       { launch, sqliteReady: true, missingResult: true },
       { launch, sqliteReady: true, missingResult: false }
     ]))
+    expect(originalProbe).toEqual(['complete', 'complete'])
   } finally {
     await testInfo.attach('native-prerequisite-observations', {
       body: JSON.stringify(observations), contentType: 'application/json'
     })
+    await testInfo.attach('original-native-probe', { body: JSON.stringify(originalProbe), contentType: 'application/json' })
     await attachLaunchFate(testInfo, fate)
     await rm(directory, { recursive: true, force: true })
   }

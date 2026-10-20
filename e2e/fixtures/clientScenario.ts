@@ -205,11 +205,14 @@ const replay = base.extend<ReplayFixtures>({
         server_static_pubkey: Buffer.from(daemon.staticPublicKey).toString('base64') }) })
     } finally { state = undefined; await daemon.close() }
   },
-  _clientReplay: [async ({ daemon, exchange, recording, relay }, use) => {
+  _clientReplay: [async ({ daemon, exchange, recording, relay }, use, info) => {
     void daemon
     let first = true
+    const native: unknown[] = []
+    let processNumber = 0
     clientAppLifecycle.opened = async (app, page) => {
-      await assertReplayNativeStorage(app)
+      const opened = ++processNumber
+      await assertReplayNativeStorage(app, observation => { native.push({ process: opened, ...observation }) })
       const identity = await page.evaluate(() => window.pyry.deviceIdentity())
       if (!identity.ok) throw new Error('Replay device identity unavailable')
       if (first) { exchange.setDeviceId(identity.deviceId); first = false }
@@ -223,6 +226,7 @@ const replay = base.extend<ReplayFixtures>({
     try { await use() } finally {
       delete clientAppLifecycle.opened
       delete clientAppLifecycle.closing
+      await info.attach('replay-native-storage', { contentType: 'application/json', body: Buffer.from(JSON.stringify(native)) })
     }
   }, { auto: true }],
   page: async ({ daemon }, use) => { void daemon; await withIsolatedElectronApp(({ page }) => use(page)) }

@@ -102,20 +102,81 @@ its catch-up cursor after a profile restart.
 
 On initial launch and every profile relaunch, the shared replay fixture probes
 `better-sqlite3` in Electron's main process before device binding and pairing. It
-loads the application's installed addon, queries an in-memory database and closes
-it. An observed false probe produces the static diagnostic
+loads the application's installed addon, opens and queries an in-memory database
+and closes it. Only explicit boolean `true` permits startup. Explicit `false`
+immediately produces the static diagnostic, without further polling:
 `Replay requires working Electron SQLite; run npm run rebuild:electron before replay.`
-Loader errors and paths are not exposed. This prerequisite check does not prove
+Load/open/query/close failures return false; native errors and paths are not
+exposed. Missing or non-boolean observations, including truthy values, poll every
+100 ms within the existing five-second bound and end with
+`Replay main-process inspection unavailable` if no conclusive boolean arrives.
+Fatal inspector errors propagate immediately. This prerequisite check does not prove
 protected-profile persistence or current provider behavior; see the
-[native-storage diagnosis and Linux replay evidence](knowledge/features/development-verification.md#replay-native-storage-prerequisite).
+[native-storage diagnosis and Linux replay evidence](knowledge/features/development-verification-replay-native-storage.md#replay-native-storage-prerequisite).
 
 The prerequisite and history's `mainRead` use synchronous inspector evaluation
-to bypass persistent collected promises after profile relaunch. An unavailable
-inspection remains distinct from a false addon probe or an empty history result;
-it fails within the existing five-second bound rather than claiming SQLite is
-unavailable. Playwright upgrades must retain checks for the adapter's internal
-local session access. See the [inspection contract](knowledge/features/e2e-harness-context-recovery.md#persistent-awaited-inspector-loss)
-and [counted Linux relaunch evidence](knowledge/features/development-verification.md#replay-inspection-after-profile-relaunch).
+to bypass persistent collected promises after profile relaunch. The generic
+reader preserves valid `false`, zero, null, undefined, empty strings, arrays and
+objects, rejects promise results, and selects a fresh current-process inspector
+session on every call. Boolean-only classification belongs to the prerequisite;
+an empty history read remains valid. Controls must use static categories or
+derived booleans rather than asserting raw inspector exception/value fields,
+which can leak content before reader sanitization. Playwright upgrades must
+retain these contracts. See the [inspection contract](knowledge/features/e2e-harness-context-recovery.md#persistent-awaited-inspector-loss)
+and [counted Linux relaunch evidence](knowledge/features/development-verification-replay-native-storage.md#replay-inspection-after-profile-relaunch).
+
+The [accepted native-observation evidence](knowledge/features/development-verification-replay-native-storage.md#counted-linux-native-observation-validation)
+records Linux x64 on 2026-10-20, clean compiled repair
+`5569f7cff359a9ac942c1c35642b0c2f1f1a5194`, profile `complete-thread`.
+These are retained results, not fresh documentation runs. Under `/tmp/builder-2190/`:
+
+| Check | Executed / passed / failed / skipped | Report | Configured / actual workers |
+| --- | --- | --- | --- |
+| Original classifier causal units | 43 / 24 / 19 / 0 | `unit-causal-red-corrected.log` | Vitest |
+| Final affected units | 43 / 43 / 0 / 0 | `rework-pre-verify.log` | Vitest |
+| Original classifier Electron control | 1 / 0 / 1 / 0 | `electron-causal-red.json` | 3 / 1 |
+| Original diagnostic assertions | 3 / 0 / 3 / 0 | `rework-diagnostic-leak-red.json` | 3 / 1 |
+| Complete repaired control spec | 4 / 4 / 0 / 0 | `rework-electron.json` | 3 / 1 |
+| Guarded paired history/thread | 4 / 4 / 0 / 0 | `rework-paired.json` | 3 / 3 concurrent slots |
+| Subsequent complete guarded replay | 29 / 29 / 0 / 1 | `rework-recorded-full.json` | 1 / 1 |
+| Supplied configured application gate 7 | 533 / 533 / 0 / 4 | Dispatcher gate report | Not supplied |
+
+Each JSON report has separate matching `.log` and `-results/` artifacts. The two
+replay summaries retain build/profile, seven-bundle hashes, all worker identities,
+input checksums and capture provenance. Node checks finished before Electron-native
+preparation; no native rebuild overlapped replay. Both guarded commands restored
+normal output, reported zero forbidden launches and used retries zero.
+
+The paired invocation selects exactly
+`a real daemon lazily fills a served gap after more than 200 entries written while Electron is closed`
+and `daemon-built thread streams, places an agent, reconnects, resets and reopens saved items`
+with `node scripts/run-offline-replay.mjs --profile complete-thread`,
+`--fully-parallel --workers 3 --repeat-each 2 --retries 0`.
+Both named tests are present and passed twice in that batch, then once in the
+complete replay and supplied application gate. Every paired history exchange is
+32 requests / 63 emitted frames; every thread exchange is 45 / 378, zero remaining.
+All 29 full-suite exchanges complete with zero remaining. The sole full-replay
+skip is the existing system-prompt-reset fixme, also skipped in application gate 7,
+tracked by [upstream #2436](https://github.com/pyrycode/pyrycode/issues/2436).
+
+The actual-Electron case
+`missing inspector values do not diagnose native failure on launch or profile relaunch`
+is present and passed in the complete control spec and application gate 7. On each
+process it omits one genuine successful probe's value, then forwards another genuine
+success. A saved marker proves profile reuse; both processes exit zero without
+teardown failures. This establishes the missing-result mechanism without fabricated
+success. History/thread input hashes and captured Desktop/daemon/binary identities
+remain those recorded below; the linked native-observation reference retains their
+full values and report hashes through the plan.
+
+The separately reported historical #2153 macOS batch remains failed: 4 executed /
+3 passed / 1 failed / 0 skipped, exchange 10 matched / 21 emitted / 22 remaining.
+Its trigger remains unknown. Original `/tmp/builder-2153/paired-3.*` and
+`paired-3-results/` paths are recorded separately; the retrievable earlier-run bundle
+under `/tmp/builder-2190/evidence-2153/` contains only the builder log, with no raw
+paired report/log/results or artifact pointers. New passes do not identify that
+historical cause or erase the failure. This harness correction requires no fresh
+provider/daemon acceptance; macOS is outside the Linux ticket's verification scope.
 
 Seven named read-only queries may reorder within an action. Every other request is an ordered barrier, including read marks. A query cannot borrow a future reply. Daemon frames retain recorded order and wait for all preceding requests, captured connection transitions and explicit test-side checkpoints. Missing, duplicate, extra or changed requests fail even after the final visible assertion. Diagnostics report counts and source provenance without payloads.
 

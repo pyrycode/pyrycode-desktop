@@ -249,7 +249,7 @@ passing without retry in the 515-case Linux application gate. Full executed,
 failed and skipped counts and unchanged capture provenance are retained there.
 The controlled delay does not establish the historical failure's production cause.
 
-The [Linux relaunch repair evidence](knowledge/features/development-verification.md#replay-inspection-after-profile-relaunch)
+The [Linux relaunch repair evidence](knowledge/features/development-verification-replay-native-storage.md#replay-inspection-after-profile-relaunch)
 records five consecutive two-worker paired runs, the complete guarded recorded
 suite and the configured application gate for #2072. It preserves the failed
 gate's unrelated visible-tail result separately. Both repaired scenarios passed

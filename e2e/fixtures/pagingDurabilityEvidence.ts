@@ -7,6 +7,7 @@ export async function installPagingDurabilityEvidence(
   await page?.evaluate(owner => {
     const state = globalThis as any
     const observations: unknown[] = []
+    const saves = new Map<string, number>()
     let epoch: string | undefined
     state.__pagingWriterObservations = observations
     if (typeof document !== 'undefined') document.addEventListener('keydown', event => {
@@ -17,11 +18,14 @@ export async function installPagingDurabilityEvidence(
     state.__observePagingWriter = (stage: string, request: any, fields: object = {}) => {
       if (request?.serverId !== owner.host || request?.conversationId !== owner.chat) return
       const metadata = request.change?.metadata
+      const p = request.change?.persistence
+      if (p && !saves.has(p.id)) saves.set(p.id, saves.size + 1)
       if (stage === 'published') epoch = metadata?.epoch
       observations.push({ stage, ms: Date.now(), sameEpoch: epoch !== undefined && epoch === metadata?.epoch,
         sameOwner: metadata?.hostId === owner.host && metadata?.conversationId === owner.chat,
         items: request.change?.items.length, ranges: request.change?.ranges?.length,
-        start: request.change?.ranges?.at(-1)?.start, completion: request.change?.completion !== undefined, ...fields })
+        start: request.change?.ranges?.at(-1)?.start, completion: request.change?.completion !== undefined,
+        save: p ? saves.get(p.id) : undefined, part: p?.part, parts: p?.parts, ...fields })
     }
   }, { host, chat })
   await app.evaluate(({ ipcMain, webContents }, owner) => {
@@ -37,6 +41,14 @@ export async function installPagingDurabilityEvidence(
     const saves = new Map<string, number>(), pending = new Set<number>(), completedSaves = new Set<number>()
     let epoch: string | undefined
     const record = (stage: string, fields: object = {}) => observations.push({ stage, ms: Date.now(), ...fields })
+    state.__observePagingAdmission = (stage: string, request: any, result: any) => {
+      if (request?.operation !== 'mutateThread' || request.serverId !== owner.host || request.conversationId !== owner.chat) return
+      const p = request.change.persistence
+      record(stage, { save: p ? saves.get(p.id) : undefined, part: p?.part, parts: p?.parts,
+        sameEpoch: epoch === request.change.metadata.epoch,
+        sameOwner: request.change.metadata.hostId === owner.host && request.change.metadata.conversationId === owner.chat,
+        status: result?.status, code: result?.code })
+    }
     state.__observeProtectedPaging = (host: string, chat: string, header: any) => {
       if (host !== owner.host || chat !== owner.chat) return
       record('protected-header', { sameOwner: header.metadata.hostId === owner.host && header.metadata.conversationId === owner.chat,

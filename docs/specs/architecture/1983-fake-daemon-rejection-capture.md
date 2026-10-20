@@ -185,4 +185,82 @@ Validation of the integrated code:
 - `npm run build` passed on `47b92b31` (`merged-build.log`). Final `pre-verify-check --no-suite` passed main-inclusion, required Security review and removed-string checks (`merged-preverify-final.log`); its two suite checks were explicitly omitted because the fresh build/typecheck and affected tests are separately recorded above.
 - `AGENTS_REPO_PATH=/Users/juhanailmoniemi/Workspace/Projects/pyrycode-desktop-agents npm run check:docs` passed. The initial invocation without that environment variable exited before validation because this nested worktree has no sibling agents checkout; it was not a documentation defect. `git diff --check` passed.
 
-The integrated candidate requires a **fresh normal dispatcher/verifier cycle and complete configured macOS gate**. No green full gate, accepted inherited failure, verifier approval or historical HTTP-responder diagnosis is claimed. Keep #2150 open and preserve its inspection-refusal boundary; today’s operator observation and focused passes do not justify closing that investigation. Documentation-only evidence changes after the tested code revision do not add a new implementation.
+At this recovery point, the integrated candidate still required a **fresh normal dispatcher/verifier cycle and complete configured macOS gate**. No green full gate, accepted inherited failure, verifier approval or historical HTTP-responder diagnosis was claimed. The recommendation then was to keep #2150 open and preserve its inspection-refusal boundary; that day's operator observation and focused passes alone did not justify closing the investigation. The later closure note and accepted gate below supersede those pending recommendations. Documentation-only evidence changes after the tested code revision do not add a new implementation.
+
+## Accepted verifier evidence, 2026-10-20
+
+The authoritative dispatcher stage result accepts verifier run
+`d91f4189239c8f9b350130a006a7591bad1433d3cb39aa40c95dc0977f7dbaa5`
+with verdict **PASS** at reviewed revision
+`9d8ed3efbce3cdb01d2b157d803c484521f7aaca`, macOS arm64. This supersedes
+the earlier plan/PR pending-gate statements. The verifier confirmed that merge
+resolution preserves main's explicit IPv4 ownership through
+`http.listen(0, '127.0.0.1')`. No source finding or remaining gate failure was
+reported. Documentation records this evidence; it did not rerun these tests.
+
+### Complete configured application gate
+
+Command: `npx playwright test`, with the normal four workers and no scenario or
+project filter. Of 532 collected cases, **530 executed, 530 passed, 0 failed,
+2 skipped, 0 retries**. The named
+`a setConversationMuted command reaches only the owning host and settles once`
+scenario is present and passed, as are the native-writer prerequisite and all
+seven visible-tail scenarios. No remaining failure requires triage. No skip,
+filter or assertion weakening was added to obtain acceptance.
+
+The two unchanged skips are:
+
+- `desktop-isolation.spec.ts` → `an independent input-enabled cover preserves isolated hover`:
+  a never-shown window receives no pointer from the display.
+- `real-claude-system-prompt.spec.ts` → `real claude picks up a saved channel system prompt at Reset session`:
+  existing fixme for the upstream daemon's frozen session arguments not refreshing
+  the saved prompt on reset.
+
+Retained fresh list report/log:
+`/tmp/verifier-1988/review-9d8ed3ef/gate-6.log`; stderr:
+`/tmp/verifier-1988/review-9d8ed3ef/gate-6.stderr.log`. The verifier retained these
+as copies of dispatcher gate 6. The accepted run's portable evidence bundle also
+contains `logs/verifier-gate__1983_6.log`, its `.stderr.log`, the verdict handoff
+and run metadata; the list report confirms the named mute pass and totals.
+
+### Exact-head mute repetition
+
+At the same reviewed revision, the verifier recorded this command:
+
+```bash
+PLAYWRIGHT_JSON_OUTPUT_NAME=/tmp/verifier-1988/review-9d8ed3ef/mute-ten.json node node_modules/@playwright/test/cli.js test e2e/conversation-mute-command.spec.ts --config=playwright.config.ts --project=parallel --no-deps --grep 'a setConversationMuted command reaches only the owning host and settles once' --repeat-each=10 --workers=1 --retries=0 --reporter=list,json --output=/tmp/verifier-1988/review-9d8ed3ef/mute-ten-results
+```
+
+Result: **10 executed, 10 passed, 0 failed, 0 skipped, 0 retries**, one actual
+worker. The named scenario executed and passed all ten times. All 20 setup records
+opened with `listenerMatchesDial: true`. Owning-host-only dispatch,
+confirmed/rejected settlement, unclaimed-ID rejection and list-refresh assertions
+remain unchanged. Fresh report/log:
+`/tmp/verifier-1988/review-9d8ed3ef/mute-ten.json` and
+`/tmp/verifier-1988/review-9d8ed3ef/mute-ten.log`; outputs are in `mute-ten-results`
+in that directory.
+
+### Historical evidence and scope
+
+The legacy-bind negative control failed; the repaired affected run recorded
+60 executed/passed, zero failed/skipped. Controlled HTTP 400/404/501 cases prove
+the listener-ownership boundary, terminal rejection, failed socket/Noise cleanup
+and a subsequent encrypted exchange through a fresh explicit owner. They do not
+identify the historical HTTP responder. Earlier failed captures, their counts,
+failure lists and artifact references above remain failed evidence. In particular,
+the older full gate's seven focus failures and the later native-writer prerequisite
+failure are not converted into passes by the accepted run.
+
+The PR's later [#2150 closure note](https://github.com/pyrycode/pyrycode-desktop/issues/2150#issuecomment-6291050634)
+records operator-directed closure on 2026-10-20 at 15:40 Europe/Helsinki after a
+separate affected-scenario retest passed without retries. It supersedes the earlier
+keep-open recommendation; #2150 is not an outstanding dependency. Historical
+system-alert identity and causality remain unproven, and no previously refused
+system-alert inspection was retried.
+
+Only macOS is verified for this ticket; other operating systems remain outside
+its verification scope. No fresh provider/live-daemon or Figma check was required
+for this fixture-only change, and skipped live cases are not claimed as passes.
+The accepted stage record and portable bundle can be retrieved with
+`fleet-task.py stages 1983` and
+`fleet-task.py evidence 1983 --run d91f4189239c8f9b350130a006a7591bad1433d3cb39aa40c95dc0977f7dbaa5 --out FRESH_DIRECTORY`.

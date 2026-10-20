@@ -50,6 +50,9 @@ Retain #2153's static codes and immediate terminal errors. Only pending observat
 ## Open Questions
 - Controlled latency must reproduce no-progress before correction; if evidence contradicts full-read contention, revise the design before implementing a different boundary.
 
+## Revisions
+2026-10-20: Resolved the open question with the real protected-store/writer regression. The original observer performs 603 synchronous decrypts and fails with `no-progress` before the queued page publication. The selected reader performs nine decrypts across initial, pending and successful observations; publication precedes the range write and only the subsequent protected start 63 satisfies progress. The regression advances only Vitest's fake monotonic clock by 10 ms per synchronous decrypt, leaving task delivery real; it has no wall-clock sleep. An earlier wall-clock-cost version also failed with no-progress. This proves the observer contention mechanism without attributing unrecorded keychain timings to the historical failure. No production storage correction is needed.
+
 ## Security review
 **Verdict:** PASS
 - Trust boundaries: `createChatHistoryHandler` continues to parse and authorize exact host/chat requests. `readHistoryCoverage` validates page metadata; existing stored fixtures retain both outer and inner ownership checks.

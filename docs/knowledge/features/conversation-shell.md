@@ -426,6 +426,9 @@ The authoritative view shares the screen's actual scroll pin. Its ordinary
 Background tasks menu and task-count pill control the same drawer.
 Current-session hook stops, refusals, errors and foreground tools come from
 selected reports/header status and live readings, so a missing legacy timeline cannot hide them.
+Agent status labels recover complete top-level descriptions from truncated compact
+JSON without requesting details; unusable input falls back to `Running Agent…`.
+See [Agent descriptions](conversation-shell-working-indicator.md#agent-descriptions-from-compact-headers).
 Tool rows with unchanged immutable source facts reuse their presentation while
 another row streams. Frozen headers and complete bodies use separate source-object
 caches; rebuilding headers on unrelated deltas would defeat `TimelineToolRow`

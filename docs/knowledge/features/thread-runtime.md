@@ -84,11 +84,10 @@ Restoration creates no owned save, read acknowledgement or current-session/promp
 authority; pending local sends keep their separate ownership.
 
 Confirmed deletion clears the owning conversation's retained items, pending sends,
-live binding, completion and read authority. Successful unpair retires those
-resources for every scope on that host, including scopes without content. The
-protected writer removes saved content through its existing ordered removal path.
-Failed credential removal does not grant successful-unpair cleanup. Other hosts
-with equal IDs remain independent.
+live binding, completion and read authority. Successful unpair retires every host
+scope through the [host cleanup lifecycle](thread-runtime-unpair.md), including
+scopes without content. Failed removal retains state; equal IDs on other hosts
+remain independent.
 
 ### Bounded complete-item application
 

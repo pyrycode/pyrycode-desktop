@@ -207,6 +207,17 @@ fixture deletes both lifecycle hooks in `finally`, including on failure. Strict
 reconnect/device boundaries and final `assertComplete()` remain mandatory. See the
 [controlled ordering and failure boundaries](knowledge/features/e2e-harness-context-recovery.md#persistent-awaited-inspector-loss).
 
+The effort scenario additionally owns a local first-error boundary around observer
+setup, scenario execution, handoff and final proof. It clears the old observer's
+ownership before awaiting replacement, independently attempts capture, disposal
+and attachment, and retains retirement proof in the final attachment. Process,
+phase and availability distinguish current proof from cached diagnostics or
+unavailable data; cached proof never satisfies an assertion. Required observations
+still fail without an earlier error. See the [proof ownership contract and counted macOS evidence](knowledge/features/development-verification-replay-native-storage.md#effort-scenario-proof-ownership)
+for the actual-path regressions, complete unchanged 96-request/396-frame effort
+replay and separately retained historical failure/comparison. The historical
+relaunch trigger remains unknown, and replay adds no fresh provider/daemon proof.
+
 The [accepted retirement verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2130#issuecomment-6273917715)
 records retained Linux x64 results on 2026-10-19, tested implementation
 `fbba3bdd7700d69cbfd7fcc9e563a96c58b8a632`, reviewed head

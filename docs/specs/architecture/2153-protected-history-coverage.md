@@ -231,6 +231,19 @@ closes the asynchronous observation gap. Existing relay, hostile-daemon, disk an
 renderer threat boundaries remain unchanged. No MUST FIX or SHOULD FIX security
 findings. Reviewer: builder, 2026-10-20.
 
+### 2026-10-20 — investigate the failed rework acceptance batch
+
+The first new paired batch on `bf14bed8` failed saved-profile catch-up at 45
+seconds (3 passed/1 failed; failed exchange 9 matched/20 emitted/23 remaining).
+The two startup controls and all 249 focused Node tests pass. This failed report
+remains `/tmp/builder-2153/rework/final-paired-1.json`; it is not repaired by an
+unchanged rerun. Add local content-free scenario observations around the resumed
+selection: latest received status/capabilities, query failure codes, received
+reply count and existing main query-observer results, attached even on failure.
+Keep the original failure separate from these diagnostic schedules and preserve
+all assertions/bounds/envelopes. No production hypothesis is adopted yet. This
+adds no authority or payload retention; the security verdict remains PASS.
+
 ### 2026-10-20 — macOS production-delivery validation
 
 Final tested source: `33aa5fee23efd70365a829f908f6e736a8ada084`, including final

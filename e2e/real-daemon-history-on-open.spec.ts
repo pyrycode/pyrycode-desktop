@@ -94,9 +94,29 @@ test('a real daemon lazily fills a served gap after more than 200 entries writte
     if (savedCheckpoint !== null) {
       const fresh = await initial.relaunch(async () => { for (const text of closedPosts) await post(text) })
       await installHistoryQueryEvidence(fresh.app, 'resume')
+      await watchPhaseReconnect(fresh.page)
+      await fresh.page.evaluate(() => {
+        const stages = { statuses: [] as string[], failures: [] as string[], replies: 0 }
+        ;(window as any).__resumeStages = stages
+        window.pyry.onDaemonEvent(event => {
+          if (['connecting', 'connected', 'failed', 'disconnected'].includes(event.type)) stages.statuses.push(event.type)
+          if (event.type === 'threadQueryFailed') stages.failures.push(event.reason)
+          if (event.type === 'threadReply') stages.replies++
+        })
+      })
       await fresh.page.locator('.channel-list__row-open').filter({ hasText: channel }).click()
       const thread = fresh.page.locator('.conversation__thread')
-      await expect(thread).toContainText(closedPosts.at(-1)!, { timeout: 45_000 })
+      try {
+        await expect(thread).toContainText(closedPosts.at(-1)!, { timeout: 45_000 })
+      } finally {
+        const observed = await Promise.allSettled([
+          fresh.page.evaluate(() => (window as any).__resumeStages),
+          readPhaseReconnect(fresh.page),
+          readReplayMainProcess(fresh.app, () => (globalThis as any).__threadHistoryAsks)
+        ])
+        await testInfo.attach('resumed-startup-observations', { contentType: 'application/json',
+          body: Buffer.from(JSON.stringify(observed.map(result => result.status === 'fulfilled' ? result.value : 'unavailable'))) })
+      }
       await expect(thread).toContainText(baseline)
       const asks = await mainRead(fresh.app, () => (globalThis as any).__threadHistoryAsks as { type: string; version?: number }[])
       expect(asks[0]).toEqual({ type: 'thread_catch_up', version: savedCheckpoint })

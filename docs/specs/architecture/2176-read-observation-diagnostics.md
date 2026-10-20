@@ -174,3 +174,35 @@ remains owned by the next stage. Historical FAILs and missing original target-ma
 raw before-evidence remain unchanged. One synchronization invariant is repaired;
 estimated total branch written work remains under 800 lines, with no new exported
 surface, consumer migration, state or production failure branch.
+
+### Synchronization reproduction, macOS arm64
+Scratch root: `/tmp/builder-2176/sync-repair/`; original gate FAIL bundle remains
+under `sync-repair-evidence/ffc78e067a57e1446e74fe49f96444dc69e4f2be953f438bd475591d094889ac/`.
+Before changing the barriers, the exact two named cases plus native prerequisite
+executed 3 tests: 2 passed, 1 failed, 0 skipped/retried (`original.json`). The reply
+failure again omitted the code-fence suffix; visible-tail passed in this run.
+
+The controlled-before source is retained as `controlled-before.patch`.
+`controlled-before.json`: 3 executed, 1 prerequisite passed, 2 expected failures,
+0 skipped/retried. The received-but-held suffix still produced only PARTIAL when
+the old visible-container barrier activated Reply. A 100 ms challenge bypassed the
+old frame-only read hold and rendered `Awaiting commit` before its exclusion check.
+These are controlled ordering proofs, not a reconstruction of historical schedules.
+
+Integrated #2173's `dd069c67` exact suffix barrier/comparison, strengthened to hold
+the actual runtime drain and require settled cursor absence; integrated #2186's
+`c449934f` paired frame/timer hold and ordered IPC sentinel, strengthened to require
+the complete mark sequence. No sibling plan, unrelated code or refused publication
+was copied. `controlled-after.json`: 4 executed/passed, 0 failed/skipped/retried,
+2 configured/actual workers. Its attachments retain exact partial/full quotes and
+receipt 1, native frame/timer opportunities 1 each, marks `[1,2,3,4]` before release.
+After release the final assertions require committed suffix content and exact marks
+`[1,2,3,4,5]`. Both controls restore scheduling APIs and subscriptions in `finally`.
+
+Final main integration was already current at `3fd12cc640d4`. Pre-verify passed
+5/5 with 41 publisher units executed/passed (`pre-verify-publisher-final.log`,
+`publisher-unit-evidence/`); the sandboxed attempt's label-read skip remains in
+`pre-verify-publisher.log`. Runtime timer-fallback/continuation and quote/copy units
+executed/passed 42 tests (26 runtime, 16 copy), zero failed/skipped
+(`runtime-copy-units.json`). Build, client-test typecheck and docs check passed.
+No assertion, timeout, retry, worker configuration or production timer was relaxed.

@@ -27,8 +27,10 @@ const frame = (type: string, payload: unknown, in_reply_to: number, extra = {}) 
 async function connected(serverId = 'a', expansion = false, compact = false) {
   const configs: NoiseRelayDriverConfig[] = [], events: StampedDaemonEvent[] = [], sent: Uint8Array[] = []
   const observations: Function[] = []
+  const diagnostics: { event: string; code?: string }[] = []
   let drop = false, throws = false
   const connection = createDaemonConnection({ serverId, deviceName: 'test', clientVersion: 'test',
+    diagnosticLog: { event: entry => { diagnostics.push(entry) } },
     pairedServer: { load: async () => ({ server: serverId, relay: 'wss://relay.example/v1/client', token: 'fake', server_static_pubkey: base64StdEncode(new Uint8Array(32)) }), save: async () => {} },
     deviceKeypair: { ensure: async () => ({ publicKey: new Uint8Array(32), privateKey: new Uint8Array(32) }) },
     sink: { isDestroyed: () => false, webContents: { send: (channel, event) => {
@@ -46,7 +48,7 @@ async function connected(serverId = 'a', expansion = false, compact = false) {
   const emit = (bytes: Uint8Array) => configs.at(-1)!.onEvent({ type: 'message', plaintext: bytes })
   const ask = (q: ThreadQuery = query, requestId = 'request') => { connection.queryThread(q, requestId); return decodeEnvelope(sent.at(-1)!).id }
   const replies = () => events.filter(e => e.type === 'threadReply' || e.type === 'threadQueryFailed')
-  return { connection, configs, events, sent, ack, emit, ask, replies, observations, failSend: (throwing = false) => { drop = true; throws = throwing } }
+  return { connection, configs, events, sent, ack, emit, ask, replies, observations, diagnostics, failSend: (throwing = false) => { drop = true; throws = throwing } }
 }
 function routePreloadQueries(route: Parameters<typeof dispatchThreadQuery>[1]) {
   electron.send.mockImplementation((_channel, command) => {
@@ -90,6 +92,87 @@ async function compactRuntime() {
   return { ...h, r, read, requests, last, data, done, update, snapshot: () => r.compact.snapshot('a', 'c'),
     close() { r.dispose(); off(); h.connection.stop() } }
 }
+it('text send through main keeps contiguous compact history and Older usable', async () => {
+  const h = await compactRuntime()
+  try {
+    h.data(); h.done()
+    h.connection.send({ conversation_id: 'c', message_id: 'synthetic-send', text: 'Synthetic text' })
+    expect(h.requests().at(-1)?.type).toBe('send_message')
+    const pending = { ...item, id: 3, kind: 'user_message', status: 'queued', active: true,
+      content: { text: 'Synthetic text', device_id: 'synthetic-device', message_id: 'synthetic-send' } }
+    h.emit(frame('thread_compact_update', { ...compactScope, version: 9, from_version: 8, progress: false, item: pending }, 0))
+    expect(h.snapshot()?.rows).toContainEqual(pending)
+    const echo = { ...item, id: 3, rev: 9, order: 9, kind: 'user_message', shown: true,
+      content: { text: 'Synthetic text', device_id: 'synthetic-device', message_id: 'synthetic-send' } }
+    h.emit(frame('thread_compact_update', { ...compactScope, version: 10, from_version: 9, progress: false, item: echo }, 0))
+    h.update(11, root(1, 11))
+    expect(h.snapshot()).toMatchObject({ checkpoint: 8, consumed: 11 })
+    expect(h.snapshot()?.failed).toBeUndefined()
+    expect(h.snapshot()?.rows).toContainEqual(echo)
+    expect(h.requests().filter(e => e.type === 'thread_catch_up')).toHaveLength(1)
+    h.r.query('older', 'a')
+    expect(h.requests().at(-1)).toMatchObject({ type: 'thread_page', payload: { before_order: 5, epoch: 'e', projection: 'compact-v1' } })
+    h.done(h.last(), { version: 11, lower_order: 0, upper_order: 5, continuation: 0, older_exists: false })
+    expect(h.snapshot()).toMatchObject({ checkpoint: 8, consumed: 11, ranges: [{ start: 0, end: 10 }] })
+    expect(h.snapshot()?.failed).toBeUndefined()
+    expect(h.r.compact.state.getState().pending.size).toBe(0)
+  } finally { h.close() }
+})
+it.each(['connection', 'capability', 'command'] as const)('compact main refusal classifies %s without transport handoff', async cause => {
+  const h = await connected('a', true, cause !== 'capability')
+  try {
+    if (cause === 'connection') h.connection.stop()
+    const q: ThreadQuery = { type: 'thread_catch_up', payload: { ...compactScope, version: cause === 'command' ? -1 : 8 } }
+    const count = h.sent.length
+    h.connection.queryThread(q, 'refused')
+    expect(h.sent).toHaveLength(count)
+    expect(h.replies().at(-1)).toMatchObject({ type: 'threadQueryFailed', reason: 'unavailable' })
+    expect(h.diagnostics).toContainEqual({ event: 'thread-query-refused', code: cause })
+    expect(h.diagnostics.some(e => e.event === 'thread-query-sent')).toBe(false)
+  } finally { h.connection.stop() }
+})
+it.each([undefined, 0])('compact query admits a pending send with order=%s and certifies only its final marker', async order => {
+  const h = await compactRuntime()
+  try {
+    const pending = { ...item, kind: 'user_message', status: 'queued', active: true, ...(order === undefined ? {} : { order }) }
+    h.emit(frame('thread_items', { ...compactScope, items: [pending], final: false }, h.last()))
+    expect(h.snapshot()?.rows).toContainEqual(pending)
+    expect(h.snapshot()?.checkpoint).toBe(0)
+    h.done()
+    expect(h.snapshot()?.checkpoint).toBe(8)
+    expect(h.r.compact.state.getState().pending.size).toBe(0)
+  } finally { h.close() }
+})
+it('locally unavailable compact recovery retains rows, settles once and works after explicit Retry', async () => {
+  const h = await compactRuntime()
+  try {
+    h.data(); h.done()
+    const rows = h.snapshot()?.rows
+    routePreloadQueries(() => null)
+    h.update(12, undefined, 10)
+    expect(h.snapshot()).toMatchObject({ failed: 'unavailable', checkpoint: 8 })
+    expect(h.snapshot()?.rows).toEqual(rows)
+    expect(h.r.compact.state.getState().pending.size).toBe(0)
+    const count = h.requests().length
+    h.update(13); h.r.query('older', 'a')
+    expect(h.requests()).toHaveLength(count)
+    routePreloadQueries(() => h.connection)
+    h.r.query('retry', 'a')
+    expect(h.requests().at(-1)?.payload).toMatchObject({ version: 8, projection: 'compact-v1' })
+    h.emit(frame('thread_items', { ...compactScope, version: 13, items: [], final: true, from_version: 8 }, h.last()))
+    expect(h.snapshot()?.failed).toBeUndefined()
+    expect(h.snapshot()?.checkpoint).toBe(13)
+    expect(h.r.compact.state.getState().pending.size).toBe(0)
+  } finally { h.close() }
+})
+it.each([-1, 1.5, 'invalid', null])('compact query still rejects an invalid present order=%s', async order => {
+  const h = await compactRuntime()
+  try {
+    h.emit(frame('thread_items', { ...compactScope, items: [{ ...item, order }], final: false }, h.last()))
+    expect(h.snapshot()).toMatchObject({ checkpoint: 0, failed: 'malformed' })
+    expect(h.r.compact.state.getState().pending.size).toBe(0)
+  } finally { h.close() }
+})
 it('compact child failure blocks queued limit variants until their explicit retry, including continuations', async () => {
   const h = await compactRuntime()
   try {

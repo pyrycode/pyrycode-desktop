@@ -14,6 +14,66 @@ const header = (id: number, parent = 0, kind = 'tool_call'): ThreadSummary => ({
   rev: 1, status: 'done', active: false, shown: true, headline: `Inspect ${id}`, detail_omitted: true,
   subtree_version: 10000, session: 'session' })
 
+for (const gap of [false, true]) test(`text send retains compact history and Older, genuine gap=${gap}`, async ({ launchPairedApp }) => {
+  const requests: Envelope[] = [], route = { projection: 'compact-v1', conversation_id: SEEDED_ROW.id, epoch: 'send' }
+  let sent = false, deviceId = ''
+  const { page, app } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities }, buildReplyFrames: bytes => {
+    const request = decodeEnvelope(bytes); requests.push(request)
+    if (request.type === 'list_conversations') return [seedConversationsFrame({ ...SEEDED_ROW, current_session_id: 'session' })]
+    if (request.type === 'thread_catch_up' || request.type === 'thread_page') {
+      const recovery = request.payload.version === 10, older = request.type === 'thread_page'
+      return [frame('thread_items', { ...route, version: sent ? 15 : 10, final: false,
+        items: [full(older ? 1 : 4, older ? 'Older after send' : 'Retained before send')] }, request.id),
+      frame('thread_items', { ...route, version: sent ? 15 : 10, items: [], final: true,
+        ...(recovery ? { from_version: 10 } : { lower_order: older ? 0 : 4, upper_order: older ? 4 : 10,
+          continuation: older ? 0 : 4, older_exists: !older }) }, request.id)]
+    }
+    if (request.type === 'send_message') {
+      sent = true
+      const { order: _order, ...pending } = { ...full(7, ''), kind: 'user_message', status: 'queued', active: true, shown: false,
+        content: { text: request.payload.text, message_id: request.payload.message_id, device_id: deviceId } }
+      return [frame('thread_compact_update', { ...route, from_version: 10, version: 11, progress: false, item: pending }),
+        frame('thread_compact_update', { ...route, from_version: 11, version: 12, progress: false,
+          item: { ...pending, order: 7, rev: 2, active: false, shown: true, status: 'delivered' } }),
+        frame('thread_compact_update', { ...route, from_version: gap ? 14 : 12, version: 15, progress: false,
+          item: full(8, 'Compact send processed') })]
+    }
+    return []
+  } })
+  await expect(page.getByText('Retained before send', { exact: true })).toBeVisible()
+  const identity = await page.evaluate(() => window.pyry.deviceIdentity())
+  if (!identity.ok) throw Error('Synthetic device identity unavailable')
+  deviceId = identity.deviceId
+  await page.evaluate(() => {
+    ;(window as any).sendProcessed = { echo: false, recovered: false, page: false }
+    window.pyry.onDaemonEvent(event => {
+      if (event.type === 'threadCompactUpdate' && event.update.payload.item?.kind === 'user_message' &&
+          event.update.payload.item.order === 7) (window as any).sendProcessed.echo = true
+      if (event.type === 'threadReply' && event.reply.type === 'thread_items' && event.reply.payload.final) {
+        if ('from_version' in event.reply.payload) (window as any).sendProcessed.recovered = true
+        if ('older_exists' in event.reply.payload && !event.reply.payload.older_exists) (window as any).sendProcessed.page = true
+      }
+    })
+  })
+  await page.getByPlaceholder('Message…').fill('Synthetic compact send')
+  await page.getByPlaceholder('Message…').press('Enter')
+  await expect.poll(() => page.evaluate(() => (window as any).sendProcessed.echo)).toBe(true)
+  await expect(page.getByText('Compact send processed', { exact: true })).toBeVisible()
+  await expect(page.getByText('Synthetic compact send', { exact: true })).toHaveCount(1)
+  if (gap) await expect.poll(() => page.evaluate(() => (window as any).sendProcessed.recovered)).toBe(true)
+  expect(requests.filter(r => r.type === 'thread_catch_up')).toHaveLength(gap ? 2 : 1)
+  if (gap) expect(requests.filter(r => r.type === 'thread_catch_up')[1].payload.version).toBe(10)
+  await expect(page.getByText('Could not load older messages', { exact: false })).toHaveCount(0)
+  await page.locator('.conversation__thread').press('Home')
+  await expect.poll(() => page.evaluate(() => (window as any).sendProcessed.page)).toBe(true)
+  await expect(page.getByText('Older after send', { exact: true })).toBeVisible()
+  await expect(page.getByText('Could not load older messages', { exact: false })).toHaveCount(0)
+  if (!gap) for (const width of [1280, 800]) {
+    await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setContentSize(width, 800), width)
+    await capturePairedApp(app, page, `/tmp/builder-2163/compact-send-${width}.png`)
+  }
+})
+
 for (const retained of [false, true]) test(`automatic compact opening publishes only committed newest root evidence, retained complete=${retained}`, async ({ launchPairedApp }, info) => {
   const requests: Envelope[] = [], route = { conversation_id: SEEDED_ROW.id, epoch: 'read', projection: 'compact-v1' }
   const grants = retained ? ['interactive', 'thread'] : [...capabilities]

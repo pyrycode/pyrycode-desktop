@@ -659,11 +659,12 @@ recovery semantics, not reproduction of the upstream trigger. Counted browser
 preserve the menu proof separately.
 
 The single-consumer [`focusVisibleTailWindow`](../../../e2e/fixtures/visibleTailFocus.ts)
-serves `visible-tail-read.spec.ts`. Each synchronous control callback finds the live
-window and independently checks `isVisible()` before `show()` and `isFocused()` before
+serves `visible-tail-read.spec.ts`. The first control pins its native window;
+later controls and reads retain that handle despite window-list changes.
+It checks `isVisible()` before `show()` and `isFocused()` before
 `focus()`. Partial or late execution cannot repeat completed fields. Every control
-evaluation is followed by up to three read-only inspections through `readMainProcess`,
-without sleeps. Both visible and focused must be confirmed; only transient control
+gets up to 21 read-only inspections through `readMainProcess`, spaced 100 ms after
+the first. Acknowledgement never permits control replay. Only transient control
 loss plus a **final conclusive mismatch** permits the second and last guarded attempt.
 An earlier mismatch followed by unavailable inspection cannot authorize resend.
 Unavailable final confirmation, acknowledged mismatch, exhaustion and missing windows

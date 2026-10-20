@@ -491,6 +491,42 @@ alone does not prove full-composition reliability or erase the historical failur
 
 ### Visible-tail native acknowledgement verification
 
+Native acknowledgement can precede visible/focused readiness. The
+[`focusVisibleTailWindow`](../../../e2e/fixtures/visibleTailFocus.ts) control pins
+its first selected BrowserWindow on the native app; subsequent controls and
+inspections retain that handle even if `getAllWindows()` changes order. Each
+control gets at most 21 read-only confirmations, separated by 100 ms after the
+first read. Confirmation never shows or focuses a window. An acknowledged
+control is never replayed; only transient acknowledgement loss followed by final
+conclusive absence permits a second guarded control. Missing/destroyed windows
+and unavailable final inspection fail. Native success still precedes the separate
+genuine `document.hasFocus()` poll and focus notification. Immediate inspections
+could reject delayed readiness or accidentally confirm a replacement window.
+
+Retained macOS arm64 evidence from the
+[post-send repair plan](../../specs/architecture/2163-compact-send-history.md#recovery-findings-and-dependency--2026-10-20)
+and [accepted verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2170#issuecomment-6300270962)
+is separate from the historical Linux runs below:
+
+| Run/report under `/tmp/builder-2163/` | Executed | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| Delayed-ready control before repair, `focus-red.log` | 20 | 19 | 1 | 0 |
+| Repaired focus controls, `focus-green-final.log` | 21 | 21 | 0 | 0 |
+| Four competing native-focus copies, `focus-mounted.json` | 4 | 2 | 2 | 0 |
+| Complete configured native capture, `bad15d599b8a` | 533 | 533 | 0 | 2 |
+
+The unit suite adds delayed acknowledged readiness and changing-window-list
+controls; fake timers exercise the bounded inspection without a unit deadline
+masking the result. The failed four-copy stress run remains failed: two copies
+correctly failed genuine focus under contention. It is not the normal configured
+composition. The inspected complete capture had four actual workers, zero retries
+or runner errors, and all seven visible-tail cases present/passed, including
+`committed folded tails require focus, uncovered viewport and a closed reader`.
+Its existing hover and system-prompt Reset skips cover neither focus nor read
+acceptance. See [the complete capture and retained failures](thread-runtime-compact.md#post-send-history-and-current-daemon-acceptance).
+These recorded checks add no fresh live-provider claim; other operating systems
+are outside that macOS ticket's verification scope.
+
 The [diagnosis with original/rerun log identities](https://github.com/pyrycode/pyrycode-desktop/issues/2074#issuecomment-6221656181)
 and [verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/2075#issuecomment-6222009186)
 distinguish two historical failures of `committed folded tails require focus,

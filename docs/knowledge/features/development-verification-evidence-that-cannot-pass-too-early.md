@@ -211,9 +211,46 @@ checked its log hash and relevant manifest entries. Original scratch paths
 `/tmp/verifier-2180/review-bf3131b5/original-playwright.log` and `retry.json`
 belong to the originating Mac and are not replaced by Linux reports.
 
-Current macOS execution is outside this Linux ticket's verification scope.
+Fresh macOS execution was outside that Linux ticket's verification scope.
 These fake-transport and captured-client results establish no fresh provider or
 live-daemon acceptance; none was required for the test-only repair.
+
+### Counted macOS compact-history integration
+
+The separate macOS arm64 integration for #2163 consumed the landed paired-scheduler
+repair from #2186 instead of duplicating its held-tail block. The
+[plan](../../specs/architecture/2163-compact-send-history.md#dependency-clearance-and-resumed-macos-validation--2026-10-20)
+and [accepted verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2170#issuecomment-6300270962)
+retain these results on 2026-10-20, separately from Linux and historical macOS:
+
+| Run/report under `/tmp/builder-2163/` | Executed | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| Earlier complete native capture, `b2978707` | 532 | 529 | 3 | 2 |
+| Dependency-cleared focused composition, `resumed-focused.json` | 42 | 42 | 0 | 0 |
+| Complete managed capture, `bad15d599b8a` | 533 | 533 | 0 | 2 |
+| Later main integration, `completed-focused.json` | 42 | 42 | 0 | 0 |
+
+The named `stable callbacks exclude hidden, queued and received but uncommitted
+tails` case was present and passed in all three successful runs, retries 0.
+Each includes the native-writer prerequisite, all 11 compact, 23 hosted-view and
+7 visible-tail scenarios, with three actual workers in the focused runs and four
+in the complete capture. Installation/build/native preparation preceded testing;
+no Node native preparation overlapped Electron. The complete capture's two
+existing skips are hidden-window pointer hover and the upstream-blocked Reset
+system-prompt fixme; neither excludes the held-tail test.
+
+Fresh `pending-read-barrier` attachments record preload receipt 1, actual frame
+opportunity 1 and timer opportunity 1 while targets remain exactly `[1,2,3,4]`,
+with the received context-usage sentinel and no committed pending text. Release
+then passes text visibility and version-5 read eligibility. The later merged
+source strengthens the final assertion to exact targets `[1,2,3,4,5]` and its
+42-case run passed that assertion. The 533-case capture belongs to its earlier
+candidate, not the subsequent merge. Prior partial recovery's 40/40 run excluded
+the held-tail case while #2186 was pending and supplies no pass for it. Earlier
+failed captures/verdicts remain failed. These are retained fake-transport/native
+results, not documentation-stage tests or fresh live-daemon acceptance; see the
+[separate counted live evidence](thread-runtime-compact.md#post-send-history-and-current-daemon-acceptance).
+Other operating systems are outside this macOS integration's verification scope.
 
 ### Read and reply synchronization on macOS
 

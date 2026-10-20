@@ -184,3 +184,206 @@ five checks including seven timing regressions (`pre-verify-final.log`), applica
 build (`build-final.log`) and docs guard. Electron ABI preparation was restored only
 after the Node gate finished (`electron-preparation-final.log`); all paths share the
 `/tmp/builder-2125/` evidence directory. No native check is left running.
+
+## Revisions — reopened slow drain, 2026-10-20
+
+### Files read
+
+- `e2e/history-writer-native.spec.ts` → `source`: retain the complete native contract.
+- `e2e/historyWriterTiming.ts` → `writerWorkloadDuration`: existing observation repair stays.
+- `src/renderer/src/store/chatHistoryWriter.ts` → `drain`: bounded sequential IPC submissions.
+- `src/main/chatHistoryStore.ts` → `execute`: serialized storage ownership across yields.
+- `src/main/historyDatabase.ts` → `transactionSteps`: transactional native storage and task yields.
+- `src/main/indexedThreadHistory.ts` → `tree`, `sequence`, `mutateThread`: authenticated index updates.
+- `src/main/electronSecretEncryption.ts` → `electronSecretEncryption`: production protected backend.
+- `playwright.config.ts` → `native-writer`: preserve prerequisite ordering and global parallelism.
+- `docs/knowledge/features/chat-history-testing-native.md` and `development-verification.md`:
+  runtime ABI ordering, historical failed evidence and native acceptance boundaries.
+
+### Context and design
+
+This is the same native liveness invariant. The recurrence at `eb35b16f` is genuine
+unfinished work (8,277 durable items after 67,850.6 ms); the unchanged 51,556.7 ms
+rerun and 65,077.8 ms baseline do not establish cause. Keep all historical evidence.
+No product visuals, schema, encryption format, shared harness migration or ADR.
+Remote feature branches inspected against current main: no overlapping planned files.
+
+Add single-consumer, bounded content-free measurements to the exact native proof:
+renderer IPC totals/maxima, main CPU profile aggregates, real safeStorage call counts
+and time, process CPU usage, host load and cgroup throttling counters. Observation
+timestamps remain separate from renderer admission-to-flush and IPC duration.
+Wrappers must delegate unchanged to real safeStorage and restore on failure/success.
+Run instrumented baseline/candidate at two configured workers, retries zero, retaining
+the prerequisite ordering. Use measured hot paths to select a local correction in
+the existing indexed writer, with deterministic operation-count/correctness regression
+before the correction. Consider existing transaction-local authenticated-node caches
+before introducing another abstraction. If measurement instead requires a broader
+storage/host repair, stop implementation and link its native blocker.
+
+### State + concurrency and repeated events
+
+No product lifecycle state or public API changes. Any index cache optimization stays
+inside its existing transaction-scoped tree instance; never share verified values
+across commits, reopened owners or protected roots. Existing transaction yields,
+atomic rollback and queue ownership stay. Native probe profiling/wrappers are owned
+by its app and stopped/restored in the failure attachment path before normal close.
+
+| Repeated event | Required coverage |
+| --- | --- |
+| Repeated index updates within one submission | deterministic causal regression and exact native reopen |
+| Later submission / fresh owner with same identity | existing indexed-storage tests and exact native reopen |
+| Assertion failure / slow or missing completion | existing timing regressions; finally retains partial evidence |
+
+### Error handling and testing strategy
+
+No new product error branch. Existing typed storage errors and fail-closed backend
+selection remain. Diagnostics retain bounded static counts/times only, never item
+bodies, SQL parameters, keys or credentials. Diagnostic failure cannot mask assertion
+failure. Prepare host Node units before rebuilding Electron ABI. Run causal regression
+red/green, seven existing timing regressions, affected indexed-storage units, pre-verify
+and build after final main merge; then five consecutive exact Linux native executions
+at two configured workers and retries zero. Record runtime/backend, counts, workload,
+input/heartbeat metrics and paths. Dispatcher owns the complete subsequent gate;
+macOS is outside scope.
+
+Open question: which measured writer/IPC/storage phase accounts for the slow drain?
+Resolve in a dated revision with baseline/candidate evidence before handoff.
+One behaviour, estimated 450 written lines, at most two production files, two new
+exports, no consumer migration, four acceptance criteria, no new product rejects.
+
+## Documentation handoff
+
+Pending documentation stage: update `docs/knowledge/features/chat-history-testing-native.md`
+under “Bounded writer native input proof” with the remaining cause, correction and
+new counted Linux evidence. Preserve the first repair's historical successes and
+failures; describe the reopened slow drain separately from its resolved
+observation-clock defect.
+
+## Security review — reopened repair, 2026-10-20
+
+**Verdict:** PASS
+
+- Trust boundaries: existing `parseChatHistoryRequest` validates production IPC;
+  test wrappers delegate without replacing the backend or bypassing validation.
+- Tokens/secrets: real safeStorage and rejection of `basic_text`/test switches stay;
+  instrumentation counts calls without retaining arguments, results or keys.
+- Files/storage: private profile and transactional protected rows unchanged;
+  fresh protected owner compares exact contents. Scratch evidence stays outside tree.
+- Electron surface: no new IPC or navigation surface; existing sandbox and isolation stay.
+- Cryptography: no algorithm/key/nonce change; any verified-node reuse must be bound
+  to the exact existing transaction-local reference, never unchecked disk data.
+- Network/I/O: fake relay and production IPC unchanged; all observations bounded.
+- Errors/logs: bounded timing/counts and static profile function names only;
+  never serialize raw inspector profiles, SQL parameters, payloads or environment.
+- Concurrency: profiling timers/wrappers stop in finally, normal owner teardown stays;
+  cache lifetime cannot extend beyond the existing tree instance.
+- Threat alignment: relay and hostile daemon validation unchanged; compromised-renderer
+  storage requests still cross validated IPC; protected storage stays fail-closed.
+
+**Reviewer:** builder (self-review per `builder/security-review.md`)
+**Date:** 2026-10-20
+
+### Measured correction decision — 2026-10-20
+
+Instrumented production baseline `8074fabe`, `baseline.json` under
+`/tmp/builder-2125-reopen/`, executes/passes 1, failed/skipped 0 at two configured /
+one actual worker, retries zero. Real `gnome_libsecret`, Electron 33.4.11 / Node
+20.18.3 / ABI 130, Linux x64. Actual drain 49,945 ms, IPC 49,840.7 ms, runner
+50,213.7 ms. Main CPU user/system 50,131.9/3,796.6 ms; native encryption/decryption
+278.6 ms total; SQLite prepare/run/get 7,494.5/5,112.8/497.2 ms. No cgroup
+throttling; host load before 4.85/5.82/7.82 and after 4.47/5.59/7.64. CPU samples
+include `read` 6,238, `same` 3,345, `Hash` 4,813 and GC 4,067 of 45,719 samples.
+Thus IPC transports predominantly CPU-heavy actual index work, rather than a
+renderer observation or keychain delay. Host load remains measured context, not
+an attribution for the historical failure. Retained recurrence bundle checksums
+verified: `/tmp/builder-2125-reopen/recurrence/7b3ee7f480d0f4a38fe77101fbbd1269ad52305931b97dd0daca2c7841afd00b/`.
+
+The existing verified caches are filled only by reads; newly constructed nodes
+are serialized, then repeatedly parsed, hashed and revalidated on subsequent
+updates in that same submission. Select reuse of those already-owned constructed
+nodes via the existing exact-proof cache in `tree` and `sequence`, preserving
+copy-on-read containers. Cache only inside the existing per-operation instance;
+disk nodes still require full verification. Sequence construction temporarily
+permits an unbalanced node during rotation: cache that only for `balanced=false`,
+and cache its strict proof only when the balance invariant holds. No SQL/schema,
+yield, batch-size, protected backend or scheduling changes.
+The new causal regression counts reparses of locally constructed authenticated
+nodes in one 31-item submission, then checks exact fresh reopen and rejection of
+corrupted disk nodes by a later transaction. Native baseline/candidate comparison
+must establish the reduction before claiming this correction resolves slow drain.
+
+## Revisions — causal regression and final Linux evidence, 2026-10-20
+
+The open cause question is resolved as redundant verification of locally constructed
+authenticated index nodes in the ordinary writer's main-process CPU path. The test
+`reuses constructed authenticated nodes within one owned submission without reparsing them`
+fails on unchanged production code with **3,349 reparses** of freshly constructed
+nodes in one 31-item submission (`causal-red.log`: 1 executed/failed, 78 filtered).
+After the correction it passes with zero reparses, exact protected-disk fresh-owner
+contents and rejection of corrupted disk nodes in a later transaction
+(`causal-green.log`: 1 executed/passed, 78 filtered). All 79 indexed-storage tests
+then execute/pass, including rollback, rotations, replay rejection and identity reuse.
+
+Controlled comparison: baseline `8074fabe` and candidate
+`18d4fae2aea128844c3a55a841ca55ae4e24f906` use identical probe instrumentation,
+runtime, production backend, two configured workers, retries zero and unchanged
+prerequisite ordering. The baseline production writer/storage files are byte-identical
+to the recurrence's `eb35b16f`. Only the candidate's constructed-node reuse changes
+production behavior. Compare `baseline.json` with `candidate-1.json`: actual drain
+49,945 → 32,289.7 ms, IPC 49,840.7 → 32,180.3 ms and main CPU user+system
+53,928.5 → 35,564.8 ms. SQLite prepare/run/get counts remain
+356,637 / 305,121 / 57,322, and real safeStorage encrypt/decrypt counts remain
+17,210 / 813. CPU self samples for `read` fall 6,238 → 2,450, `same`
+3,345 → 165 and `Hash` 4,813 → 2,358. This is removal of demonstrated CPU work,
+with identical durable storage operations, rather than a faster observation alone.
+The retained overdue recurrence remains failed; its external scheduler state is unknown.
+
+Five **consecutive** Linux x64 executions on the candidate each executed/passed 1,
+failed/skipped 0, retries zero, two configured / one actual worker. Command:
+`PW_WORKERS=2 npx playwright test e2e/history-writer-native.spec.ts --retries=0 --reporter=json`;
+each invocation has a separate `--output` directory and report. Runtime is Electron
+33.4.11 / embedded Node 20.18.3 / ABI 130, real `gnome_libsecret` throughout.
+All retain one admission, exactly 8,333 durable items / 271 submissions, no writer
+or diagnostic errors, advancing unfinished durable counts around all three real
+inputs, explicit flush, exact fresh protected-owner equality, both app exits 0,
+no signals and no teardown failures. Thresholds and backend assertions are unchanged.
+
+All artifact paths below are under `/tmp/builder-2125-reopen/`. Reports are
+`candidate-N.json`, with `candidate-N.stderr` and `candidate-N-results/` siblings.
+Heartbeat entries show sample count / maximum gap in ms; other times are ms.
+
+| N | Actual drain | IPC | Runner observation | Keyboard x / y / z | Renderer beats / gap | Main beats / gap |
+| --- | ---: | ---: | ---: | --- | --- | --- |
+| 1 | 32289.7 | 32180.3 | 32517.0 | 89.0 / 126.6 / 143.9 | 1615 / 24.9 | 1048 / 88.6 |
+| 2 | 29960.1 | 29863.9 | 30109.5 | 76.6 / 14.2 / 82.1 | 1498 / 24.2 | 998 / 76.0 |
+| 3 | 33554.0 | 33447.2 | 33738.9 | 94.7 / 74.4 / 78.5 | 1678 / 24.6 | 1066 / 98.5 |
+| 4 | 35218.5 | 35107.8 | 35489.9 | 55.7 / 71.3 / 17.1 | 1761 / 26.5 | 1117 / 100.2 |
+| 5 | 53777.1 | 53642.0 | 54063.6 | 131.1 / 102.6 / 108.2 | 2684 / 58.1 | 1443 / 118.6 |
+
+Main CPU totals for runs 1–5: 35,564.8 / 32,774.1 / 36,364.8 / 38,264.6 /
+54,463.4 ms. One-minute host load before→after: 3.82→4.40, 3.46→3.14,
+3.68→3.94, 4.05→4.84, 6.25→8.29. Cgroup throttling remains zero throughout.
+The slower fifth run is retained as measured; higher observed load is context,
+not a controlled attribution of its slowdown. IPC continues to track actual work,
+independently of the renderer/runner observation clocks.
+
+Collection (`collection.json`) contains **523** ordinary cases: native-writer 1,
+clipboard 31, parallel 491. The exact scenario occurs only in native-writer;
+clipboard and parallel retain their existing dependencies and parallelism. No
+global worker reduction, added retry, skip, storage pause or synthetic input.
+
+Post-final-main-merge checks on candidate `18d4fae2` / main `1c001e0e` passed:
+`pre-verify-final.log` (five checks, all 79 indexed-storage tests passed),
+`related-units.log` (seven timing + 36 migration tests, 43 executed/passed),
+`build-candidate.log` and `docs-guard.log`. Host Node 25.8.0 / ABI 141 checks
+finished before `electron-candidate.log` restored Electron ABI 130; no rebuild
+overlapped native executions. All native executions and collection have finished.
+
+Dispatcher handoff: the complete configured application gate remains pending. It
+must pass this prerequisite without retry **and run the dependent projects**
+(522 collected cases, with existing skip reasons retained);
+a prerequisite-only rerun cannot establish that acceptance. Verifier must review
+the counted complete result. Documentation handoff above remains pending for its
+own stage. macOS is outside this ticket's verification scope. Final repair remains
+one behavior, one production file, one new test-helper export, no API migration or
+new product reject branch, and under 450 written lines including plan and tests.

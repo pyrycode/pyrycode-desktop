@@ -74,6 +74,234 @@ for (const gap of [false, true]) test(`text send retains compact history and Old
   }
 })
 
+for (const retained of [false, true]) test(`automatic compact opening publishes only committed newest root evidence, retained complete=${retained}`, async ({ launchPairedApp }, info) => {
+  const requests: Envelope[] = [], route = { conversation_id: SEEDED_ROW.id, epoch: 'read', projection: 'compact-v1' }
+  const grants = retained ? ['interactive', 'thread'] : [...capabilities]
+  let held: Envelope | undefined, read = 0, shown = 10
+  const summary = () => ({ ...SEEDED_ROW, current_session_id: 'session', last_shown_version: shown, read_up_to: read })
+  const { page, app, daemon, forwarder } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities: grants }, buildReplyFrames: bytes => {
+    const request = decodeEnvelope(bytes); requests.push(request)
+    if (request.type === 'list_conversations') return [seedConversationsFrame(summary())]
+    if (request.type === 'thread_catch_up') {
+      if (request.payload.conversation_id !== SEEDED_ROW.id) return [frame('thread_items', {
+        conversation_id: request.payload.conversation_id, epoch: 'other', projection: 'compact-v1', version: 0,
+        items: [], final: true, lower_order: 0, upper_order: 1, continuation: 0, older_exists: false }, request.id)]
+      if (request.payload.projection !== 'compact-v1') return [
+        frame('thread_items', { conversation_id: SEEDED_ROW.id, epoch: 'read', version: 100,
+          items: [{ ...full(1, 'Retained hidden complete'), shown: false }], final: false }, request.id),
+        frame('thread_items', { conversation_id: SEEDED_ROW.id, epoch: 'read', version: 100, items: [], final: true,
+          lower_order: 1, upper_order: 2, continuation: 1, older_exists: false }, request.id)]
+      held = request; return []
+    }
+    if (request.type === 'mark_conversation_read') { read = Number(request.payload.up_to); return [frame('conversation_updated', summary())] }
+    return []
+  } })
+  const marks = () => requests.filter(r => r.type === 'mark_conversation_read').map(r => r.payload)
+  const settle = () => page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  if (retained) {
+    await expect.poll(() => page.evaluate(async id => {
+      const result = await window.pyry.chatHistory({ operation: 'readThread', serverId: 'fake-daemon', conversationId: id })
+      return result.status === 'stored' && result.snapshot.kind === 'daemon-items' ? result.snapshot.thread.checkpoint : null
+    }, SEEDED_ROW.id)).toBe(100)
+    grants.push('thread_expansion', 'thread_compact'); forwarder.dropClientLeg()
+  }
+  await expect.poll(() => held?.payload.projection).toBe('compact-v1')
+  await page.evaluate(() => {
+    ;(window as any).readCompletions = 0
+    ;(window as any).readAcknowledged = 0
+    ;(window as any).readSummary = 10
+    window.pyry.onDaemonEvent(e => {
+      if (e.type === 'threadReply' && e.reply.type === 'thread_items' && e.reply.payload.final) (window as any).readCompletions++
+      if (e.type === 'conversationUpdated') (window as any).readAcknowledged = e.conversation.read_up_to
+      if (e.type === 'conversationsReceived') {
+        (window as any).readSummary = e.conversations[0]?.last_shown_version
+        // Trigger observation synchronously at receipt, before the new summary/render can commit.
+        document.querySelector('.conversation__thread')?.dispatchEvent(new Event('scroll'))
+      }
+    })
+  })
+  const rows = Array.from({ length: 35 }, (_, n) => ({ ...header(n * 2 + 1, 0, 'agent'), headline: `Root agent ${n + 1}` }))
+  const messages = Array.from({ length: 35 }, (_, n) => full(n * 2 + 2, `Agent result ${n + 1}`))
+  daemon.pushFrame(frame('thread_items', { ...route, version: 10, items: [...messages, full(71, 'Committed tail')], headers: rows, final: false }, held!.id))
+  const tail = page.locator('[data-read-row="71"]')
+  await expect(tail).toContainText('Committed tail')
+  await tail.scrollIntoViewIfNeeded(); await settle()
+  expect(marks()).toEqual([]) // Assembled rows are insufficient without newest completion.
+  daemon.pushFrame(frame('thread_items', { ...route, version: 10, items: [], final: true,
+    lower_order: 1, upper_order: 72, continuation: 1, older_exists: false }, held!.id))
+  await expect.poll(() => page.evaluate(() => (window as any).readCompletions)).toBe(1)
+  await tail.scrollIntoViewIfNeeded()
+  await expect.poll(marks).toEqual([{ conversation_id: SEEDED_ROW.id, up_to: 10 }])
+  // Owning acknowledgement clears the sidebar dot; repeated viewport observation deduplicates.
+  await expect.poll(() => page.evaluate(() => (window as any).readAcknowledged)).toBe(10)
+  const channel = page.locator('.channel-list__row').filter({ hasText: SEEDED_ROW.name! }).first()
+  await expect(channel.getByRole('img', { name: 'Idle', exact: true })).toBeVisible()
+  await page.evaluate(() => { window.dispatchEvent(new Event('focus')); document.querySelector('.conversation__thread')?.dispatchEvent(new Event('scroll')) })
+  await settle(); expect(marks()).toHaveLength(1)
+  shown = 11
+  daemon.pushFrame(frame('conversations', { conversations: [summary()] }))
+  // Visible list/name processing plus a commit barrier fences a newer summary before row admission.
+  await expect.poll(() => page.evaluate(() => (window as any).readSummary)).toBe(11)
+  await page.locator('.composer__input').fill('commit barrier'); await settle()
+  expect(marks()).toHaveLength(1)
+  daemon.pushFrame(frame('thread_compact_update', { ...route, from_version: 10, version: 11, progress: false,
+    header: { ...header(72, 0, 'agent'), headline: 'Newest root header' } }))
+  const newest = page.locator('[data-read-row="72"]')
+  await expect(newest).toContainText('Newest root header'); await newest.scrollIntoViewIfNeeded()
+  await expect.poll(marks).toEqual([{ conversation_id: SEEDED_ROW.id, up_to: 10 }, { conversation_id: SEEDED_ROW.id, up_to: 11 }])
+  await expect.poll(() => page.evaluate(() => (window as any).readAcknowledged)).toBe(11)
+  daemon.pushFrame(frame('thread_compact_update', { ...route, from_version: 11, version: 12, progress: true }))
+  daemon.pushFrame(frame('conversations', { conversations: [summary(), { ...SEEDED_ROW, id: 'other', name: 'Other read control' }] }))
+  await page.getByText('Other read control', { exact: true }).click()
+  await expect(page.locator('[data-read-row="72"]')).toHaveCount(0)
+  const previous = held!.id
+  await page.getByText(SEEDED_ROW.name!, { exact: true }).first().click()
+  await expect.poll(() => held?.id).not.toBe(previous)
+  daemon.pushFrame(frame('thread_items', { ...route, version: 12, items: [], final: true, from_version: 10 }, held!.id))
+  await expect.poll(() => page.evaluate(() => (window as any).readCompletions)).toBe(3) // Other empty window and reopened window.
+  await newest.scrollIntoViewIfNeeded(); await settle()
+  await expect(channel.getByRole('img', { name: 'Idle', exact: true })).toBeVisible()
+  expect(marks()).toHaveLength(2) // Acknowledged state survives reopening and hidden-only progress.
+  for (const width of [800, 1280]) {
+    await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setContentSize(width, 800), width)
+    await newest.scrollIntoViewIfNeeded(); await settle()
+    await page.screenshot({ path: `/tmp/builder-2175/compact-read-${retained}-${width}.png` })
+  }
+  expect(requests.filter(r => r.type === 'thread_read_children' || r.type === 'thread_read_tool_body')).toHaveLength(0)
+  shown = 14
+  daemon.pushFrame(frame('conversations', { conversations: [summary()] }))
+  daemon.pushFrame(frame('thread_compact_update', { ...route, from_version: 13, version: 14, progress: false, item: full(73, 'Gapped tail') }))
+  await expect(page.locator('[data-read-row="73"]')).toContainText('Gapped tail')
+  await page.locator('[data-read-row="73"]').scrollIntoViewIfNeeded(); await settle()
+  expect(marks()).toHaveLength(2)
+  await info.attach('build', { body: JSON.stringify(await app.evaluate(() => process.versions)), contentType: 'application/json' })
+  await info.attach('read-marks', { body: JSON.stringify(marks()), contentType: 'application/json' })
+})
+
+for (const width of [800, 1280]) test(`compact tool stacks join every visible seam at ${width}px`, async ({ launchPairedApp }, info) => {
+  const requests: Envelope[] = []
+  const route = { conversation_id: SEEDED_ROW.id, epoch: 'joins' }
+  const { page, app, daemon } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities }, buildReplyFrames: bytes => {
+    const request = decodeEnvelope(bytes); requests.push(request)
+    if (request.type === 'list_conversations') return [seedConversationsFrame({ ...SEEDED_ROW, current_session_id: 'session' })]
+    if (request.type === 'thread_catch_up') return [
+      frame('thread_items', { ...route, projection: 'compact-v1', version: 10000,
+        items: [full(1, 'Compact joins ready'), full(4, 'Visible separator'), full(6, 'After lone tool')],
+        // Successful daemon headers explicitly report known-no-error, rather than omit it.
+        headers: [{ ...header(2), headline: 'Read', error_summary: '' },
+          { ...header(3), headline: 'SendMessage', error_summary: '' },
+          { ...header(5), headline: 'Lone tool', error_summary: '' }], final: false }, request.id),
+      frame('thread_items', { ...route, projection: 'compact-v1', version: 10000, items: [], final: true,
+        lower_order: 1, upper_order: 7, continuation: 1, older_exists: false }, request.id)]
+    return []
+  } })
+  await app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size, 800), width)
+  await expect(page.getByText('Compact joins ready', { exact: true })).toBeVisible()
+  expect(requests.find(request => request.type === 'thread_catch_up')?.payload.projection).toBe('compact-v1')
+  const run = page.getByRole('button', { name: /^Using tools: 2/ })
+  const row = (id: number) => page.locator(`[data-read-row="${id}"] > .tool-row`)
+  await expect(run).toHaveAttribute('aria-expanded', 'false')
+  await expect(row(2)).toHaveCount(0)
+  await expect(row(3)).toHaveCount(0)
+  await run.click()
+  await expect(run).toHaveAttribute('aria-expanded', 'true')
+  await expect(row(2)).toContainText('Read')
+  await expect(row(3)).toContainText('SendMessage')
+  await expect(row(2)).toBeVisible()
+  await expect(row(3)).toBeVisible()
+  await page.mouse.move(0, 0)
+  const measure = () => page.locator('.tool-run__row, [data-read-row="2"] > .tool-row, [data-read-row="3"] > .tool-row, [data-read-row="5"] > .tool-row').evaluateAll(elements => elements.map(element => {
+    const box = element.getBoundingClientRect(), css = getComputedStyle(element)
+    return { top: box.top, bottom: box.bottom, left: box.left, width: box.width,
+      corners: [css.borderTopLeftRadius, css.borderTopRightRadius, css.borderBottomLeftRadius, css.borderBottomRightRadius],
+      border: [css.borderTopWidth, css.borderBottomWidth], borderColor: css.borderColor, shadow: css.boxShadow,
+      wrapper: element.parentElement?.className }
+  }))
+  const geometry = await measure()
+  await info.attach('compact-join-geometry', { body: JSON.stringify(geometry), contentType: 'application/json' })
+  await page.screenshot({ path: `/tmp/builder-2165/compact-joins-${width}.png`, animations: 'disabled' })
+  expect(geometry).toHaveLength(4)
+  for (let index = 1; index <= 2; index++) {
+    expect(Math.abs(geometry[index].top - geometry[index - 1].bottom + 1)).toBeLessThanOrEqual(0.5)
+    expect(geometry[index].left).toBe(geometry[0].left)
+    expect(geometry[index].width).toBe(geometry[0].width)
+  }
+  expect(geometry.map(row => row.corners)).toEqual([
+    ['6px', '6px', '0px', '0px'], ['0px', '0px', '0px', '0px'],
+    ['0px', '0px', '6px', '6px'], ['6px', '6px', '6px', '6px']
+  ])
+  expect(geometry.every(row => row.border.every(width => width === '1px'))).toBe(true)
+  expect(geometry.every(row => row.borderColor === geometry[0].borderColor)).toBe(true)
+  expect(geometry[0].shadow).toBe('none')
+  expect(geometry[1].shadow).toBe('none')
+  expect(geometry[2].shadow).not.toBe('none')
+  expect(geometry[3].shadow).toBe(geometry[2].shadow)
+  const separator = await page.locator('[data-read-row="4"]').boundingBox()
+  const gap = await page.locator('.conversation__thread').evaluate(element => parseFloat(getComputedStyle(element).rowGap))
+  expect(separator).not.toBeNull()
+  expect(gap).toBeGreaterThan(0)
+  expect(separator!.y - geometry[2].bottom).toBe(gap)
+  expect(geometry[3].top - separator!.y - separator!.height).toBe(gap)
+  await run.click()
+  await expect(row(2)).toHaveCount(0)
+  await expect(row(3)).toHaveCount(0)
+  const closedHeader = await page.locator('.tool-run__row').boundingBox()
+  const closedSeparator = await page.locator('[data-read-row="4"]').boundingBox()
+  expect(closedHeader).not.toBeNull()
+  expect(closedSeparator).not.toBeNull()
+  expect(closedSeparator!.y - closedHeader!.y - closedHeader!.height).toBe(gap)
+  await run.click()
+  await expect(row(2)).toBeVisible()
+  await expect(row(3)).toBeVisible()
+  expect((await measure()).map(row => [row.top, row.bottom])).toEqual(geometry.map(row => [row.top, row.bottom]))
+  // A new revision under the same source id preserves the visible-neighbour joins.
+  daemon.pushFrame(frame('thread_compact_update', { ...route, projection: 'compact-v1', from_version: 10000, version: 10001,
+    progress: false, header: { ...header(3), rev: 2, headline: 'SendMessage refreshed', error_summary: '' } }))
+  await expect(row(3)).toContainText('SendMessage refreshed')
+  const refreshed = await measure()
+  for (let index = 1; index <= 2; index++) {
+    expect(Math.abs(refreshed[index].top - refreshed[index - 1].bottom + 1)).toBeLessThanOrEqual(0.5)
+  }
+  expect(refreshed.map(row => row.corners)).toEqual(geometry.map(row => row.corners))
+  expect(requests.filter(request => request.type === 'thread_read_tool_body' || request.type === 'thread_read_children')).toHaveLength(0)
+})
+
+test('compact Agent status describes truncated input and follows live revisions', async ({ launchPairedApp }, info) => {
+  const requests: Envelope[] = [], route = { conversation_id: SEEDED_ROW.id, epoch: 'agent-status' }
+  const agent = (rev: number, description: string): ThreadSummary => ({ ...header(2, 0, 'agent'), rev,
+    active: true, status: 'running', subtree_version: rev,
+    headline: `Agent: {"description":"${description}","subagent_type":"general-purpose","model":"sonnet","prompt":"Read-only investigation. Do not edit code, s…` })
+  const { page, app, daemon } = await launchPairedApp({ threadMode: 'native', helloAck: { capabilities }, buildReplyFrames: bytes => {
+    const request = decodeEnvelope(bytes); requests.push(request)
+    if (request.type === 'list_conversations') return [seedConversationsFrame({ ...SEEDED_ROW, current_session_id: 'session' })]
+    if (request.type === 'thread_catch_up') return [
+      frame('thread_items', { ...route, projection: 'compact-v1', version: 1, items: [full(1, 'Agent status ready')],
+        headers: [agent(1, 'Diagnose desktop older-messages error')], final: false }, request.id),
+      frame('thread_items', { ...route, projection: 'compact-v1', version: 1, items: [], final: true,
+        lower_order: 0, upper_order: 3, continuation: 0, older_exists: false }, request.id)]
+    return []
+  } })
+  await expect(page.getByText('Agent status ready', { exact: true })).toBeVisible()
+  expect(requests.find(request => request.type === 'thread_catch_up')?.payload.projection).toBe('compact-v1')
+  daemon.pushFrame(encodeEnvelope({ id: 91, type: 'turn_state', ts: '2026-10-20T00:00:00Z', session_id: 'session',
+    payload: { conversation_id: SEEDED_ROW.id, state: 'responding' } }))
+  const status = page.locator('.composer-status__label--tool')
+  await expect(status).toHaveText('Running Agent: Diagnose desktop older-messages error…')
+  await expect(status).toHaveCSS('text-overflow', 'ellipsis')
+  await expect(status).toHaveCSS('white-space', 'nowrap')
+  await expect(status).not.toContainText('{')
+  await expect(status).not.toContainText('prompt')
+  await info.attach('agent-status-wide', { body: await capturePairedApp(app, page), contentType: 'image/png' })
+  daemon.pushFrame(frame('thread_compact_update', { ...route, projection: 'compact-v1', from_version: 1, version: 2,
+    progress: false, header: agent(2, 'Inspect revised status') }))
+  await expect(status).toHaveText('Running Agent: Inspect revised status…')
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(800, 800))
+  await expect(status).toBeVisible()
+  await info.attach('agent-status-minimum', { body: await capturePairedApp(app, page), contentType: 'image/png' })
+  // Both received descriptions have committed before excluding demand from label derivation.
+  expect(requests.filter(request => ['thread_read_children', 'thread_read_tool_body', 'thread_page', 'history'].includes(request.type))).toEqual([])
+})
+
 for (const retained of [false, true]) test(`compact recovery and closed-parent live tasks, retained complete=${retained}`, async ({ launchPairedApp }) => {
   test.setTimeout(90000)
   const grants = retained ? ['interactive', 'thread', 'stop_background_task'] : [...capabilities, 'stop_background_task']
@@ -309,7 +537,7 @@ test('production compact demand keeps 8333 source items off the wire until visib
   daemon.pushFrame(encodeEnvelope({ id: 94, type: 'question_dismissed', ts: '2026-10-19T00:00:00Z', session_id: 'session',
     payload: { conversation_id: SEEDED_ROW.id, question_batch_id: 'batch', outcome: 'unanswered', source: 'no_answer' } }))
   await expect(page.getByText('Closed agent question', { exact: true })).toHaveCount(0)
-  expect(requests.filter(r => r.type === 'mark_conversation_read')).toHaveLength(0)
+  expect(requests.filter(r => r.type === 'mark_conversation_read').map(r => r.payload.up_to)).toEqual([10000])
   const saved = await page.evaluate(id => window.pyry.chatHistory({ operation: 'readThread', serverId: 'fake-daemon', conversationId: id }), SEEDED_ROW.id)
   expect(saved.status).toBe('missing')
 

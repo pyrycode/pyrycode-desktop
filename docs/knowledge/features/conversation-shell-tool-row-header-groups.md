@@ -155,7 +155,13 @@ siblings because their mounted wrappers interrupt DOM adjacency. Failure stays
 local to the [Failed icon](conversation-shell-tool-rows.md#failed-icon), with plain
 borders on neighbours. Wrappers are flex columns so negative join margins affect
 height; closed descendants have no mounted wrappers. See
-[tool-row box treatment](conversation-shell-tool-row-body.md).
+[tool-row box treatment](conversation-shell-tool-row-box.md#consecutive-tool-rows-join-into-one-stack-1073).
+The same joins apply to complete rows and compact omitted-detail headers. Successful
+compact headers may explicitly carry `error_summary: ""`; `CompactRow` must omit the
+empty status paragraph or its margins separate otherwise correctly joined rows.
+Extra wrapper content can therefore break geometry even when the join map and CSS
+are correct. Expanding the run only reveals held headers and does not request tool
+bodies or child pages.
 
 ### Verification
 
@@ -266,6 +272,29 @@ ordinary joined-stack geometry and off after full relaunch; see the
 member expansion through outer collapse, appends and an earlier-root history prepend,
 collapsed count/status changes, denial plus result without double counting, and the
 header/member join at both 800px and 1280px window widths.
+
+[`e2e/compact-demand.spec.ts`](../../../e2e/compact-demand.spec.ts) adds
+“compact tool stacks join every visible seam at 800px” and its 1280px counterpart.
+The native fake transport negotiates `compact-v1` and supplies omitted-detail Read
+and SendMessage headers with explicit empty error summaries. After positively observing
+both rows, each test measures header→Read and Read→SendMessage: lower top equals upper
+bottom minus 1px, within 0.5px. It also checks equal widths, 1px plain borders, square
+internal corners, 6px outer corners and only the final row's shadow; a visible non-tool
+separator and lone tool retain ordinary spacing. Collapse/reopen and a same-ID header
+revision preserve the joins, hidden members consume no space, and the outgoing-request
+log contains no tool-body or child-page requests from opening the run.
+
+The [compact-join verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2171#issuecomment-6289239483)
+records Linux x64 evidence on 2026-10-20. The retained baseline ran **2 tests, 0 passed,
+2 failed, 0 skipped**: header→Read was −1px but Read→SendMessage was +31px at both widths.
+At reviewed head `3a46acdc7034ac289d49b9563d3ba9967f537b38`, the full application/replay
+gate ran **521 tests, 521 passed, 0 failed, 5 skipped**, with no flaky results. The verdict
+confirms both named compact seam tests and both existing complete-route tool-run tests
+were present and passed with retry 0; both compact seams measured −1px at both widths.
+It also records comparison of the integrated captures with Figma `384:7103`, preserving
+the square-internal-corner ruling, rounded outer corners and final-row shadow with no
+deviation within scope. This is recorded client layout/replay evidence; no live
+provider/daemon run was required or claimed. macOS is outside this Linux ticket's scope.
 
 Adjacent-tool setups in [`tool-row-toggle`](../../../e2e/tool-row-toggle.spec.ts),
 [`tool-groups`](../../../e2e/tool-groups.spec.ts) and

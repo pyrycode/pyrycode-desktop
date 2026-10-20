@@ -185,6 +185,15 @@ shows `Outcome unknown`. Unsupported agent status or malformed required content 
 summary fallback. No terminal status synthesizes a successful result. Optional
 `ToolRow.suppliedOutcome` treatment leaves legacy result/denial-driven callers unchanged.
 
+Supplied `kind === 'agent' && active === true` also keeps the whole row at opacity 1
+on compact omitted-detail headers and complete items, whether ungrouped or inside
+an expanded tool run. `CompactRow` and `TimelineToolRow` carry this fact to
+`ToolRow.activeAgent`; `.tool-row--active-agent` shares the resolved opacity rule
+without changing the outcome. Ordinary pending `tool_call` rows remain at 0.5,
+including a tool whose display name is `Agent`. Inferring identity from adapted
+`toolCall` presentation or its name would lose this distinction. Running/count
+copy, grouping, placement and disclosure retain their independent contracts.
+
 Background membership requires usable saved `content.tool_use_id` and `task_id`, plus
 either a direct `task_link` with matching `tool_call_id`/`task_id`, or one matching entry
 in `task_link.tasks`. The daemon can save an entire `background_task_roster` payload as
@@ -277,6 +286,29 @@ card/child/run expansion and marker navigation retention, immediate launch resul
 work after the main reply, settled prior-session reopen and reused-scope isolation.
 All its cases belong to the serialized clipboard project because copy assertions
 share Electron's system clipboard.
+
+[`active-agent-opacity.spec.ts`](../../../e2e/active-agent-opacity.spec.ts) uses native
+fake-daemon replies with separate data/final frames. Its four
+`active agent stays emphasized: compact=<boolean>, grouped=<boolean>` cases cover
+compact omitted-detail headers and complete items, each grouped and ungrouped.
+They require opacity 1 from the visible agent name through every ancestor to the
+document root and an ordinary pending tool named `Agent` at 0.5. Grouped cases
+verify `Using tools: 2`, collapse/reopen and repeat the measurements; all cases
+retain the existing status/count assertions and attach mounted captures.
+
+The [accepted Linux verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2172#issuecomment-6289239923)
+at `86484e0c680078e229dd85c6b63b60c4c7f0ca9b` inspected all four pre-fix error
+contexts showing ancestor opacity 0.5. The corrected focused run recorded
+4 executed, 4 passed, 0 failed, 0 skipped, with all four named cases present and
+passed; the verdict independently confirms their dispatcher JSON results.
+The application run recorded 523 executed, 522 passed, 1 failed and 5 skipped;
+the unrelated message-reply failure passed its same-tree rerun (4 executed,
+4 passed, 0 failed, 0 skipped) and is tracked by
+[#2173](https://github.com/pyrycode/pyrycode-desktop/issues/2173).
+Review compared all four revision-matched 1280×773 captures (1280×800 windows)
+with Figma `789:10437` and live row `789:10539`. This is mounted client presentation
+evidence, with no live-provider requirement; macOS was outside this Linux ticket's
+verification scope. These are retained results, not documentation-stage test runs.
 
 The [supplied-agent verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/1939#issuecomment-6107300201)
 at `916a2219ddd57f5914204a181a2e63022e409872` confirms the named mounted cases

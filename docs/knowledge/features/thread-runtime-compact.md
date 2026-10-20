@@ -67,6 +67,7 @@ authorities.
 | Root ranges | Only a matching separate successful query marker certifies its root window. |
 | Compact checkpoint | Successful newest/catch-up completion supplies resumable compact evidence. Older-page completion cannot advance it. |
 | Consumed progress | Admitted live intervals, including hidden-only progress, advance consumption without inventing rows or a checkpoint. |
+| Visible-read progress | Successful newest/catch-up completion certifies `readThrough` and `readRoots`; contiguous admitted live progress can extend that read authority. |
 | Child enumeration | Only successful replacement/continuation pages can establish that enumeration's completeness at its capture. |
 | Body freshness | Matching revision/scope, adequate capture version, data and success marker are required; root coverage supplies none of these. |
 
@@ -85,12 +86,40 @@ remains available only on the complete route. Offline compact reopening reads no
 disk and exposes only session-held roots/detail with truthful stale/missing state.
 `runtime.presentation(host, chat)` supplies selected compact display facts with
 `version: 0`, `checkpoint: 0` and no ranges. Delivery settlement and composer reports
-use those facts rather than older retained complete items. The compact view passes
-no `readInputs` to `useReadObservation`, even when a complete snapshot/checkpoint is
-retained. Compact progress and successful detail reads cannot borrow that evidence;
-compact receipts are withheld. Complete-route publication still requires the
-actually committed/rendered authoritative revision and its existing visibility and
-completion fences. Closed-parent controls use independently admitted
+use those facts rather than older retained complete items. Complete checkpoints,
+ranges, persistence and `runtime.state.complete` cannot authorize compact reads.
+
+Compact visible reads pair `compact.readEvidence` with the exact immutable display
+snapshot constructed from the held compact rows. `ConversationScreen` passes that
+proof to `ThreadItemsView`'s `useReadObservation`; a layout effect installs committed
+inputs before observation. The received owning summary's `last_shown_version` must
+be within the held read watermark, and the newest ordered, shown, nonqueued root
+must have a compact certificate. Its visible root header is sufficient: no body or
+descendant prefetch is required. The focused, visible window, closed reader overlay
+and uncovered tail geometry remain mandatory. `markConversationRead` targets that
+`last_shown_version`; received owning-daemon acknowledgement clears attention. Repeated
+observation deduplicates attempts, while a later evidenced shown target can advance
+the mark. Hidden-only progress cannot create a newer shown target.
+
+Consumption can cross a gap, so neither `consumed` nor assembled rows certify a
+read. Older-page/detail completion alone cannot establish newest authority. A
+target beyond held evidence, an affecting unresolved gap, incomplete initial
+delivery or queued/unordered shown rows withhold publication. Successful overlapping
+captures preserve a later contiguous live read watermark. A root revised beyond
+that watermark loses eligibility until evidenced; an older root certificate must
+not certify its newer revision. A newer summary or mutable runtime snapshot cannot
+upgrade evidence held by an older committed render.
+
+Compact selects its own read-route epoch from a per-opening token and compact
+epoch. Render evidence captures connection, selection and generation ownership;
+its current-scope predicate can only revoke authority. Same-epoch reselection,
+reset, deletion, successful unpair, suspension and disposal retire observation
+authority before lifecycle publication. Disconnect invalidates held connection
+proof; reconnect preserves the publisher's bounded resend of already observed
+pending targets. Equal IDs on another host supply no authority. Complete-route
+publication retains its independent committed revision, completion and visibility
+fences; see [read publication](thread-runtime.md#live-controls-and-read-publication).
+Closed-parent controls use independently admitted
 [full/live identities](conversation-shell-turn-status.md#session-scoped-live-presentation),
 never hidden-body prefetch.
 
@@ -160,6 +189,54 @@ the reader's agent and position as details change.
 
 ## Validation evidence
 
+### Compact visible-read validation and live hold
+
+The [accepted verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2178#issuecomment-6291696290),
+stage `7bf5d368`, records Linux validation on 2026-10-20 at `30bd337e`.
+The supplied dispatcher gate report records **9,908 units executed/passed,
+0 failed, 3 skipped**; the accepted verdict separately reports **9,990
+executed/passed, 0 failed, 3 skipped**. These differing aggregates remain separate.
+Both report the application gate as **528 executed/passed, 0 failed, 4 skipped**.
+The verdict confirms all nine `compact-demand.spec.ts` cases, including both
+`automatic compact opening publishes only committed newest root evidence,
+retained complete=false/true` variants, and both complete viewport read controls
+were present and passed. The skips are three macOS badge/window cases and the
+existing system-prompt reset exclusion.
+
+Both automatic compact variants positively observe successful newest completion,
+committed rows and scrolling, then send exactly `up_to: 10` followed by `up_to: 11`.
+Received acknowledgements clear sidebar attention, retained after reopening.
+Processing and commit barriers fence incomplete delivery, a newer summary before
+commit, hidden-only progress and gapped-tail exclusions. Retained complete checkpoint
+100 cannot certify the incomplete compact render. No body or child reads occur.
+Static renderer tests cannot establish this mounted observation. The publisher
+units additionally cover overlapping captures, gap repair, Older and lifecycle
+retirement; the [plan](../../specs/architecture/2175-compact-visible-reads.md#revisions)
+records those boundaries.
+
+Restoring the original observer guard in the controlled builder build failed at
+the absent first mark: **1 executed, 0 passed, 1 failed, 0 skipped** in
+`/tmp/builder-2175/before-mounted.log`. The repaired build passed both variants:
+**2 executed/passed, 0 failed/skipped** in `after-mounted.log`. Builder's guarded
+complete-thread replay at `3368e515` recorded **1 executed/passed, 0 failed/skipped**,
+zero forbidden launches; `daemon-built thread streams, places an agent, reconnects,
+resets and reopens saved items` was present and passed. That replay proves retained
+complete-route compatibility, not production compact or cross-client acceptance.
+
+**Pre-merge hold — Juhana:** companion mobile access was unavailable in the Linux
+worker (`adb` absent; no connected companion session). The required current-daemon/
+mobile scenario remains unverified: **0 executed, 0 passed, 0 failed, 0 skipped**.
+Before merge, open an unread long agent-heavy channel through automatic compact
+selection, read its newest shown root, prove daemon read advancement to
+`last_shown_version`, and observe mobile clear and retain the read state after
+reopening. Record candidate Desktop build/revision, daemon revision/version,
+accepted `interactive`, `thread`, `thread_expansion`, `thread_compact` booleans,
+numeric prior read/last-shown/acknowledged targets, mobile results and
+executed/passed/failed/skipped counts with at least one scenario executed without
+skipping. Fake transport, captured replay and the verifier PASS do not release this
+hold. These are recorded Linux client results; macOS is outside this ticket's
+verification scope. Only the docs guard runs in the documentation stage.
+
 ### Production activation and visible demand
 
 The [accepted verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2143#issuecomment-6268645624)
@@ -206,8 +283,9 @@ late replies after collapse/navigation. Native composer input committed within
 1000 ms while a detail reply remained unfinished. Both closed-parent control
 variants exercise refusal recovery and live Stop with isolation/missing-identity
 guards; the retained variant holds complete refusal revision 1 alongside compact
-revision 2. Compact read receipts remain zero. Launch-fate attachments record normal
-exit 0, no signal and no teardown failures. All three prior complete pending-tool
+revision 2. That historical activation run withheld compact read receipts; the
+visible-read contract above supersedes that behavior. Launch-fate attachments record
+normal exit 0, no signal and no teardown failures. All three prior complete pending-tool
 browser regressions also passed in the accepted full run.
 
 The accepted evidence bundle retains the verdict, gate tails and accepted rerun;

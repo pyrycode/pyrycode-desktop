@@ -18,6 +18,44 @@ export interface ThreadComposerReports {
 }
 const order = (item: ThreadSnapshot['items'][number]) => typeof item.order === 'number' ? item.order : 0
 
+/** Compact headlines may end mid-input, so validate only complete top-level member prefixes. */
+function compactAgentDescription(json: string): string | undefined {
+  if (!json.startsWith('{')) return undefined
+  let depth = 0, quoted = false, escaped = false
+  for (let at = 0; at <= json.length; at++) {
+    const char = json[at]
+    if (quoted) {
+      if (escaped) escaped = false
+      else if (char === '\\') escaped = true
+      else if (char === '"') quoted = false
+      continue
+    }
+    if (depth === 1 && (char === ',' || char === '}' || at === json.length)) {
+      try {
+        const prefix: unknown = JSON.parse(`${json.slice(0, at)}}`)
+        if (typeof prefix === 'object' && prefix !== null && 'description' in prefix &&
+            typeof prefix.description === 'string' && prefix.description.trim()) return prefix.description.trim()
+      } catch { return undefined }
+      if (char === '}') return undefined
+    }
+    if (char === '"') quoted = true
+    else if (char === '{' || char === '[') depth++
+    else if (char === '}' || char === ']') depth--
+  }
+  return undefined
+}
+
+function composerToolName(name: string, input?: Record<string, string>): string {
+  if (name === 'Agent') {
+    const description = input?.description?.trim()
+    return description ? `Agent: ${description}` : 'Agent'
+  }
+  const suffix = /^Agent(?:\s*:\s*|\s+)([\s\S]*)$/.exec(name)?.[1]
+  if (suffix === undefined || !(suffix.startsWith('{') || suffix.startsWith('['))) return name
+  const description = compactAgentDescription(suffix)
+  return description ? `Agent: ${description}` : 'Agent'
+}
+
 /** Transient chrome reads the selected host's authoritative facts, never the retired timeline. */
 export function threadComposerReports(snapshot: ThreadSnapshot, session: string | null, clearedThrough = 0,
   running = false): ThreadComposerReports {
@@ -31,7 +69,7 @@ export function threadComposerReports(snapshot: ThreadSnapshot, session: string 
   for (const row of rows) {
     const item = row.item
     if (item?.kind === 'toolCall' && row.source.active === true && !row.source.parent && !taskLinked(row.source))
-      result.tool = { name: item.name, elapsedSeconds: item.elapsedSeconds }
+      result.tool = { name: composerToolName(item.name, item.input), elapsedSeconds: item.elapsedSeconds }
     if (item?.kind === 'turnBoundary' && row.source === newestEnd && row.source.rev > clearedThrough && !running && activity < order(row.source)) {
       const { kind: _kind, ...end } = item
       result.latest = { type: 'turnEnd', ...end }

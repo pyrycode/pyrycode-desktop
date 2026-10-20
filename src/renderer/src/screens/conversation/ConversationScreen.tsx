@@ -231,7 +231,7 @@ export function ConversationScreen({
   const compactSelected = useStore(threadRuntime.state, s => s.selection?.host === selectedHost && s.selection?.chat === openConversationId && s.selection?.projection === 'compact-v1')
   const compactSnapshot = useStore(threadRuntime.compact.state, s => compactSelected
     ? s.snapshots.get(JSON.stringify([selectedHost, openConversationId])) : undefined)
-  // This display value never enters the complete store, writer or read observer.
+  // This display value never supplies complete-store or persistence authority.
   const authoritativeSnapshot = useMemo((): ThreadSnapshot | null => compactSelected
     ? compactSnapshot && selectedHost !== null && openConversationId !== null ? {
       hostId: selectedHost, conversationId: openConversationId, epoch: compactSnapshot.epoch,
@@ -417,7 +417,8 @@ export function ConversationScreen({
         standaloneStatus={false}
         backgroundTasksOpen={panelOpen} onBackgroundTasksOpenChange={setPanelOpen}
         onOlder={() => selectedHost !== null && threadRuntime.query('older', selectedHost)}
-        readInputs={!compactSelected && threadSummary ? { row: threadSummary, readerOpen,
+        readInputs={threadSummary ? { row: threadSummary, readerOpen,
+          ...(compactSelected && compactSnapshot ? { compact: threadRuntime.compact.readEvidence(authoritativeSnapshot, compactSnapshot) } : {}),
           completeThrough: complete?.epoch === authoritativeSnapshot.epoch ? complete.version : 0 } : undefined}
         sendInputs={{ midTurnInput: liveInput.runConfig?.midTurnInput === true, diagnose: window.pyry.sendDiagnostic, local: selectedHost !== null && openConversationId !== null && localSend !== null
           ? { hostId: selectedHost, conversationId: openConversationId, ...localSend } : undefined,
@@ -1167,9 +1168,10 @@ function CompactRow({ source, snapshot, expanded, toggle, changed }: {
   if (item?.kind !== 'toolCall') return <p className="session-delimiter__title">Summary: {typeof source.headline === 'string' ? source.headline : 'Unavailable summary'}</p>
   return <>
     <ToolRow item={item} headerExpandable running={typeof source.active === 'boolean' ? source.active : undefined} expansion={{ expanded: open, onToggle: () => { setLaunchOpen(false); toggle(source.id) } }}
+      activeAgent={source.kind === 'agent' && source.active === true}
       suppliedOutcome={{ label: (typeof source.status === 'string' ? source.status : 'Status unknown') + count,
         failed: source.status === 'failed', denied: source.status === 'denied' }} />
-    {typeof source.error_summary === 'string' && <p role="status">{source.error_summary}</p>}
+    {typeof source.error_summary === 'string' && source.error_summary !== '' && <p role="status">{source.error_summary}</p>}
     {open && <>
       {source.kind === 'agent' && <button type="button" className="tool-row__chip tool-row__chip--toggle"
         aria-expanded={launchOpen} onClick={() => setLaunchOpen(value => !value)}>Launch body</button>}
@@ -1263,7 +1265,7 @@ function ThreadItemsView({ compact = false, pin, snapshot, readInputs, sendInput
   activePin.current = pin ?? localPin
   useThreadLayoutEffect(() => activePin.current.layoutChanged(), [expandedTools, expandedRuns, admitted, snapshot])
   const paneRef = localPin.paneRef
-  useReadObservation(!compact && readInputs ? { ...readInputs, snapshot } : undefined, pin?.paneRef ?? paneRef, scrollPin.ref)
+  useReadObservation(readInputs ? { ...readInputs, snapshot } : undefined, pin?.paneRef ?? paneRef, scrollPin.ref)
   const items: ThreadItem[] = rows.map(row => row.item ?? { kind: 'userText', text: '' })
   const positions = new Map(rows.flatMap((row, index) => row.marker ? [] : [[row.source.id, index] as const]))
   const projection = rows.map((row, index) => ({ index, depth: row.depth,
@@ -1373,6 +1375,7 @@ function ThreadItemsView({ compact = false, pin, snapshot, readInputs, sendInput
                 onClick={() => toggleTool(id)}>{summary}</button>
             : <p className="session-delimiter__title">{summary}</p> : item.kind === 'toolCall'
             ? <TimelineToolRow item={item} rowKey={id} running={row.source.active === true}
+                activeAgent={row.source.kind === 'agent' && row.source.active === true}
                 active={row.source.active === true} outcome={row.outcome}
                 outcomeFailed={row.source.status === 'failed'} outcomeDenied={row.source.status === 'denied'}
                 count={row.source.kind === 'agent' ? row.count : undefined}
@@ -2162,7 +2165,7 @@ function ToolFailedIcon(): JSX.Element {
 // Compare primitive group state and the existing row identity. Legacy ToolRow props are
 // constructed only when something this row consumes changes, including its toggle handler.
 const TimelineToolRow = memo(function TimelineToolRow({
-  item, rowKey, count, background, running, expanded, onToggle, active, outcome, outcomeFailed, outcomeDenied
+  item, rowKey, count, background, running, expanded, onToggle, active, activeAgent, outcome, outcomeFailed, outcomeDenied
 }: {
   item: Extract<ThreadItem, { kind: 'toolCall' }>
   rowKey: number | string
@@ -2172,11 +2175,12 @@ const TimelineToolRow = memo(function TimelineToolRow({
   expanded: boolean
   onToggle: (key: number | string) => void
   active?: boolean
+  activeAgent?: boolean
   outcome?: string
   outcomeFailed?: boolean
   outcomeDenied?: boolean
 }): JSX.Element {
-  return <ToolRow item={item} running={active}
+  return <ToolRow item={item} running={active} activeAgent={activeAgent}
     suppliedOutcome={outcome === undefined ? undefined : { label: outcome, failed: outcomeFailed === true, denied: outcomeDenied === true }}
     group={count === undefined ? undefined : { count, background, running }}
     expansion={{ expanded, onToggle: () => onToggle(rowKey) }} />
@@ -2189,6 +2193,7 @@ export function ToolRow({
   expansion,
   headerExpandable = false,
   running,
+  activeAgent = false,
   suppliedOutcome
 }: {
   item: Extract<ThreadItem, { kind: 'toolCall' }>
@@ -2197,6 +2202,7 @@ export function ToolRow({
   expansion?: { expanded: boolean; onToggle: () => void }
   headerExpandable?: boolean
   running?: boolean
+  activeAgent?: boolean
   suppliedOutcome?: { label: string; failed: boolean; denied: boolean }
 }): JSX.Element {
   const { result, denial } = item
@@ -2333,7 +2339,7 @@ export function ToolRow({
   )
   return (
     // tool-row--expanded is appended LAST so the collapsed prefix stays byte-stable.
-    <div className={body ? `${rowClass} tool-row--expanded` : rowClass}>
+    <div className={[rowClass, activeAgent && 'tool-row--active-agent', body && 'tool-row--expanded'].filter(Boolean).join(' ')}>
       {expandable ? (
         <button
           type="button"

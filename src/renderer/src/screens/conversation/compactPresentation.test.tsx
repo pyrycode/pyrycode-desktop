@@ -1,9 +1,22 @@
 import { expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { threadItemPresentation } from './threadItemPresentation'
-import { ToolRow } from './ConversationScreen'
+import { ThinkingIndicator, ThreadItemsTimeline, ToolRow } from './ConversationScreen'
 import { threadComposerReports } from './threadComposerReports'
 import { threadTaskPresentations } from './threadTaskPresentation'
+
+it('renders decoded Agent descriptions as escaped status text with elapsed formatting', () => {
+  const snapshot = { hostId: 'host', conversationId: 'chat', epoch: 'epoch', version: 1, checkpoint: 1,
+    ranges: [], repair: null, items: [{ id: 1, rev: 1, order: 1, kind: 'agent', session: 'current',
+      status: 'running', active: true, shown: true, content: { name: 'Agent', elapsed_seconds: 72,
+        input: { description: 'Read "quoted" <script> & files' } } }] }
+  const tool = threadComposerReports(snapshot, 'current').tool
+  const markup = renderToStaticMarkup(<ThinkingIndicator state="working" toolName={tool?.name ?? null}
+    toolElapsedSeconds={tool?.elapsedSeconds} retry={null} resetting={null} thinkingTokens={null} />)
+  expect(markup).toContain('Running Agent: Read &quot;quoted&quot; &lt;script&gt; &amp; files… 1m 12s')
+  expect(markup).toContain('composer-status__label--tool')
+  expect(markup).not.toContain('<script>')
+})
 
 it('keeps supplied compact headlines expandable without inventing a tool body or handle', () => {
   const item = threadItemPresentation({ id: 1, kind: 'agent', rev: 1, status: 'running', shown: true,
@@ -14,6 +27,21 @@ it('keeps supplied compact headlines expandable without inventing a tool body or
   expect(markup).toContain('aria-expanded="false"')
   expect(markup).toContain('Inspect workspace')
   expect(markup).not.toContain('tool-row__body')
+})
+
+it.each([
+  { name: 'unknown error', error: undefined, visible: false },
+  { name: 'known no error', error: '', visible: false },
+  { name: 'reported error', error: 'Read failed <details>', visible: true }
+])('renders compact error text only when present: $name', ({ error, visible }) => {
+  const markup = renderToStaticMarkup(<ThreadItemsTimeline compact snapshot={{ hostId: 'host', conversationId: 'chat',
+    epoch: 'epoch', version: 0, checkpoint: 0, ranges: [], repair: null, items: [
+      { id: 1, kind: 'tool_call', rev: 1, status: 'done', shown: true, active: false,
+        summary: '', content: null, headline: 'Read', detail_omitted: true,
+        ...(error === undefined ? {} : { error_summary: error }) }
+    ] }} />)
+  expect(markup.includes('<p role="status">')).toBe(visible)
+  if (error) expect(markup).toContain('Read failed &lt;details&gt;')
 })
 
 it('does not turn a child message summary into a complete message', () => {

@@ -28,9 +28,16 @@ for (const closing of ['quit', 'window'] as const) {
     // Pause the writer's timer, then establish actual receipt/rendering before closing.
     await first.page.clock.install()
     await first.page.clock.pauseAt(new Date())
+    await first.page.evaluate(() => {
+      Object.assign(window, { shutdownTailReceived: new Promise<void>(resolve => {
+        const off = window.pyry.onDaemonEvent(event => { if (event.type === 'threadUpdate') { off(); resolve() } }, true)
+      }) })
+    })
     const tail = { ...item, id: 11, order: 11, summary: 'Buffered indexed shutdown tail',
       content: { text: 'Buffered indexed shutdown tail' } }
     await first.daemon.pushFrame(frame('thread_item_added', { ...route, version: 21, item: tail }))
+    await first.page.evaluate(() => (window as typeof window & { shutdownTailReceived: Promise<void> }).shutdownTailReceived)
+    await first.page.clock.runFor(50) // Apply the tail; the writer's 200 ms delay remains buffered.
     await expect(first.page.getByText(tail.summary, { exact: true })).toBeVisible()
     const before = await read(first.page)
     expect(before).toMatchObject({ status: 'stored', snapshot: { thread: { checkpoint: 20, items: [item] } } })

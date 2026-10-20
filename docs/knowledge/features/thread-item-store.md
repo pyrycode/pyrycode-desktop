@@ -19,7 +19,9 @@ are independent of this store. Tool/agent headers and body/child replies never
 become complete items, owned saves, complete-history certificates or unseen-content
 read authority. Saved complete checkpoints cannot authorize compact resume.
 [ADR 0016](../decisions/0016-session-only-compact-projection.md) records why headers
-were kept out of canonical storage. Ordinary production opening remains complete.
+were kept out of canonical storage. Production opening uses the owning host's
+accepted handshake to select compact automatically; omitted runtime options
+retain complete delivery.
 
 ## Identity, placement and full items
 
@@ -124,6 +126,15 @@ null clears even where the full-item DTO's optional fields require another type.
 Optional diagnostics emit only static event/code values, never content or scope ids.
 
 ## Snapshots and completed batches
+
+`store.getState().batch(run)` synchronously folds ordered mutations into one
+publication for all affected scopes. Nested calls share the outer transaction;
+scalar admission remains available outside it. Admission reads staged slices so
+later changes/appends see earlier items and companions. Each changed held item map
+is copied once, then final display and arrival order are rebuilt once per scope.
+Previously published maps, arrays and snapshots remain immutable; untouched scopes
+keep their identity. This publication transaction is distinct from the certified
+reply handle returned by `beginBatch` and grants no completion evidence.
 
 `ThreadSnapshot` is the host/conversation-scoped sync/cache read surface, defined in
 [`src/shared/chatHistory.ts`](../../../src/shared/chatHistory.ts) and re-exported by
@@ -233,9 +244,10 @@ publications still persist normally.
 `beginBatch(hostId, conversationId, epoch)` returns null without matching ownership.
 Its handle has `applyItems`, `commit` and `abandon`. Applying full items can publish
 facts and applied version, but never checkpoint, ranges or older availability.
-Application is per item: a rejected item does not roll back prior successful items,
-but any repair result makes that handle ineligible to commit. Abandonment retains
-received facts and leaves complete progress unchanged.
+Admission remains per item: a rejected item does not roll back earlier admitted
+facts, but any repair makes the handle ineligible to commit. `applyItems` folds
+its supplied array through the synchronous publication transaction. Abandonment
+retains received facts and leaves complete progress unchanged.
 
 Only the [thread query coordinator](#thread-query-coordinator) certifies a completed
 server reply. The store consumes client-owned
@@ -260,6 +272,11 @@ missing items/holders imply no removals. Successful `beginBatch.commit` alone ad
 `completion: { fromVersion, version }` and optional
 `availability: { start, available }` for the oldest supplied certified boundary.
 Repair, live updates and same-epoch holder recreation cannot supply that certificate.
+Transaction coalescing unions owned changed identities and ranges, retains the
+latest admitted item for each identity and records intermediate metadata,
+completion and availability in ordered `priorProgress`. Keeping only the last
+delta would silently omit saved items; keeping only final metadata could discard
+an unfinished/repair obligation. Epoch/reset ownership starts a new owned payload.
 
 The [writer](chat-history-storage.md#buffered-replacements) coalesces item revisions
 and ranges while retaining progress/boundary observations in order. Main folds them
@@ -475,6 +492,12 @@ reply/reset, query failure or idle expiry, preventing another request from compe
 for the daemon's unfinished slot. A nonterminal generation/metadata rejection also
 publishes failure while keeping that tombstone. Explicit retry queues behind it;
 late parts can release the slot but cannot publish facts or certify a successor.
+With [bounded runtime application](thread-runtime.md#bounded-complete-item-application),
+`observeTerminal` records a matching received complete-view terminal separately
+from queued content. Navigation releases a slot whose terminal is already known,
+including a previously cancelled slot on repeated navigation. Incomplete,
+unrelated, expansion and compact replies do not qualify. This receipt bookkeeping
+never publishes items or certifies completion.
 
 `ThreadQueryState` is `idle`, `loading {purpose}` or
 `failed {purpose, reason, retryable: true}`; purpose is `catch-up` or `older`.
@@ -498,6 +521,36 @@ with the owning lifecycle integration; fresh ids and generation checks fence lat
 delivery after either form of cleanup.
 
 ## Testing
+
+Bounded-update validation for #2079 is linked from the
+[runtime's accepted Linux evidence](thread-runtime.md#bounded-update-validation).
+The supplied dispatcher gate-4 summary reports **9,869 unit tests executed/passed,
+0 failed, 3 skipped**; the accepted verdict reports **9,951 executed/passed,
+0 failed, 3 skipped**. These are separate reports, not combined totals. The verdict
+confirms all four terminal-kind/lifecycle combinations and six coordinator
+correlation/repeated-navigation cases passed. Builder rework at `668a6df6` records
+**54 runtime/coordinator cases executed/passed, 0 failed/skipped**. See the
+[plan](../../specs/architecture/2079-bounded-thread-updates.md).
+
+An earlier guarded replay at `de6e481a` executed
+**29: 28 passed, 1 failed, 1 skipped**; the isolated history retry passed
+**1/1, 0 failed/skipped**. That protected-coverage failure became
+[#2153](https://github.com/pyrycode/pyrycode-desktop/issues/2153), now closed by the
+merged history-observation repair. The default-worker unit run's unchanged
+five-second storage rollback timeout remains tracked by
+[#2155](https://github.com/pyrycode/pyrycode-desktop/issues/2155); its unchanged
+isolated retry passed **1/1, 0 failed/skipped**, and the two-worker full run passed
+**9,918, 0 failed, 3 skipped**.
+
+The bounded-update regressions compare scalar and folded admission through
+additions, field changes, placement ties, same-revision companion appends,
+duplicates/stale inputs, repair and recovery, including progress metadata and old
+snapshot immutability. Counted map-copy/order assertions distinguish batching from
+merely delaying individual rebuilds. The coordinator checks one completion
+notification after publication; runtime checks finite drains, changed-slice send
+settlement, ordered controls and late lifecycle callbacks. The existing writer
+integration flushes a mixed admitted batch and compares its saved state, including
+owned progress. See [counted Linux evidence](thread-runtime.md#bounded-update-validation).
 
 [`threadItemStore.test.ts`](../../../src/renderer/src/store/threadItemStore.test.ts)
 uses supplied complete-item and certificate fixtures without Electron, a daemon or

@@ -252,7 +252,7 @@ test('stable callbacks exclude hidden, queued and received but uncommitted tails
     const pending = new Map<number, FrameRequestCallback>()
     let handle = -1
     let delivered = 0
-    const off = window.pyry.onDaemonEvent(event => { if (event.type === 'threadUpdate' && event.update.type === 'thread_text_append') delivered++ })
+    const off = window.pyry.onDaemonEvent(event => { if (event.type === 'threadUpdate' && event.update.type === 'thread_text_append') delivered++ }, true)
     window.requestAnimationFrame = callback => { pending.set(handle, callback); return handle-- }
     window.cancelAnimationFrame = handle => { if (!pending.delete(handle)) cancel(handle) }
     window.pendingReadFrame = { received: () => delivered, release: () => {

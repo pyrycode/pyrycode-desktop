@@ -19,7 +19,7 @@ const route = { conversation_id: SEEDED_ROW.id, epoch: 'frame-epoch' }
 const streaming = { id: 10, rev: 1, order: 10, kind: 'assistant_message', status: 'running', active: true,
   shown: true, summary: '', content: { text: 'start,' }, session: 'session' }
 
-test('the mounted bridge publishes a delta-only burst on its first frame with one React commit', async ({ launchPairedApp }) => {
+test('the mounted bridge publishes a delta-only burst with paused frames through its bounded timer fallback', async ({ launchPairedApp }) => {
   const { page, daemon } = await launchPairedApp({ threadMode: 'native',
     buildReplyFrames: bytes => {
       const request = decodeEnvelope(bytes)
@@ -80,7 +80,7 @@ test('the mounted bridge publishes a delta-only burst on its first frame with on
         ;(window as EvidenceWindow).deltaFrames = {
           begin: () => {
             delivered = 0; requests = 0; commits = 0; holding = true
-            off = window.pyry.onDaemonEvent(event => { if (event.type === 'threadUpdate') delivered++ })
+            off = window.pyry.onDaemonEvent(event => { if (event.type === 'threadUpdate') delivered++ }, true)
           },
           read: () => ({ delivered, requests, commits, pending: callbacks.size, injected }),
           release: () => {
@@ -106,15 +106,10 @@ test('the mounted bridge publishes a delta-only burst on its first frame with on
         id: seq + 10, type: 'thread_text_append', ts: `2026-10-08T00:00:${String(seq).padStart(2, '0')}Z`,
         payload: { ...route, version: seq + 21, item_id: 10, base_rev: seq + 1, rev: seq + 2, text: `${seq},` }
       }))
-      // Each delivery runs in a separate task, so React cannot hide per-arrival redraws.
-      await expect.poll(async () => (await read()).delivered).toBe(seq + 1)
     }
+    await expect.poll(async () => (await read()).delivered).toBe(12)
     expect((await read()).injected).toBeGreaterThan(0)
     expect((await read()).requests).toBe(1)
-    expect((await read()).pending).toBe(1)
-    expect((await read()).commits).toBe(0)
-    await expect(bubble).toHaveText('start,')
-    await page.evaluate(() => (window as EvidenceWindow).deltaFrames.release())
     await expect(bubble).toHaveText('start,0,1,2,3,4,5,6,7,8,9,10,11,')
     expect((await read()).commits).toBe(1)
     expect((await read()).pending).toBe(0)

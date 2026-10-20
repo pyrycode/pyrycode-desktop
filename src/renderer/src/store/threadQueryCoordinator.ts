@@ -26,13 +26,19 @@ type Scope = { id: string; restorePending: boolean; catchUp: boolean; older: boo
   ready: boolean; exhausted: boolean; state: ThreadQueryState; initialize?: boolean }
 type Pending = { scope: Scope; requestId: string; query: Exclude<ThreadQuery, { type: 'thread_read_tool_body' | 'thread_read_children' }>; generation: symbol | undefined;
   recovery: boolean; resetRecovery: boolean; cancelled: boolean; sent: boolean; captured?: { epoch: string; version: number };
-  batch?: NonNullable<ReturnType<ThreadItemStore['beginBatch']>>; timer?: ReturnType<typeof setTimeout> }
+  terminalReceived?: boolean; batch?: NonNullable<ReturnType<ThreadItemStore['beginBatch']>>; timer?: ReturnType<typeof setTimeout> }
 type Host = { connected: boolean; scope?: Scope; pending?: Pending }
 
 /** Supplied-input only: production subscription and capability selection belong to #1908. */
 export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
   const hosts = new Map<string, Host>()
   let disposed = false
+  let completions: Map<string, () => void> | undefined
+  function complete(host: string, chat: string, epoch: string, version: number): void {
+    const notify = () => deps.onComplete?.(host, chat, epoch, version)
+    if (completions) completions.set(JSON.stringify([host, chat]), notify)
+    else notify()
+  }
   const store = () => deps.store.getState()
   const generation = (host: string, id: string) => store().hosts.get(host)?.get(id)?.generation
   function present(host: string, scope: Scope, state: ThreadQueryState): void {
@@ -158,7 +164,7 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
     release(h, p)
     deps.log?.event({ event: 'thread-query-completed', code: p.query.type })
     if (p.query.type === 'thread_catch_up') { s.catchUp = false; s.ready = true; s.recovery = false; s.resetRecovery = false }
-    if (p.query.type === 'thread_catch_up') deps.onComplete?.(host, s.id, v.epoch, v.version)
+    if (p.query.type === 'thread_catch_up') complete(host, s.id, v.epoch, v.version)
     if ('older_exists' in v) s.exhausted = !v.older_exists
     present(host, s, { type: 'idle' }); pump(host, h)
   }
@@ -169,10 +175,10 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
       hosts.set(host, h)
       const changed = h.scope?.id !== (value.conversationId ?? undefined)
       if (changed) {
-        if (h.pending && !h.pending.cancelled) {
+        if (h.pending && (!h.pending.cancelled || h.pending.terminalReceived)) {
           h.pending.cancelled = true; h.pending.batch?.abandon()
           const pending = h.pending
-          if (!pending.sent) release(h, pending)
+          if (!pending.sent || pending.terminalReceived) release(h, pending)
           present(host, pending.scope, { type: 'idle' })
         }
         h.scope = value.conversationId === null ? undefined : { id: value.conversationId,
@@ -204,7 +210,7 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
         if (applied.type === 'repair') repair(e.serverId, h, e.conversationId)
         else if (applied.type === 'applied' && h.scope?.id === e.conversationId && h.scope.ready) {
           const snapshot = store().snapshot(e.serverId, e.conversationId)
-          if (snapshot && !snapshot.repair) deps.onComplete?.(e.serverId, e.conversationId, snapshot.epoch, snapshot.checkpoint)
+          if (snapshot && !snapshot.repair) complete(e.serverId, e.conversationId, snapshot.epoch, snapshot.checkpoint)
         }
       } else {
         const snapshot = store().snapshot(e.serverId, e.conversationId)
@@ -236,7 +242,22 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
     if (h?.scope) present(host, h.scope, { type: 'idle' })
   }
   // cancelHost is connection teardown; navigation instead retains an unfinished host slot.
-  return { input, cancelHost, dispose(): void {
+  return { input, cancelHost,
+    observeTerminal(event: Extract<StampedDaemonEvent, { type: 'threadReply' | 'threadQueryFailed' }>): void {
+      const p = event.serverId === null ? undefined : hosts.get(event.serverId)?.pending
+      if (!p || p.requestId !== event.requestId || p.scope.id !== event.conversationId) return
+      if (event.type === 'threadReply' && ('projection' in event.reply.payload ||
+          event.reply.payload.conversation_id !== p.scope.id || !(event.reply.type === 'thread_reset' ||
+          event.reply.type === 'thread_items' && event.reply.payload.final))) return
+      // Receipt permits cancelled-slot cleanup only; application still owns completion evidence.
+      p.terminalReceived = true
+    }, batch(run: () => void): void {
+    if (completions) { run(); return }
+    const notifications = new Map<string, () => void>()
+    completions = notifications
+    try { store().batch(run) } finally { completions = undefined }
+    for (const notify of notifications.values()) notify()
+  }, dispose(): void {
     disposed = true
     for (const host of hosts.keys()) cancelHost(host)
   } }

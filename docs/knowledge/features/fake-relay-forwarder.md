@@ -16,17 +16,20 @@ A round-trip test needs a relay that carries opaque frames **bidirectionally** b
 
 ## How it works
 
-### Public surface (two exports)
+### Public surface
 
 ```ts
 export function startFakeRelayForwarder(): Promise<FakeRelayForwarder>
 
 export interface FakeRelayForwarder {
   url: string                                   // ws://127.0.0.1:<port> — NO trailing path
+  setupDiagnostics(): FakeRelaySetupDiagnostics // independent content-free snapshot
   whenReady(timeoutMs?: number): Promise<void>  // resolves once BOTH legs are registered
   dropClientLeg(): void                          // terminate the current client leg; a re-dial re-splices (#416)
   closeClientLeg(code: number): void             // CLEAN close of the current client leg with a caller-chosen WS code (#464)
-  close(): Promise<void>                         // terminates both legs + server; idempotent
+  closeClientAfterServerFrames(count: number, code: number): void
+  whenServerFramesForwarded(count: number, timeoutMs?: number): Promise<void>
+  close(): Promise<void>                         // terminates both legs + WS/HTTP servers; idempotent
 }
 ```
 
@@ -35,6 +38,41 @@ The listener binds explicitly to `127.0.0.1`, the same IPv4 loopback address ret
 `startFakeRelayForwarder()` resolves once the server is **listening** (so the returned `url` is dial-ready). The `start*` prefix matches the codebase's existing `startRelay`/`startBlackHole` test-helper naming.
 
 The consumer appends the leg path itself: `${url}/v1/client` for the real client (its `url` is caller-supplied — `relayConnection.ts` dials it verbatim), `${url}/v1/server` for the fake daemon.
+
+### Setup observation and listener ownership
+
+The explicitly owned HTTP server binds with `http.listen(0, '127.0.0.1')` and
+backs `new WebSocketServer({ server: http })`. `listenerMatchesDial` compares
+the actual bound address/family to the advertised IPv4 loopback address, exposing
+only a boolean. A macOS wildcard listener can be shadowed by an exact IPv4
+listener on the same port; preserving the exact bind excludes that competing
+responder. The controlled ownership regression fails against the legacy wildcard
+bind and checks `EADDRINUSE` for a competing exact listener on the repaired path.
+This proves an ownership defect without identifying any historical HTTP responder.
+
+`FakeRelaySetupDiagnostics` contains `listenerMatchesDial`, numeric
+`parserErrors`, `upgradeRequests`, `upgradeRejections` and `connections`, the
+latest `parserClass`, and `methodValid`, `upgradeValid`, `keyValid`,
+`versionValid` booleans. Parser classes are `none`, `other`, or one of
+`HPE_INVALID_METHOD`, `HPE_INVALID_URL`, `HPE_INVALID_VERSION`,
+`HPE_INVALID_HEADER_TOKEN`, `HPE_HEADER_OVERFLOW`,
+`HPE_UNEXPECTED_CONTENT_LENGTH`; unknown codes become `other`.
+Every `setupDiagnostics()` call returns a copy. Counters belong to one forwarder;
+no event history, request, socket, error, URL, header, key or frame content is
+retained in a snapshot. Concurrent-forwarder tests exchange distinct opaque
+frames and check independent counters; mutating a snapshot cannot change them.
+
+Observation preserves rejection behavior. A private HTTP-server subclass counts
+`clientError` in `emit` and returns `super.emit` unchanged. Adding a `clientError`
+listener would replace Node's default parser response/cleanup; adding
+`wsClientError` would suppress `ws`'s default upgrade rejection. Neither listener
+is installed. An upgrade observer runs after `ws`'s synchronous handler and reads
+only validity booleans and whether the socket ended. Ordinary HTTP requests keep
+the stock 426 response. Controlled parser/invalid-key tests compare rejection
+bytes with an uninstrumented server, await rejected socket close and then
+complete a valid exchange. The [setup fixture](e2e-harness.md#pre-electron-fake-daemon-setup-failures)
+folds counter deltas into bounded per-attempt Playwright attachments; HTTP
+rejections remain terminal and only one exact pre-open `ECONNRESET` can retry.
 
 ### Leg identification — by upgrade path, not frame bytes
 
@@ -102,7 +140,7 @@ the two drive opposite classifications on the client side:
 
 ### Teardown — idempotent
 
-`close()` is guarded by a cached `closePromise`. First call: reject a still-pending readiness deferred, clear the readiness timer, `terminate()` both leg sockets (no-op if null/already closed), `wss.close(cb)`, resolve when the server callback fires. Second and later calls return the **same** promise — no throw, no double `wss.close`. Deterministic idempotency (a cached promise, not best-effort), mirroring `startRelay`'s close contract.
+`close()` is guarded by a cached `closePromise`. First call: reject a still-pending readiness deferred, clear the readiness timer, `terminate()` both leg sockets (no-op if null/already closed), close the WebSocket server, then close its explicitly owned HTTP listener and resolve from that callback. Second and later calls return the **same** promise — no throw, no double close. Closing `wss` alone would leave the externally supplied HTTP listener open. Deterministic idempotency mirrors `startRelay`'s close contract.
 
 ## Edge cases and limitations
 

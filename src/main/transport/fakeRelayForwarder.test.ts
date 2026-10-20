@@ -1,6 +1,10 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { WebSocket } from 'ws'
 import type { RawData } from 'ws'
+import { WebSocketServer } from 'ws'
+import { once } from 'node:events'
+import { createConnection } from 'node:net'
+import { createServer } from 'node:http'
 import { startFakeRelayForwarder } from './fakeRelayForwarder'
 
 // These tests drive the forwarder with two RAW `ws` clients (not createRelayConnection): the
@@ -65,7 +69,101 @@ afterEach(async () => {
   for (const c of cleanups.splice(0)) await c()
 })
 
+// Resolve on close, so a rejection must release its socket as well as send a response.
+async function rawRequest(url: string, request: string): Promise<string> {
+  const socket = createConnection({ host: '127.0.0.1', port: Number(new URL(url).port) })
+  cleanups.push(() => { socket.destroy() })
+  let response = ''
+  socket.setEncoding('utf8')
+  socket.on('data', chunk => { response += chunk })
+  const closed = once(socket, 'close')
+  await once(socket, 'connect')
+  socket.end(request)
+  await closed
+  return response
+}
+
 describe('startFakeRelayForwarder', () => {
+  it('owns the advertised IPv4 listener and excludes a competing responder', async () => {
+    const forwarder = await startFakeRelayForwarder()
+    cleanups.push(() => forwarder.close())
+    expect(forwarder.setupDiagnostics().listenerMatchesDial).toBe(true)
+    const competitor = createServer()
+    cleanups.push(() => new Promise<void>(resolve => competitor.close(() => resolve())))
+    const rejected = once(competitor, 'error')
+    competitor.listen(Number(new URL(forwarder.url).port), '127.0.0.1')
+    expect((await rejected)[0]).toMatchObject({ code: 'EADDRINUSE' })
+    const server = await connect(`${forwarder.url}/v1/server`, 1)
+    cleanups.push(() => server.terminate())
+    expect(forwarder.setupDiagnostics().connections).toBe(1)
+  })
+
+  it('keeps concurrent forwarders, dials and opaque exchanges isolated', async () => {
+    await Promise.all(Array.from({ length: 8 }, async (_, index) => {
+      const forwarder = await startFakeRelayForwarder()
+      cleanups.push(() => forwarder.close())
+      const [client, server] = await Promise.all([
+        connect(`${forwarder.url}/v1/client`, 1), connect(`${forwarder.url}/v1/server`, 1)
+      ])
+      cleanups.push(() => client.terminate(), () => server.terminate())
+      await forwarder.whenReady()
+      const received = nextFrame(client)
+      server.send(new Uint8Array([index]))
+      expect(Array.from((await received).data)).toEqual([index])
+      expect(forwarder.setupDiagnostics()).toMatchObject({
+        listenerMatchesDial: true, connections: 2, upgradeRequests: 2, parserErrors: 0
+      })
+    }))
+  })
+
+  it.each([
+    ['parser', 'PRIVATE-SENTINEL /private-sentinel HTTP/1.1\r\nHost: private-sentinel\r\n\r\n'],
+    ['parser-other', 'GET /private-sentinel PRIVATE/1.1\r\nHost: private-sentinel\r\n\r\n'],
+    ['upgrade', 'GET /private-sentinel HTTP/1.1\r\nHost: private-sentinel\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: private-sentinel\r\n\r\n']
+  ])('captures a %s rejection without replacing its response and remains usable', async (boundary, request) => {
+    const baseline = new WebSocketServer({ port: 0 })
+    cleanups.push(() => new Promise<void>(resolve => baseline.close(() => resolve())))
+    await once(baseline, 'listening')
+    const address = baseline.address()
+    if (address === null || typeof address === 'string') throw new Error('missing baseline listener')
+    const expectedResponse = await rawRequest(`ws://127.0.0.1:${address.port}`, request)
+    expect(expectedResponse).toMatch(/^HTTP\/1.1 400 /)
+
+    const forwarder = await startFakeRelayForwarder()
+    cleanups.push(() => forwarder.close())
+    const before = forwarder.setupDiagnostics()
+    expect(await rawRequest(forwarder.url, request)).toBe(expectedResponse)
+    expect(forwarder.setupDiagnostics()).toEqual({
+      listenerMatchesDial: true,
+      parserErrors: boundary === 'upgrade' ? 0 : 1,
+      parserClass: boundary === 'parser' ? 'HPE_INVALID_METHOD' : boundary === 'parser-other' ? 'other' : 'none',
+      upgradeRequests: boundary === 'upgrade' ? 1 : 0,
+      upgradeRejections: boundary === 'upgrade' ? 1 : 0,
+      connections: 0,
+      methodValid: boundary === 'upgrade',
+      upgradeValid: boundary === 'upgrade',
+      keyValid: false,
+      versionValid: boundary === 'upgrade'
+    })
+    expect(before.parserErrors).toBe(0)
+    expect(before.upgradeRequests).toBe(0)
+    const snapshot = forwarder.setupDiagnostics()
+    snapshot.parserErrors = 99
+    expect(forwarder.setupDiagnostics().parserErrors).not.toBe(99)
+    expect(JSON.stringify(snapshot)).not.toContain('private-sentinel')
+    const independent = await startFakeRelayForwarder()
+    cleanups.push(() => independent.close())
+    expect(independent.setupDiagnostics()).toEqual(before)
+
+    const client = await connect(`${forwarder.url}/v1/client`, 1)
+    const server = await connect(`${forwarder.url}/v1/server`, 1)
+    await forwarder.whenReady()
+    const received = nextFrame(server)
+    client.send('usable')
+    expect(Buffer.from((await received).data).toString()).toBe('usable')
+    expect(forwarder.setupDiagnostics().connections).toBe(2)
+  })
+
   it('holds profile retirement until required server frames are actually written to the client', async () => {
     const forwarder = await startFakeRelayForwarder()
     cleanups.push(() => forwarder.close())

@@ -39,3 +39,8 @@ No new production error paths. Assertion failure retains raw reports and still r
 
 ## Open Questions
 None. The shared drain identity provides a narrow timer interception without pausing unrelated work.
+
+## Revisions
+2026-10-20: Confirmed the timer bypass with the controlled original barrier plus a 100 ms native opportunity: `before.json` records 1 executed, 0 passed, 1 failed, 0 skipped, retries zero, at the expected “Awaiting commit” absence assertion. The repaired barrier retains that challenge and adds positive native opportunity counters. `after.json` records 1 executed/passed, 0 failed/skipped/retried; its `pending-read-barrier` attachment records receipt 1, frame opportunity 1, timer opportunity 1, targets `[1,2,3,4]` and the received context-usage sentinel. Both reports and their result directories remain under `/tmp/builder-2186/`.
+
+Historical evidence was recovered through owning ticket #2176 (PR #2180), not the PR number. Bundle `ffc78e067a57e1446e74fe49f96444dc69e4f2be953f438bd475591d094889ac`, downloaded beneath `/tmp/builder-2186/evidence-2176/`, retains the original full macOS gate log `logs/verifier-gate__2176_6.log` (SHA-256 `f5917e8f8ed50c180f3116b6c6c8dd3df1075189352d9833e5ab4aaeeae2acc3`): 531 executed, 529 passed, 2 failed, 2 skipped. The stable-callback absence assertion failed with the pending text rendered. Its `handoff/verifier-2176.md` preserves the exact unchanged retry: 2 executed, 1 passed (stable callbacks), 1 failed (reply source, #2173), 0 skipped/retried. The original scratch `retry.json` is not included in this bundle; its successful named outcome is handoff evidence, not a newly inspected raw JSON report. Original macOS red and retry are not replaced by Linux results.

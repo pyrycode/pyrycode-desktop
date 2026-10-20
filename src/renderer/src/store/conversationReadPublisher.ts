@@ -1,11 +1,19 @@
 import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react'
 import type { RendererCommand } from '@shared/ipc/commands'
+import type { RendererDiagnosticEvent } from '@shared/ipc/diagnostics'
 import { conversationListStore } from './conversationListStore'
 import { sessionStore } from './sessionStore'
 import type { ThreadSnapshot } from './threadItemStore'
 import { conversationReadRouteStore } from './conversationReadRouteStore'
 
 const useReadLayoutEffect = typeof document === 'undefined' ? useEffect : useLayoutEffect
+const sendReadDiagnostic = (event: RendererDiagnosticEvent): void => {
+  if (typeof window !== 'undefined') window.pyry?.sendDiagnostic?.(event)
+}
+const emitReadDiagnostic = (log: (event: RendererDiagnosticEvent) => void, event: RendererDiagnosticEvent): void => {
+  try { log(event) }
+  catch { /* Best-effort diagnostics must not change read observation or publication. */ }
+}
 
 type ReadRow = { id: string; serverId?: string | null; read_up_to?: number; latest_entry_id?: number; last_shown_version?: number }
 type ReadCommand = Extract<RendererCommand, { type: 'markConversationRead' }>
@@ -68,17 +76,30 @@ function newestShown(snapshot: ThreadSnapshot) {
     typeof i.order === 'number' && i.order > 0).at(-1)
 }
 
-export function readTargetFor(thread: ThreadReadInputs): number | undefined {
+export function readTargetFor(thread: ThreadReadInputs, log = sendReadDiagnostic): number | undefined {
   const { snapshot: s, row } = thread, target = row.last_shown_version, tail = newestShown(s), order = tail?.order
-  if (s.hostId !== row.serverId || s.conversationId !== row.id || row.read_up_to === undefined ||
-    target === undefined || !Number.isSafeInteger(target) || target < 0 || !tail || typeof order !== 'number') return undefined
+  const reject = (code: 'scope-unavailable' | 'scope-mismatch' | 'read-metadata-unavailable' | 'target-invalid' |
+    'checkpoint-insufficient' | 'completion-insufficient' | 'repair-pending' | 'tail-unavailable' |
+    'coverage-insufficient' | 'shown-tail-pending' | 'compact-snapshot-mismatch' | 'compact-stale' |
+    'compact-completion-insufficient' | 'compact-tail-uncovered'): undefined => { emitReadDiagnostic(log, { event: 'read-target', code }); return undefined }
+  if (row.serverId === undefined || row.serverId === null) return reject('scope-unavailable')
+  if (s.hostId !== row.serverId || s.conversationId !== row.id) return reject('scope-mismatch')
+  if (row.read_up_to === undefined || target === undefined) return reject('read-metadata-unavailable')
+  if (!Number.isSafeInteger(target) || target < 0) return reject('target-invalid')
+  if (!tail || typeof order !== 'number') return reject('tail-unavailable')
   if (thread.compact) {
     const proof = thread.compact
-    if (proof.snapshot !== s || !proof.current() || !Number.isSafeInteger(proof.through) ||
-      target > proof.through || !proof.roots.has(tail.id)) return undefined
-  } else if (target > s.checkpoint || !Number.isSafeInteger(thread.completeThrough) || target > thread.completeThrough ||
-    s.repair && target > s.repair.fromVersion || !s.ranges.some(r => r.start <= order && r.start < r.end)) return undefined
-  if (s.items.some(i => i.shown === true && (i.status === 'queued' || typeof i.order !== 'number' || i.order <= 0))) return undefined
+    if (proof.snapshot !== s) return reject('compact-snapshot-mismatch')
+    if (!proof.current()) return reject('compact-stale')
+    if (!Number.isSafeInteger(proof.through) || target > proof.through) return reject('compact-completion-insufficient')
+    if (!proof.roots.has(tail.id)) return reject('compact-tail-uncovered')
+  } else {
+    if (target > s.checkpoint) return reject('checkpoint-insufficient')
+    if (!Number.isSafeInteger(thread.completeThrough) || target > thread.completeThrough) return reject('completion-insufficient')
+    if (s.repair && target > s.repair.fromVersion) return reject('repair-pending')
+    if (!s.ranges.some(r => r.start <= order && r.start < r.end)) return reject('coverage-insufficient')
+  }
+  if (s.items.some(i => i.shown === true && (i.status === 'queued' || typeof i.order !== 'number' || i.order <= 0))) return reject('shown-tail-pending')
   return target
 }
 
@@ -105,37 +126,55 @@ export function useReadPublication(selected = publisher): void {
 }
 
 export function useReadObservation(inputs: ThreadReadInputs | undefined,
-  pane: RefObject<HTMLDivElement>, thread: RefObject<HTMLDivElement>): void {
+  pane: RefObject<HTMLDivElement>, thread: RefObject<HTMLDivElement>, log = sendReadDiagnostic): void {
   const committed = useRef(inputs)
   const setup = useRef<{ key: string; region: HTMLElement; covered: HTMLElement; tail: HTMLElement;
     observe: () => void; dispose: () => void }>()
   useReadLayoutEffect(() => { committed.current = inputs })
   useReadLayoutEffect(() => {
     const region = thread.current, covered = pane.current
-    const target = inputs && readTargetFor(inputs), newest = inputs && newestShown(inputs.snapshot)
+    const newest = inputs && newestShown(inputs.snapshot)
     const routeEpoch = inputs?.compact?.routeEpoch ?? inputs?.snapshot.epoch
     const key = inputs && newest && JSON.stringify([inputs.snapshot.hostId, inputs.snapshot.conversationId, routeEpoch, newest.id])
     const held = setup.current
     if (held && key === held.key && region === held.region && covered === held.covered &&
-      !inputs?.readerOpen && held.tail.isConnected) { held.observe(); return }
+      !inputs?.readerOpen && held.tail.isConnected) {
+      emitReadDiagnostic(log, { event: 'read-observer-setup', code: 'reused' }); held.observe(); return
+    }
     held?.dispose(); setup.current = undefined
-    if (!inputs || inputs.readerOpen || !region || !covered || target === undefined || !newest || !key) return
+    if (!inputs) { emitReadDiagnostic(log, { event: 'read-observer-setup', code: 'inputs-unavailable' }); return }
+    const target = readTargetFor(inputs, log)
+    if (target === undefined || !newest || !key) return // Target rejection already logged; success guarantees newest/key.
+    if (inputs.readerOpen) { emitReadDiagnostic(log, { event: 'read-observer-setup', code: 'reader-open' }); return }
+    if (!region || !covered) { emitReadDiagnostic(log, { event: 'read-observer-setup', code: 'dom-unavailable' }); return }
     const tail = region.querySelector<HTMLElement>(`[data-read-row="${newest.id}"]`)
-    if (!tail) return
+    if (!tail) { emitReadDiagnostic(log, { event: 'read-observer-setup', code: 'tail-dom-unavailable' }); return }
     const { hostId, conversationId, epoch } = inputs.snapshot
     const observe = () => {
       const current = committed.current
-      if (!current || current.readerOpen || current.snapshot.hostId !== hostId || current.snapshot.conversationId !== conversationId || current.snapshot.epoch !== epoch) return
-      const target = readTargetFor(current)
-      if (target === undefined || newestShown(current.snapshot)?.id !== newest.id ||
-        (current.compact?.routeEpoch ?? current.snapshot.epoch) !== routeEpoch ||
-        conversationReadRouteStore.getState().epochFor(hostId, conversationId) !== routeEpoch ||
-        !document.hasFocus() || document.visibilityState !== 'visible' || !tail.isConnected || tail.closest('[hidden]') || tail.classList.contains('message-row--queued')) return
+      const stop = (code: 'inputs-unavailable' | 'reader-open' | 'scope-stale' | 'tail-stale' | 'route-stale' |
+        'document-unfocused' | 'document-hidden' | 'tail-disconnected' | 'tail-hidden' | 'tail-queued' |
+        'viewport-empty' | 'viewport-above' | 'viewport-below'): void => emitReadDiagnostic(log, { event: 'read-observer', code })
+      if (!current) return stop('inputs-unavailable')
+      if (current.readerOpen) return stop('reader-open')
+      if (current.snapshot.hostId !== hostId || current.snapshot.conversationId !== conversationId || current.snapshot.epoch !== epoch) return stop('scope-stale')
+      const target = readTargetFor(current, log)
+      if (target === undefined) return // The delegated rejection already emitted its one record.
+      if (newestShown(current.snapshot)?.id !== newest.id) return stop('tail-stale')
+      if ((current.compact?.routeEpoch ?? current.snapshot.epoch) !== routeEpoch ||
+        conversationReadRouteStore.getState().epochFor(hostId, conversationId) !== routeEpoch) return stop('route-stale')
+      if (!document.hasFocus()) return stop('document-unfocused')
+      if (document.visibilityState !== 'visible') return stop('document-hidden')
+      if (!tail.isConnected) return stop('tail-disconnected')
+      if (tail.closest('[hidden]')) return stop('tail-hidden')
+      if (tail.classList.contains('message-row--queued')) return stop('tail-queued')
       const viewport = region.getBoundingClientRect(), rect = tail.getBoundingClientRect()
       const shell = covered.closest('.conversation__covered') ?? covered
       const top = Math.max(viewport.top, shell.querySelector('.conversation__top-chrome')?.getBoundingClientRect().bottom ?? viewport.top)
       const bottom = Math.min(viewport.bottom, shell.querySelector('.conversation__input-chrome')?.getBoundingClientRect().top ?? viewport.bottom)
-      if (rect.height <= 0 || rect.bottom <= top || rect.bottom > bottom) return
+      if (rect.height <= 0) return stop('viewport-empty')
+      if (rect.bottom <= top) return stop('viewport-above')
+      if (rect.bottom > bottom) return stop('viewport-below')
       ;(current.publisher ?? publisher).observe(hostId, conversationId, target, routeEpoch ?? epoch)
     }
     const resize = new ResizeObserver(observe)

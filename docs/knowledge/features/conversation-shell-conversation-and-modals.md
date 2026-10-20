@@ -62,7 +62,7 @@ pending sends. `ThreadItemsView` derives action handles with `threadQueueHandle`
 not queue-store/event matching. `foldQueuedRows` and its foreign-row projection were
 deleted in #2023; `foldQueuedRows.ts` retains only `QueuedRowHandle`. The reducer's
 local-echo/receipt APIs and tests remain until #2024 and cannot add accepted rows.
-See [queue authority](conversation-shell.md#what-it-does) for supplied ordering,
+See [queue authority](conversation-shell-behavior.md#what-it-does) for supplied ordering,
 identity damage, scoped targets and item-driven delivery/drop/loss.
 
 **`TimelineRow`'s `userText` arm uses supplied queued presentation independently of

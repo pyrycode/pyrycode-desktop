@@ -63,6 +63,17 @@ path in an owned batch` checks one write per final path for 400 items. See the
 batching resolved the observed timeout even in isolation; native-focus scheduling
 remains unproven. Keep this regression and the read spec.
 
+`reuses constructed authenticated nodes within one owned submission without reparsing them`
+counts reparses of locally serialized index nodes in a shuffled 31-item submission,
+requires zero, then compares exact fresh-owner contents and rejects disk-node
+corruption in a later transaction. Counting SQL or protected payload operations alone
+misses this CPU cost: populating caches only during reads still reparsed constructed
+nodes 3,349 times before the correction. The causal red/green runs each executed one
+test (78 filtered, none skipped): red failed, green passed. All 79 indexed-storage
+tests then executed/passed with zero failures/skips. See the
+[native comparison and counted Linux evidence](chat-history-testing-native.md#reopened-slow-drain-cause-and-correction)
+for unchanged storage-operation counts and real input/heartbeat acceptance.
+
 `e2e/daemon-item-cache.test.ts` compares separate, coalesced and held-failure saves
 through protected disk/reopen. It covers saved/pending repair and unfinished fences,
 partial/repeated completion, later live progress, same-epoch holder recreation,

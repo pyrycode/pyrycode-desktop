@@ -479,7 +479,7 @@ text changes when details reveal and cannot prove that no stats were added. See
   overview over the size cap.
 - **`.bubble__markdown`** ([Assistant markdown
   renderer](assistant-markdown-renderer.md)) is unaffected structurally: `.bubble__meta` is appended as
-  its *sibling* inside `.bubble`, never as its child, so the markdown container's own flex column and 8px
+  its *sibling* inside `.bubble`, never as its child, so the markdown container's own flex column and 16 px
   block-rhythm gap never reach the meta row.
 - **Standalone attachment offers** use the base message-row and bubble classes without the text-row
   modifier, actions or meta row. Their old width cap and chrome remain. Tool, session-reset, refusal

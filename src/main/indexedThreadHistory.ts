@@ -107,11 +107,19 @@ function header(value: unknown, server: string, conversation: string, legacy = f
   if (itemCount > MAX_CHAT_HISTORY_ITEMS || rangeCount > MAX_CHAT_HISTORY_ITEMS || typeof v.hasArrival !== 'boolean') throw INVALID_CHAT_HISTORY
   if (!legacy && (typeof v.generation !== 'string' || !/^[0-9a-f-]{36}$/.test(v.generation))) throw INVALID_CHAT_HISTORY
   const parsed = { metadata, itemCount, rangeCount, hasArrival: v.hasArrival,
+    ...(v.persistenceOwner === undefined ? {} : { persistenceOwner: resetIdentity(v.persistenceOwner) }),
+    ...(v.persistence === undefined ? {} : { persistence: pendingSave(v.persistence) }),
     ...(v.resetId === undefined ? {} : { resetId: resetIdentity(v.resetId) }),
     ...(v.availabilityStart === undefined ? {} : { availabilityStart: natural(v.availabilityStart) }),
     ...(v.mutable === undefined ? {} : { mutable: mutable(v.mutable) }),
     ...(!legacy && typeof v.generation === 'string' ? { generation: v.generation } : {}) }
   if (!same(parsed, value)) throw INVALID_CHAT_HISTORY
+  return parsed
+}
+function pendingSave(value: unknown): { id: string; next: number; parts: number } {
+  const v = object(value), parsed = { id: resetIdentity(v.id), next: natural(v.next), parts: natural(v.parts) }
+  if (!same(parsed, value) || !parsed.id || parsed.parts < 2 || parsed.next < 1 || parsed.next >= parsed.parts)
+    throw INVALID_CHAT_HISTORY
   return parsed
 }
 
@@ -239,14 +247,17 @@ export function createIndexedThreadHistory(deps: {
       if (result.count) pending.set('parent:' + result.key, '')
       return result
     }
-    function flush(): void {
+    function* flushSteps(): Generator<void> {
       for (const [address, payload] of pending) {
         const [name, key] = address.split(':')
         if (payload === null) db.prepare('DELETE FROM thread_auth WHERE scope = ? AND tree = ? AND path = ?').run(identity, name, key)
         else db.prepare('INSERT OR REPLACE INTO thread_auth VALUES (?, ?, ?, ?)').run(identity, name, key, payload)
+        yield
       }
+      pending.clear()
     }
-    return { rank, window, set, flush }
+    function flush(): void { for (const ignored of flushSteps()) void ignored }
+    return { rank, window, set, flush, flushSteps }
   }
   // The protected header authenticates these content-free paths. Replaying any old
   // leaf or branch fails against its parent's current digest, including after reopen.
@@ -300,16 +311,16 @@ export function createIndexedThreadHistory(deps: {
       }
       return update(ref, '')
     }
-    function window(ref: Ref, start: number, end: number): Leaf[] {
-      const result: Leaf[] = []
-      function visit(ref: Ref, path: string, offset: number): void {
+    function* windowSteps(ref: Ref, start: number, end: number): Generator<Leaf> {
+      function* visit(ref: Ref, path: string, offset: number): Generator<Leaf> {
         if (!ref.count || offset >= end || offset + ref.count <= start) return
         const n = read(ref, path), at = offset + (n.value ? 1 : 0)
-        if (n.value && offset >= start) result.push(n.value)
-        visit(n.left, path + '0', at); visit(n.right, path + '1', at + n.left.count)
+        if (n.value && offset >= start) yield n.value
+        yield* visit(n.left, path + '0', at); yield* visit(n.right, path + '1', at + n.left.count)
       }
-      visit(ref, '', 0); return result
+      yield* visit(ref, '', 0)
     }
+    function window(ref: Ref, start: number, end: number): Leaf[] { return Array.from(windowSteps(ref, start, end)) }
     function rank(ref: Ref, key: string): number {
       const target = bits(key)
       let result = 0
@@ -322,14 +333,16 @@ export function createIndexedThreadHistory(deps: {
       }
       return result
     }
-    function flush(): void {
+    function* flushSteps(): Generator<void> {
       for (const [path, payload] of pending) {
         if (payload === null) db.prepare('DELETE FROM thread_auth WHERE scope = ? AND tree = ? AND path = ?').run(identity, name, path)
         else db.prepare('INSERT OR REPLACE INTO thread_auth VALUES (?, ?, ?, ?)').run(identity, name, path, payload)
+        yield
       }
       pending.clear()
     }
-    return { get, set, window, rank, flush }
+    function flush(): void { for (const ignored of flushSteps()) void ignored }
+    return { get, set, window, windowSteps, rank, flush, flushSteps }
   }
   function selectedRow(db: Database.Database, identity: string, kind: string, leaf: Leaf): Row {
     const row = db.prepare<[string, string, number], Row>(`SELECT ${columns} FROM thread_records WHERE scope = ? AND kind = ? AND ordinal = ?`)
@@ -345,6 +358,8 @@ export function createIndexedThreadHistory(deps: {
   }
   function writeHeader(db: Database.Database, identity: string, h: ReturnType<typeof header>): void {
     const value = { metadata: h.metadata, itemCount: h.itemCount, rangeCount: h.rangeCount, hasArrival: h.hasArrival,
+      ...(h.persistenceOwner === undefined ? {} : { persistenceOwner: h.persistenceOwner }),
+      ...(h.persistence === undefined ? {} : { persistence: h.persistence }),
       ...(h.resetId === undefined ? {} : { resetId: h.resetId }),
       ...(h.availabilityStart === undefined ? {} : { availabilityStart: h.availabilityStart }),
       ...(h.mutable ? { mutable: h.mutable } : {}), generation: h.generation }
@@ -378,13 +393,14 @@ export function createIndexedThreadHistory(deps: {
     if (typeof row.identity !== 'string' || !/^[0-9a-f-]{36}$/.test(row.identity)) throw INVALID_CHAT_HISTORY
     return row.identity
   }
-  function load(db: Database.Database, server: string, conversation: string, legacy = false) {
+  function load(db: Database.Database, server: string, conversation: string, legacy = false, allowPending = false) {
     const identity = scope(db, server, conversation)
     if (identity === null) return null
     const rows = db.prepare<[string], Row>(`SELECT ${columns} FROM thread_records WHERE scope = ? ORDER BY kind, ordinal`).all(identity)
     const first = rows.find(r => r.kind === 'header')
     if (!first) throw INVALID_CHAT_HISTORY
     const h = header(decode(first, identity), server, conversation, legacy)
+    if (h.persistence && !allowPending) throw INVALID_CHAT_HISTORY
     if (h.mutable) {
       const m = h.mutable
       if ((m.sequence ?? m.roots.order).count !== h.itemCount || m.roots.ranges.count !== h.rangeCount) throw INVALID_CHAT_HISTORY
@@ -497,19 +513,60 @@ export function createIndexedThreadHistory(deps: {
     ids.flush(); ordered.flush(); ranges.flush(); sorted.flush(); endings.flush()
     return m
   }
-  function mutateThread(db: Database.Database, request: Extract<ChatHistoryRequest, { operation: 'mutateThread' }>): void {
+  function* mutateThread(db: Database.Database, request: Extract<ChatHistoryRequest, { operation: 'mutateThread' }>): Generator<void> {
     if (db.pragma('user_version', { simple: true }) === 6) db.exec(`CREATE TABLE IF NOT EXISTS thread_auth (
       scope TEXT NOT NULL REFERENCES thread_scopes(identity) ON DELETE CASCADE,
       tree TEXT NOT NULL, path TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(scope, tree, path)); PRAGMA user_version = 7`)
     const c = request.change, metadata = c.metadata
+    const p = c.persistence
+    if (p && db.pragma('user_version', { simple: true }) === 7) db.exec(`CREATE TABLE history_save_parts (
+      id TEXT NOT NULL, part INTEGER NOT NULL, payload BLOB NOT NULL, PRIMARY KEY(id, part)); PRAGMA user_version = 8`)
+    function receipt(part: number): unknown {
+      if (!p) return undefined
+      const row = db.prepare<[string, number], { payload: unknown }>('SELECT payload FROM history_save_parts WHERE id = ? AND part = ?').get(p.id, part)
+      if (!row) return undefined
+      if (!(row.payload instanceof Uint8Array)) throw INVALID_CHAT_HISTORY
+      const value = object(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(encryption.decrypt(row.payload))))
+      if (!same(value, { id: p.id, part, value: value.value })) throw INVALID_CHAT_HISTORY
+      return value.value
+    }
+    function acknowledge(part: number, value: unknown): void {
+      if (!p) return
+      db.prepare('INSERT INTO history_save_parts VALUES (?, ?, ?)').run(p.id, part,
+        Buffer.from(encryption.encrypt(Buffer.from(JSON.stringify({ id: p.id, part, value })))))
+    }
     let identity = scope(db, request.serverId, request.conversationId)
     let h: ReturnType<typeof header> | undefined
     if (identity !== null) {
       const row = db.prepare<[string], Row>(`SELECT ${columns} FROM thread_records WHERE scope = ? AND kind = 'header' AND ordinal = 0`).get(identity)
       if (!row) throw INVALID_CHAT_HISTORY
       h = header(decode(row, identity), request.serverId, request.conversationId)
+      yield
+    }
+    const known = receipt(-1)
+    const binding = () => ({ scope: identity, owner: h?.persistenceOwner, serverId: request.serverId,
+      conversationId: request.conversationId, epoch: metadata.epoch, resetId: c.resetId ?? null, parts: p?.parts })
+    if (known !== undefined) {
+      // Check the exact protected lifecycle before a replay can exercise acceptEpoch/reset.
+      if (!h || !same(known, binding())) throw INVALID_CHAT_HISTORY
+      const accepted = p && receipt(p.part)
+      if (accepted !== undefined) {
+        if (accepted !== digest(JSON.stringify(request))) throw INVALID_CHAT_HISTORY
+        return
+      }
+    }
+    if (h && identity !== null) {
       if (h.metadata.epoch !== metadata.epoch || c.resetId !== undefined && c.resetId !== h.resetId) {
         if (!c.acceptEpoch) throw INVALID_CHAT_HISTORY
+        // Empty the old owner's children incrementally so FK cascades cannot hide a backlog.
+        for (const table of ['thread_records', 'thread_payloads', 'thread_auth']) {
+          const next = db.prepare<[string], { id: number }>(`SELECT rowid AS id FROM ${table} WHERE scope = ? LIMIT 1`)
+          const remove = db.prepare(`DELETE FROM ${table} WHERE scope = ? AND rowid = ?`)
+          for (let child = next.get(identity); child; child = next.get(identity)) {
+            remove.run(identity, child.id)
+            yield
+          }
+        }
         db.prepare('DELETE FROM thread_scopes WHERE identity = ?').run(identity)
         identity = null; h = undefined
       }
@@ -526,6 +583,15 @@ export function createIndexedThreadHistory(deps: {
           sequence: emptySequence(), nodes: 0 } }
     }
     if (!h) throw INVALID_CHAT_HISTORY
+    if (h.persistence && (!p || h.persistence.id !== p.id || h.persistence.parts !== p.parts || h.persistence.next !== p.part))
+      throw INVALID_CHAT_HISTORY
+    if (p) {
+      if (known === undefined) {
+        if (p.part !== 0 || h.persistence) throw INVALID_CHAT_HISTORY
+        h.persistenceOwner ??= randomUUID()
+        acknowledge(-1, binding())
+      } else if (!h.persistence) throw INVALID_CHAT_HISTORY
+    }
     let m = h.mutable
     if (!m || m.roots.endings === undefined) {
       const snapshot = load(db, request.serverId, request.conversationId)
@@ -572,8 +638,10 @@ export function createIndexedThreadHistory(deps: {
     }
     // Captured constants keep nested work on this exact protected owner/header.
     const owner = identity, currentHeader = h, mutableState = m
-    for (const id of c.removeIds) erase(id)
-    const pending = new Map(c.items.map(item => [item.id, item]))
+    yield
+    for (const id of c.removeIds) { erase(id); yield }
+    const pending = new Map<number, ThreadSnapshot['items'][number]>()
+    for (const entry of c.items) { pending.set(entry.id, entry); yield }
     function upsert(id: number): void {
       const entry = pending.get(id)
       if (!entry) return
@@ -618,26 +686,31 @@ export function createIndexedThreadHistory(deps: {
       if (value.kind === 'turn_end' && key !== null) mutableState.roots.endings = endings.set(mutableState.roots.endings ?? empty(), key + numericKey(ordinal), leaf)
       pending.delete(id)
     }
-    for (const id of [...pending.keys()]) upsert(id)
+    for (const id of pending.keys()) { upsert(id); yield }
     for (const range of c.ranges) {
       let start = range.start, end = range.end
       const first = ranges.rank(m.roots.ranges, numericKey(start)), last = ranges.rank(m.roots.ranges, numericKey(end))
         + (ranges.get(m.roots.ranges, numericKey(end)) ? 1 : 0)
-      for (const leaf of ranges.window(m.roots.ranges, Math.max(0, first - 1), last)) {
+      yield
+      for (const leaf of ranges.windowSteps(m.roots.ranges, Math.max(0, first - 1), last)) {
         const row = selectedRow(db, owner, 'range', leaf), r = threadHistoryCodec.ranges([decode(row, owner)])[0]
-        if (r.end < start || r.start > end) continue
+        if (r.end < start || r.start > end) { yield; continue }
         start = Math.min(start, r.start); end = Math.max(end, r.end)
         m.roots.ranges = ranges.set(m.roots.ranges, numericKey(r.start), null)
         db.prepare("DELETE FROM thread_records WHERE scope = ? AND kind = 'range' AND ordinal = ?").run(owner, row.ordinal)
+        yield
       }
       const ordinal = natural(m.nextOrdinal++), row = protect(db, owner, { kind: 'range', ordinal, arrival: null,
         item_order: null, range_ordinal: null, range_start: start, range_end: end }, { start, end })
       if (!(row.payload instanceof Uint8Array)) throw INVALID_CHAT_HISTORY
       m.roots.ranges = ranges.set(m.roots.ranges, numericKey(start), { ordinal, digest: digest(row.payload), position: null, id: null })
+      yield
     }
     // Replay owned progress in admission order. Certificates cannot acquire the version of a later
     // live observation or erase obligations lost when a same-epoch holder was recreated.
-    for (const progress of [...c.priorProgress ?? [], c]) {
+    const observations = c.priorProgress ?? []
+    for (let index = 0; index <= observations.length; index++) {
+      const progress = index < observations.length ? observations[index] : c
       const old = h.metadata, next = progress.metadata, completion = progress.completion
       const certified = completion !== undefined && completion.fromVersion <= old.checkpoint
       const fenced = old.repair !== null || (old.uncommittedVersion ?? 0) > old.checkpoint
@@ -664,12 +737,18 @@ export function createIndexedThreadHistory(deps: {
       }
       h.metadata = threadHistoryCodec.metadata({ ...old, ...next, olderAvailable, version: Math.max(old.version, next.version), checkpoint,
         uncommittedVersion, repair }, request.serverId, request.conversationId)
+      yield
     }
     m.sequence = sequenceRoot; m.nodes = nodes
     h.mutable = m; h.hasArrival = true; h.generation = randomUUID(); h.itemCount = m.roots.ids.count; h.rangeCount = m.roots.ranges.count
     if (h.itemCount > MAX_CHAT_HISTORY_ITEMS || h.rangeCount > MAX_CHAT_HISTORY_ITEMS) throw INVALID_CHAT_HISTORY
-    ids.flush(); ordered.flush(); ranges.flush(); sorted.flush(); endings.flush()
+    yield* ids.flushSteps(); yield* ordered.flushSteps(); yield* ranges.flushSteps(); yield* sorted.flushSteps(); yield* endings.flushSteps()
+    if (p) {
+      acknowledge(p.part, digest(JSON.stringify(request)))
+      h.persistence = p.part + 1 === p.parts ? undefined : { id: p.id, next: p.part + 1, parts: p.parts }
+    }
     writeHeader(db, owner, h)
+    yield
   }
   function mutablePage(db: Database.Database, identity: string, h: ReturnType<typeof header>, limit: number,
     token: Record<string, unknown> | null, opening = false): ThreadHistoryResult {
@@ -776,6 +855,7 @@ export function createIndexedThreadHistory(deps: {
     const row = db.prepare<[string], Row>(`SELECT ${columns} FROM thread_records WHERE scope = ? AND kind = 'header' AND ordinal = 0`).get(identity)
     if (!row) throw INVALID_CHAT_HISTORY
     const h = header(decode(row, identity), server, conversation)
+    if (h.persistence) throw INVALID_CHAT_HISTORY
     if (recovery && (!token || recovery.format !== 'daemon-items-rebase' || Object.keys(recovery).length !== 5 ||
       recovery.owner !== identity || recovery.epoch !== digest(h.metadata.epoch) ||
       recovery.token !== digest(JSON.stringify(token)))) throw INVALID_CONTINUATION
@@ -789,7 +869,7 @@ export function createIndexedThreadHistory(deps: {
       // A retained scope converts once, transactionally, without progress or owned-save authority.
       const saved = load(db, server, conversation)
       if (!saved) throw INVALID_CHAT_HISTORY
-      db.exec(`CREATE TABLE IF NOT EXISTS thread_auth (scope TEXT NOT NULL REFERENCES thread_scopes(identity) ON DELETE CASCADE,
+      if (db.pragma('user_version', { simple: true }) === 6) db.exec(`CREATE TABLE IF NOT EXISTS thread_auth (scope TEXT NOT NULL REFERENCES thread_scopes(identity) ON DELETE CASCADE,
         tree TEXT NOT NULL, path TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(scope, tree, path)); PRAGMA user_version = 7`)
       h.mutable = activate(db, identity, h, saved.thread); h.hasArrival = true
       h.availabilityStart ??= saved.thread.ranges[0]?.start
@@ -870,7 +950,7 @@ export function createIndexedThreadHistory(deps: {
           migrate(db)
           if (request.operation === 'mutateThread') {
             reading = false
-            mutateThread(db, request)
+            for (const ignored of mutateThread(db, request)) void ignored
             return { status: 'ok' }
           }
           const server = Buffer.from(request.serverId, 'utf16le')
@@ -878,11 +958,11 @@ export function createIndexedThreadHistory(deps: {
           if (request.operation === 'removeServer') {
             for (const s of db.prepare<[Buffer], { conversation: unknown }>('SELECT conversation FROM thread_scopes WHERE server = ?').all(server)) {
               if (!Buffer.isBuffer(s.conversation) || s.conversation.length % 2 !== 0) throw INVALID_CHAT_HISTORY
-              load(db, request.serverId, s.conversation.toString('utf16le'))
+              load(db, request.serverId, s.conversation.toString('utf16le'), false, true)
             }
           } else if ('conversationId' in request) {
             if (paging) return readPage(db, request.serverId, request.conversationId, paging.limit, token, paging.opening, recovery)
-            const snapshot = load(db, request.serverId, request.conversationId)
+            const snapshot = load(db, request.serverId, request.conversationId, false, request.operation !== 'readThread')
             previous = snapshot?.thread ?? null
             if (request.operation === 'readThread') return snapshot ? { status: 'stored', snapshot } : { status: 'missing' }
           }
@@ -908,5 +988,19 @@ export function createIndexedThreadHistory(deps: {
       }
     }
   }
-  return api
+  return { ...api,
+    /** Internal admitted request; the application store retains queue ownership across turns. */
+    async executeMutation(request: Extract<ChatHistoryRequest, { operation: 'mutateThread' }>,
+      onTurn?: (units: number) => Promise<void>): Promise<ChatHistoryResult> {
+      try {
+        if (!encryption.isAvailable()) throw new EncryptionUnavailableError()
+        database.transaction(migrate)
+        await database.transactionSteps(db => mutateThread(db, request), onTurn)
+        return { status: 'ok' }
+      } catch (caught) {
+        return { status: 'error', code: caught === UNSUPPORTED_CHAT_HISTORY_VERSION ? 'unsupported-version'
+          : caught instanceof EncryptionUnavailableError ? 'encryption-unavailable' : 'write-failed' }
+      }
+    }
+  }
 }

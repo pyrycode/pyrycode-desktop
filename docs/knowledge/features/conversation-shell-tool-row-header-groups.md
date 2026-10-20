@@ -84,7 +84,8 @@ was frozen 2026-08-26, and this section is #854's only home.
 
 ## Subagent tool groups
 
-`ThreadItemsView` uses `threadItemPresentations` to nest shown supplied items under
+`ThreadItemsView` uses metadata-only `threadItemIndex`, sharing `nest` with the
+complete adapter, to nest shown supplied items under
 a shown `agent` with the matching item-id `parent` in the same snapshot. It does not
 join `parentToolUseId` against stored arrival order. Missing, hidden and non-agent
 parents leave children flat; a catch-up parent or revision relocates each child
@@ -96,8 +97,11 @@ New groups start collapsed. Text-only descendants still permit disclosure and do
 not add tools. Counts include distinct shown descendant `tool_call` item ids,
 excluding messages, nested agent cards and the owner; equal `tool_use_id` values do
 not merge supplied items. Supplied `active` determines activity independently of
-launch results, child activity or main-turn endings. Expanding reveals the retained
-children; hiding a parent preserves their independent expansion.
+launch results, child activity or main-turn endings. Expanding admits and mounts
+already-held children; closing a parent unmounts them and defers full adaptation,
+preserving their independent source-ID expansion state. Closed headers use lightweight
+presentation; body-only command and denial formatting wait for expansion. Complete
+composer-report and notification projection stays independent of this local visibility.
 
 `groupToolRows` and `withProvisionalAgents` were deleted in
 [#2023](https://github.com/pyrycode/pyrycode-desktop/issues/2023).
@@ -128,7 +132,8 @@ positions from retained roster/start/finish evidence.
 `ThreadItemsTimeline` keys its inner view by host/conversation/epoch. Numeric daemon
 item ids key the stable sibling wrappers and tool expansion within that scope;
 marker and run headers derive keys from those ids. Appends, revisions, prepends and
-late reparenting keep the row mounted, including while an ancestor hides it. Equal
+late reparenting preserve source identity and expansion. Closed descendants and folded
+members unmount; reopening can create new DOM elements for the same sources. Equal
 ids in a new scope cannot inherit expansion or refs. There is no `agentKeys`,
 `firstRowKey`, `FoldedRow.itemIndex` or provisional-to-loaded key handoff.
 
@@ -149,7 +154,7 @@ member. The wrapper map emits only `tool-group-row--joined-above` and
 siblings because their mounted wrappers interrupt DOM adjacency. Failure stays
 local to the [Failed icon](conversation-shell-tool-rows.md#failed-icon), with plain
 borders on neighbours. Wrappers are flex columns so negative join margins affect
-height; hidden wrappers consume no space. See
+height; closed descendants have no mounted wrappers. See
 [tool-row box treatment](conversation-shell-tool-row-body.md).
 
 ### Verification
@@ -173,12 +178,15 @@ first stamp: identical stamps allow an overwriting implementation to pass.
 Roster/history/receipt/delivery/stop suites retain their direct producer assertions,
 and `src/shared/chatHistory.test.ts` retains version-1 assistant-parent round trips.
 
-Mounted `e2e/tool-groups.spec.ts` retains all four active cases: marker navigation,
+Mounted `e2e/tool-groups.spec.ts` retains its four existing cases: marker navigation,
 interleaved groups, joined borders and started-agent lifecycle. `e2e/thread-items.spec.ts`
 adds authoritative supplied nesting/expansion/scroll and task-control proofs.
 Keep the ordinary stack geometry in `e2e/tool-row-toggle.spec.ts`; unchanged inner
 ToolRow markup does not establish wrapper geometry. Static markup cannot prove
-navigation, listeners, scrolling or mounted state retention.
+navigation, listeners, scrolling or expansion retention across remounts. Both native
+window variants of the keyboard-collapse regression additionally check the complete
+controlling header between real application chrome; see
+[counted Linux expansion/anchor evidence](conversation-shell-scroll-pin.md#deferred-expansion-verification).
 
 The [cleanup verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/2027#issuecomment-6202221899)
 at `11b4c95e4f3e2a665b5342882fd64ce569882793` records the complete configured
@@ -237,8 +245,10 @@ The header is a native button: click, Enter and Space toggle it and `aria-expand
 reflects the local state. Its chevron follows the label, pointing down when collapsed
 and up when expanded; member-row chevrons keep their existing treatment. It shares
 the Desktop tool outline, fill and joins. Headers are keyed **siblings** of the
-existing mounted tool wrappers, rather than containers that reparent members.
-Hidden members consume no space but retain their result and nested-group state;
+visible tool wrappers, rather than containers that reparent members. A folded run
+keeps its header while its members and their bodies are absent. Metadata supplies
+membership, count and status without full hidden-body construction; separate
+source-ID sets retain result and nested-group expansion across remounts;
 see [Expansion identity](#expansion-identity) and [Visible tool-row joins](#visible-tool-row-joins).
 
 ### Coverage and recorded evidence

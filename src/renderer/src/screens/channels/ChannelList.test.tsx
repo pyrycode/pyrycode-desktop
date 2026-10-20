@@ -120,6 +120,7 @@ const render = (
       serverIds={serverIds}
       statuses={statuses}
       openConversationId={openConversationId}
+      openServerId={openConversationId === null ? null : DEFAULT_SERVER}
       onOpen={noop}
       onOpenSettings={noop}
       onOpenArchive={noop}
@@ -137,6 +138,7 @@ const render = (
       // #1476 — the Channels tree's own pen handler, split back out of `onRename`. Defaulted to `noop`
       // here for its siblings' reason: it is REQUIRED on the view, so the container must decide.
       onEditChannel={noop}
+      onSetPinned={noop}
     />
   )
 

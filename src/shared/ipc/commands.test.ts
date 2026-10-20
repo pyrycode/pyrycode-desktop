@@ -1856,6 +1856,25 @@ it('bounds optional workspace rename attempt identifiers', () => {
   expect(isRendererCommand(command)).toBe(true)
 })
 
+describe('setConversationPinned', () => {
+  const command = { type: 'setConversationPinned', serverId: 'host-a',
+    payload: { conversation_id: 'channel', pinned: true } }
+  it.each([true, false])('admits a strict %s value', pinned => {
+    expect(isRendererCommand({ ...command, payload: { ...command.payload, pinned } })).toBe(true)
+  })
+  it.each([undefined, null, [], {}, { conversation_id: 'channel' },
+    ...[undefined, null, 1, 0, 'true', 'false'].map(pinned => ({ conversation_id: 'channel', pinned })),
+    ...['', null, 1].map(conversation_id => ({ conversation_id, pinned: true })),
+    { ...command.payload, serverId: 'host-b' }, { ...command.payload, extra: undefined },
+    { ...command.payload, [Symbol('extra')]: true }, Object.create(command.payload)
+  ])('refuses malformed payload %j', payload => {
+    expect(isRendererCommand({ ...command, payload })).toBe(false)
+  })
+  it.each([undefined, null, '', [], 1, 'x'.repeat(1025)])('refuses invalid host %j', serverId => {
+    expect(isRendererCommand({ ...command, serverId })).toBe(false)
+  })
+})
+
 describe('setConversationMuted (#1595)', () => {
   const payload = { conversation_id: 'conv-42', muted: true }
   const valid = { type: 'setConversationMuted', payload, attemptId: 'attempt-1' }

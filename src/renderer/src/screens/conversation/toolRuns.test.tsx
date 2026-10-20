@@ -15,14 +15,14 @@ const render = (items: ThreadItem[], foldTools = true) => renderToStaticMarkup(c
 }))
 const headers = (html: string) => html.match(/Using tools: \d+/g) ?? []
 
-it('folds supplied tools while keeping joined children mounted and lone tools ordinary', () => {
+it('folds supplied tools without mounting members and keeps lone tools ordinary', () => {
   const items = [tool(1), tool(2)]
   const ordinary = render(items, false)
   expect(headers(ordinary)).toEqual([])
   expect(ordinary).toContain('tool-group-row--joined-below')
   expect(ordinary).toContain('tool-group-row--joined-above')
   expect(headers(render(items))).toEqual(['Using tools: 2'])
-  expect(render(items).match(/hidden=""/g)).toHaveLength(2)
+  expect(render(items)).not.toContain('data-read-row=')
   expect(render([tool(1)])).toBe(render([tool(1)], false))
 })
 

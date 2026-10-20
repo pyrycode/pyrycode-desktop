@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto'
 import Database from 'better-sqlite3'
 import { createHistoryDatabase } from './historyDatabase'
 import { createIndexedThreadHistory } from './indexedThreadHistory'
-import { parseChatHistorySnapshot, type ThreadSnapshot } from '../shared/chatHistory'
+import { parseChatHistorySnapshot, parseChatHistoryRequest, type ThreadSnapshot } from '../shared/chatHistory'
 import type { SecretEncryption } from './secureStore'
 
 const roots: string[] = [], owners: ReturnType<typeof createHistoryDatabase>[] = []
@@ -32,6 +32,78 @@ const ask = (operation: string, extra: object = {}, serverId = 'Host', conversat
   ({ operation, serverId, ...(operation === 'removeServer' ? {} : { conversationId }), ...extra })
 const put = (s: { serverId: string; conversationId: string } = snapshot()) => ask('replaceThread', { snapshot: s }, s.serverId, s.conversationId)
 const newest = (limit = 2) => ask('newestThreadPage', { limit })
+it('rolls back a failed data part and its obligation atomically before exact fresh-owner retry', async () => {
+  const h = setup(), s = snapshot(0), id = '12345678-1234-4234-8234-123456789abc'
+  await h.store.execute(put(s))
+  const items = Array.from({ length: 31 }, (_, id) => ({ id, rev: 1, kind: 'future' }))
+  const request = parseChatHistoryRequest(owned(s, { items, persistence: { id, part: 0, parts: 2 } }))
+  if (request.operation !== 'mutateThread') throw Error('missing mutation')
+  expect(await h.store.executeMutation(request, async () => { throw Error('injected turn failure') }))
+    .toEqual(error('write-failed'))
+  h.database.close()
+  const fresh = h.fresh().store
+  expect(await fresh.execute(ask('readThread'))).toEqual(stored(s))
+  expect(await fresh.execute(request)).toEqual({ status: 'ok' })
+  expect(await fresh.execute(ask('readThread'))).toEqual(error('unreadable'))
+  expect(await fresh.execute(owned(s, { persistence: { id, part: 1, parts: 2 } }))).toEqual({ status: 'ok' })
+  expect(await fresh.execute(ask('readThread'))).toEqual(stored({ ...s, thread: {
+    ...s.thread, items, arrivalOrder: items.map(i => i.id) } }))
+})
+
+it('protects ordered save parts and exact acknowledgements independently of daemon fences', async () => {
+  const h = setup(), s = snapshot(0)
+  await h.store.execute(put(s))
+  const part = (id: string, n: number, extra: object = {}) => owned(s, {
+    persistence: { id, part: n, parts: 3 }, ...extra })
+  const first = '12345678-1234-4234-8234-123456789abc', next = '22345678-1234-4234-8234-123456789abc'
+  expect(await h.store.execute(part(first, 1))).toEqual(error('write-failed'))
+  expect(await h.store.execute(part(first, 0))).toEqual({ status: 'ok' })
+  expect(await h.store.execute(part(first, 0))).toEqual({ status: 'ok' })
+  expect(await h.store.execute(owned(snapshot(0, 'Other', 'Chat'), {
+    persistence: { id: first, part: 1, parts: 3 } }))).toEqual(error('write-failed'))
+  expect(await h.store.execute(ask('readThread', {}, 'Other', 'Chat'))).toEqual({ status: 'missing' })
+  expect(await h.store.execute(part(first, 0, { removeIds: [99] }))).toEqual(error('write-failed'))
+  expect(await h.store.execute(part(first, 2))).toEqual(error('write-failed'))
+  expect(await h.store.execute(part(next, 0))).toEqual(error('write-failed'))
+  expect(await h.store.execute(part(first, 1, { persistence: { id: first, part: 1, parts: 4 } }))).toEqual(error('write-failed'))
+  expect(await h.store.execute(part(first, 1))).toEqual({ status: 'ok' })
+  h.database.close()
+  const fresh = h.fresh().store
+  expect(await fresh.execute(ask('readThread'))).toEqual(error('unreadable'))
+  expect(await fresh.execute(part(first, 2))).toEqual({ status: 'ok' })
+  expect(await fresh.execute(ask('readThread'))).toEqual(stored(s))
+  // Converting another retained scope must not downgrade the journal's schema.
+  const other = snapshot(0, 'Other', 'Chat')
+  expect(await fresh.execute(put(other))).toEqual({ status: 'ok' })
+  expect((await fresh.execute(ask('openThreadPage', { limit: 1 }, 'Other', 'Chat'))).status).toBe('page')
+  expect(h.database.transaction(db => db.pragma('user_version', { simple: true }))).toBe(8)
+  expect(await fresh.execute(part(next, 0))).toEqual({ status: 'ok' })
+  for (const n of [0, 1, 2]) expect(await fresh.execute(part(first, n))).toEqual({ status: 'ok' })
+  expect(await fresh.execute(ask('readThread'))).toEqual(error('unreadable'))
+  expect(await fresh.execute(part(next, 1))).toEqual({ status: 'ok' })
+  expect(await fresh.execute(part(next, 2))).toEqual({ status: 'ok' })
+  expect(await fresh.execute(ask('readThread'))).toEqual(stored(s))
+})
+
+it.each(['reset', 'epoch', 'replace', 'delete', 'unpair'] as const)(
+  'retires an abandoned save on %s and rejects stale parts after scope reuse', async lifecycle => {
+    const h = setup(), s = snapshot(0), id = '12345678-1234-4234-8234-123456789abc'
+    await h.store.execute(put(s))
+    const part = (n: number) => owned(s, { persistence: { id, part: n, parts: 2 } })
+    expect(await h.store.execute(part(0))).toEqual({ status: 'ok' })
+    if (lifecycle === 'reset') expect(await h.store.execute(owned(s, { resetId: 'replacement' }))).toEqual({ status: 'ok' })
+    else if (lifecycle === 'epoch') expect(await h.store.execute(owned({ ...s, thread: { ...s.thread, epoch: 'other' } }))).toEqual({ status: 'ok' })
+    else if (lifecycle === 'replace') expect(await h.store.execute(put(s))).toEqual({ status: 'ok' })
+    else {
+      expect(await h.store.execute(ask(lifecycle === 'delete' ? 'removeConversation' : 'removeServer'))).toEqual({ status: 'ok' })
+      expect(await h.store.execute(put(s))).toEqual({ status: 'ok' })
+    }
+    const before = await h.store.execute(ask('readThread'))
+    for (const n of [0, 1]) expect(await h.store.execute(part(n))).toEqual(error('write-failed'))
+    h.database.close()
+    expect(await h.fresh().store.execute(ask('readThread'))).toEqual(before)
+  })
+
 it.each(['metadata', 'movement', 'removal', 'replacement'] as const)('rebases protected traversal after %s without losing moved identities', async change => {
   const h = setup(), s = snapshot(0)
   const items = Array.from({ length: 61 }, (_, id) => ({ id, kind: 'future', rev: 1, order: id,
@@ -168,19 +240,21 @@ it('cold opening payload work stays bounded as unrelated older, hidden and range
     const conversionMs = performance.now() - converting
     h.database.close(); const fresh = h.fresh()
     let structural = 0, records = 0, payloads = 0
+    // Each prepared statement is private to this call. Count real reads directly
+    // without retaining a Vitest mock and its call history for every statement.
     fresh.database.transaction(db => {
       const prepare = db.prepare.bind(db)
       vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
         const statement = prepare(sql)
         if (sql.startsWith('SELECT')) for (const method of ['all', 'get'] as const) {
           const read = statement[method].bind(statement)
-          vi.spyOn(statement, method).mockImplementation((...args) => {
+          Object.defineProperty(statement, method, { value: (...args: unknown[]) => {
             const result = read(...args), count = Array.isArray(result) ? result.length : Number(result !== undefined)
             if (sql.includes('thread_auth')) structural += count
             else if (sql.includes('thread_records')) records += count
             else if (sql.includes('thread_payloads')) payloads += count
             return result
-          })
+          } })
         }
         return statement
       })
@@ -235,6 +309,45 @@ function owned(s: { serverId: string; conversationId: string; thread: ThreadSnap
   return ask('mutateThread', { change: { metadata, acceptEpoch: true, items: [], removeIds: [], ranges: [], ...extra } }, s.serverId, s.conversationId)
 }
 
+it('bounded and separately saved application preserve exact items, order and progress after replay and reopen', async () => {
+  const bounded = setup(), separate = setup(), seed = snapshot(40)
+  seed.thread.items[1] = { ...seed.thread.items[1], kind: 'assistant_message', content: { text: 'prefix' } }
+  for (const h of [bounded, separate]) {
+    expect(await h.store.execute(put(seed))).toEqual({ status: 'ok' })
+    expect(await h.store.execute(owned(seed))).toEqual({ status: 'ok' })
+  }
+  const { items: ignoredItems, ranges: ignoredRanges, arrivalOrder: ignoredArrival, ...old } = seed.thread
+  void ignoredItems; void ignoredRanges; void ignoredArrival
+  const unfinished = { ...old, version: 400, uncommittedVersion: 400 }
+  const completed = { ...old, version: 400, checkpoint: 400, uncommittedVersion: 0, repair: null }
+  const items = [{ ...seed.thread.items[1], content: { text: 'prefix extended' } },
+    { ...seed.thread.items[2], rev: 500, order: 10000, text: 'revision' },
+    { id: 100, rev: 1, kind: 'future', order: 2 }]
+  const observations = [{ metadata: unfinished }, { metadata: completed, completion: { fromVersion: 100, version: 400 },
+    availability: { start: 0, available: false } }, { metadata: { ...completed, version: 450, uncommittedVersion: 450 } }]
+  const request = parseChatHistoryRequest(owned(seed, { items, removeIds: [3, 7], ranges: [{ start: 3, end: 900 }],
+    priorProgress: observations, metadata: { ...completed, version: 450, checkpoint: 450, uncommittedVersion: 450 } }))
+  if (request.operation !== 'mutateThread') throw Error('expected mutation')
+  expect(await bounded.store.executeMutation(request)).toEqual({ status: 'ok' })
+  expect(await separate.store.execute(owned(seed, { items, removeIds: [3, 7], ranges: [{ start: 3, end: 900 }], metadata: old }))).toEqual({ status: 'ok' })
+  for (const progress of [...observations, request.change]) {
+    expect(await separate.store.execute(owned(seed, { ...progress, items: [], ranges: [], removeIds: [], priorProgress: [] }))).toEqual({ status: 'ok' })
+  }
+  const read = ask('readThread'), expected = await separate.store.execute(read)
+  if (expected.status !== 'stored' || expected.snapshot.kind !== 'daemon-items') throw Error('expected saved thread')
+  expect(expected.snapshot.thread.items).toEqual(expect.arrayContaining(items))
+  expect(expected.snapshot.thread.items.some(item => item.id === 3 || item.id === 7)).toBe(false)
+  expect(expected.snapshot.thread.arrivalOrder).toEqual([...seed.thread.arrivalOrder.filter(id => id !== 3 && id !== 7), 100])
+  expect(expected.snapshot.thread.ranges).toEqual([{ start: 0, end: 950 }])
+  expect(await bounded.store.execute(read)).toEqual(expected)
+  expect(await bounded.store.executeMutation(request)).toEqual({ status: 'ok' })
+  bounded.database.close()
+  expect(await bounded.fresh().store.execute(read)).toEqual(expected)
+  const p = await page(bounded.fresh().store)
+  expect(p.metadata).toMatchObject({ checkpoint: 400, version: 450, uncommittedVersion: 450, olderAvailable: false })
+  expect(p.availabilityStart).toBe(0)
+})
+
 it('successive owned additions keep ordering paths and record work bounded without rewriting placements', async () => {
   const h = setup(), s = snapshot(0)
   let reads = 0, writes = 0
@@ -244,11 +357,11 @@ it('successive owned additions keep ordering paths and record work bounded witho
       const statement = prepare(sql)
       if (sql.startsWith('SELECT')) {
         const get = statement.get.bind(statement), all = statement.all.bind(statement)
-        vi.spyOn(statement, 'get').mockImplementation((...args) => { const r = get(...args); reads += r ? 1 : 0; return r })
-        vi.spyOn(statement, 'all').mockImplementation((...args) => { const r = all(...args); reads += r.length; return r })
+        statement.get = (...args) => { const r = get(...args); reads += r ? 1 : 0; return r }
+        statement.all = (...args) => { const r = all(...args); reads += r.length; return r }
       } else {
         const run = statement.run.bind(statement)
-        vi.spyOn(statement, 'run').mockImplementation((...args) => { writes++; return run(...args) })
+        statement.run = (...args) => { writes++; return run(...args) }
       }
       return statement
     })
@@ -492,7 +605,7 @@ it('coalesces shared protected paths into one write per path in an owned batch',
       const statement = prepare(sql)
       if (sql.startsWith('INSERT OR REPLACE INTO thread_auth')) {
         const run = statement.run.bind(statement)
-        vi.spyOn(statement, 'run').mockImplementation((...args) => { writes++; return run(...args) })
+        statement.run = (...args) => { writes++; return run(...args) }
       }
       return statement
     })
@@ -516,11 +629,11 @@ it('ordinary owned validation, serialization and protected record work stay boun
         const statement = prepare(sql)
         if (sql.startsWith('SELECT')) {
           const all = statement.all.bind(statement), get = statement.get.bind(statement)
-          vi.spyOn(statement, 'all').mockImplementation((...args) => { const result = all(...args); rows += result.length; return result })
-          vi.spyOn(statement, 'get').mockImplementation((...args) => { const result = get(...args); rows += result ? 1 : 0; return result })
+          statement.all = (...args) => { const result = all(...args); rows += result.length; return result }
+          statement.get = (...args) => { const result = get(...args); rows += result ? 1 : 0; return result }
         } else {
           const run = statement.run.bind(statement)
-          vi.spyOn(statement, 'run').mockImplementation((...args) => { writes++; return run(...args) })
+          statement.run = (...args) => { writes++; return run(...args) }
         }
         return statement
       })
@@ -804,8 +917,8 @@ it('selected reads/JSON decodes/decrypts stay bounded when unrelated history gro
         const statement = prepare(sql)
         if (sql.startsWith('SELECT')) {
           const all = statement.all.bind(statement), get = statement.get.bind(statement)
-          vi.spyOn(statement, 'all').mockImplementation((...args) => { const result = all(...args); rows += result.length; return result })
-          vi.spyOn(statement, 'get').mockImplementation((...args) => { const result = get(...args); rows += result ? 1 : 0; return result })
+          statement.all = (...args) => { const result = all(...args); rows += result.length; return result }
+          statement.get = (...args) => { const result = get(...args); rows += result ? 1 : 0; return result }
         }
         return statement
       })

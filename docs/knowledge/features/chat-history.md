@@ -3,7 +3,9 @@
 The main-process service stores ordered conversation lists and daemon-item
 snapshots in protected indexed SQLite storage, using the same OS-backed
 protection as the [secure store](secure-store.md). A
-fresh service instance can read saved content without a connection or Noise handshake. Host identity is the
+fresh service instance can read completed saved content without a connection or
+Noise handshake. Interrupted split saves remain protected and unreadable until
+exact retry or authorized supersession. Host identity is the
 saved pairing record's `server` field, so equal conversation ids on different
 hosts remain separate.
 
@@ -93,10 +95,11 @@ restoration and clears schedule no list write.
 
 Item ownership comes from each received transition's `owned` change at the exact
 host/conversation/epoch. The writer skips unchanged ownership references and local
-restoration, so hydration schedules no save. `parseChatHistoryRequest` detaches
-changed items, explicit removals, metadata and new evidence before scheduling;
-it does not project a shortened holder as a complete snapshot. Ordered completion
-intervals and availability boundaries preserve saved repair/unfinished fences
+restoration, so hydration schedules no save. Capture links immutable detached owned
+changes; `parseChatHistoryRequest` validates/detaches each bounded submission before
+IPC and independently in main. It does not project a shortened holder as a complete
+snapshot. Ordered completion intervals and availability boundaries preserve saved
+repair/unfinished fences
 that the holder may not contain. Holder loss retains pending work; intentional
 same-epoch resets carry a unique retry identity. See
 [owned mutation admission](chat-history-api.md#owned-authoritative-mutations).
@@ -188,13 +191,15 @@ for saved-read notices, result/error classifications and preservation after fail
 ## Storage and concurrency
 
 Production `createChatHistoryStore` composes the authoritative indexed backend
-with protected list cells, stable authoritative payloads and schema-7 authenticated
-mutable indexes. One main-process database owner lazily opens a reusable synchronous connection at
+with protected list cells, stable authoritative payloads, schema-7 authenticated
+mutable indexes and schema-8 split-save receipts/obligations. One main-process
+database owner lazily opens a reusable synchronous connection at
 `history/history.sqlite` beneath
 trusted `userDataPath`. The composition root retains it across window reopening;
 graceful app quit flushes renderers, drains handler/store admission and closes it.
-Directory creation uses mode 0700 and the database is set to 0600. Reads and
-mutations run synchronously within transactions; secure-store I/O is outside them.
+Directory creation uses mode 0700 and the database is set to 0600. Reads run
+synchronously within transactions; ordinary owned mutations yield within
+one atomic transaction per submission. Secure-store I/O is outside transactions.
 See [schema admission and migration](chat-history-api.md#api).
 
 First access recognizes and ignores owned version-1 legacy envelopes, validates

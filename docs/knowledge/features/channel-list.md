@@ -29,6 +29,10 @@ belong only in [Archive](archive-screen.md), which retains daemon list order. A 
 server stamp remains visible in a fallback without host actions; it is never assigned to another
 host. Two paired daemon workspaces on one machine remain two hosts.
 
+A single **Pinned** section, when non-empty, precedes every host, outside any host's folds — see [the
+global Pinned section](#the-global-pinned-section) below. Eligible rows leave their host's Channels
+list; they are never also drawn there.
+
 The host and all three sections begin expanded and fold independently, including on an empty host.
 Folding preserves the current conversation or app selection and composer draft. Host rows show no
 connection dots or dot wrapper in any state; Edit host reveals on hover or keyboard focus. A failed host keeps a
@@ -229,7 +233,7 @@ aria-label="Conversations">` root, including under static server rendering.
 
 Sidebar mutations require the clicked row or host's status to be `connected`;
 missing, reconnecting, disconnected and error entries fail closed. This covers chat/channel
-creation, conversation rename and Save as channel. The open chat never determines
+creation, conversation rename, Save as channel and pin/unpin. The open chat never determines
 availability. Held rows remain selectable; host and section folds remain usable. The
 existing workspace dialog state has no sidebar entry point.
 
@@ -271,9 +275,9 @@ which now serves the Chats tree alone. Both pens draw from one `RowPenControl` s
 class tokens, handler) built in `renderBody` for the two row partitions — see [the row's hover-revealed
 control](channel-list-row-hover-control.md) for the shared markup.
 
-Since #1441 the two trailing-control sets are **not** disjoint by section: a Recent row carries both
-its own Save-as-channel chevron and this pen, while a Channels row carries the pen alone (there is
-nothing to save on an already-promoted row). `renderBody` passes `onSaveAsChannel` to the Recent
+A Chats row carries its own Save-as-channel chevron and pen, while a Channels row carries
+Pin/Unpin and the pen
+(there is nothing to save on an already-promoted row). `renderBody` passes `onSaveAsChannel` to the Recent
 `.map` alone and a pen handler to both maps, so at most two trailing controls render per row, never
 the Save-as-channel chevron on a Channels row. The container owns each dialog's open/name state as
 its own local `useState` pair, rendered as siblings of `ChannelListView`. See [Save-as-channel
@@ -316,6 +320,138 @@ a create control. Dropping such a row would hide a real conversation; placing it
 host would claim an identity the client cannot establish. The helper uses a `Map`, avoiding
 plain-object `__proto__` behavior for string ids. Server ids are React reconciliation keys and
 comparison operands, never rendered as labels or attributes.
+
+### The global Pinned section (`channelListViewModel.ts` / `ChannelList.tsx`, added by [#2084](https://github.com/pyrycode/pyrycode-desktop/issues/2084))
+
+Pins are host-local and nullable (`ConversationSummary.pinned_at?: string | null`, [Core
+\#3538](https://github.com/pyrycode/pyrycode/issues/3538)) — the daemon decides what's pinned, this
+screen requests changes but derives placement only from received state; see
+[Conversation list store § Received pin state](conversation-list-store.md#received-pin-state-since-2084) for the decode. `partitionSidebar(rows,
+serverIds)` wraps `partitionActive`: it starts from the active Channels partition, keeps only rows
+stamped with a **saved** host id (`serverIds`, the same join `groupByServer` uses — an unattributed or
+unpaired-host stamp is never eligible) and a non-null `pinned_at`, and removes exactly those rows from
+the Channels copy it returns. Chats, Apps, and both unattributed fallbacks are untouched. `renderBody`
+draws the resulting `pinned` list in a `.channel-list__pinned` block before the host loop, and omits
+both the block and its separator when `pinned` is empty — the section's only entry/exit condition.
+
+Ordering parses each row's `pinned_at` once (not once per comparator call) with a local
+`PIN_RFC3339`/`pinInstant` pair that mirrors [Archive's `archiveInstant`/`isArchiveInstant`
+convention](archive-screen.md) rather than importing it, to keep this screen's fallback semantics from
+drifting if Archive's ever changes: real calendar/leap-year validity, RFC3339 offset or `Z`, and
+arbitrary sub-millisecond precision compared by parsed milliseconds first, then the fractional digits
+past the third with trailing zeros trimmed (so `.0001` and `.00010000...1` compare correctly without
+float rounding). A row with a syntactically invalid or impossible-date stamp sorts after every row
+with a valid one. Ties — both invalid, or two valid instants equal to that precision — break on
+`serverId` then `id`, ascending UTF-16 code-unit order, the same tie-break family `channelListViewModel`
+uses elsewhere. Two hosts reporting the same conversation ID both keep their own pinned row — the
+partition and the sort key on server id first, never collapsing by conversation id alone. The input
+array and its rows are not mutated.
+
+Each pinned row reuses the ordinary `Row` component with two additional optional props: `pinnedHost`
+(a display label, never `undefined` for a pinned row, so its presence is `Row`'s own "am I a pinned
+row" signal) and `hostDown`. The title's `· host name` suffix renders as a second escaped `<span
+className="channel-list__pinned-host">` child of the existing title span — never a separate attribute,
+URL or lookup key — using the same `hostRowLabel`/`selectHostLabelFor` fallback (`'Server'`) the host
+row itself falls back to, read by the container from `useHostLabelStore` and passed down as a
+`serverId → label` map so the pure view never touches the label store directly. The pen is the existing
+`CHANNELS_ROW_PEN` (**Edit channel**, gated on that row's own host being `connected` — never on the
+open chat), and the row's React key is `JSON.stringify([serverId, id])`, the two-part key `groupByServer`
+anticipates for exactly this duplicate-ID case.
+
+Host-tree Channels and Chats, like Pinned, select only when `row.serverId === openServerId`
+and `row.id === openConversationId`, with the hosted pane absent or explicitly closed.
+`openServerId` comes from the active conversation's stamped host. `Row` exposes selection as
+`aria-current="true"`, which controls the `--color-on-primary` fill. An ID-only comparison
+also selects another host's tree row when opening a pin. Pins reuse `onOpen`; Edit targets the clicked row.
+
+`pinnedChannels.test.tsx` selects each host in shared-ID channel/channel, chat/chat and
+pinned-B/tree-A layouts, asserting one current row and its title. Missing/wrong identities
+and an open hosted pane select none. Static markup cannot prove clicks or paint.
+[`e2e/sidebar-selection.spec.ts`](../../../e2e/sidebar-selection.spec.ts) clicks A/B/A/B in each
+layout, asserts exclusive current state page-wide and checks resting fill after moving the
+pointer away. [Recorded Linux verifier evidence](https://github.com/pyrycode/pyrycode-desktop/pull/2118#issuecomment-6258207166):
+**3 executed, 3 passed, 0 failed, 0 skipped**; all three failed before the fix. This is
+fake-transport evidence; provider live behavior was outside acceptance and macOS outside scope.
+
+**Offline appearance is scoped to pinned rows only, by a data attribute, not a shared class.**
+`Row` sets `data-pinned` and `data-host-down` on its wrapper; `channels.css` scopes
+`.channel-list__row[data-host-down='true']` to error-colored title/suffix/status-dot text and 0.6
+row opacity, `connecting` draws the normal appearance, and a 1px inverse-primary
+`.channel-list__pinned-rule` follows the group. This status comes from the same `SessionState.statuses`
+map every other row reads — a pinned row for a saved-but-unreachable host keeps rendering from the
+persisted list (see [chat history](chat-history.md)) through a profile relaunch, independent of
+whether that host's connection has resolved yet.
+
+[`pinnedChannels.test.tsx`](../../../src/renderer/src/screens/channels/pinnedChannels.test.tsx) is the
+static suite: `partitionSidebar` ordering (fractional precision, invalid-after-valid, UTF-16 ties,
+eligibility, frozen input) and markup (heading placement, escaped suffix and fallbacks, exactly one
+pinned-vs-host-tree selection, connecting-vs-down-vs-error coloring, empty-section omission).
+[`e2e/sidebar-pinned.spec.ts`](../../../e2e/sidebar-pinned.spec.ts) is the mounted display scenario: external
+and correlated `conversation_updated` pushes that add/remove/reorder only the emitting host's pins,
+host-attributed rename and selection across a shared conversation ID, measured geometry against Figma,
+computed disconnected/error styling, and an actual profile relaunch that observes a successful saved
+list before quitting rather than re-seeding one. Local actions use the same authoritative placement
+path described below, including changes made from another device.
+
+#### Pin and unpin actions
+
+Every Channels row has a visible-at-rest **Pin channel** button immediately left of its pen;
+Pinned rows have **Unpin channel** in that slot. Chats have no pin action. The labels are both
+accessible names and control name pills. Inline Font Awesome Free thumbtack/thumbtack-slash paths
+render at 12px in `--color-primary`, matching Figma `869:13089` / `872:9638` / `872:9649`.
+The existing `.channel-list__rename` token still identifies the Edit channel pen, whose hover/focus
+reveal and dialog remain intact. Open, pin/unpin and edit are sibling buttons; activating a pin
+neither opens nor edits the channel. Connected rows have keyboard order **open → pin/unpin → edit**.
+
+Pin and pen have adjacent, non-overlapping **28×24px** hit areas. The title reserves 56px for them,
+so long names ellipsize before either button. Right-aligning the pin glyph within its hit area
+preserves the design's **20px glyph pitch** without borrowing the Chats chevron/pen's overlapping
+slots. A visible glyph alone cannot prove that both controls remain independently clickable.
+
+Both pin actions are disabled unless that row's host is `connected`, including while `connecting`.
+The container reads statuses and passes display/action inputs to pure `Row`; its callback rechecks
+`canMutateHost(row.serverId)` immediately before dispatch, so a stale rendered handler cannot write
+after disconnect. Pinned `disconnected`/`error` rows retain the error-colored name, host suffix and
+dot at 0.6 row opacity; `connecting` keeps normal row appearance while Unpin remains disabled.
+
+The [pin write path](daemon-connection-methods.md#channel-pin-writes) sends once through the owning
+host. No optimistic timestamp or placement is stored: held confirmation leaves the section and
+order unchanged. Correlated or unsolicited `conversationUpdated` refreshes only the emitting host;
+the authoritative list then moves a pin into Pinned or returns an unpin to its host's alphabetical
+Channels list. The last unpin removes Pinned and its rule. Refusals (including older hosts'
+`protocol.unknown_type`) and local encode/send failures leave placement unchanged. Repeated pinning
+preserves the timestamp on the host; the client never mints one or retries.
+
+#### Pin-action verification
+
+[`e2e/sidebar-pin-actions.spec.ts`](../../../e2e/sidebar-pin-actions.spec.ts),
+`sidebar pin actions route uniquely and wait for owning-host confirmation`, drives the visible
+controls through real preload/IPC/registry and encrypted fake connections across two hosts.
+It covers delayed confirmation, repeated pinning, unsolicited host-local refresh, refusal,
+unknown/mismatched/ambiguous ownership, stale activation, disconnected/error/connecting states and
+recovery. Received list events and a rendered-frame barrier fence no-send/no-move assertions;
+a short wait alone would allow those checks to pass before command processing.
+
+Recorded Linux x64 evidence for revision `369b9108` (2026-10-18), from
+[the verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2110#issuecomment-6255332291)
+and the retained dispatcher gate report:
+
+- Complete configured Playwright gate: **499 executed, 499 passed, 0 failed, 5 skipped**.
+  The named pin-action scenario above passed, as did both hover viewport cases,
+  `a row control names itself in a pill that follows the pointer, clear of the control` and
+  `a Channels row holds the Edit channel pen inside the same 24px row`.
+- Captured-client subset in that gate: **28 executed, 28 passed, 0 failed, 1 skipped**
+  (the existing system-prompt-reset exclusion).
+- Builder's guarded rename/promote/archive lifecycle replay: **3 executed, 3 passed,
+  0 failed, 0 skipped**, with 0 forbidden launches.
+- Dispatcher unit gate 4: **9,366 executed, 9,366 passed, 0 failed, 3 skipped**.
+  This retained count supersedes the verdict comment's different unit total; the supplied
+  report does not enumerate individual unit results.
+
+These are recorded fake-transport and captured replay results, not fresh current-provider live
+runs. No live acceptance was required for this command/UI slice; macOS was outside this Linux
+ticket's verification scope. The verifier also compared Electron captures at 1280×800 and 800×600
+with Figma, including long-title clearance and disabled host-down Unpin.
 
 ### Workspace data
 
@@ -434,12 +570,12 @@ box it's given, and the sidebar's `flex: 0 0 400px` is the single place width is
 
 #### Row control hover
 
-Each edit pen, section-create plus and Save-as-channel chevron paints its own
+Each edit pen, section-create plus, enabled pin/unpin and Save-as-channel chevron paints its own
 `--color-state-hover` rectangle with `--radius-xs` corners when the control itself
 is hovered. Row hover alone reveals the glyph without this layer; keyboard-only
 focus retains the existing outline and name pill without painting the layer.
 The layer extends 4px beyond each side of the SVG box: 20px square for the 12px
-conversation pens/chevron, 22px for the 14px host/workspace pens and 24px for
+conversation pens/chevron/pin, 22px for the 14px host/workspace pens and 24px for
 the 16px pluses.
 
 The shared `:hover::before` rule covers `.channel-list__host-edit`,
@@ -447,6 +583,11 @@ The shared `:hover::before` rule covers `.channel-list__host-edit`,
 `.channel-list__host-add`, `.channel-list__workspace-create`,
 `.channel-list__section-create` and `.channel-list__save`. Host-add and workspace
 controls remain retained CSS surfaces without sidebar entry points.
+Pin uses a separate `.channel-list__pin:enabled:hover::before` selector, with its 20px layer centered
+on the right-aligned glyph. Disabled pin/unpin paints no hover layer and reveals no pointer pill.
+Keep `:enabled` outside the shared `:is(...)`: its specificity would otherwise apply to every
+argument and override the later 22px edit / 24px create sizes. The hover spec checks those sizes
+and disabled pin behavior; name-pill and row-geometry specs retain open → pin → edit focus coverage.
 The absolutely positioned, non-interactive layer sits over the row fill and below
 the relatively positioned SVG. Sizing the paint from the larger hit box would
 give the wrong glyph clearance; changing button padding or dimensions would
@@ -479,13 +620,29 @@ cannot establish hover paint or layout stability. See the
   hosts remain foldable but cannot create. Authentication checks need connected-only controls or
   composer readiness plus authentication/receipt barriers; see
   [host connection verification](channel-list-host-row.md#connection-presentation-and-verification).
+- **Unpairing an unreachable saved host after a profile relaunch can hang — tracked by
+  [#2089](https://github.com/pyrycode/pyrycode-desktop/issues/2089), reproduced on unchanged main
+  without any pin field or pinned markup involved.** The global Pinned section's own restart,
+  offline-appearance and authoritative-replace behavior are unaffected and independently verified;
+  only the follow-on unpair action on such a host is the open gap. Do not read #2084's e2e coverage as
+  closing it — that scenario is skipped pending #2089, independently of the active pin-display
+  assertions in the same spec.
+- **Mounted and recorded-replay coverage of the Pinned section (`e2e/sidebar-pinned.spec.ts`, the
+  shared-replay client scenarios) is fake-transport and captured-daemon evidence, not current
+  provider/daemon live acceptance.** It proves the client's own decode, partition, render and
+  persistence behavior against a scripted peer; it does not establish that a present-day `pyry`
+  daemon or provider sends `pinned_at` in the shape this screen expects.
 
 ## Related
 
 - [Paired shell](paired-shell.md) / [#140](../codebase/140.md) — the `list ⇄ thread` router this screen
   fills the `list` arm of; since [#670](../codebase/670.md) also the two-pane shell's sidebar.
 - [Conversation list store](conversation-list-store.md) / [#208](../codebase/208.md) — the store slice
-  this screen reads verbatim (snake_case `ConversationSummary` rows, `null` vs `[]` contract).
+  this screen reads verbatim (snake_case `ConversationSummary` rows, `null` vs `[]` contract), including
+  [the received `pinned_at` field](conversation-list-store.md#received-pin-state-since-2084) this
+  screen's global Pinned section reads (#2084).
+- [Global Pinned section architecture](../../specs/architecture/2084-global-pinned-channels.md) —
+  design, security review and the verifier-found host-vs-conversation-id selection fix (#2084).
 - [Conversation list fetch](conversation-list-fetch.md) / [#139](../codebase/139.md) — the transport
   decode; documents the no-message-text wire gap this screen's row shape is scoped by.
 - [Conversation shell](conversation-shell.md) — the thread view every row opens into via `onOpen`.

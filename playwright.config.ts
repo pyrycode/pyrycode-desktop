@@ -10,6 +10,7 @@ import { availableParallelism } from 'node:os'
 
 const REAL_TIER = /(^|\/)real-[^/]*\.spec\.ts$/
 const CAPTURE_TIER = /(^|\/)capture-[^/]*\.spec\.ts$/
+const NATIVE_WRITER = /(^|\/)history-writer-native\.spec\.ts$/
 
 // The specs that write or read the operating system clipboard, which every Electron process on the
 // machine shares. Two of them overlapping would read each other's text. A new spec that copies or pastes
@@ -64,8 +65,7 @@ export default defineConfig({
   // `(^|\/)` pins the match to a path boundary and `[^/]*` keeps it inside one segment, so the partition
   // now depends on the FILENAME alone — which is what both configs always claimed.
   testIgnore: [REAL_TIER, CAPTURE_TIER],
-  // One X display per run on Linux, whatever command started it, so a gate and an agent's own run in one
-  // container stop sharing the container's display. See e2e/fixtures/runDisplay.ts.
+  // Each Linux worker owns its X display; global setup validates the policy before launches.
   globalSetup: './e2e/fixtures/runDisplay.ts',
   // Files spread across workers; the tests inside one file still run in order in one worker. Every
   // launch already owns its own resources: a fresh `mkdtemp` user-data dir, fake relay forwarders and
@@ -77,11 +77,16 @@ export default defineConfig({
   // the fully serial run.
   fullyParallel: false,
   workers: workerCount(),
-  // The clipboard project is listed first so its single worker starts at once rather than running its
-  // specs one after another at the end, after the parallel ones have finished.
+  // After the native deadline proof, clipboard starts alongside parallel so its serial
+  // cases do not accumulate at the end of the run.
   projects: [
-    { name: 'clipboard', testMatch: CLIPBOARD_SPECS, workers: 1 },
-    { name: 'parallel', testIgnore: [REAL_TIER, CAPTURE_TIER, ...CLIPBOARD_SPECS] }
+    // This deadline proof must finish before competing Electron launches. A single-worker
+    // project alone would still overlap the other projects. Dependencies isolate only this
+    // scenario; clipboard and parallel retain their existing concurrency after it completes.
+    { name: 'native-writer', testMatch: NATIVE_WRITER, workers: 1 },
+    { name: 'clipboard', testMatch: CLIPBOARD_SPECS, workers: 1, dependencies: ['native-writer'] },
+    { name: 'parallel', testIgnore: [REAL_TIER, CAPTURE_TIER, NATIVE_WRITER, ...CLIPBOARD_SPECS],
+      dependencies: ['native-writer'] }
   ],
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,

@@ -4,6 +4,26 @@ import { parseChatHistoryRequest, parseChatHistorySnapshot, threadHistoryCodec }
 const summary = { id: 'chat', name: null, is_promoted: false, is_archived: true, cwd: '/display', last_message_ts: '', last_used_at: 'date', workspace_label: null }
 
 describe('chat history records and requests', () => {
+  it('admits detached bounded persistence parts and rejects malformed identities, sequences and oversized work', () => {
+    const persistence = { id: '12345678-1234-4234-8234-123456789abc', part: 0, parts: 3 }
+    const change = { metadata: { hostId: 'h', conversationId: 'c', epoch: 'e', version: 100, checkpoint: 100, repair: null },
+      acceptEpoch: false, items: [], removeIds: [], ranges: [], persistence }
+    const parse = (patch: object) => parseChatHistoryRequest({ operation: 'mutateThread', serverId: 'h', conversationId: 'c', change: { ...change, ...patch } })
+    expect(parse({})).toMatchObject({ change: { persistence } })
+    const parsed = parse({})
+    persistence.part = 1
+    expect(parsed).toMatchObject({ change: { persistence: { part: 0 } } })
+    for (const p of [null, {}, { ...persistence, id: 'scope' }, { ...persistence, part: -1 },
+      { ...persistence, part: 3 }, { ...persistence, parts: 1 }, { ...persistence, parts: 100001 },
+      { ...persistence, extra: true }, { ...persistence, part: 0.5 }]) expect(() => parse({ persistence: p })).toThrow()
+    expect(() => parse({ removeIds: Array.from({ length: 32 }, (_, i) => i) })).toThrow()
+    expect(() => parse({ priorProgress: Array.from({ length: 32 }, () => ({ metadata: change.metadata })) })).toThrow()
+    let visited = 0
+    const oversized = Array.from({ length: 1000 }, () => ({ get id() { visited++; return 1 } }))
+    expect(() => parse({ items: oversized })).toThrow()
+    expect(visited).toBe(0)
+    expect(parse({ removeIds: Array.from({ length: 31 }, (_, i) => i) })).toMatchObject({ change: { persistence } })
+  })
   it('admits bounded opaque recovery only on before-page requests and detached partial pages', () => {
     const request = { operation: 'beforeThreadPage', serverId: 'host', conversationId: 'chat', limit: 20, continuation: 'YQ', recovery: 'Yg' }
     expect(parseChatHistoryRequest(request)).toEqual(request)
@@ -74,10 +94,10 @@ describe('chat history records and requests', () => {
 })
 
 
-describe('saved list archive timestamp', () => {
+describe.each(['archived_at', 'pinned_at'])('saved list %s timestamp', (field) => {
   const list = (rows: unknown[]) => ({ version: 1, kind: 'list', serverId: 'host', conversations: rows })
   it.each(['2026-09-30T12:00:00Z', 'invalid-time', '', null])('preserves %s through JSON restoration', (archived_at) => {
-    const saved = list([{ ...summary, archived_at }])
+    const saved = list([{ ...summary, [field]: archived_at }])
     expect(parseChatHistorySnapshot(JSON.parse(JSON.stringify(saved)))).toEqual(saved)
   })
   it('restores a pre-field saved snapshot without inventing an archive time', () => {
@@ -85,7 +105,12 @@ describe('saved list archive timestamp', () => {
     expect(parseChatHistorySnapshot(JSON.parse(JSON.stringify(saved)))).toEqual(saved)
   })
   it.each([false, true, 1, {}, []])('rejects wrong-type saved stamps: %s', (archived_at) => {
-    expect(() => parseChatHistorySnapshot(list([{ ...summary, archived_at }]))).toThrow()
+    expect(() => parseChatHistorySnapshot(list([{ ...summary, [field]: archived_at }]))).toThrow()
+  })
+  it('never echoes invalid input', () => {
+    expect(() => parseChatHistorySnapshot(list([{ ...summary, [field]: { private: 'PRIVATE_SENTINEL' } }]))).toThrow()
+    try { parseChatHistorySnapshot(list([{ ...summary, [field]: { private: 'PRIVATE_SENTINEL' } }])) }
+    catch (error) { expect(String(error)).not.toContain('PRIVATE_SENTINEL') }
   })
 })
 

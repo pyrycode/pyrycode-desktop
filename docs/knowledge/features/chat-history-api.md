@@ -124,6 +124,14 @@ commit or roll back together. Existing fractional-index scopes also convert once
 after full validation, to the final AVL representation without rewriting placements.
 See [ADR 0014](../decisions/0014-authenticated-owned-thread-mutations.md).
 
+Schema 8 adds `history_save_parts(id, part, payload)` atomically with the first
+split owned mutation. Its encrypted receipts bind persistence identity, protected
+owner, exact scope/epoch/reset lifecycle and total parts, plus each accepted
+request's digest; they contain no item content. The database owner admits version 8,
+and conversion of another retained scope preserves it. Older executables reject
+this schema rather than ignoring pending saves. Snapshot format version 1 and the
+daemon wire contract are unchanged. See the independent obligation below.
+
 The mutable protected header authenticates item-id, numeric-order/arrival and range
 radix roots plus an AVL held sequence with subtree counts. Stable placement ordinals
 identify nodes; they are not dense display positions. Rank verifies the complete
@@ -177,6 +185,7 @@ Ordinary received saves use the existing fixed IPC with
 | `completion?` | Exact completed `{ fromVersion, version }`, supplied by successful `beginBatch.commit`; never an unbound certification flag. |
 | `availability?` | `{ start, available }` for the certified oldest supplied boundary; requires completion. |
 | `priorProgress?` | Earlier metadata/completion/availability observations retained in admission order during coalescing and retry. |
+| `persistence?` | Internal split-save `{ id, part, parts }`: UUID-v4 identity, zero-based ordered part and fixed total, bound to the protected owner/lifecycle. Grants no daemon completion or reset authority. |
 
 `parseChatHistoryRequest` detaches only changed JSON and bounded observations.
 Unknown request/change/observation keys, duplicate item/removal ids, overlap between
@@ -200,6 +209,69 @@ equal-boundary exhaustion (`false`) wins, and newer/metadata-only observations c
 erase older exhaustion. A holder's scalar checkpoint or availability alone cannot
 certify unloaded work.
 
+The renderer writer captures immutable detached owned changes in a linked queue per
+host/conversation; it does not flatten or revalidate the accumulated backlog.
+Capture may coalesce only an unstarted tail with distinct item ids and metadata,
+with at most 32 combined items and ordered progress observations. Epoch/reset
+admission, removals, ranges and repeated ids remain serial barriers. Started or
+failed cursors are immutable; epoch/reset supersession drops the old queue without
+rebuilding it.
+
+Every submission contains at most **32 combined items, removals, ranges and progress
+observations**, including its final metadata observation. Large changes emit removals,
+then items, then ranges in their original order, using at most 31 data entries plus
+neutral metadata per part. Original `priorProgress` follows in ordered groups of at
+most 32 observations, then the original final metadata/completion/availability.
+Neutral data prefixes retain the target version but claim checkpoint zero and no
+completion, repair or unfinished progress. They cannot lower an already saved
+checkpoint and therefore cannot establish persistence completeness on their own.
+Each bounded request is parsed before IPC and independently admitted in main;
+persistence-bearing requests exceeding 32 are rejected from raw array lengths
+before decoding any item payload. Ordinary requests without these additive fields
+retain their prior admission limits.
+
+A change exceeding 32 units receives one UUID and a fixed part count computed from
+array lengths when its generator starts. Main atomically commits the first data
+prefix with a protected header obligation `{ id, next, parts }`, accepted-part
+receipt and owner binding. Each following part must match that exact lifecycle and
+expected sequence; skipped parts, changed replays, wrong totals and unrelated
+mutations fail with `write-failed` without changing the prefix. Only the expected
+last part clears that save's marker after its data and original progress are durable.
+This local obligation is independent of daemon `completion`, `repair` and
+`uncommittedVersion`: finishing persistence neither advances daemon progress nor
+clears genuine repair/unfinished work without its original completion authority.
+
+While the obligation is pending, `readThread`, `openThreadPage`, `newestThreadPage`
+and `beforeThreadPage` return `unreadable` before traversal, including through a fresh
+database owner. The durable prefix remains on disk. Exact retries can finish it;
+reopening or reusing coordinate strings alone cannot. Accepted receipts survive
+completion and scope deletion so old requests cannot gain authority over recreated
+content. Exact accepted-part replays return success without folding progress again,
+including a lost final acknowledgement replay while a newer save is pending.
+Explicit authorized epoch/reset supersession, full replacement and deletion can
+retire an abandoned obligation; full replacement rotates persistence ownership even
+in the same epoch. Their internal validation may inspect the pending prefix, while
+public reads stay closed. Stale endings cannot clear another save's marker.
+
+The writer advances its retained request cursor only after successful durable
+acknowledgement and a current queue/generation check. Failure preserves the exact
+request and persistence identity; the failed key is suppressed for the rest of that
+drain and waits for explicit `flush()` or a later received-event retry, with no
+automatic retry loop.
+Every submitted part, including a failed attempt, yields through a one-shot
+`MessageChannel` task; both ports close before resumption. This real event-loop
+boundary works even when renderer timers are paused; the normal 200 ms capture
+debounce remains timer-controlled. A microtask would not prove native input liveness.
+
+Confirmed deletion remains ordered behind admitted writes and suppresses queued
+content for that exact host/conversation. Host removal pauses its queues until
+settlement; success invalidates their generations, while failed unpair retains
+eligible work. Late callbacks cannot advance a replacement queue or another host's
+equal conversation id. `stop()` unsubscribes, waits for pending host-removal
+settlement and flushes admitted work with the same bounds and finite failure policy.
+Normal window/app teardown awaits that drain; repeatedly failed abandoned work
+remains protected and unreadable rather than spinning or manufacturing completion.
+
 After one-time conversion, mutation reads/decrypts only changed items and required
 metadata/evidence, with fixed-width lookup and logarithmic sequence work. A protected
 aggregate JSON-node count subtracts removed/revised old items and adds changed items;
@@ -208,6 +280,46 @@ full/page readers remain coherent. Metadata replay touches the header with work
 proportional to received observations, not saved history. Protection stays in main;
 the renderer receives no SQL, filesystem, keys or ciphertext. Bounded reads return
 only validated projections and opaque local continuations.
+
+An ordinary `mutateThread` save executes through a resumable generator rather than
+one synchronous pass, so the main process can still service native callbacks while
+a large save is in flight. The work unit is one admitted item or removal, one
+preparation entry (an old owner's row during an epoch/reset replacement — deleted
+one at a time so the foreign-key cascade on the emptied scope cannot hide a
+backlog), one range-traversal candidate or range start, one progress observation,
+or one authenticated index row flush. `historyDatabase.ts`'s `transactionSteps`
+drains the generator and awaits a turn callback every 16 units — `setImmediate` by
+default, a real macrotask, so timers and native events run between batches.
+`createChatHistoryStore`'s optional `onMutationTurn` hook overrides that callback;
+only deterministic tests pass one, production code takes the default. Range
+traversal stays lazy (`windowSteps`, one leaf at a time) and index flushing stays
+incremental, so one incoming range merging many saved ranges, or a large pending
+backlog, cannot shift the cost into another synchronous phase instead of shrinking it.
+
+One `BEGIN IMMEDIATE` transaction stays open for the whole mutation across every
+yield: `COMMIT` runs only once the generator completes, and any thrown error —
+including one raised while suspended on a yield — rolls the transaction back, so
+no partial submission becomes durable. Earlier acknowledged parts of a split save
+remain durable, protected by the independent fail-closed obligation until completion.
+Pending schema migrations still commit in their own synchronous transaction
+immediately before the bounded one opens, never across a yield. The application store's queue holds the connection for the
+mutation's entire promise, so no other admitted read, write, reset, removal or
+close touches storage during a yield; `close()` seals admission and waits for the
+queue before closing the native connection. There is no internal retry: a failed
+mutation returns through the existing error result, and explicit resubmission,
+including replaying a lost acknowledgement, is idempotent against the saved state.
+
+A migration failure, or an open failure other than `unsupported-version`, on a
+mutation now surfaces as `write-failed` rather than the `unreadable` the old fully
+synchronous path returned; both are existing static codes the renderer only logs,
+so this changes diagnostics rather than renderer-visible behavior.
+
+Import, retained-format conversion (the one-time upgrade from positional to
+sequence-indexed storage) and full-snapshot replacement (`replaceThread`) stay
+fully synchronous. They are outside this bounded-execution claim and keep their
+existing contracts. Renderer admission, compact transport and lazy presentation are
+separate from the writer/storage liveness claim; see the
+[native input/heartbeat proof](chat-history-testing-native.md#bounded-writer-native-input-proof).
 
 ### Bounded authoritative opening and pages
 

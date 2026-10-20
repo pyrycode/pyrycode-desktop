@@ -49,6 +49,7 @@ import { encodeEnvelope, parseJsonObject } from './transport/codec'
 import { buildRequestSystemPrompt } from './transport/requestSystemPromptEnvelope'
 import { buildSetSystemPrompt } from './transport/setSystemPromptEnvelope'
 import { buildSetConversationMuted } from './transport/setConversationMutedEnvelope'
+import { buildSetConversationPinned } from './transport/setConversationPinnedEnvelope'
 import { buildSwitchAgent } from './transport/switchAgentEnvelope'
 import { buildNewSession } from './transport/newSessionEnvelope'
 import { buildListConversations } from './transport/listConversationsEnvelope'
@@ -115,6 +116,7 @@ import {
   type RenameWorkspacePayload,
   type SetSystemPromptPayload,
   type SetConversationMutedPayload,
+  type SetConversationPinnedPayload,
   MAX_SYSTEM_PROMPT_BYTES,
   type RequestAttachmentPayload,
   type ReadWorkspaceFilePayload,
@@ -287,6 +289,7 @@ export interface DaemonConnection {
   hostedResources: ReturnType<typeof createHostedResources>
   hostedApps: ReturnType<typeof createHostedApps>
   queryThread(query: ThreadQuery, requestId: string): void
+  cancelThreadQuery?(requestId: string): void
   requestHostSystemPrompt(requestId: string): void
   setHostSystemPrompt(systemPrompt: string, requestId: string): void
   /** Idempotent. Emits `connecting`, then sources the inputs and constructs the driver. */
@@ -580,6 +583,8 @@ export interface DaemonConnection {
    * nothing and is cleared on the next dial. The attempt id never reaches the wire. Never throws.
    */
   setConversationMuted(payload: SetConversationMutedPayload, attemptId: string): void
+  /** One authenticated write; authoritative conversationUpdated/re-list owns placement. */
+  setConversationPinned(payload: SetConversationPinnedPayload): void
   /**
    * Encrypt a payload-carrying `set_session_settings` control envelope onto the live session — asks the
    * daemon to change one session's model / reasoning effort / YOLO (pyrycode #844/#845). Honors the
@@ -789,6 +794,12 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     deps.messageLifecycle?.acknowledge(deps.serverId, conversationId, [content.message_id])
   }
   const threadReceiver = createThreadUpdateReceiver(event => {
+    if (event.kind === 'thread-compact-update') {
+      const { payload, type, ...correlation } = event.envelope
+      emitDaemonEvent(sink, { type: 'threadCompactUpdate', conversationId: event.update.payload.conversation_id,
+        update: event.update, correlation })
+      return
+    }
     if (event.kind === 'thread-query-failed') {
       emitDaemonEvent(sink, { type: 'threadQueryFailed', conversationId: event.conversationId,
         requestId: event.requestId, inReplyTo: event.inReplyTo, reason: event.reason })
@@ -832,6 +843,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   let stopped = false
   let driver: NoiseRelayDriver | null = null
   let authenticated = false
+  let bodyCapable = false
+  let compactCapable = false
   // A daemon whose accepted handshake lacks `thread` (#1908). Its driver is parked rather than stopped:
   // every outbound method sees no driver and stays inert, inbound frames are dropped, and the parked
   // driver's own supervisor keeps re-dialling after a drop, so a daemon update clears the state.
@@ -1278,6 +1291,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       case 'handshake-complete': {
         resetHosted()
         threadReceiver.reset()
+        bodyCapable = false
         let ack: HelloAckPayload
         try {
           ack = parseHelloAck(event.helloAck)
@@ -1304,6 +1318,8 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
           return
         }
         authenticated = true
+        bodyCapable = ack.server_id === deps.serverId && ['interactive', 'thread', 'thread_expansion'].every(c => ack.capabilities.includes(c))
+        compactCapable = bodyCapable && ack.capabilities.includes('thread_compact')
         hostedResources.reset(ack.capabilities.includes('hosted_apps_v1'))
         hostedApps.reset(ack.server_id === deps.serverId && ack.capabilities.includes('hosted_apps_v1'))
         deliveryFailed = false
@@ -1371,7 +1387,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
             return
           }
           case 'thread-frame':
-            if (authenticated && !stopped) threadReceiver.receive(inbound.envelope)
+            if (authenticated && !stopped) threadReceiver.receive(inbound.envelope, event.plaintext)
             return
           case 'message':
             emitDaemonEvent(sink, { type: 'messageReceived', message: inbound.message, daemonTs: inbound.ts })
@@ -3036,7 +3052,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       // Advertise `multi_agent` too (#1657): without it the daemon withholds Codex conversations,
       // their frames and Codex model rows, all of which the window now decodes per agent (#1649).
       // Advertise `stop_background_task` (#1770), detection only: the echo says the daemon takes the verb.
-      capabilities: [CAPABILITY_INTERACTIVE, 'thread', CAPABILITY_MULTI_AGENT, CAPABILITY_STOP_BACKGROUND_TASK, 'hosted_apps_v1']
+      capabilities: [CAPABILITY_INTERACTIVE, 'thread', 'thread_expansion', 'thread_compact', CAPABILITY_MULTI_AGENT, CAPABILITY_STOP_BACKGROUND_TASK, 'hosted_apps_v1']
     })
     return {
       connection: {
@@ -3325,12 +3341,22 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
 
   function queryThread(query: ThreadQuery, requestId: string): void {
     const id = nextEnvelopeId++
-    threadReceiver.register(id, requestId, query)
+    if (!threadReceiver.register(id, requestId, query)) return
     if (driver === null || !authenticated || stopped) { threadReceiver.fail(id, 'unavailable'); return }
+    if ('projection' in query.payload && (!compactCapable ||
+        !isRendererCommand({ type: 'queryThread', serverId: deps.serverId, requestId, query }))) { threadReceiver.fail(id, 'unavailable'); return }
+    if ((query.type === 'thread_read_tool_body' || query.type === 'thread_read_children') && (!bodyCapable ||
+        !isRendererCommand({ type: 'queryThread', serverId: deps.serverId, requestId, query }))) {
+      threadReceiver.fail(id, 'unavailable'); return
+    }
     const p = query.payload
     const payload = { conversation_id: p.conversation_id,
-      ...(query.type === 'thread_catch_up' ? { epoch: query.payload.epoch, version: query.payload.version } : { before_order: query.payload.before_order }),
-      ...(p.limit === undefined ? {} : { limit: p.limit }) }
+      ...('projection' in p ? { projection: p.projection } : {}),
+      ...(query.type === 'thread_page' && query.payload.projection ? { epoch: query.payload.epoch } : {}),
+      ...(query.type === 'thread_read_tool_body' || query.type === 'thread_read_children' ? { epoch: query.payload.epoch, item_id: query.payload.item_id, expected_rev: query.payload.expected_rev } :
+        query.type === 'thread_catch_up' ? { epoch: query.payload.epoch, version: query.payload.version } : { before_order: query.payload.before_order }),
+      ...('limit' in p && p.limit !== undefined ? { limit: query.type === 'thread_read_children' ? Math.min(p.limit || 50, 256) : p.limit } : {}),
+      ...(query.type === 'thread_read_children' && query.payload.cursor ? { cursor: query.payload.cursor } : {}) }
     try {
       const bytes = encodeEnvelope({ id, type: query.type, ts: now(), payload })
       driver.sendMessage(bytes, outcome => {
@@ -3829,6 +3855,21 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
       deps.diagnosticLog?.event({ event: 'conversation-read-sent' })
     } catch {
       deps.diagnosticLog?.event({ event: 'conversation-read-failed', code: 'local-send' })
+    }
+  }
+
+  function setConversationPinned(payload: SetConversationPinnedPayload): void {
+    if (driver === null || !authenticated) {
+      deps.diagnosticLog?.event({ event: 'conversation-pin-refused', code: 'not-connected' })
+      return
+    }
+    try {
+      const bytes = buildSetConversationPinned({ id: nextEnvelopeId++, ts: now(),
+        payload: { conversation_id: payload.conversation_id, pinned: payload.pinned } })
+      driver.sendMessage(bytes)
+      deps.diagnosticLog?.event({ event: 'conversation-pin-sent' })
+    } catch {
+      deps.diagnosticLog?.event({ event: 'conversation-pin-failed', code: 'local-send' })
     }
   }
 
@@ -4409,6 +4450,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     setHostSystemPrompt,
     requestSystemPrompt,
     queryThread,
+    cancelThreadQuery: requestId => threadReceiver.cancel(requestId),
     requestConversations,
     requestRecentWorkspaces,
     createConversation,
@@ -4428,6 +4470,7 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
     setSystemPrompt,
     markConversationRead,
     setConversationMuted,
+    setConversationPinned,
     setSessionSettings,
     answerModal,
     cancelModal,

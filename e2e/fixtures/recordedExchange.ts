@@ -198,17 +198,55 @@ export class RecordedExchange {
       finish()
     })
   }
+  /** Retire only this connection's prefix. Future profiles and unreleased test actions cannot unblock it. */
+  async whenConnectionComplete(timeoutMs = 5_000): Promise<void> {
+    const connection = this.connection
+    return new Promise((resolve, reject) => {
+      const cleanup = (): void => { clearTimeout(timer); this.progress.delete(finish) }
+      const finish = (): void => {
+        if (this.failure) { cleanup(); reject(this.failure); return }
+        if (this.recording.barriers?.[this.barrier]?.before === this.index &&
+            (this.recording.wire[this.index]?.connection ?? connection) === connection) {
+          cleanup(); reject(new Error('Recorded exchange retirement requires an unreleased checkpoint')); return
+        }
+        if (this.index === this.recording.wire.length ||
+            (this.recording.wire[this.index]?.connection ?? 1) > connection) {
+          cleanup(); resolve()
+        }
+      }
+      const timer = setTimeout(() => {
+        this.failure ??= new Error('Recorded exchange connection prefix incomplete')
+        this.notifyProgress()
+      }, timeoutMs)
+      this.progress.add(finish)
+      finish()
+    })
+  }
   private notifyProgress(): void { for (const finish of [...this.progress]) finish() }
+  /** Only observed calls on the closing session may follow its raw close position. */
+  private closeAfter(): number | undefined {
+    const close = this.recording.closures?.[this.closure]
+    if (!close) return undefined
+    let end = close.before
+    while (this.recording.wire[end]?.connection === close.connection &&
+        this.recording.wire[end].direction === 'client') end++
+    return end
+  }
   private drain(): Uint8Array[] {
+    if (this.failure) throw this.failure
     const frames: Uint8Array[] = []
+    const closeAfter = this.closeAfter()
     while (this.index <= this.recording.wire.length) {
       const close = this.recording.closures?.[this.closure]
-      if (close?.before === this.index) {
-        if (!this.onClose || close.connection !== this.connection) return this.fail('Recorded exchange transport boundary mismatch')
+      if (close && closeAfter === this.index) {
+        if (!this.onClose || close.connection !== this.connection ||
+            this.recording.wire[this.index]?.connection === close.connection)
+          return this.fail('Recorded exchange transport boundary mismatch')
         this.closure++
         this.onClose({ code: close.code, afterServerFrames: this.connection + this.emitted + frames.length })
       }
       if (this.index === this.recording.wire.length) break;
+      // A checkpoint within the tail remains an explicit test-side obligation.
       if (this.recording.barriers?.[this.barrier]?.before === this.index) break
       const entry = this.recording.wire[this.index]
       if ((entry.connection ?? 1) !== this.connection) break
@@ -228,6 +266,8 @@ export class RecordedExchange {
     return frames
   }
   start(): Uint8Array[] { return this.drain() }
+  /** One Noise response per connection, followed by all emitted application frames. */
+  serverFrameCount(): number { return this.connection + this.emitted }
   private mapped(value: unknown): unknown {
     if (typeof value === 'string') return this.identities.get(value) ?? value
     if (Array.isArray(value)) return value.map(child => this.mapped(child))
@@ -250,7 +290,8 @@ export class RecordedExchange {
     const mismatch = `Recorded exchange request mismatch at step ${this.matched + 1}`
     if (!object(actual.payload)) return this.fail(mismatch)
     const eligible: Envelope[] = []
-    for (let i = this.index; i < this.recording.wire.length; i++) {
+    const end = this.closeAfter() ?? this.recording.wire.length
+    for (let i = this.index; i < end; i++) {
       if (this.recording.barriers?.[this.barrier]?.before === i) break
       const entry = this.recording.wire[i]
       if ((entry.connection ?? 1) !== this.connection) break

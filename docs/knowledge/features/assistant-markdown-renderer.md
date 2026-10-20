@@ -43,10 +43,10 @@ presentation. The stable reader callback and
 allow unchanged settled replies to reuse their render on new deltas. Memoization
 changes no security rule below.
 
-Rendering parses `text` synchronously without store access or effect hooks. The module-private `CodeBlock` holds a local DOM ref for user-activated copying; `AssistantMarkdown` emits no wrapper element of its own (`react-markdown` v10 emits block elements directly; the container and its class are [#609](../codebase/609.md)'s `.bubble__markdown`, a flex column with `gap: var(--space-2)` for Figma `16:43`'s 8px block rhythm). Built on `react-markdown@10.1.0` with:
+Rendering parses `text` synchronously without store access or effect hooks. The module-private `CodeBlock` holds a local DOM ref for user-activated copying; `AssistantMarkdown` emits no wrapper element of its own (`react-markdown` v10 emits block elements directly; the container is `.bubble__markdown`, a flex column with a base `gap: var(--space-4)` of 16 px and the [heading boundary adjustments](#configuration-and-usage) below). Built on `react-markdown@10.1.0` with:
 
 - **No `rehypePlugins`.** No HTML parser exists in the dependency graph at all — interpreting HTML would require adding `rehype-raw` to `package.json`, a visible, reviewable act, not a config flip.
-- **Two stable `remarkPlugins`: `[remarkGfmSubset, remarkHostedLinks]`.**
+- **Three stable `remarkPlugins`: `[remarkGfmSubset, remarkHostedLinks, remarkCodeSpanLinks]`.**
   `remarkGfmSubset` registers only table, task-list and strikethrough syntax through
   matching `micromarkExtensions` and `fromMarkdownExtensions` pairs. Invoke all six
   factories: passing a function instead of an extension object can consume syntax
@@ -54,9 +54,24 @@ Rendering parses `text` synchronously without store access or effect hooks. The 
   uninstalled. The reader's Copy as plain text imports this same subset into its
   mdast parser, avoiding a second syntax configuration. `remarkHostedLinks` adds no
   syntax or HTML capability; it only rejects normalized hosted destinations (below).
+  `remarkCodeSpanLinks` then wraps qualifying inline-code nodes as links (below).
 - **Typing `remarkGfmSubset`'s `this` needs the augmentation imported from its owner, not declared locally.** `tsconfig.web.json`'s `strict` rejects a bare `function` calling `this.data()` (`noImplicitThis`). `import type { Processor } from 'unified'` alone isn't enough — `unified`'s own `Data` interface declares neither extension array; `remark-parse` contributes both by module augmentation, and react-markdown's types import `Processor`/`PluggableList` from `unified` directly, so that augmentation never enters the program unless something imports it (four `TS2339`s otherwise). A local structural `this` type fails the other way, contravariantly: `Plugin`'s `this` is `Processor`, so `Processor` must satisfy the local type, and weak-type detection rejects it against an unaugmented `Data` (`TS2322`). The fix is `import type {} from 'remark-parse'` alongside the `unified` import, both type-only (erased at build) and both declared directly in `package.json`'s `devDependencies` rather than reached for transitively — leaning on a transitively-hoisted package for a type import is exactly what breaks on a differently-resolved `npm ci`. The payoff beyond compiling: `micromarkExtensions` is then typed `MicromarkExtension[]` and `gfmTable()` returns exactly that, so both pushes are type-checked rather than cast.
 - **`skipHtml` left at its default (unset).** The tempting-looking `skipHtml: true` *deletes* HTML tags and promotes their inner text into the message; the default *escapes* them to visible characters instead, matching the bubble's pre-existing untrusted-text posture and preserving the `&lt;`/`&amp;` discriminator tests need.
 - **One shared allowlist, and Obsidian `open` links** (direct change, 2026-10-12). `allowedLinkHref` moved to `src/shared/externalLink.ts`, and the main process's window-open handler (`src/main/windowOpenHandler.ts`) calls the same function, so render and click cannot disagree. It admits web links as below plus exactly `obsidian://open`: lowercase action, no userinfo, port, path or fragment, query keys only `vault`, `file`, `path` and `paneType`, every value decoding, and no encoded `&` or `#`. `file` and `path` must name a note: a last segment with no dot or ending `.md`, no colon. Obsidian hands a file it cannot view to the OS default app, so `file=x.hta` would run. Obsidian's `open` also takes `prepend` and `append`, which write to the note, and parses a fragment into parameters; both are refused. The `urlTransform` passes exact hosted app identities and allowlisted external hrefs, then defers other values to react-markdown's default. The link override still decides whether any control exists.
+- **Whole inline-code URL links** (`remarkCodeSpanLinks`) trim the parsed code value
+  only to choose the href: a whitespace-free candidate admitted by the shared
+  `allowedLinkHref` becomes `<a href="URL" target="_blank" rel="noreferrer"><code>…</code></a>`.
+  The original parsed code text, including padding CommonMark retains, stays unchanged.
+  Both component tables reuse `webLink` and the existing external-open boundary;
+  denied URLs, hosted app targets, relative Markdown paths and code containing words
+  or multiple URLs remain plain code even with navigation callbacks. Fenced and
+  indented blocks are excluded, and entire inline/reference-link subtrees are skipped,
+  including code nested in emphasis, so only the outer link can navigate. The wrapper's
+  `data.hProperties.href` retains the admitted trimmed string verbatim: setting only
+  mdast `link.url` would URI-encode Unicode and HTML-sensitive characters before the
+  unchanged `urlTransform` and `webLink` gates and normal React escaping. Preserve the
+  code node's source position on both wrapper and child; pending synthetic completion
+  must unwrap both anchor and code, while original completed source links on settlement.
 - **`components.a`** ([#610](../codebase/610.md)) → a fail-closed predicate, `allowedLinkHref(href)`, decides *in the renderer, at render time, before any anchor element exists* — it does not lean on the main-process guards, because a `javascript:` href executes in the document rather than navigating it and so is never seen by `will-navigate`. It parses the href with `new URL(href)` and **no base argument** (so relative/protocol-relative/empty/unparseable hrefs are rejected without being resolved — a dev-server build and a packaged build can never disagree on the same reply), requires `protocol` to be `http:`/`https:`, and separately requires the *original* string to match `/^https?:\/\//i` (a scheme-with-no-authority like `http:example.com` would otherwise base-resolve to a different host in the two builds — this is what keeps the renderer's decision and `setWindowOpenHandler`'s independent one in agreement). An allowed href renders `<a href={allowed} target="_blank" rel="noreferrer">`, returning the **original** href string, never the parser's normalised form. `target="_blank"` is the click mechanism, not decoration — it is what routes the click to `setWindowOpenHandler` (now `src/main/windowOpenHandler.ts`), which hands the URL to `shell.openExternal` and denies the in-app window on every path; a plain anchor would be a same-document navigation `will-navigate` cancels, so the link would look correct and silently do nothing. In the default table, other destinations render `children` only, without an anchor or `href`. [#1627](https://github.com/pyrycode/pyrycode-desktop/issues/1627) pulled this entire branch out into module-scope `webLink(href, children)`, called from both the module-constant `a` override and the opt-in table below — one function handles external links and inert text, so the two tables cannot answer that question differently.
 - **`markdownLinkPath(href)`** ([#1627](https://github.com/pyrycode/pyrycode-desktop/issues/1627)) → a second, independent fail-closed predicate, checked *before* `webLink` in the opt-in table only: it strips a `#fragment`, then a trailing `:line`/`:line:column` suffix (in that order — checking for a URL scheme before removing the suffix would read `Plan.md:12` as the scheme `plan.md:`), rejects what remains if it now carries a URL scheme or does not end in `.md`/`.markdown` (case-insensitive), `decodeURIComponent`s it exactly once (matching micromark's own single percent-encoding of a link destination), and rejects both an undecodable escape and a decoded path longer than `MAX_WORKSPACE_FILE_PATH_LENGTH` — the last check exists because the main-side `isWorkspaceFileReadRequest` (`src/shared/ipc/workspaceFileRead.ts`) silently drops an over-length ask, which would otherwise leave [the reader](conversation-shell-markdown-reader.md) loading forever with no answer to correlate against. A non-null result is untrusted, unresolved, path text — it is never joined, normalised or checked against a local folder here; the daemon does all confinement on the other end of the [`readWorkspaceFile` bridge](attachment-retrieval.md).
 - **`components.input`** ([#1080](https://github.com/pyrycode/pyrycode-desktop/issues/1080)) → the task-list extension's hast handler puts an `<input type="checkbox" disabled>`, plus `checked` when the item is checked, into the item's first paragraph — the first element type this file would otherwise have let a package default put across the boundary its own header describes. The override renders an inert `<span className="task-mark"|"task-mark task-mark--checked" role="img" aria-label="Not done"|"Done" />` instead: no `<input>` ever reaches the DOM, so source-authored task lists create no form control, submission target or autofill surface. Client-owned code-copy and opt-in navigation buttons are explicit exceptions to the former blanket prohibition on controls in Markdown. The source's entire influence is the one boolean `node.checked`, destructured behind its own `typeof` gate in the handler and compared with `=== true` here — it only ever selects between two client-owned class/label pairs, and no daemon substring is interpolated into either. `role="img"` plus the label keeps the state in the accessibility tree without a text node inside `.bubble`, which every whole-bubble text assertion in `e2e/` would otherwise have to admit; the mark itself is drawn as a CSS pseudo-element for the same reason (`.bubble__markdown .task-mark--checked::after`).
@@ -84,6 +99,39 @@ Rendering parses `text` synchronously without store access or effect hooks. The 
 
 Neither the `a` nor `img` override spreads `{...props}` — a spread would put `href`/`src` straight back (and, for `a`, `title` and anything else react-markdown supplies) while every visible-text test assertion kept passing, so the no-spread rule is enforced by construction (a code comment flags it), not by test coverage alone. `.bubble__markdown a { color: var(--color-primary); text-decoration: underline; }` in `conversation.css` ([#610](../codebase/610.md)) is the app's first anchor rule — the underline is load-bearing, not decorative: colour alone against the surrounding prose ink measures 1.31:1, well under WCAG G183's 3:1 floor for a colour-only link cue.
 
+## Heading typography
+
+`conversation.css` applies the Figma `892:13442` scale through descendant selectors
+`.bubble__markdown h1` through `h6`. The token families in `theme/tokens.css` each
+provide `-size`, `-line`, `-weight` and `-tracking` values:
+
+| Level | Token family | Size / line height | Weight | Tracking |
+| --- | --- | --- | --- | --- |
+| H1 | `--text-markdown-h1-*` | 20 / 28 px | 500 | 0 px |
+| H2 | `--text-markdown-h2-*` | 18 / 26 px | 500 | 0 px |
+| H3 | `--text-title-medium-*` | 16 / 24 px | 500 | 0.15 px |
+| H4–H6 | `--text-markdown-h4-h6-*` | 14 / 20 px | 700 | 0.25 px |
+
+All six levels explicitly use On Secondary Container
+(`--color-on-secondary-container`) and `--font-sans`, preserving the Roboto-first
+stack (`'Roboto', system-ui, -apple-system, sans-serif`). H3 reuses title-medium;
+the other families are Markdown-specific so general-purpose type tokens retain
+their existing values.
+
+The same rules reach settled replies, `StreamingAssistantMarkdown`, headings
+nested in quotes or list items, and `MarkdownReaderView` through its existing
+`.bubble__markdown` container. The reader needs no duplicate heading definition.
+Inline code keeps `--font-mono` and inherits its heading's size, including 18 px
+inside H2; changing heading type must not replace that monospace treatment.
+
+This scale is independent of the [heading spacing](#configuration-and-usage)
+and preserves non-heading typography. [Reader browser verification](assistant-markdown-renderer-verification.md#reader-headings)
+confirms the inherited scale, spacing and first-block clearance at both widths;
+it required no production style changes or duplicate reader heading rules.
+Font packaging is outside this change. See
+[computed typography verification](assistant-markdown-renderer-verification.md#heading-typography)
+for literal-value and token assertions across streaming and settlement.
+
 ## Configuration and usage
 
 `TimelineRow` uses `<StreamingAssistantMarkdown text={item.text}
@@ -91,10 +139,35 @@ onOpenMarkdownPath={onOpenMarkdownPath} onOpenHostedApp={onOpenHostedApp} />`
 while `inProgress` is true, and `<AssistantMarkdown text={item.text}
 onOpenMarkdownPath={onOpenMarkdownPath} onOpenHostedApp={onOpenHostedApp} />`
 on settlement. Both live inside `.bubble__markdown`, with direct block children,
-reset margins and the existing 8px flex gap. Neither carries `bubble--assistant-text`;
+reset margins and a base 16 px (`--space-4`) flex gap. Neither carries `bubble--assistant-text`;
 markdown owns prose whitespace on both branches, and `.code-block__body` retains
 `pre-wrap` for code. The decorative cursor is a sibling after the markdown container,
 before `BubbleMeta`, and disappears on settlement. User messages do not use this renderer.
+
+The same spacing reaches settled replies, streaming replies and the reader.
+At top level, a non-heading followed by H1–H6 has a 20 px gap; a heading followed
+by a non-heading has 12 px. Adjacent headings and adjacent non-heading blocks
+retain 16 px. Direct-child adjacent-sibling rules adjust `margin-block-start`
+by `calc(var(--space-5) - var(--space-4))` (+4 px) before a heading and
+`calc(var(--space-3) - var(--space-4))` (−4 px) after one. Changing the container
+gap would also change unrelated boundaries; descendant heading margins would
+disturb nested lists and quotes.
+
+Streaming fragments leave frozen and pending blocks as direct flex children,
+so these rules also cross frozen/pending boundaries. The direct-child margin
+reset and sibling-only adjustments keep first/last blocks flush, including
+heading-only messages. Nested list-item and blockquote rhythm stays 8 px
+(`--space-2`), including nested headings. Metadata and file/image attachments sit
+outside this container and retain their separate 12 px (`--space-3`) margins.
+
+Prose type still comes from each caller's ancestor. Reusing `AssistantMarkdown`
+and `.bubble__markdown` does not supply the message bubble's inherited body size
+or ink. The [reader's scroll body](conversation-shell-markdown-reader.md#body-typography)
+therefore sets body-medium (Roboto 14/20 px, 0.25 px tracking) and On Secondary
+Container explicitly. Quotes and links inherit that type while retaining their
+bar and Primary underlined link treatment; fenced code keeps its own Mono 12/20
+rules. Verify a new surface's computed inheritance in the browser rather than
+inferring it from shared markup.
 
 `onOpenMarkdownPath` and `onOpenHostedApp` are optional, forwarded through
 `ConversationScreen` and both conversation timelines to `TimelineRow`. Both reply
@@ -259,52 +332,10 @@ the earlier memoization decline.
 
 ## Verification
 
-`hostedAppLink.test.ts` pins the exact raw grammar. `hostedAppLinks.test.tsx`
-covers opt-in and inert output, no render-time activation or identity attributes,
-normalization rejection, escaped titles/reference labels and meaningful/blank
-labels in settled and streaming renderers. Static markup cannot prove activation;
-see [the production link scenarios and counted evidence](development-verification.md#hosted-app-link-verification).
-
-`StreamingAssistantMarkdown.test.tsx` replays every original prefix of the named
-regression fixtures and deterministic seeded block-starter fuzz. It compares raw
-partition trees at absolute offsets and rendered markup with the full parse/render,
-ignoring only whitespace between blocks. Pending display has separate expected-output
-cases because it intentionally differs from raw-prefix rendering. Existing
-`AssistantMarkdown.test.tsx` security cases also cover callers without stabilization.
-
-Static markup and unchanged DOM identity cannot prove a skipped render.
-[`e2e/progressive-markdown.spec.ts`](../../../e2e/progressive-markdown.spec.ts) uses
-mounted V8 function counters for frozen-render skips and bounded probing, plus a
-scoped parser breakpoint to prove later inputs exclude frozen source. It also covers
-definition invalidation, pending presentation and both raw-source settlement triggers.
-[`e2e/assistant-whitespace.spec.ts`](../../../e2e/assistant-whitespace.spec.ts) checks
-computed styles and geometry for markdown-owned whitespace and cursor placement.
-
-Recorded evidence at `4d33723f` from the
-[passing verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1832#issuecomment-6028909574):
-the configured fake-transport run executed 321 tests, all passed, with 0 failed and
-5 skipped. Both named progressive tests, “indented pending headers and heading closers
-preserve streaming presentation” and “progressive presentation, parser/render reuse
-and raw-source settlement”, were present and passed (2 executed, 0 failed/skipped).
-All 13 assistant-whitespace tests executed and passed (0 failed/skipped). No live
-Claude or real-daemon evidence is required for this renderer behavior.
-
-The settled-row regression also counts `AssistantMarkdown` separately from
-`TimelineRow`, `ToolRow`, `StreamingAssistantMarkdown` and `parseMarkdown`.
-Establish positive counts before measuring skips and observe each delta before
-delivering the next; batching can otherwise manufacture apparent reuse.
-`StreamingAssistantMarkdown` may execute again for its own partition-state update,
-so its positive counter must remain separate from the parent row count. See
-[row reuse verification](conversation-shell-timeline-render.md#row-reuse-verification)
-for the mounted regression and baseline/fixed evidence.
-
-At `c0268369`, the 2026-10-08
-[verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1889#issuecomment-6053401984)
-and dispatcher gate report record 358 fake-transport tests executed/passed, 0 failed
-and 4 skipped. Both “settled rows skip deltas and unrelated group toggles while the
-active reply renders” and “progressive presentation, parser/render reuse and
-raw-source settlement” were present and passed. This is counted mounted evidence
-for settled reuse alongside the existing progressive proof.
+See [Assistant Markdown verification](assistant-markdown-renderer-verification.md)
+for computed typography, spacing, progressive rendering and retained counted
+evidence. Static server renders establish markup; Electron checks establish
+computed styles and mounted behavior.
 
 ## Related
 
@@ -314,7 +345,7 @@ for settled reuse alongside the existing progressive proof.
 - [#623 codebase notes](../codebase/623.md) — the `pre` override, `fenceLanguage`, and the original mobile-mock `.code-block`/`.code-block__header`/`.code-block__body` CSS.
 - [#721](https://github.com/pyrycode/pyrycode-desktop/issues/721) — redrew that CSS to the desktop design (corner, border colour, gutters, header type, divider colour, body line height); no change to `AssistantMarkdown.tsx` or to `fenceLanguage`. Added the `--text-label-medium-*` quartet, `--text-label-medium-weight-emphasized`, and the bespoke `--text-code-body-line` to `theme/tokens.css`.
 - [#780](https://github.com/pyrycode/pyrycode-desktop/issues/780) — reused `.code-block`/`.code-block__body` headerless for a second call site (an expanded `Bash` tool row's command), which moved `white-space: pre-wrap` and `word-break: break-word` onto `.code-block__body` itself in place of `.bubble__markdown pre` (deleted) and `.bubble` inheritance — neither reached the new site. No change to `AssistantMarkdown.tsx`. See [Conversation shell § Shell command code block](conversation-shell-tool-row-code-block.md#shell-command-code-block-780).
-- [#628 codebase notes](../codebase/628.md) — the `h1`–`h6` type-scale CSS, and the type-role census that picked the four steps.
+- [#628 codebase notes](../codebase/628.md) — the original heading type-role census; the current [Markdown heading scale](#heading-typography) supersedes that mapping.
 - [#629 codebase notes](../codebase/629.md) — the `ul`/`ol` indent, the blockquote's indent-plus-bar, and the nested block-rhythm CSS; the marker-overhang arithmetic that bounds the list indent.
 - [#630 codebase notes](../codebase/630.md) — inline code's chip CSS and its ancestry-based exclusion from a fenced block's contents; closes the #624 split.
 - [#610 codebase notes](../codebase/610.md) — the `http:`/`https:` link allowlist, `allowedLinkHref`, and the app's first anchor CSS.

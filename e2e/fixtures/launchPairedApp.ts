@@ -160,6 +160,8 @@ export type LaunchPairedAppOptions = Omit<FakeDaemonOptions, 'url'> & {
  *  one option, not two. Used only by the relaunch-persistence spec; absent = the default fresh-dir,
  *  full-drive behaviour every other consumer relies on. */
 export type LaunchControl = {
+  /** Native protection probes must use the actual OS backend, never reversible test encryption. */
+  productionSecrets?: boolean
   /** Install command observation after window readiness, before pairing or conversation activation. */
   onLaunched?: (app: ElectronApplication) => Promise<void>
   /** Return at Welcome so mounted pairing tests can control authentication delivery. */
@@ -384,14 +386,16 @@ export const test = base.extend<PairedAppFixtures>({
       delete env.ELECTRON_RENDERER_URL
       if (control.rendererUrl !== undefined) env.ELECTRON_RENDERER_URL = control.rendererUrl
       env[LOOPBACK_RELAY_ENV_FLAG] = '1'
-      env[TEST_SECRET_BACKEND_ENV_FLAG] = '1'
+      if (control.productionSecrets) delete env[TEST_SECRET_BACKEND_ENV_FLAG]
+      else env[TEST_SECRET_BACKEND_ENV_FLAG] = '1'
       // #1067: through the shared launch, not `electron.launch` directly — it adds the desktop isolation
       // (renderer-throttling switches + the third isPackaged-gated dev flag, which keeps the window
       // hidden) that this fixture's 48 spec files all need and none should re-derive. Everything above
       // stays here: the scenario's env and its per-run user-data dir are this fixture's business.
       let launchIndex = 0
       const app = await launchIsolatedApp({
-        args: ['.', `--user-data-dir=${userDataDir}`],
+        args: [...(control.productionSecrets ? ['-r', join(process.cwd(), 'e2e/fixtures/productionSecrets.cjs')] : []),
+          '.', `--user-data-dir=${userDataDir}`],
         env,
         fate: {
           ...fate,

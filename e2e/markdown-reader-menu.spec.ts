@@ -39,7 +39,9 @@ const noteText = (): string =>
     '',
     '<script>alert(1)</script>',
     '',
-    '<img src="x" onerror="alert(1)">'
+    '<img src="x" onerror="alert(1)">',
+    '',
+    'End of note.'
   ].join('\n') + (longNote ? '\n\n' + Array.from({ length: 45 }, (_, i) =>
     `## Synthetic section ${i}\n\nText stays visible behind the fixed reader header. Tokens first, running time second.`
   ).join('\n\n') : '')
@@ -51,7 +53,9 @@ const plainText = (): string =>
     '',
     '<script>alert(1)</script>',
     '',
-    '<img src="x" onerror="alert(1)">'
+    '<img src="x" onerror="alert(1)">',
+    '',
+    'End of note.'
   ].join('\n')
 
 function readReply(requestId: number): Uint8Array[] {
@@ -150,6 +154,25 @@ test('the reader menu copies the note three ways and refreshes it (#1630)', asyn
   await expect(reader.locator('h1')).toHaveText('Plan version 1', { timeout: TIMEOUT_MS })
   // Raw HTML in the note is visible text, never markup.
   await expect(reader.locator('.bubble__markdown script, .bubble__markdown img')).toHaveCount(0)
+  for (const width of [1280, 800]) {
+    await app.evaluate(({ BrowserWindow }, value) => BrowserWindow.getAllWindows()[0].setSize(value, 800), width)
+    const rhythm = await reader.locator('.bubble__markdown').evaluate(el => {
+      const box = el.getBoundingClientRect()
+      const blocks = Array.from(el.children).map(child => child.getBoundingClientRect())
+      return {
+        count: blocks.length,
+        // Raw HTML remains bare escaped text between the second and final element.
+        gap: blocks[1].top - blocks[0].bottom,
+        first: blocks[0].top - box.top,
+        last: box.bottom - blocks[blocks.length - 1].bottom
+      }
+    })
+    expect(rhythm.count).toBe(3)
+    expect(rhythm.gap).toBeCloseTo(12, 1)
+    expect(rhythm.first).toBeCloseTo(0, 1)
+    expect(rhythm.last).toBeCloseTo(0, 1)
+    await capturePairedApp(app, page, `/tmp/builder-2107/reader-${width}.png`)
+  }
 
   // --- 3. Copy as markdown: the raw file text, with the client's confirmation. ---
   await trigger.click()

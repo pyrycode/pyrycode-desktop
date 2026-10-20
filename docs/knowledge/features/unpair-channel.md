@@ -235,7 +235,7 @@ required prop bound in `PairedShellView` to the shell's existing back nav
 into `exitConversationDeps` at its delete and archive exits). Copying the Settings row's no-op into the
 dialog would strand the operator on a thread route for a host that no longer exists: unlike the Settings
 screen, `ChannelList` renders on both the `list` and `thread` routes, so the departed host's own chat can
-be the one on screen when its dialog's Unpair host button is confirmed. See [Conversation list store § The per-server drop](conversation-list-store.md#the-per-server-drop-and-its-stricter-sibling-selector-since-1196)
+be the one on screen when its dialog's Unpair host button is confirmed. See [Conversation list store § The per-server drop](conversation-list-store-per-server-keying.md#the-per-server-drop-and-its-stricter-sibling-selector-since-1196)
 for `clearConversationsFor` and `selectExclusiveConversationIdsFor`, and [Conversation last-read
 store](conversation-last-read-store.md) for `clearLastReadFor` — the three store-level primitives this
 clear composes — and [Paired shell — routing](paired-shell-routing.md) for `exitActiveConversation`, which
@@ -399,7 +399,7 @@ deletion ([#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163), bui
   security review caught it (MUST FIX) before any code shipped, since an id another paired machine also
   reports would otherwise let "forget machine A" destroy machine B's retained threads and close the chat
   the operator is reading on B, with no backfill in either timeline store. Fixed by
-  `selectExclusiveConversationIdsFor` ([Conversation list store](conversation-list-store.md#the-per-server-drop-and-its-stricter-sibling-selector-since-1196)):
+  `selectExclusiveConversationIdsFor` ([Conversation list store](conversation-list-store-per-server-keying.md#the-per-server-drop-and-its-stricter-sibling-selector-since-1196)):
   an id another slot also holds is never dropped. Costs nothing against an honest daemon — conversation
   ids are UUIDv4, so a real collision cannot occur.
 
@@ -501,6 +501,6 @@ deletion ([#1163](https://github.com/pyrycode/pyrycode-desktop/issues/1163), bui
   `docs/specs/architecture/1196-scoped-clear-on-per-server-unpair.md` — gave `runUnpairServer`'s
   non-last-server arm a scoped clear, closing the gap #1163's spec left open (both unpair callers now
   reach `clearServerScopedState`; see § The three renderer callers). [Conversation list
-  store](conversation-list-store.md#the-per-server-drop-and-its-stricter-sibling-selector-since-1196) —
+  store — per-server keying](conversation-list-store-per-server-keying.md#the-per-server-drop-and-its-stricter-sibling-selector-since-1196) —
   `clearConversationsFor` and `selectExclusiveConversationIdsFor`, the two store primitives this clear
   composes.

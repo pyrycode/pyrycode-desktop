@@ -884,6 +884,7 @@ app.whenReady().then(() => {
         return
       }
       case 'queryThread':
+      case 'cancelThreadQuery':
         dispatchThreadQuery(command, serverId => servers.route(serverId), live.sink)
         return
       case 'requestHostSystemPrompt':
@@ -1112,6 +1113,9 @@ app.whenReady().then(() => {
         }
         return
       }
+      case 'setConversationPinned':
+        router.resolve(command.payload.conversation_id, command.serverId)?.connection.setConversationPinned(command.payload)
+        return
       case 'setSessionSettings':
         // ROUTED BY SESSION ID (#1119) — the DAEMON's own session id, not a conversation id (#501 is the
         // standing bug about those two being confused), learned off the stamped `runConfigReceived` and

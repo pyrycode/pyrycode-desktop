@@ -1,6 +1,7 @@
 import { sendConversationCommand } from './conversationActionAvailability'
 import { createAttachmentImageSources } from './attachmentImageSource'
 import { threadRuntime } from '../../store/threadRuntime'
+import type { ThreadBodyState } from '../../store/threadBodies'
 import { selectThreadReadings } from '../../store/threadLiveState'
 import { threadLiveInputs } from './threadLiveInputs'
 import { threadComposerReports, type ThreadComposerReports } from './threadComposerReports'
@@ -11,7 +12,7 @@ import { ThreadPromptSlot } from './ThreadPromptSlot'
 import { useReadObservation, type ThreadReadInputs } from '../../store/conversationReadPublisher'
 import type { ThreadSnapshot } from '../../store/threadItemStore'
 import { threadTaskPresentations, type ThreadTaskInputs } from './threadTaskPresentation'
-import { taskLinked, threadItemPresentations, threadQueueHandle, actOnThreadQueue, type ThreadSendInputs } from './threadItemPresentation'
+import { taskLinked, threadItemIndex, threadItemPresentation, threadQueueHandle, actOnThreadQueue, type ThreadSendInputs } from './threadItemPresentation'
 import { agentSwitchStore, type AgentSwitchStatus } from '../../store/agentSwitchStore'
 import { useReplySuggestionStore, selectReplySuggestion, visibleReplySuggestion } from '../../store/replySuggestionStore'
 import { useSessionFactsStore, selectSessionFactsFor } from '../../store/sessionFactsStore'
@@ -168,7 +169,7 @@ import { EditChatDialogView, requestRenameConversation } from '../channels/EditC
 // whose lifetime has to be the dialog's open lifetime. It imports nothing from this directory, so this
 // is the one-way seam `EditChatDialog` already crosses, not a cycle.
 import { EditChannelDialog } from '../channels/EditChannelDialog'
-import { BackgroundTaskPanelView } from './BackgroundTaskPanel'
+import { backgroundTaskStopSupported, BackgroundTaskPanelView } from './BackgroundTaskPanel'
 import type { RendererCommand } from '@shared/ipc/commands'
 
 // Conversation content comes from daemon items and locally unaccepted sends.
@@ -191,6 +192,13 @@ export interface ConversationScreenProps {
   // passes neither and the screen keeps its own state, which is what leaves every existing render unchanged.
   backgroundTasksOpen?: boolean
   onBackgroundTasksOpenChange?: (open: boolean) => void
+}
+
+function liveTaskIdentities(snapshot: ThreadSnapshot, input: ReturnType<typeof threadLiveInputs>, agent: string | undefined): NonNullable<ThreadTaskInputs['liveTasks']> {
+  return input.sessionId && agent ? input.taskProgress.filter(reading => reading.conversationId === snapshot.conversationId &&
+    reading.envelopeSessionId === input.sessionId).map(reading => ({ hostId: snapshot.hostId,
+      conversationId: snapshot.conversationId, epoch: snapshot.epoch, session: input.sessionId ?? undefined,
+      agent, taskId: reading.taskId, progress: reading })) : []
 }
 
 export function ConversationScreen({
@@ -218,26 +226,52 @@ export function ConversationScreen({
   const authoritative = threadRuntime.isThread(selectedHost, openConversationId)
   // A host whose daemon lacks `thread` is update-required (#1908) and draws no rows, saved ones included.
   const daemonOutdated = useSessionStore(s => selectedHost !== null && isDaemonUpdateRequired(s.statuses.get(selectedHost)))
-  const authoritativeSnapshot = useStore(threadRuntime.items, s => selectedHost === null || openConversationId === null ||
+  const completeSnapshot = useStore(threadRuntime.items, s => selectedHost === null || openConversationId === null ||
     daemonOutdated ? null : s.hosts.get(selectedHost)?.get(openConversationId)?.snapshot ?? null)
+  const compactSelected = useStore(threadRuntime.state, s => s.selection?.host === selectedHost && s.selection?.chat === openConversationId && s.selection?.projection === 'compact-v1')
+  const compactSnapshot = useStore(threadRuntime.compact.state, s => compactSelected
+    ? s.snapshots.get(JSON.stringify([selectedHost, openConversationId])) : undefined)
+  // This display value never enters the complete store, writer or read observer.
+  const authoritativeSnapshot = useMemo((): ThreadSnapshot | null => compactSelected
+    ? compactSnapshot && selectedHost !== null && openConversationId !== null ? {
+      hostId: selectedHost, conversationId: openConversationId, epoch: compactSnapshot.epoch,
+      items: compactSnapshot.rows.map(row => ({ ...row })), version: 0, checkpoint: 0, ranges: [], repair: null,
+      olderAvailable: compactSnapshot.older
+    } : null : completeSnapshot, [compactSelected, compactSnapshot, completeSnapshot, selectedHost, openConversationId])
   const threadLive = useMemo(() => threadRuntime.live(selectedHost ?? '', openConversationId ?? ''), [selectedHost, openConversationId])
   const liveState = useStore(threadLive, s => s)
   const localSend = useStore(threadRuntime.sends, s => selectedHost === null || openConversationId === null
     ? null : s.select(selectedHost, openConversationId))
   const liveInput = useMemo(() => threadLiveInputs(liveState, localSend?.localSendPending), [liveState, localSend])
-  const composerReports = useMemo(() => authoritativeSnapshot
-    ? threadComposerReports(authoritativeSnapshot, liveInput.sessionId, localSend?.reportsClearedThrough, liveInput.activity.turnRunning)
-    : null, [authoritativeSnapshot, liveInput.sessionId, liveInput.activity.turnRunning, localSend?.reportsClearedThrough])
   const taskStops = useStore(threadRuntime.taskStops, s => s.entries)
   const queryKey = JSON.stringify([selectedHost, openConversationId])
   const networkQueryState = useStore(threadRuntime.state, s => s.queries.get(queryKey))
   const localQueryState = useStore(threadRuntime.state, s => s.localQueries.get(queryKey))
-  const queryState = localQueryState && localQueryState.type !== 'idle' ? localQueryState : networkQueryState
+  const compactPending = useStore(threadRuntime.compact.state, s => selectedHost !== null && s.pending.get(selectedHost) === openConversationId)
+  const queryState = compactSelected ? compactSnapshot?.failed
+    ? { type: 'failed' as const } : compactPending ? { type: 'loading' as const } : undefined
+    : localQueryState && localQueryState.type !== 'idle' ? localQueryState : networkQueryState
   const complete = useStore(threadRuntime.state, s => s.complete.get(queryKey))
   const threadRestoring = useStore(threadRuntime.state, s => s.restoring.has(queryKey))
   const threadConnection = useSessionStore(s => selectedHost === null ? undefined : s.statuses.get(selectedHost))
   const threadSummary = useConversationListStore(s => authoritative
     ? s.byServer.get(selectedHost)?.find(row => row.id === openConversationId) : undefined)
+  const taskInputs = useMemo((): ThreadTaskInputs => ({ stops: taskStops,
+    liveTasks: compactSelected && authoritativeSnapshot ? liveTaskIdentities(authoritativeSnapshot, liveInput, threadSummary?.agent) : [],
+    progress: authoritativeSnapshot ? liveInput.taskProgress.flatMap(reading => authoritativeSnapshot.items.filter(item =>
+      item.session === reading.envelopeSessionId && item.active === true && typeof item.content === 'object' && item.content !== null && 'task_id' in item.content && item.content.task_id === reading.taskId).map(item => ({
+        hostId: authoritativeSnapshot.hostId, conversationId: authoritativeSnapshot.conversationId, epoch: authoritativeSnapshot.epoch,
+        session: typeof item.session === 'string' ? item.session : undefined,
+        agent: typeof item.agent === 'string' ? item.agent : undefined, taskId: reading.taskId, creatingItemId: item.id, progress: reading
+      }))) : [], connection: selectedHost !== null && threadConnection ? { hostId: selectedHost, status: threadConnection } : undefined
+  }), [taskStops, compactSelected, authoritativeSnapshot, liveInput, threadSummary?.agent, selectedHost, threadConnection])
+  useEffect(() => {
+    if (compactSelected && authoritativeSnapshot) threadRuntime.taskStops.getState().settle(authoritativeSnapshot, taskInputs)
+  }, [compactSelected, authoritativeSnapshot, taskInputs])
+  const composerReports = useMemo(() => authoritativeSnapshot ? {
+    ...threadComposerReports(authoritativeSnapshot, liveInput.sessionId, localSend?.reportsClearedThrough, liveInput.activity.turnRunning),
+    taskCount: threadTaskPresentations(authoritativeSnapshot, taskInputs).filter(task => task.active).length
+  } : null, [authoritativeSnapshot, liveInput.sessionId, liveInput.activity.turnRunning, localSend?.reportsClearedThrough, taskInputs])
   useEffect(() => {
     const dispatch = agentSwitchStore.getState().dispatch
     dispatch({ type: 'paneChanged', pane: selectedHost === null || openConversationId === null
@@ -379,24 +413,26 @@ export function ConversationScreen({
         <ThreadPromptSlot host={selectedHost} conversationId={openConversationId} />
       </div>}
       {authoritative && authoritativeSnapshot && <ThreadItemsTimeline snapshot={authoritativeSnapshot} pin={threadPin}
+        compact={compactSelected}
         standaloneStatus={false}
         backgroundTasksOpen={panelOpen} onBackgroundTasksOpenChange={setPanelOpen}
         onOlder={() => selectedHost !== null && threadRuntime.query('older', selectedHost)}
-        readInputs={threadSummary ? { row: threadSummary, readerOpen,
+        readInputs={!compactSelected && threadSummary ? { row: threadSummary, readerOpen,
           completeThrough: complete?.epoch === authoritativeSnapshot.epoch ? complete.version : 0 } : undefined}
         sendInputs={{ midTurnInput: liveInput.runConfig?.midTurnInput === true, diagnose: window.pyry.sendDiagnostic, local: selectedHost !== null && openConversationId !== null && localSend !== null
           ? { hostId: selectedHost, conversationId: openConversationId, ...localSend } : undefined,
           connection: selectedHost !== null && threadConnection ? { hostId: selectedHost, status: threadConnection } : undefined,
           onAction: (serverId, command) => sendConversationCommand({ ...command, serverId }) }}
-        taskInputs={{ stops: taskStops, progress: liveInput.taskProgress.flatMap(reading => authoritativeSnapshot.items.filter(item =>
-          item.session === reading.envelopeSessionId && item.active === true && typeof item.content === 'object' && item.content !== null && 'task_id' in item.content && item.content.task_id === reading.taskId).map(item => ({
-            hostId: authoritativeSnapshot.hostId, conversationId: authoritativeSnapshot.conversationId, epoch: authoritativeSnapshot.epoch,
-            session: typeof item.session === 'string' ? item.session : undefined,
-            agent: typeof item.agent === 'string' ? item.agent : undefined, taskId: reading.taskId, creatingItemId: item.id, progress: reading
-          }))), connection: selectedHost !== null && threadConnection ? { hostId: selectedHost, status: threadConnection } : undefined,
+        taskInputs={{ ...taskInputs,
           onStopTask: (serverId, conversationId, taskId) => {
-            const snapshot = threadRuntime.items.getState().snapshot(serverId, conversationId)
-            if (!snapshot || !threadRuntime.taskStops.getState().begin(snapshot, taskId)) return
+            const selection = threadRuntime.state.getState().selection
+            if (selection?.host !== serverId || selection.chat !== conversationId) return
+            const snapshot = threadRuntime.presentation(serverId, conversationId)
+            const agent = conversationListStore.getState().byServer.get(serverId)?.find(row => row.id === conversationId)?.agent
+            if (!snapshot || !backgroundTaskStopSupported(sessionStore.getState().statuses.get(serverId), 'claude')) return
+            const current = threadLiveInputs(threadRuntime.live(serverId, conversationId).getState())
+            const liveTasks = selection.projection === 'compact-v1' ? liveTaskIdentities(snapshot, current, agent) : []
+            if (!threadRuntime.taskStops.getState().begin(snapshot, taskId, { liveTasks })) return
             try { sendConversationCommand({ type: 'stopBackgroundTask', serverId, payload: { conversation_id: conversationId, task_id: taskId } }) }
             catch { threadRuntime.taskStops.getState().event({ type: 'backgroundTaskStopRejected', serverId, conversationId, taskId }) }
           } }}
@@ -410,8 +446,8 @@ export function ConversationScreen({
           <ThreadPromptSlot host={selectedHost} conversationId={openConversationId} />
         </>} />}
       <TopOverlayControl onRepairHost={onRepairHost} threadLive={authoritative ? threadLive : undefined}
-        savedMessages={selectedHost !== null && offline && !daemonOutdated && authoritativeSnapshot?.items.some(item => item.shown === true) === true}
-        loadingSavedMessages={selectedHost !== null && threadRestoring}
+        savedMessages={!compactSelected && selectedHost !== null && offline && !daemonOutdated && authoritativeSnapshot?.items.some(item => item.shown === true) === true}
+        loadingSavedMessages={!compactSelected && selectedHost !== null && threadRestoring}
         markdownOpenFailed={reader.state.type === 'closed' && reader.state.notice} />
       </div>
       {/* #962/#967: the region between the thread and the status area is EMPTY, and that emptiness is the
@@ -570,6 +606,7 @@ interface ThreadPin {
   scrollPin: ThreadScrollPin
   /** Resume following the bottom. Called when the operator's own message enters the timeline (#602). */
   followBottom: () => void
+  layoutChanged: (navigation?: boolean) => void
 }
 
 // The standard isomorphic alias. `document` exists in the window and NOT in vitest's `node` environment
@@ -683,8 +720,8 @@ function useThreadScrollPin(conversationId: string | null, presentation?: object
   const observedRegion = useRef<HTMLElement | null>(null)
   const membership = useRef<MutationObserver | null>(null)
   const rows = useRef<{ root: Element | null; positions: Map<Element, number>;
-    eligible: Element[]; visible: Set<Element> }>({ root: null,
-    positions: new Map(), eligible: [], visible: new Set() })
+    eligible: Element[]; visible: Set<Element>; controllers: Map<string, Element> }>({ root: null,
+    positions: new Map(), eligible: [], visible: new Set(), controllers: new Map() })
   const chromeTargets = useRef(new Set<Element>())
   // The offset the pin itself last wrote, while the scroll event that write queued is still outstanding. See
   // `reassertPinnedToBottom` for why this exists and why it cannot go stale.
@@ -714,6 +751,7 @@ function useThreadScrollPin(conversationId: string | null, presentation?: object
   const topAnchor = useRef<{
     row: Element
     top: number
+    controllers: { row: Element; top: number }[]
     presentation?: object
     conversationId: string | null
   } | null>(null)
@@ -736,7 +774,9 @@ function useThreadScrollPin(conversationId: string | null, presentation?: object
   }
   const syncRows = (el: Element, records = membership.current?.takeRecords() ?? []): void => {
     const index = rows.current
-    if (index.root !== el || records.some(record => record.type === 'childList' && record.target === el)) {
+    if (index.root !== el || records.some(record => record.type === 'childList' && record.target === el ||
+        record.type === 'attributes' && record.target.parentNode === el &&
+        (record.attributeName === 'data-read-row' || record.attributeName === 'data-run-row'))) {
       const children = Array.from(el.children)
       const positions = new Map(children.map((row, position) => [row, position]))
       for (const row of index.positions.keys()) {
@@ -747,6 +787,10 @@ function useThreadScrollPin(conversationId: string | null, presentation?: object
       }
       index.root = el
       index.positions = positions
+      index.controllers = new Map(children.flatMap(row => {
+        const source = row.getAttribute('data-read-row'), run = row.getAttribute('data-run-row')
+        return source !== null ? [[source, row]] : run !== null ? [[`run:${run}`, row]] : []
+      }))
       index.eligible = children.filter(row => !row.hasAttribute('data-history-gap') && row.getBoundingClientRect().height > 0)
       index.visible = new Set(index.eligible)
       return
@@ -775,6 +819,10 @@ function useThreadScrollPin(conversationId: string | null, presentation?: object
     const row = candidates[lo] ?? null
     topAnchor.current = row !== null
       ? { row, top: row.getBoundingClientRect().top - threadTop,
+          controllers: (row.getAttribute('data-thread-controllers') ?? '').split(',').filter(Boolean).reverse().flatMap(id => {
+            const owner = rows.current.controllers.get(id)
+            return owner ? [{ row: owner, top: owner.getBoundingClientRect().top - threadTop }] : []
+          }),
           presentation, conversationId }
       : null
   }
@@ -853,7 +901,7 @@ function useThreadScrollPin(conversationId: string | null, presentation?: object
   // fires computes at-bottom -> true, which is the value the flag already holds. And chrome CANNOT corrupt the
   // flag: a chrome mount shrinks clientHeight while leaving scrollTop and scrollHeight untouched, which raises
   // the maximum scroll offset, so the browser never clamps scrollTop and no scroll event fires at all.
-  useThreadLayoutEffect(() => {
+  const reconcileLayout = (visibilityChanged = false): void => {
     const el = ref.current
     const pane = paneRef.current
     if (pane === null) return
@@ -862,14 +910,26 @@ function useThreadScrollPin(conversationId: string | null, presentation?: object
     const input = pane?.querySelector<HTMLElement>('.conversation__input-chrome')
     measureThreadChrome(pane)
 
-    const anchor = topAnchor.current
+    const remembered = topAnchor.current
+    const surviving = remembered?.row.parentElement === el ? remembered
+      : remembered?.controllers.find(owner => owner.row.parentElement === el)
+    const anchor = remembered && surviving ? { ...remembered, ...surviving } : null
     if (el !== null && !following.current && anchor !== null &&
         anchor.conversationId === conversationId &&
-        presentation !== anchor.presentation &&
+        (visibilityChanged || presentation !== anchor.presentation) &&
         anchor.row.parentElement === el) {
+      const threadRect = el.getBoundingClientRect()
+      const anchorRect = anchor.row.getBoundingClientRect()
+      if (remembered?.row !== anchor.row) {
+        // A removed reading row falls back to its complete header between the overlaid controls.
+        const visibleTop = Math.max(threadRect.top, header?.getBoundingClientRect().bottom ?? threadRect.top)
+        const visibleBottom = Math.min(threadRect.bottom, input?.getBoundingClientRect().top ?? threadRect.bottom)
+        anchor.top = Math.max(visibleTop - threadRect.top,
+          Math.min(remembered?.top ?? 0, visibleBottom - threadRect.top - anchorRect.height))
+      }
       // Preserve the surviving visible row at zero and during middle-of-thread gap insertion:
       // short threads include unused viewport space that is not part of the inserted content.
-      const offset = el.scrollTop + anchor.row.getBoundingClientRect().top - el.getBoundingClientRect().top - anchor.top
+      const offset = el.scrollTop + anchorRect.top - threadRect.top - anchor.top
       const padding = Number.parseFloat(getComputedStyle(el).paddingBottom)
       const contentBottom = Array.from(el.children).reduce(
         (bottom, row) => Math.max(bottom, row.getBoundingClientRect().bottom),
@@ -904,14 +964,14 @@ function useThreadScrollPin(conversationId: string | null, presentation?: object
       observer.disconnect()
       membership.current?.disconnect()
       membership.current = null
-      rows.current = { root: null, positions: new Map(), eligible: [], visible: new Set() }
+      rows.current = { root: null, positions: new Map(), eligible: [], visible: new Set(), controllers: new Map() }
       chromeTargets.current.clear()
       topAnchor.current = null
       observedRegion.current = observationRoot
       if (el !== null) {
         membership.current = new MutationObserver(records => syncRows(el, records))
         membership.current.observe(el, { childList: true, subtree: true, characterData: true,
-          attributes: true, attributeFilter: ['hidden', 'style', 'class', 'data-history-gap'] })
+          attributes: true, attributeFilter: ['hidden', 'style', 'class', 'data-history-gap', 'data-read-row', 'data-run-row'] })
       }
     }
     const chrome = new Set<Element>([pane])
@@ -927,7 +987,8 @@ function useThreadScrollPin(conversationId: string | null, presentation?: object
       viewport.current = { width: el.clientWidth, height: el.clientHeight, contentHeight: el.scrollHeight }
       rememberTop(el)
     }
-  })
+  }
+  useThreadLayoutEffect(() => reconcileLayout())
 
   // The observer's cancellation path, and it needs an effect of its own: the dep-free one above has no
   // dependency array, so ITS cleanup would run after every render and tear down the set it just synced.
@@ -939,7 +1000,7 @@ function useThreadScrollPin(conversationId: string | null, presentation?: object
       growth.current?.disconnect()
       membership.current?.disconnect()
       membership.current = null
-      rows.current = { root: null, positions: new Map(), eligible: [], visible: new Set() }
+      rows.current = { root: null, positions: new Map(), eligible: [], visible: new Set(), controllers: new Map() }
       chromeTargets.current.clear()
       topAnchor.current = null
       observedRegion.current = null
@@ -969,6 +1030,11 @@ function useThreadScrollPin(conversationId: string | null, presentation?: object
 
   return {
     paneRef,
+    layoutChanged: (navigation = false) => {
+      const el = ref.current
+      if (navigation && el) rememberTop(el)
+      else reconcileLayout(true)
+    },
     scrollPin: {
       onWheel: (event) => {
         if (!event.isTrusted) return
@@ -1066,6 +1132,7 @@ function MessageBubble({ message }: { message: Message }): JSX.Element {
 }
 
 type ThreadItemsProps = {
+  compact?: boolean
   standaloneStatus?: boolean
   backgroundTasksOpen?: boolean
   onBackgroundTasksOpenChange?: (open: boolean) => void
@@ -1087,10 +1154,88 @@ export function ThreadItemsTimeline(props: ThreadItemsProps): JSX.Element {
   const s = props.snapshot
   return <ThreadItemsView key={JSON.stringify([s.hostId, s.conversationId, s.epoch])} {...props} />
 }
-function ThreadItemsView({ pin, snapshot, readInputs, sendInputs, taskInputs, trailing, onOlder, standaloneStatus = true, backgroundTasksOpen = false, onBackgroundTasksOpenChange, turnRunning = false, foldTools = false, onReply, onOpenMarkdownPath, onOpenHostedApp }: ThreadItemsProps): JSX.Element {
+const THREAD_PRESENTATION_BATCH = 256
+type CompactSource = ThreadSnapshot['items'][number]
+function CompactRow({ source, snapshot, expanded, toggle, changed }: {
+  source: CompactSource; snapshot: ThreadSnapshot; expanded: ReadonlySet<number>
+  toggle: (id: number | string) => void; changed: () => void
+}): JSX.Element {
+  const item = threadItemPresentation(source, false)
+  const open = expanded.has(source.id)
+  const [launchOpen, setLaunchOpen] = useState(false)
+  const count = source.kind === 'agent' && typeof source.public_child_count === 'number' ? ` · ${source.public_child_count} direct children` : ''
+  if (item?.kind !== 'toolCall') return <p className="session-delimiter__title">Summary: {typeof source.headline === 'string' ? source.headline : 'Unavailable summary'}</p>
+  return <>
+    <ToolRow item={item} headerExpandable running={typeof source.active === 'boolean' ? source.active : undefined} expansion={{ expanded: open, onToggle: () => { setLaunchOpen(false); toggle(source.id) } }}
+      suppliedOutcome={{ label: (typeof source.status === 'string' ? source.status : 'Status unknown') + count,
+        failed: source.status === 'failed', denied: source.status === 'denied' }} />
+    {typeof source.error_summary === 'string' && <p role="status">{source.error_summary}</p>}
+    {open && <>
+      {source.kind === 'agent' && <button type="button" className="tool-row__chip tool-row__chip--toggle"
+        aria-expanded={launchOpen} onClick={() => setLaunchOpen(value => !value)}>Launch body</button>}
+      <CompactDetail key={source.kind === 'agent' ? 'children' : 'body'} source={source} snapshot={snapshot}
+        childrenOnly={source.kind === 'agent'} expanded={expanded} toggle={toggle} changed={changed} />
+      {source.kind === 'agent' && launchOpen && <CompactDetail source={source} snapshot={snapshot}
+        childrenOnly={false} expanded={expanded} toggle={toggle} changed={changed} />}
+    </>}
+  </>
+}
+function CompactDetail({ source, snapshot, childrenOnly, expanded, toggle, changed }: {
+  source: CompactSource; snapshot: ThreadSnapshot; childrenOnly: boolean; expanded: ReadonlySet<number>
+  toggle: (id: number | string) => void; changed: () => void
+}): JSX.Element {
+  const [state, setState] = useState<ThreadBodyState>({ type: 'missing', reason: 'unfetched', stale: true })
+  const lease = useRef<ReturnType<typeof threadRuntime.bodies.demand>>()
+  const [childrenExpanded, setChildrenExpanded] = useState<ReadonlySet<number>>(() => new Set())
+  const toggleChild = (id: number | string) => { if (typeof id === 'number') setChildrenExpanded(previous => {
+    const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next
+  }) }
+  const connection = useSessionStore(s => s.statuses.get(snapshot.hostId))
+  const generation = useStore(threadRuntime.compact.state, s => s.snapshots.get(JSON.stringify([snapshot.hostId, snapshot.conversationId]))?.generation)
+  const selection = useStore(threadRuntime.state, s => s.selection?.generation)
+  useEffect(() => {
+    let active = true
+    const request = { serverId: snapshot.hostId, conversationId: snapshot.conversationId, epoch: snapshot.epoch,
+      itemId: source.id, revision: source.rev }
+    const notify = (next: ThreadBodyState) => { if (active) setState(next) }
+    const owned = childrenOnly ? threadRuntime.children.demand(request, notify)
+      : threadRuntime.bodies.demand({ ...request, kind: source.kind === 'agent' ? 'agent' : 'tool_call' }, notify)
+    lease.current = owned
+    setState(owned.getState())
+    return () => { active = false; lease.current = undefined; owned.release() }
+    // The cache updates an active lease's revision and refreshes it. Reacquiring on rev would send twice.
+  }, [snapshot.hostId, snapshot.conversationId, snapshot.epoch, source.id, source.kind, childrenOnly, connection, generation, selection])
+  useThreadLayoutEffect(() => changed(), [state])
+  const offline = connection?.type !== 'connected'
+  const content = state.content
+  return <div className="tool-row__body">
+    {offline && <p role="status">Unavailable offline{content || state.page ? ' · retained content' : ''}</p>}
+    {state.type === 'loading' && <p role="status">Loading…</p>}
+    {state.stale && (content || state.page) && <p role="status">Retained content · stale</p>}
+    {state.type === 'failed' && <p role="status">Could not load details. <button type="button" disabled={offline}
+      onClick={() => lease.current?.retry()}>Retry</button></p>}
+    {state.type === 'missing' && !offline && <p role="status">Details unavailable. <button type="button"
+      onClick={() => lease.current?.retry()}>Retry</button></p>}
+    {childrenOnly ? <>
+      {state.page?.children.filter(child => child.shown).map(child => <div key={child.id} className="tool-group-row tool-group-row--depth-1">
+        <CompactRow source={{ ...child }} snapshot={snapshot} expanded={childrenExpanded} toggle={toggleChild} changed={changed} />
+      </div>)}
+      {state.page?.more === true && state.page.cursor !== undefined && state.type === 'ready' && <button type="button"
+        disabled={offline} onClick={() => { const cursor = state.page?.cursor; if (cursor) lease.current?.continue(cursor) }}>More children</button>}
+    </> : content && <>
+      {typeof content.input === 'string' && <pre className="tool-row__input-value">{content.input}</pre>}
+      {typeof content.output === 'string' && (content.output === '' ? <p>{TOOL_RESULT_EMPTY_COPY}</p>
+        : <pre className="tool-row__result">{content.output}</pre>)}
+    </>}
+  </div>
+}
+function ThreadItemsView({ compact = false, pin, snapshot, readInputs, sendInputs, taskInputs, trailing, onOlder, standaloneStatus = true, backgroundTasksOpen = false, onBackgroundTasksOpenChange, turnRunning = false, foldTools = false, onReply, onOpenMarkdownPath, onOpenHostedApp }: ThreadItemsProps): JSX.Element {
   const tasks = useMemo(() => threadTaskPresentations(snapshot, taskInputs), [snapshot, taskInputs])
   const activeTaskCount = tasks.filter(task => task.active).length
-  const rows = useMemo(() => threadItemPresentations(snapshot), [snapshot])
+  const rows = useMemo(() => threadItemIndex(snapshot), [snapshot])
+  const [expandedTools, setTools] = useState<ReadonlySet<number>>(() => new Set())
+  const [expandedRuns, setRuns] = useState<ReadonlySet<number>>(() => new Set())
+  const [admitted, setAdmitted] = useState<ReadonlySet<number>>(() => new Set())
   const local = sendInputs?.local?.hostId === snapshot.hostId && sendInputs.local.conversationId === snapshot.conversationId
     ? sendInputs.local : undefined
   const pending = local?.pending ?? []
@@ -1111,13 +1256,14 @@ function ThreadItemsView({ pin, snapshot, readInputs, sendInputs, taskInputs, tr
       }) }
   }, [snapshot.hostId, snapshot.conversationId])
   // Completed older pages change the immutable item list without necessarily advancing the watermark.
-  const visibleItems = useMemo(() => [...snapshot.items, ...pending], [snapshot.items, pending])
+  const visibleItems = useMemo(() => [...snapshot.items, ...pending], [snapshot.items, pending, expandedTools, expandedRuns, admitted])
   const localPin = useThreadScrollPin(snapshot.conversationId, visibleItems, onOlder)
   const scrollPin = pin?.scrollPin ?? localPin.scrollPin
+  const activePin = useRef(pin ?? localPin)
+  activePin.current = pin ?? localPin
+  useThreadLayoutEffect(() => activePin.current.layoutChanged(), [expandedTools, expandedRuns, admitted, snapshot])
   const paneRef = localPin.paneRef
-  useReadObservation(readInputs && { ...readInputs, snapshot }, pin?.paneRef ?? paneRef, scrollPin.ref)
-  const [expandedTools, setTools] = useState<ReadonlySet<number>>(() => new Set())
-  const [expandedRuns, setRuns] = useState<ReadonlySet<number>>(() => new Set())
+  useReadObservation(!compact && readInputs ? { ...readInputs, snapshot } : undefined, pin?.paneRef ?? paneRef, scrollPin.ref)
   const items: ThreadItem[] = rows.map(row => row.item ?? { kind: 'userText', text: '' })
   const positions = new Map(rows.flatMap((row, index) => row.marker ? [] : [[row.source.id, index] as const]))
   const projection = rows.map((row, index) => ({ index, depth: row.depth,
@@ -1129,6 +1275,7 @@ function ThreadItemsView({ pin, snapshot, readInputs, sendInputs, taskInputs, tr
   useThreadLayoutEffect(() => {
     if (revealAgent === null) return
     agentNodes.current.get(revealAgent)?.scrollIntoView({ block: 'nearest' })
+    activePin.current.layoutChanged(true)
     setRevealAgent(null)
   }, [revealAgent])
   const runs = foldTools ? foldToolRuns(items, projection) : []
@@ -1137,10 +1284,28 @@ function ThreadItemsView({ pin, snapshot, readInputs, sendInputs, taskInputs, tr
   const open = (run: ToolRun) => run.members.some(index => expandedRuns.has(rows[index].source.id))
   const hiddenAt = (index: number): boolean => {
     const row = rows[index]
-    const run = byMember.get(index) ?? row.ancestors.map(owner => byMember.get(positions.get(owner) ?? -1)).find(Boolean)
-    return row.ancestors.some(owner => !expandedTools.has(owner)) || (!row.marker && run !== undefined && !open(run))
+    const enclosing = row.ancestors.map(owner => byMember.get(positions.get(owner) ?? -1)).find(Boolean)
+    const run = byMember.get(index) ?? enclosing
+    return row.ancestors.some(owner => !expandedTools.has(owner)) ||
+      ((!row.marker || enclosing !== undefined) && run !== undefined && !open(run))
   }
-  const visible = rows.flatMap((row, index) => hiddenAt(index) ? [] : [{ row, index }])
+  const visible = useMemo(() => rows.flatMap((row, index) => hiddenAt(index) ? [] : [{ row, index }]),
+    [rows, expandedTools, expandedRuns, foldTools])
+  const admittedNow = new Set(admitted)
+  let budget = THREAD_PRESENTATION_BATCH
+  for (const { row } of visible) if (!admittedNow.has(row.source.id) && budget > 0) {
+    admittedNow.add(row.source.id); budget--
+  }
+  useEffect(() => {
+    const ids = [...new Set(visible.map(({ row }) => row.source.id))]
+    const allowed = new Set(ids)
+    const next = new Set([...admitted].filter(id => allowed.has(id)))
+    let remaining = THREAD_PRESENTATION_BATCH
+    for (const id of ids) if (!next.has(id) && remaining > 0) { next.add(id); remaining-- }
+    if (next.size === admitted.size && [...next].every(id => admitted.has(id))) return
+    const timer = setTimeout(() => setAdmitted(next), 0)
+    return () => clearTimeout(timer)
+  }, [visible, admitted])
   const joins = new Map(visible.map(({ row, index }, at) => {
     const previous = visible[at - 1]?.row, next = visible[at + 1]?.row
     return [index, [
@@ -1160,14 +1325,18 @@ function ThreadItemsView({ pin, snapshot, readInputs, sendInputs, taskInputs, tr
     <div className="conversation__thread" ref={scrollPin.ref} onScroll={scrollPin.onScroll}
       onWheel={scrollPin.onWheel} onKeyDown={scrollPin.onKeyDown} aria-label="Conversation history" tabIndex={0}>
       {rows.flatMap((row, index) => {
-        const id = row.source.id, item = row.item, start = byStart.get(index)
+        const id = row.source.id, start = byStart.get(index)
         const run = byMember.get(index) ?? row.ancestors.map(owner => byMember.get(positions.get(owner) ?? -1)).find(Boolean)
         const handle = threadQueueHandle(snapshot, row.source, sendInputs)
         const collapsedOwner = row.ancestors.some(owner => !expandedTools.has(owner))
         const hidden = collapsedOwner || (run !== undefined && !open(run))
-        if (row.marker) return <div key={`marker-${id}`} className={`tool-group-row tool-group-row--depth-${row.depth}`} hidden={collapsedOwner}>
+        if (collapsedOwner || row.marker && hiddenAt(index)) return []
+        const item = (!hidden || row.marker) && admittedNow.has(id)
+          ? threadItemPresentation(row.source, !row.marker && (row.item?.kind !== 'toolCall' || expandedTools.has(id))) : null
+        if (row.marker) return <div key={`marker-${id}`} className={`tool-group-row tool-group-row--depth-${row.depth}`}>
           <button type="button" className="agent-start-marker" onClick={() => {
             setTools(previous => new Set([...previous, ...row.ancestors]))
+            setAdmitted(previous => new Set([...previous, id]))
             setRevealAgent(id)
           }}>
             <span className={`conversation-status-dot${row.source.active === true ? ' agent-start-marker__running'
@@ -1182,18 +1351,24 @@ function ThreadItemsView({ pin, snapshot, readInputs, sendInputs, taskInputs, tr
           item?.kind === 'toolCall' && joins.get(index)].filter(Boolean).join(' ')
         const summary = typeof row.source.summary === 'string' ? row.source.summary.slice(0, 4096) : 'Unsupported item'
         const agent = row.source.agent === 'claude' || row.source.agent === 'codex' ? row.source.agent : undefined
-        return [start && <div key={`run-${id}`} hidden={collapsedOwner} className={`tool-group-row tool-run${open(start) ? ' tool-group-row--joined-below' : ''}`}>
-          <ToolRunHeader run={start} expanded={open(start)} onToggle={() => setRuns(previous => {
+        return [start && <div key={`run-${id}`} data-run-row={id} className={`tool-group-row tool-run${open(start) ? ' tool-group-row--joined-below' : ''}`}>
+          <ToolRunHeader run={start} expanded={open(start)} onToggle={() => { if (compact && open(start)) setTools(previous => {
+            const next = new Set(previous)
+            for (const member of start.members) next.delete(rows[member].source.id)
+            return next
+          }); setRuns(previous => {
             const next = new Set(previous)
             if (start.members.some(member => previous.has(rows[member].source.id))) {
               for (const member of start.members) next.delete(rows[member].source.id)
             }
             else for (const member of start.members) next.add(rows[member].source.id)
             return next
-          })} />
-        </div>, <div key={id} data-read-row={id} className={classes} hidden={hidden}
+          }) }} />
+        </div>, !hidden && admittedNow.has(id) && <div key={id} data-read-row={id} className={classes}
+          data-thread-controllers={[...(run ? [`run:${rows[run.index].source.id}`] : []), ...row.ancestors.map(String)].join(',')}
           ref={node => { if (node) agentNodes.current.set(id, node); else agentNodes.current.delete(id) }}>
-          {item === null ? row.hasChildren
+          {compact && row.source.detail_omitted === true ? <CompactRow source={row.source} snapshot={snapshot}
+            expanded={expandedTools} toggle={toggleTool} changed={() => activePin.current.layoutChanged()} /> : item === null ? row.hasChildren
             ? <button type="button" className="tool-row__chip tool-row__chip--toggle" aria-expanded={expandedTools.has(id)}
                 onClick={() => toggleTool(id)}>{summary}</button>
             : <p className="session-delimiter__title">{summary}</p> : item.kind === 'toolCall'
@@ -2012,6 +2187,7 @@ export function ToolRow({
   defaultExpanded = false,
   group,
   expansion,
+  headerExpandable = false,
   running,
   suppliedOutcome
 }: {
@@ -2019,13 +2195,14 @@ export function ToolRow({
   defaultExpanded?: boolean
   group?: { count: number; running: boolean; background?: boolean }
   expansion?: { expanded: boolean; onToggle: () => void }
+  headerExpandable?: boolean
   running?: boolean
   suppliedOutcome?: { label: string; failed: boolean; denied: boolean }
 }): JSX.Element {
   const { result, denial } = item
   const elapsed = suppliedOutcome !== undefined ? running === true ? item.elapsedSeconds : undefined
     : running !== false && !group?.background && result === null && denial === undefined ? item.elapsedSeconds : undefined
-  const expandable = group !== undefined || result !== null || denial !== undefined || (running !== undefined && item.input !== undefined)
+  const expandable = headerExpandable || group !== undefined || result !== null || denial !== undefined || (running !== undefined && item.input !== undefined)
   const [localExpanded, setExpanded] = useState(defaultExpanded)
   const expanded = expansion?.expanded ?? localExpanded
   const rowClass = suppliedOutcome !== undefined
@@ -2036,14 +2213,14 @@ export function ToolRow({
         ? `tool-row tool-row--resolved${result.isError ? ' tool-row--error' : ''}`
         : 'tool-row'
   const body = expanded && (result !== null || denial !== undefined || (running !== undefined && item.input !== undefined))
-  const resultText = denial !== undefined
+  const resultText = !body ? '' : denial !== undefined
     ? denialDisplayText(result?.resultSummary ?? denial.message)
     : result?.resultSummary ?? ''
   // #780: the shell call's command, or null for every other tool and for a shell call carrying none.
   // A `const` rather than an inline call because it is consumed TWICE below — by the guard and by the
   // child — which is exactly the reason `chipRuns` is one. The field list stays inline for the
   // opposite reason (consumed once), which keeps "a collapsed row never computes the list" structural.
-  const command = shellCommandBlock(item)
+  const command = body ? shellCommandBlock(item) : null
   // #855: the header's two runs, either of which may be null. A `const` for `command`'s stated reason —
   // it is consumed TWICE below, once per switch — and it is the ONE call for both, so "the two runs
   // agree about which call this is" is structural rather than two calls that could be given different
@@ -4494,7 +4671,7 @@ function ComposerErrorSlotControl({
     const currentSession = sessionIdStore.getState().sessionId
     const currentWrites = runSettingsWriteStore.getState()
     const serverId = conversationHostNow(currentId ?? null)
-    const currentItem = source && threadRuntime.items.getState().snapshot(source.host, source.chat)
+    const currentItem = source && threadRuntime.presentation(source.host, source.chat)
     const stillOwn = source && currentItem?.epoch === source.epoch && currentItem.items.some(item => item.id === source.item && item.rev === source.rev)
     if (currentId === undefined || currentId !== open?.id || !offer ||
         (!source || !stillOwn || source.host !== serverId || source.session !== currentSession || ownAction?.changeId !== undefined) ||

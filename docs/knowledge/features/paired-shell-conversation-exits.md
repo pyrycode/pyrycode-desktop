@@ -182,7 +182,7 @@ reply currently being handled.
 
 **Security residual, accepted rather than fixed: a cross-server id collision.** Two paired servers can
 both claim one conversation id
-([`selectExclusiveConversationIdsFor`](conversation-list-store.md#the-per-server-drop-and-its-stricter-sibling-selector-since-1196)
+([`selectExclusiveConversationIdsFor`](conversation-list-store-per-server-keying.md#the-per-server-drop-and-its-stricter-sibling-selector-since-1196)
 is the precedent for that threat). Server B's list reply carrying server A's open chat's id would re-seed A's snapshot with
 B's name, `cwd` and `workspace_label` — this bridge refuses ambiguity only *within* one reply, not across
 two. The obvious tightening — joining the reply's origin against the id's attributed server before

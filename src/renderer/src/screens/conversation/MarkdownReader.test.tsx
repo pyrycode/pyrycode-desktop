@@ -107,6 +107,16 @@ describe('MarkdownReaderView (#1627)', () => {
     expect(markup).not.toContain('aria-busy')
   })
 
+  it('renders H1–H6 inside the shared Markdown wrapper (#2100)', () => {
+    const markup = view({
+      type: 'loaded', requestKey: 'headings', path: 'notes/Headings.md',
+      text: [1, 2, 3, 4, 5, 6].map(level => `${'#'.repeat(level)} Heading ${level}`).join('\n\n'),
+      refreshKey: null, notice: false
+    })
+    expect(markup).toContain(`<div class="bubble__markdown">${[1, 2, 3, 4, 5, 6]
+      .map(level => `<h${level}>Heading ${level}</h${level}>`).join('\n')}</div>`)
+  })
+
   it('shows the path only as the title text, never in an attribute', () => {
     const markup = view({ type: 'loading', requestKey: 'k', path: 'notes/Hidden-Dir/Plan.md' })
     expect(markup).toContain('Plan.md')

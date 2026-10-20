@@ -7,6 +7,9 @@ import type { ChatHistoryRequest, ChatHistoryResult } from '@shared/chatHistory'
 import type { StampedDaemonEvent } from '@shared/ipc/events'
 import type { ConversationSummary } from '@shared/wire/types'
 
+const realTimeout = setTimeout
+const realClearTimeout = clearTimeout
+
 const row = (id: string): ConversationSummary => ({ id, name: id, cwd: '/', is_promoted: false,
   is_archived: false, last_message_ts: '', last_used_at: '', workspace_label: null })
 function harness(write = async (_request: ChatHistoryRequest): Promise<ChatHistoryResult> => ({ status: 'ok' })) {
@@ -45,6 +48,137 @@ const threadRequests = (h: ReturnType<typeof harness>) => h.save.mock.calls
   .map(([request]) => request).filter(request => request.operation === 'mutateThread')
 
 describe('chat history recording', () => {
+  it('flushes and stops a bounded backlog while the renderer clock stays paused', async () => {
+    const h = harness()
+    h.delta('seed'); await h.writer.flush(); h.save.mockClear()
+    const slice = h.threads.getState().hosts.get('a')!.get('chat')!
+    const items = Array.from({ length: 100 }, (_, n) => ({ id: n + 100, rev: 1, kind: 'user_message', content: { text: 'fixture' } }))
+    let delivered = 0
+    const turns: number[] = []
+    const { port1, port2 } = new MessageChannel()
+    port1.onmessage = () => { delivered++ }
+    h.save.mockImplementation(async () => {
+      turns.push(delivered)
+      port2.postMessage(null)
+      return { status: 'ok' }
+    })
+    let deadline: ReturnType<typeof setTimeout> | undefined
+    vi.useFakeTimers()
+    try {
+      h.threads.setState({ hosts: new Map([['a', new Map([['chat', { ...slice,
+        owned: { ...slice.owned!, acceptEpoch: false, items }
+      }]])]]) })
+      const completed = (async () => {
+        await h.writer.flush()
+        h.delta('after flush')
+        await h.writer.stop()
+      })()
+      await Promise.race([completed, new Promise<void>((_, reject) => {
+        deadline = realTimeout(() => reject(new Error('writer waited for the paused renderer clock')), 1000)
+      })])
+      const requests = threadRequests(h)
+      expect(turns).toEqual(requests.map((_, n) => n))
+      expect(delivered).toBe(requests.length)
+      expect(requests.flatMap(r => r.change.items.map(i => i.id))).toEqual([...items.map(i => i.id), 1])
+      expect(requests.at(-1)?.change.items[0]).toMatchObject({ id: 1, rev: 2, content: { text: 'seedafter flush' } })
+      for (const { change: c } of requests) expect(c.items.length + c.removeIds.length + c.ranges.length +
+        (c.priorProgress?.length ?? 0) + 1).toBeLessThanOrEqual(32)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      if (deadline !== undefined) realClearTimeout(deadline)
+      await vi.runAllTimersAsync()
+      vi.useRealTimers()
+      await h.writer.stop()
+      port1.close(); port2.close()
+    }
+  })
+  it('coalesces distinct queued items within the same counted budget', async () => {
+    const h = harness()
+    h.delta('seed'); await h.writer.flush(); h.save.mockClear()
+    for (let id = 2; id <= 61; id++) h.threads.getState().applyUpdate('a', { type: 'thread_item_added', payload: {
+      conversation_id: 'chat', epoch: 'e', version: id,
+      item: { id, rev: 1, kind: 'assistant_message', shown: true, active: false, status: 'finished', summary: '', content: {} }
+    } })
+    await h.writer.stop()
+    const requests = threadRequests(h)
+    expect(requests.length).toBeLessThan(10)
+    expect(requests.flatMap(r => r.change.items.map(i => i.id))).toEqual(Array.from({ length: 60 }, (_, n) => n + 2))
+    for (const { change: c } of requests)
+      expect(c.items.length + (c.priorProgress?.length ?? 0) + 1).toBeLessThanOrEqual(32)
+  })
+  it('bounds every owned work category, yields between submissions and retries only unsaved cursors', async () => {
+    let failAt = 3
+    const h = harness(async () => h.save.mock.calls.length === failAt
+      ? { status: 'error', code: 'write-failed' } : { status: 'ok' })
+    h.delta('seed')
+    await h.writer.flush()
+    h.save.mockClear()
+    const slice = h.threads.getState().hosts.get('a')!.get('chat')!
+    const metadata = { ...slice.owned!.metadata, version: 100, checkpoint: 100 }
+    const change = { ...slice.owned!, metadata, acceptEpoch: false,
+      items: Array.from({ length: 75 }, (_, n) => ({ id: n + 100, rev: 1, kind: 'user_message', content: { text: 'fixture' } })),
+      removeIds: Array.from({ length: 71 }, (_, n) => n + 1000),
+      ranges: Array.from({ length: 69 }, (_, n) => ({ start: n * 3, end: n * 3 + 1 })),
+      priorProgress: Array.from({ length: 67 }, () => ({ metadata })) }
+    let beats = 0
+    const { port1, port2 } = new MessageChannel()
+    port1.onmessage = () => { beats++ }
+    h.save.mockImplementation(async () => {
+      port2.postMessage(null)
+      return h.save.mock.calls.length === failAt ? { status: 'error', code: 'write-failed' } : { status: 'ok' }
+    })
+    h.threads.setState({ hosts: new Map([['a', new Map([['chat', { ...slice, owned: change }]])]]) })
+    let failed: ChatHistoryRequest | undefined
+    try {
+      await h.writer.flush()
+      expect(h.save).toHaveBeenCalledTimes(3)
+      failed = threadRequests(h).at(-1)
+      failAt = -1
+      await h.writer.stop()
+    } finally { port1.close(); port2.close() }
+    const requests = threadRequests(h)
+    expect(requests[3]).toEqual(failed)
+    for (const { change: c } of requests) expect(c.items.length + c.removeIds.length + c.ranges.length +
+      (c.priorProgress?.length ?? 0) + 1).toBeLessThanOrEqual(32)
+    expect(new Set(requests.flatMap(r => r.change.items.map(i => i.id))).size).toBe(75)
+    expect(new Set(requests.flatMap(r => r.change.removeIds)).size).toBe(71)
+    expect(requests.flatMap(r => r.change.ranges)).toHaveLength(69)
+    expect(requests.flatMap(r => [...r.change.priorProgress ?? [], r.change])
+      .filter(p => p.metadata.checkpoint === 100)).toHaveLength(68)
+    expect(beats).toBe(requests.length)
+  })
+  it.each(['reset', 'epoch', 'delete', 'unpair', 'failed-unpair'] as const)('fences a held bounded cursor after %s with the same chat on another host', async action => {
+    let release: (result: ChatHistoryResult) => void = () => {}
+    let hold = false
+    const h = harness(() => hold ? new Promise(resolve => { release = resolve }) : Promise.resolve({ status: 'ok' }))
+    h.delta('seed'); h.delta('other host', 'chat', 'b')
+    await h.writer.flush()
+    const slice = h.threads.getState().hosts.get('a')!.get('chat')!
+    h.threads.setState(state => ({ hosts: new Map(state.hosts).set('a', new Map([['chat', { ...slice,
+      owned: { ...slice.owned!, items: Array.from({ length: 100 }, (_, id) => ({ id: id + 100, rev: 1, kind: 'user_message' })) }
+    }]])) }))
+    let count = 0
+    h.save.mockImplementation(async request => {
+      if (request.operation === 'mutateThread' && ++count === 2) { hold = true; return new Promise(resolve => { release = resolve }) }
+      return { status: 'ok' }
+    })
+    const flushing = h.writer.flush()
+    await vi.waitFor(() => expect(hold).toBe(true))
+    const boundary = h.save.mock.calls.length
+    if (action === 'reset') { h.threads.getState().acceptEpoch('a', 'chat', 'e', true); h.delta('replacement') }
+    if (action === 'epoch') h.threads.getState().acceptEpoch('a', 'chat', 'replacement')
+    if (action === 'delete') h.event({ type: 'conversationDeleted', serverId: 'a', id: 'chat' })
+    if (action === 'unpair') beginChatHistoryRemoval('a')(true)
+    if (action === 'failed-unpair') beginChatHistoryRemoval('a')(false)
+    release({ status: 'error', code: 'write-failed' })
+    await flushing
+    h.delta(' survives', 'chat', 'b')
+    await h.writer.stop()
+    const after = h.save.mock.calls.slice(boundary).map(([r]) => r)
+    expect(after.filter(r => r.operation === 'mutateThread' && r.serverId === 'a')
+      .flatMap(r => r.operation === 'mutateThread' ? r.change.items : []).some(i => i.id >= 100)).toBe(action === 'failed-unpair')
+    expect(threadRequests(h).at(-1)).toMatchObject({ serverId: 'b', change: { items: [{ content: { text: 'other host survives' } }] } })
+  })
   it('submits owned changes and retains failed work for a later explicit retry', async () => {
     let fail = true
     const h = harness(async () => fail ? { status: 'error', code: 'write-failed' } : { status: 'ok' })
@@ -52,11 +186,11 @@ describe('chat history recording', () => {
     await h.writer.flush()
     expect(h.save).toHaveBeenCalledTimes(1)
     expect(h.save.mock.calls[0][0]).toMatchObject({ operation: 'mutateThread', change: {
-      acceptEpoch: true, items: [{ id: 1, content: { text: 'owned' } }]
+      acceptEpoch: true, items: []
     } })
     fail = false
     await h.writer.flush()
-    expect(h.save).toHaveBeenCalledTimes(2)
+    expect(threadRequests(h).at(-1)).toMatchObject({ change: { items: [{ id: 1, content: { text: 'owned' } }] } })
     await h.writer.stop()
   })
   it('retains newer owned work through a held failure and memory-only holder loss', async () => {
@@ -75,8 +209,8 @@ describe('chat history recording', () => {
     await draining
     expect(h.save).toHaveBeenCalledTimes(1)
     await h.writer.flush()
-    expect(h.save).toHaveBeenCalledTimes(2)
-    expect(threadRequests(h)[1]).toMatchObject({ change: { acceptEpoch: true,
+    expect(h.save).toHaveBeenCalledTimes(5)
+    expect(threadRequests(h).at(-1)).toMatchObject({ change: {
       items: [{ rev: 3, content: { text: 'one two three' } }] } })
     await h.writer.stop()
   })
@@ -167,7 +301,7 @@ describe('chat history recording', () => {
     h.list()
     h.delta('fresh')
     await h.writer.flush()
-    expect(threadRequests(h)).toMatchObject([{ change: { items: [{ content: { text: 'fresh' } }] } }])
+    expect(threadRequests(h).at(-1)).toMatchObject({ change: { items: [{ content: { text: 'fresh' } }] } })
     await h.writer.stop()
   })
 
@@ -188,7 +322,7 @@ describe('chat history recording', () => {
     h.list()
     h.delta('fresh')
     await h.writer.stop()
-    expect(threadRequests(h)).toMatchObject([{ change: { items: [{ content: { text: 'fresh' } }] } }])
+    expect(threadRequests(h).at(-1)).toMatchObject({ change: { items: [{ content: { text: 'fresh' } }] } })
   })
 
   it('resumes buffered history when credential removal fails', async () => {
@@ -200,7 +334,7 @@ describe('chat history recording', () => {
     expect(h.save).not.toHaveBeenCalled()
     settle(false)
     await h.writer.flush()
-    expect(threadRequests(h)).toMatchObject([{ change: { items: [{ content: { text: 'kept' } }] } }])
+    expect(threadRequests(h).at(-1)).toMatchObject({ change: { items: [{ content: { text: 'kept' } }] } })
     await h.writer.stop()
   })
 
@@ -215,7 +349,7 @@ describe('chat history recording', () => {
     expect(stopped).toBe(false)
     settle(removed)
     await stopping
-    expect(h.save).toHaveBeenCalledTimes(removed ? 0 : 1)
+    expect(h.save).toHaveBeenCalledTimes(removed ? 0 : 2)
   })
 
   it('does not let an in-flight save restore comparison state after successful removal', async () => {
@@ -265,7 +399,12 @@ describe('chat history recording', () => {
 
   it('keeps the newest content received during an in-flight write and drains it on stop', async () => {
     let release: (r: ChatHistoryResult) => void = () => {}
-    const h = harness(() => new Promise((resolve) => { release = resolve }))
+    let first = true
+    const h = harness(() => {
+      if (!first) return Promise.resolve({ status: 'ok' })
+      first = false
+      return new Promise((resolve) => { release = resolve })
+    })
     h.delta('one')
     h.run()
     await vi.waitFor(() => expect(h.save).toHaveBeenCalledTimes(1))
@@ -273,13 +412,11 @@ describe('chat history recording', () => {
     h.delta(' three')
     const stopped = h.writer.stop()
     release({ status: 'ok' })
-    await vi.waitFor(() => expect(h.save).toHaveBeenCalledTimes(2))
-    expect(threadRequests(h)[1].change.items[0].content).toMatchObject({ text: 'one two three' })
-    release({ status: 'ok' })
     await stopped
+    expect(threadRequests(h).at(-1)?.change.items[0].content).toMatchObject({ text: 'one two three' })
     h.delta(' after stop')
     h.run()
-    expect(h.save).toHaveBeenCalledTimes(2)
+    expect(h.save).toHaveBeenCalledTimes(4)
   })
 
   it.each(['result', 'throw'])('contains %s failures and permits subsequent saves', async (mode) => {
@@ -294,7 +431,7 @@ describe('chat history recording', () => {
     fail = false
     h.delta(' usable')
     await h.writer.stop()
-    expect(h.save).toHaveBeenCalledTimes(2)
+    expect(h.save).toHaveBeenCalledTimes(4)
     expect(JSON.stringify(h.log.mock.calls)).not.toContain('secret error')
     expect(JSON.stringify(h.log.mock.calls)).not.toContain('usable')
   })

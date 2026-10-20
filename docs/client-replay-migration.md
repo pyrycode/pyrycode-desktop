@@ -32,13 +32,13 @@ Unrelated storage and fake-suite work remains under its existing owners.
 | `real-claude-permission-modal.spec.ts` | Session checkbox, confirmation, repeated use, new-session prompt, Cancel | Witness mtime proves effects occur only with permission |
 | `real-claude-permission-mode.spec.ts` | Confirmed bypass, no-op write, menu return, Manual approval Read | Registry/handoff-note setup and actual Read denial |
 | `real-claude-phase-reconnect.spec.ts` | Same-turn status restored across reconnect | Real disconnect, running tool and filesystem release gate |
-| `real-claude-question-answer.spec.ts` | Model change during question and continuation with original answer | Real question tool and continued child |
+| `real-claude-question-answer.spec.ts` | Same outstanding two-question batch across model change; exact indexed UI answers, daemon dismissal, fresh confirmation and original-turn completion before model probe | Real question tool, answer interpretation and changed resolved-model announcement |
 | `real-claude-question-cancel.spec.ts` | Clarification refusal, dismissal, stopped work | Absence of generated artifacts after Cancel |
 | `real-claude-queue-delivery.spec.ts` | Queued send, delivery identity and ordering | Real entered/release files and tool effects |
 | `real-claude-queue-drop.spec.ts` | Mid-turn enqueue, drop before drain, no later queued turn | Real gate file and genuinely running child |
 | `real-claude-queue-send-now.spec.ts` | Send now inside the current turn | Real tool entered/release gate and child consumption |
 | `real-claude-system-prompt.spec.ts` | Stored prompt at spawn; a save leaves current session unchanged | Actual system-prompt application; existing reset fixme remains explicit |
-| `real-claude-thread.spec.ts` | Daemon-built stream, agent placement, reconnect, reset and saved reopen | Real agent execution and transport restart |
+| `real-claude-thread.spec.ts` | Daemon-built stream, agent placement, reconnect, reset, exact protected saved-list title and saved-reply reopen | Real agent execution and transport restart |
 | `real-daemon-archive-order.spec.ts` | Archived channels sorted by use | Daemon registry timestamps independently checked |
 | `real-daemon-conversation-lifecycle.spec.ts` | Archive, restore, deletion and reply-gated navigation | Real registry operations |
 | `real-daemon-create-channel.spec.ts` | Named promoted channel, default workspace and dialog close | Real daemon creation semantics |
@@ -64,6 +64,28 @@ is no successful current capture of that assertion; its full test remains a fixm
 Claude spec. It is relevant board context but has no current scenario to migrate.
 #1662's requested two-agent handover is also separate acceptance from the
 existing Codex channel test. Neither can be closed on replay results alone.
+
+## Question-answer proof
+
+`claude-question-answer` selects an offered policy and answers a separate confirmation
+question through Other. `scenarioInput('question-confirmation', ...)` supplies unique
+text only after the two-question batch surfaces; the initial prompt cannot supply it.
+The accepted pending-question model change must leave the original host, conversation,
+batch and turn outstanding. Exact indexed values, including the surfaced policy label,
+must match the observed submission. Panel disappearance alone is optimistic: the proof
+also requires the owning daemon's answered dismissal, fresh top-level assistant text
+containing the confirmation on the original turn, and a later matching normal terminal
+item before the changed-model probe. Label mention order and prose format are irrelevant.
+
+Same-route/epoch snapshots exclude known assistant text/revisions and terminal identities;
+they never establish the witness, original tool turn or completion. Every accepted live
+assistant text revision before submission also extends the exclusion baseline, including
+between arming and submission. Shorter/missing bodies cannot erase exclusions, and a
+status-only update cannot make old confirmation text fresh. Genuine subsequent appends
+remain eligible, including paired same-revision suffixes. A terminal can complete the proof
+only when first observed after the witness. See the
+[observer contract and controls](knowledge/features/development-verification-evidence-that-cannot-pass-too-early.md#question-answer-interpretation-and-freshness)
+and [counted Linux evidence with distinct daemon provenance](knowledge/features/development-verification-live-test-diagnosis.md#question-answer-linux-acceptance).
 
 ## Baseline repairs found by live execution
 
@@ -119,7 +141,15 @@ the release-file ordering, remains. Successful live-only assertions also mark
 causal checkpoints: offline waits for their actual recorded message prefix but
 never executes or claims the filesystem/OS proof.
 
-Observed push-overload closes are recorded at the exact application-message prefix with their actual WebSocket code. Replay forwards every preceding encrypted frame before reproducing that local close; explicit application reconnects and profile relaunches still come from the shared scenario. Capture adapters remain separate build inputs.
+Observed push-overload closes retain their raw application-message position and
+actual WebSocket code. Capture observes client calls before sending, so trailing
+calls can still belong to the closing connection without proving successful
+socket writes. Replay exactly matches only its finite contiguous client-only
+tail before reproducing the close, after forwarding every preceding encrypted
+frame. No daemon frame crosses the raw close, and checkpoints and connection
+ownership remain enforced. Explicit reconnects and profile relaunches still come
+from the shared scenario. Capture adapters remain separate build inputs. See the
+[close scheduling contract](recorded-tests.md#replay-contract).
 
 The evidence observers also retain native identity semantics: queue markers include an ordered same-revision suffix, and a completed permission turn is counted once even when reconnect returns its item again. These repairs preserve every original matcher and strengthen the meaning of completion. An AST audit retains all 1,028 original expect expressions, plus all 1,036 from merged baseline `aebee62f`, normalizing only type assertions and the equivalent read-only inspection wrapper.
 
@@ -152,6 +182,56 @@ wins the merge; a replacement item invalidates it. This integrates with the
 saved/live restoration fixes merged in PR #2058.
 
 ## Validation evidence
+
+Replay evidence identifies the executed build separately from capture provenance.
+Default replay uses normal output and checks automatic projection policy, including
+compact selection when accepted capabilities permit it. Explicit
+`node scripts/run-offline-replay.mjs --profile complete-thread --retries 0` builds
+the current source's complete route for the whole run, including creation and
+reconnect, then restores normal output after success or failure. Both profiles
+retain the executable guard, original shared assertions, full-envelope matching,
+captured capabilities, causal barriers and completion checks. Neither supplies
+fresh provider behavior or physical transport proof. The
+[replay contract](recorded-tests.md#replay-contract) gives the exact retained-input
+selection, restoration failure behavior and separate revision/dirty/profile,
+bundle-hash, input-checksum and capture-source fields.
+
+The [combined Linux retained-input acceptance](knowledge/features/development-verification.md#captured-close-client-tails)
+resolves the earlier close-ordering hold. On clean build revision
+`3372c1f318aa4da6d46c4638fd0ce4dccb990998`, the unchanged retained question input
+(`24bbe5df…dac1`, captured from Desktop `ef097bfc` / daemon `66430593`, Claude
+2.1.280) passed the original named question-answer scenario under
+`--profile complete-thread`: 1 executed/passed, 0 failed/skipped, retries zero,
+38 matched / 201 emitted / 0 remaining and zero forbidden launches. All four
+original closes remain consumed with their captured codes and positions intact.
+The linked evidence carries the full input checksum, daemon binary checksum,
+bundle provenance and commands separately from the executed build identity.
+
+The subsequent complete guarded normal-profile committed-recording suite recorded
+29 executed/passed, 0 failed, 1 skipped, retries zero and zero forbidden launches;
+all 29 exchanges completed at 773 matched / 3,216 emitted / 0 remaining. The
+excluded `real claude picks up a saved channel system prompt at Reset session`
+remains an explicit fixme. Earlier retained-input runs remain failed: compatibility
+alone forwarded the prefix but left 29 requests outstanding, while automatic
+selection failed earlier on a compact request. Offline completion establishes no
+fresh provider behavior or physical transport acceptance; macOS is outside this
+Linux ticket's verification scope.
+
+The [completed-profile retirement contract and Linux evidence](recorded-tests.md#replay-contract)
+record the final connection-completion then relay-forwarding boundary, five fresh
+three-worker paired batches (20 executed/passed, 0 failed/skipped), subsequent
+guarded replay (29 executed/passed, 0 failed, 1 existing fixme), and both named
+history/thread cases passed without retry in the configured application gate
+(515 executed/passed, 0 failed, 5 skipped). This closes the later retirement
+acceptance; #2129 is closed. Earlier failed runs remain historical failures.
+
+The [saved-title observation evidence](knowledge/features/development-verification.md#protected-saved-list-title-observation)
+records the controlled stored-null mechanism, 11 passing regressions, five
+three-worker paired batches (20 passed), the complete guarded recorded run
+(29 passed, one existing system-prompt-reset fixme), and both named relaunch cases
+passing without retry in the 515-case Linux application gate. Full executed,
+failed and skipped counts and unchanged capture provenance are retained there.
+The controlled delay does not establish the historical failure's production cause.
 
 The [Linux relaunch repair evidence](knowledge/features/development-verification.md#replay-inspection-after-profile-relaunch)
 records five consecutive two-worker paired runs, the complete guarded recorded

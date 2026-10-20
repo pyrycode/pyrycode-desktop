@@ -66,6 +66,34 @@ afterEach(async () => {
 })
 
 describe('startFakeRelayForwarder', () => {
+  it('holds profile retirement until required server frames are actually written to the client', async () => {
+    const forwarder = await startFakeRelayForwarder()
+    cleanups.push(() => forwarder.close())
+    const client = await connect(`${forwarder.url}/v1/client`)
+    const server = await connect(`${forwarder.url}/v1/server`)
+    cleanups.push(() => client.terminate(), () => server.terminate())
+    await forwarder.whenReady()
+    let retired = false
+    const retiring = forwarder.whenServerFramesForwarded(2).then(() => { retired = true })
+    const first = nextFrame(client)
+    server.send('first')
+    await first
+    expect(retired).toBe(false)
+    const second = nextFrame(client)
+    server.send('second')
+    await second
+    await retiring
+    expect(retired).toBe(true)
+    await forwarder.whenServerFramesForwarded(2)
+  })
+
+  it('rejects pending retirement on teardown rather than crediting unwritten frames', async () => {
+    const forwarder = await startFakeRelayForwarder()
+    const retiring = expect(forwarder.whenServerFramesForwarded(1)).rejects.toThrow('closed before frame delivery')
+    await forwarder.close()
+    await retiring
+  })
+
   it('forwards a frame byte-identical in both directions, content-blind (AC2, AC3)', async () => {
     const forwarder = await startFakeRelayForwarder()
     cleanups.push(() => forwarder.close())

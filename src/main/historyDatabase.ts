@@ -14,7 +14,7 @@ export function createHistoryDatabase({ userDataPath }: { userDataPath: string }
     const db = new Database(path)
     try {
       const version = db.pragma('user_version', { simple: true })
-      if (version !== 7 && version !== 6 && version !== 5) {
+      if (version !== 8 && version !== 7 && version !== 6 && version !== 5) {
         if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4) throw UNSUPPORTED_CHAT_HISTORY_VERSION
       }
       // The protected schema-5 to 6 conversion runs in indexedThreadHistory's
@@ -88,6 +88,24 @@ export function createHistoryDatabase({ userDataPath }: { userDataPath: string }
         }
         return run(db)
       })()
+    },
+    /** The application queue owns this connection until completion, including every yield. */
+    async transactionSteps(run: (db: Database.Database) => Generator<void>,
+      onTurn: (units: number) => Promise<void> = () => new Promise(resolve => setImmediate(resolve))): Promise<void> {
+      const db = open()
+      if (db.inTransaction) throw new Error('history transaction already active')
+      db.exec('BEGIN IMMEDIATE')
+      try {
+        const steps = run(db)
+        let units = 0
+        while (!steps.next().done) {
+          if (++units === 16) { await onTurn(units); units = 0 }
+        }
+        db.exec('COMMIT')
+      } catch (error) {
+        if (db.inTransaction) db.exec('ROLLBACK')
+        throw error
+      }
     },
     close(): void { connection?.close(); connection = undefined }
   }

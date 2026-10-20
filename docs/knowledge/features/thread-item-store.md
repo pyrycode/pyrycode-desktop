@@ -12,6 +12,15 @@ The input types are `ThreadItem` and `ThreadUpdate` from `src/shared/wire/thread
 [main's thread receiver](inbound-message-decode-limits.md#complete-live-thread-validation)
 owns wire validation and complete logical-update assembly.
 
+These are complete-route semantics. Explicit `compact-v1` selection uses the
+[session-only compact owner](thread-runtime.md#explicit-compact-projection), whose
+roots sort by `(order, id)` and whose root coverage/checkpoint/consumed progress
+are independent of this store. Tool/agent headers and body/child replies never
+become complete items, owned saves, complete-history certificates or unseen-content
+read authority. Saved complete checkpoints cannot authorize compact resume.
+[ADR 0016](../decisions/0016-session-only-compact-projection.md) records why headers
+were kept out of canonical storage. Ordinary production opening remains complete.
+
 ## Identity, placement and full items
 
 Nested Maps scope state by host then conversation; daemon item ids are unique only

@@ -45,7 +45,9 @@ APIs and tests do not provide a fallback when a host lacks `thread`.
     settled renderer shows literal `**bold`.
 
   Markdown owns whitespace on both branches: the container's flex column and
-  `gap: var(--space-2)` provide the 8px block rhythm, with direct-child margins reset.
+  `gap: var(--space-4)` provide the 16 px top-level block rhythm, with direct-child
+  margins reset and flush container edges. Nested list/quote rhythm stays 8 px;
+  metadata/attachment margins remain separate at 12 px.
   `.code-block__body` preserves and wraps code whitespace. The assistant-tail
   `bubble--assistant-text` modifier and its `pre-wrap` rule have been removed.
   The renderer's security boundary is unchanged: no `rehypePlugins` or `skipHtml`,
@@ -105,6 +107,14 @@ The [presentation adapter](../../../src/renderer/src/screens/conversation/thread
 narrows held JSON into existing row props without calling `reduceTimeline`, searching
 for an open bubble or using legacy roster/evidence inference. Supplied `parent`,
 `active`, `status`, `order` and `ended_order` govern nesting, lifecycle and placement.
+Visual rendering first uses metadata-only `threadItemIndex`, sharing `nest` with
+the complete adapter. It checks ancestor/run visibility and bounded admission before
+calling `threadItemPresentation` for a visible header or full row. Closed descendants
+and folded members are absent from the DOM and do not construct complete bodies;
+closed tool bodies also defer command/denial formatting. Updates while closed stay
+deferred until reopening. Complete `threadItemPresentations` remains independent
+for composer reports and notifications. See
+[admission and counted evidence](conversation-shell-scroll-pin.md#deferred-expansion-verification).
 
 Only `shown === true` items create rows. Hidden items remain held without rows.
 Unknown kinds/statuses, unsupported notice subtypes (including saved answers), and
@@ -195,26 +205,31 @@ in that identity gets formatted stats. Child text can share the main reply's rec
 session/agent/turn: omitting parent would move the main usage footer onto that child.
 Equal turn strings in different sessions or parents do not join; adjacency and
 current-session attribution never supply missing identity.
+The visual index retains ending sources without formatting usage until visible
+demand. It searches backwards for the latest nonempty formatted reading; selecting
+only the last ending would lose usage when a later ending has empty metrics.
 
 ### Scoped identity, expansion and attachments
 
 The inner view remounts on `(hostId, conversationId, epoch)`. Numeric daemon item ids
 key row wrappers within that scope, so appends, revisions and older-item prepends
-retain row identity; equal ids after a scope change reset row-local state. Tool
-and card expansion is keyed by item id. Stable sibling wrappers retain mounted children
-through catch-up parents and late reparenting, rather than giving each card recursive
-component ownership. New groups start collapsed; ancestor collapse hides descendants
-without clearing their own expansion. Two hosts reusing conversation/item ids have
-separate cards, and host/conversation/epoch switches reset tools, cards, runs and refs.
+retain source identity; equal ids after a scope change reset view-local state. Tool
+and card expansion sets live above the row components and are keyed by item id.
+Sibling ordering survives catch-up parents and late reparenting without recursive
+card ownership. New groups start collapsed; ancestor collapse unmounts descendants
+without clearing their own expansion. Reopening remounts the current held sources;
+DOM-object identity is not retained across absence. Two hosts reusing conversation/item
+ids have separate cards, and host/conversation/epoch switches reset tools, cards,
+runs and refs.
 
 `foldToolRuns` receives the flat projection with supplied ancestry/activity and card/
 marker barriers. Opening a run remembers every member id; any retained member keeps
 the regrouped run open through revisions, older prepends and appends. Remembering only
 the first member would collapse the residual run when that member moved into a card.
-Collapsing a run clears its current member ids. Collapsed members remain mounted,
-preserving their result expansion while hidden. A text-bearing or positional key would
-remount rows during these updates. The immutable `snapshot.items` change signal also
-preserves existing following and held-reader scroll behavior during regrouping; see
+Collapsing a run clears its current member ids. Collapsed members unmount while
+their separate result/card expansion state survives. A text-bearing or positional
+expansion key would lose that state during updates. Snapshot item identity and local
+visibility/admission changes drive following and held-reader restoration; see
 [supplied snapshot anchor restoration](conversation-shell-scroll-pin.md#supplied-snapshot-anchor-restoration).
 
 `ThreadAttachmentScopeContext` carries snapshot host/conversation ownership and a
@@ -305,6 +320,9 @@ their other inputs stay equal. Metadata, delivery, queue state,
 action availability and callback changes remain observable. The separately memoized
 [`AssistantMarkdown`](assistant-markdown-renderer.md#how-it-works) also skips parsing
 when a row changes only its metadata or actions and its markdown inputs stay equal.
+Frozen sources have separate header and complete-body caches. Rebuilding a closed
+header on every unrelated delta or admission chunk would defeat tool memoization;
+mutable sources remain uncached and revised frozen objects get fresh presentations.
 
 Queue actions come from the shown supplied user item's usable queue handle and the
 owning host's current eligibility. Unavailable actions receive `undefined`.
@@ -320,11 +338,11 @@ stable keyed toggle. Only an executed wrapper constructs the shared `group` and
 `expansion` objects. The toggle updates the keyed expansion set functionally;
 `ToolRow` retains its standalone `defaultExpanded` state contract.
 
-Group wrappers update visibility and joins independently of the memoized contents.
-Hidden descendants remain mounted, so collapsing and reopening a parent preserves
-child result expansion. Keys and wrappers are unchanged by memoization. Whole-thread
-projections and join scans still run; this reuse does not establish constant layout
-cost or smoother scrolling through profiling. Design:
+Visible wrappers update joins independently of the memoized contents. Hidden
+descendants and folded members unmount; source-ID expansion sets restore their
+result state on reopening. Metadata indexing and join scans still run, while full
+visual presentation is demanded only for admitted visible rows. This reuse does
+not establish constant layout cost or smoother scrolling through profiling. Design:
 [settled row reuse](../../specs/architecture/1886-settled-row-reuse.md).
 
 ### Row reuse verification
@@ -334,12 +352,15 @@ cost or smoother scrolling through profiling. Design:
 uses mounted V8 function counters with multiple settled messages, resolved grouped
 and unrelated tools, and an active reply. Positive counts precede measurement, and
 each of three chunks has its own display barrier before the next delivery. Each delta
-executes one `TimelineRow`, one `AssistantMarkdown` and zero `ToolRow`s. Four
-parent/child toggles each execute one tool and zero message, markdown, parser or
-message-action functions; hidden child expansion survives collapse/reopen.
+executes one `TimelineRow`, one `AssistantMarkdown` and zero `ToolRow`s. Opening or
+reopening the parent executes two tools (parent plus mounted child); child expansion
+and parent collapse each execute one. All four toggles execute zero message,
+markdown, parser or message-action functions, and child expansion survives absence.
 `StreamingAssistantMarkdown` can execute again for its own partition-state update:
 count its positive execution separately from the parent row, rather than requiring
-one streaming-component call per delta. DOM retention alone cannot prove these skips.
+one streaming-component call per delta. DOM identity alone cannot prove these skips.
+The revised remount counts and frozen-header reuse passed in the
+[deferred-expansion verification](conversation-shell-scroll-pin.md#deferred-expansion-verification).
 
 Recorded on 2026-10-08 in the
 [verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/1889#issuecomment-6053401984):

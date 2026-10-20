@@ -67,6 +67,46 @@ as the sole target evaluator for that phase; eligibility and send behavior are u
 The spec-local mounted consumer counts active observers, listeners and list subscriptions
 and retains disposed callbacks to exercise committed-input replacement directly.
 
+2026-10-20 repair: the saved FAIL at `d1433431` identified one shared invariant:
+diagnostic exceptions must never affect read eligibility or publication. Add one
+best-effort emission boundary around only the injected sink or default bridge lookup
+and invocation. Keep domain evaluation, DOM work and publication outside that catch.
+Missing transport is silent; throwing diagnostics are dropped without retries or logging.
+No new state, exported types, consumer migration or failure mode is introduced.
+
+The main merge brings #2175's compact evidence and route epochs. Preserve its guard
+precedence: scope/metadata/target, ordered tail, then compact proof or complete evidence,
+then pending shown rows. Compact refusals distinguish snapshot mismatch, stale authority,
+insufficient completion and uncovered tail. Both route-epoch exclusions keep `route-stale`.
+The remote overlap scan found no other feature branches touching the three files.
+The repair and its regressions remain the same diagnostic behavior; estimated total
+branch work stays below 650 written lines, with no new exported surfaces or call sites.
+
+| Repeated event / failure | Added regression |
+| --- | --- |
+| Each target refusal with a throwing sink | target diagnostic matrix, normal and throwing sinks |
+| Missing/throwing default transport access | target transport matrix and mounted hook bridge cases |
+| Setup/callback refusal with throwing diagnostics | mounted diagnostic case, preserving single attempts |
+| Reuse while the sink throws | mounted diagnostic case, exact eligible publication once and deduplication |
+| Compact proof replacement and route reuse | compact unit reasons and retained mounted callbacks |
+
+The existing main-receiver proof and cleanup assertions remain. Run the new tests
+before the exception boundary to retain raw fails-before evidence. Verify native
+preparation including its unchanged five-second Node provenance probe before focused
+Electron checks. Complete macOS dispatcher gates and fresh verifier judgment remain
+required later-stage acceptance; focused passes cannot replace them. Historical FAIL
+and failed runs remain failed; the original target matrix's raw before-run evidence
+was not retained and is not reconstructed by this repair.
+
+## Documentation handoff
+- Pending documentation stage: `docs/knowledge/features/conversation-shell.md`,
+  `### Authoritative thread read publication`: document static target/setup/observer
+  event names and reason codes, compact/route exclusions, delegated single-event
+  counting, reuse as success, and best-effort behavior when diagnostics are absent or throw.
+- Pending documentation stage: `docs/knowledge/features/conversation-last-read-store.md`,
+  `## How it works`: explain that diagnostic failure cannot change eligibility,
+  observer lifetime, geometry, publication or deduplication, and no identity/content is emitted.
+
 ## Verification evidence
 macOS arm64, 2026-10-20; final main merge was already up to date at `2d8a7e32`.
 - Test-first target matrix: 21 failed / 5 passed before implementation (missing records).

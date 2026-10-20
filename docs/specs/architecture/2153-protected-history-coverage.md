@@ -162,3 +162,110 @@ a new failure or claim exchange completion proves publication/durability.
 
 Open questions: none. Linux x64 is this run's verification scope; no fresh
 provider/daemon or physical-effect acceptance is required.
+
+### Reopened current-source validation results — 2026-10-20
+
+Current-source acceptance passed without another code change. Linux x64, Node
+25.8.0, Electron 33.4.11; clean tested revision
+`c733774b645ee8673bc84c73ec3be102d2de5075`, containing final merged main
+`2d8a7e323ffe74f7ba4e232483a267d8b5a0d0a1` and both existing repairs.
+The evidence commit after execution changes only this plan. `src/` and `e2e/`
+remain byte-identical to admitted main. No current-reader or application failure
+reproduced, so no speculative correction, duplicate regression or new causal
+claim is justified.
+
+All five pre-verify checks passed. The entire existing observer regression file
+executed/passed **28/28**, zero failed/skipped, explicitly including
+`waits across split saves at baseline and after dispatch` and
+`bounded protected reads leave time for received paging progress`, plus all
+failure, ownership, disconnected-range and successful-value controls. Raw report:
+`/tmp/builder-2153/reopened/units/unit-q3svyjl8/0.json`, SHA-256
+`130d6f6f137c581ebdd54079cfe62d9680572a4291a1c1a5d4445c1bb5c74475`.
+The original split-save failing-before proof/hash remains in Validation evidence
+above; the original bounded-reader failing-before proof/hash remains in
+`docs/specs/architecture/2158-bounded-protected-coverage.md` → Validation evidence.
+These establish their controlled mechanisms, not either historical trigger.
+
+Client-test typecheck, docs guard and normal build passed. Initial sandboxed
+installation failed on esbuild binary validation (`EPERM`); approved installation
+then passed. This environment failure is not a scenario regression. All Node
+checks completed before successful Electron SQLite preparation. Native preparation
+and replay never overlapped. Every replay command restored the normal build.
+
+Commands from the worktree root (all artifacts below use prefix
+`/tmp/builder-2153/reopened/`; logs use the corresponding report stem):
+```sh
+npm install --no-audit --no-fund
+PYRY_GATE_EVIDENCE_DIR=/tmp/builder-2153/reopened/units python3 /work/Projects/pyrycode-desktop-agents/bin/pre-verify-check --test-file e2e/fixtures/historyCoverage.test.ts
+npm run typecheck:client-tests
+npm run check:docs
+npm run build
+npm run rebuild:electron
+# Five consecutive batches, N = 1..5:
+PLAYWRIGHT_JSON_OUTPUT_NAME=/tmp/builder-2153/reopened/paired-N.json node scripts/run-offline-replay.mjs --profile complete-thread --grep 'a real daemon lazily fills a served gap|daemon-built thread streams' --fully-parallel --workers=3 --repeat-each=2 --retries=0 --reporter=list,json --output=/tmp/builder-2153/reopened/paired-N-results
+# Followed by the complete committed-recording suite:
+PLAYWRIGHT_JSON_OUTPUT_NAME=/tmp/builder-2153/reopened/recorded-full.json node scripts/run-offline-replay.mjs --profile complete-thread --retries=0 --reporter=list,json --output=/tmp/builder-2153/reopened/recorded-full-results
+```
+
+| Fresh report | Executed / passed / failed / skipped | Configured / peak actual workers | Report SHA-256 |
+| --- | --- | --- | --- |
+| `paired-1.json` | 4 / 4 / 0 / 0 | 3 / 3 | `cc6c851d40724d80a027d170bfa2b594a7c00fd5e3e6ba9769438a4c47842351` |
+| `paired-2.json` | 4 / 4 / 0 / 0 | 3 / 3 | `3d4bdc8945f010d1e0c8569cf8835f1de91bf4af70594d694747358747b19dde` |
+| `paired-3.json` | 4 / 4 / 0 / 0 | 3 / 3 | `e3d31e17856597feed0e384561a13328b6cd22de484aef146f5f3d3762351edd` |
+| `paired-4.json` | 4 / 4 / 0 / 0 | 3 / 3 | `8b29cd11c18ed48318fa7ea4a06c51c7fd1a51a4763cf3ba0602163d3ff6cb58` |
+| `paired-5.json` | 4 / 4 / 0 / 0 | 3 / 3 | `354fb83ae834f57c23a66dc57d61511d72df19dea2e12474ed7c7f465af39239` |
+| `recorded-full.json` | 29 / 29 / 0 / 1 | 1 / 1 (unchanged default) | `e96653cc20b655c0832324abe3f879eb19372c868ed58758b667221bbc08e422` |
+
+Both named cases passed twice in each batch (**20 total executed/passed**), then
+once each in full replay. Every result has retry zero; no flaky results or report
+errors. All batches occupied slots 0/1/2 with three overlapping tests. Batches
+1/2/4/5 recycled a completed worker (indices 0/1/2/3); batch 3 used 0/1/2.
+The sole skipped full-suite case remains
+`real claude picks up a saved channel system prompt at Reset session`, never
+counted as passed. No timeout, sleep, retry, skip or concurrency policy changed.
+
+All six guards report `forbiddenLaunchAttempts: 0`. Every history exchange
+completed **32 matched requests / 63 emitted frames / 0 remaining**; every thread
+exchange completed **45 / 378 / 0**. All 29 full-suite exchanges completed:
+**773 matched / 3,216 emitted / 0 remaining**. Every run reports clean source and
+profile `complete-thread`, with identical seven-output bundle maps. Main bundle
+SHA-256 `0392503cdc7b6934daebc336f9ec6d5aa3cac5f4f6a24678b29c5e165efdf12c`;
+renderer bundle SHA-256
+`2c054d586268ed0b30f0c5836c1b848085b370391ee9c8325dee6ece299d77e5`.
+Full identities, guard outcomes, per-exchange counts and capture provenance are
+retained in `counted-evidence.json`, SHA-256
+`2decf5ee8a0d12bdf1464e93155636f55a0639e6adec56b0aac1987f398a2f03`.
+The read-only `summarize.py` asserts multiplicity, zero retries, actual worker
+overlap, shared clean build identity, input checksums, guards and every remaining
+request count; `validation-summary.log` retains its counted output.
+
+History/thread recording hashes remain respectively
+`de0b1166b6e05e0792228c07be25c20498b117914e673558222eac12cd4e6d2c` /
+`53a3db11cfab2d5041b511d7be4d030ab5b2b8449b7fdb3ea1d7e5e3db552ae3`.
+Both retain capture Desktop `00ec821f9380b00cf2dfc0dd4817ee15584106a5`, daemon
+`58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`, binary SHA-256
+`5f5b3b9ce42eda74024637f4929dd720d36c1226ce6e370eb62fbe9e6b22f7c0`.
+No recording, envelope matching, causal checkpoint, inspection, profile retirement,
+paging assertion or production contract changed.
+
+Historical evidence is preserved separately: downloaded #2125 verifier bundle
+`55afa7335001014f2b8b89a282a4635347e5598af427d63db8813d424be43973`
+under `evidence-2125/` passes all 24 bundled file checksums and retains the full
+failed-report pointer plus the selected rerun report (3 executed/passed).
+Downloaded #2158 builder/verifier bundles under `evidence-2158/` also pass all
+bundled checksums and retain the original controlled red/green record. These
+supplement the original plan references; current passing results do not identify
+or erase the `de6e481a` or `b505bf0118` historical failures.
+
+Dispatcher handoff remains pending for this new candidate: run the configured
+application gate and retain both named cases passing without retry; verifier
+checks counted results separately from inherited failures. Earlier accepted
+gate evidence above belongs to the earlier candidate. No fresh provider/daemon
+or physical-effect result is claimed. macOS is outside this Linux verification.
+
+## Documentation handoff
+
+Pending documentation stage: reconcile these fresh current-source results in
+`docs/knowledge/features/chat-history-testing.md` → Counted Linux coverage-observer
+validation, preserving the original failure/pass pairs, unknown historical
+triggers and the separate pending dispatcher application gate.

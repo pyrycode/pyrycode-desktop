@@ -244,7 +244,7 @@ test('stable callbacks exclude hidden, queued and received but uncommitted tails
   // Publish the authoritative next watermark before holding the canonical append's frame.
   daemon.pushFrame(frame('conversations', { conversations: [{ ...row, last_shown_version: 5 }] }))
   const pendingItem = Number(await page.locator('[data-read-row]').last().getAttribute('data-read-row'))
-  // #2186: hold the bridge's frame and paired timer, with real preload receipt.
+  // Hold the bridge's frame and its paired timer drain, with real preload receipt.
   // Focus/scroll callbacks still run, and must use the displayed target rather than receipt.
   await page.evaluate(() => {
     const browser: Window = window
@@ -263,8 +263,8 @@ test('stable callbacks exclude hidden, queued and received but uncommitted tails
     }
     browser.cancelAnimationFrame = handle => { pending.delete(handle); cancel.call(window, handle) }
     browser.setTimeout = (callback, delay, ...args) => {
-      // The runtime races the identical drain function through both APIs.
-      // Leave unrelated timers live, including focus work and test polling.
+      // createThreadRuntime races the identical drain function through both APIs.
+      // Leave unrelated timers live, including focus work and the test's polling.
       if (typeof callback !== 'function' || ![...pending.values()].some(frame => frame === callback)) {
         return timeout.call(window, callback, delay, ...args)
       }
@@ -291,14 +291,17 @@ test('stable callbacks exclude hidden, queued and received but uncommitted tails
     await expect.poll(() => page.evaluate(() => window.pendingReadFrame.received())).toBe(1)
     await expect.poll(() => page.evaluate(() => window.pendingReadFrame.opportunities().frames)).toBeGreaterThan(0)
     await expect.poll(() => page.evaluate(() => window.pendingReadFrame.opportunities().timers)).toBeGreaterThan(0)
-    await page.waitForTimeout(100) // Challenge the runtime's 50 ms fallback while frames are held.
+    // Give the runtime's 50 ms fallback a real opportunity while the frame is held.
+    await page.waitForTimeout(100)
     await expect(page.locator('.bubble').last()).not.toContainText('Awaiting commit')
     const prior = targets(commands)
     expect(prior).toEqual([1, 2, 3, 4])
+    expect(prior.at(-1)).toBe(4)
     const contextAsks = commands.filter(c => c.type === 'request_context_usage').length
     await page.evaluate(conversationId => {
       window.dispatchEvent(new Event('focus'))
       document.querySelector('.conversation__thread')!.dispatchEvent(new Event('scroll'))
+      // Both observers run synchronously. Drain their outbound IPC before exclusion.
       window.pyry.sendCommand({ type: 'requestContextUsage', payload: { conversation_id: conversationId } })
     }, row.id)
     await expect.poll(() => commands.filter(c => c.type === 'request_context_usage').length).toBe(contextAsks + 1)

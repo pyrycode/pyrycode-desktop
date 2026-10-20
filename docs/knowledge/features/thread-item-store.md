@@ -523,7 +523,7 @@ delivery after either form of cleanup.
 ## Testing
 
 Bounded-update validation for #2079 is linked from the
-[runtime's accepted Linux evidence](thread-runtime.md#bounded-update-validation).
+[runtime's accepted Linux evidence](thread-runtime-update-validation.md#bounded-update-validation).
 The supplied dispatcher gate-4 summary reports **9,869 unit tests executed/passed,
 0 failed, 3 skipped**; the accepted verdict reports **9,951 executed/passed,
 0 failed, 3 skipped**. These are separate reports, not combined totals. The verdict
@@ -550,7 +550,7 @@ merely delaying individual rebuilds. The coordinator checks one completion
 notification after publication; runtime checks finite drains, changed-slice send
 settlement, ordered controls and late lifecycle callbacks. The existing writer
 integration flushes a mixed admitted batch and compares its saved state, including
-owned progress. See [counted Linux evidence](thread-runtime.md#bounded-update-validation).
+owned progress. See [counted Linux evidence](thread-runtime-update-validation.md#bounded-update-validation).
 
 [`threadItemStore.test.ts`](../../../src/renderer/src/store/threadItemStore.test.ts)
 uses supplied complete-item and certificate fixtures without Electron, a daemon or

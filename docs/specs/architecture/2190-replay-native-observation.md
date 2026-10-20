@@ -103,3 +103,46 @@ guarded recorded suite. Preserve all prior reports and store rework evidence und
 - Pending for the documentation stage: carry counted Linux causal, Electron, paired
   and complete replay evidence, provenance and artifact paths into those sections;
   retain the historical failed batch separately and its trigger as unknown.
+
+## Rework validation — 2026-10-20
+Linux x64, repair `5569f7cff359a9ac942c1c35642b0c2f1f1a5194`, main `ebe063cfd561`.
+Pre-verify passed all five checks and 43/43 affected units (`rework-pre-verify.log`);
+build (`rework-build.log`), client/control typechecks and docs guard passed.
+Node checks finished before `rework-native-preparation.log` prepared Electron;
+no native rebuild overlapped either replay. macOS remains outside scope.
+
+All artifacts below are under `/tmp/builder-2190/`, with matching `.log`, `.json`
+and `-results/` paths; replay summaries also retain every input and build identity.
+
+| Check / artifact prefix | Executed / passed / failed / skipped | Workers configured / peak executing |
+| --- | --- | --- |
+| Original assertions, causal leak check: `rework-diagnostic-leak-red` | 3 / 0 / 3 / 0 | 3 / 1 |
+| Static categories: `rework-diagnostic-green` | 3 / 3 / 0 / 0 | 3 / 1 |
+| Complete control spec: `rework-electron` | 4 / 4 / 0 / 0 | 3 / 1 |
+| Guarded paired batch: `rework-paired` | 4 / 4 / 0 / 0 | 3 / 3 |
+| Complete guarded suite: `rework-recorded-full` | 29 / 29 / 0 / 1 | 1 / 1 |
+
+The three new cases fail before the fix specifically because caught error messages
+contain injected inspector fields; afterward each propagates its exact static
+category after one read. The Electron attachment retains two genuine successful
+probes per process, first omitted then forwarded, with saved-profile marker reuse,
+two zero-code exits and no teardown failures. No success was fabricated.
+
+The paired command retains the original selection, repeat-each 2, fully-parallel,
+three workers and retries zero. Its actual parallel slots are 0/1/2 and peak test
+concurrency is three; worker process identities are 0/1/2/3 as one slot is reused.
+All identities remain in `rework-paired-summary.json`; none are discarded. Both
+history exchanges are 32 requests / 63 frames and both thread exchanges 45 / 378.
+All 29 full-suite exchanges also finish with zero remaining. The sole existing
+system-prompt reset fixme remains tracked by upstream `pyrycode/pyrycode#2436`.
+
+Both replay summaries identify clean compiled repair `5569f7cf`, complete-thread,
+identical seven-bundle hashes, unchanged history/thread input and capture-source
+identities, zero retries and zero forbidden launches. Both commands restored
+normal output successfully. Prior evidence, including every original failure,
+remains separate. The dispatcher owns subsequent configured application acceptance;
+the documentation handoff above remains pending. Report SHA-256:
+- `rework-diagnostic-leak-red.json`: `4d44dba16f5216c1ba70ed9cba32ef1671ce80a4d16bbfdc1b0ed929f62fa369`
+- `rework-electron.json`: `21d66b0eeaf7428c9038491229c3073671c62ebe12cf3fc8ab215214b671c1e5`
+- `rework-paired.json`: `4ee93b16adfdf3832e6f61e09d3774a46be671103579d2c1462a13dbf4442524`
+- `rework-recorded-full.json`: `ccca7b87129c36d126d993fe004f18a583694dc4cf126c13419ab5d0c5563652`

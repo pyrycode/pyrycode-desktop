@@ -37,6 +37,15 @@ local statement reuse. The installed observer aggregates only during exact-owner
 admission. Ordinary builds contain no wrappers. The anchor assertions failed before
 implementation and passed afterward; this is instrumentation proof only.
 
+The instrumented baseline passed 4/4 with all sixteen original paging inputs.
+Its third inputs compiled 13,345 and 13,335 index statements and reached older
+numeric coverage in 2,467 and 1,183 ms respectively. This is measured amplification,
+not a failing protected-paging trace. Temporarily apply the exact two-flush change
+from #2198 commit `6c3e95b3` for one paired diagnostic comparison, then remove it
+unless paging attribution justifies retaining a correction. Keep the candidate's
+dirty source/build identity explicit. #2198's causal unit regression belongs to
+that repair; it cannot substitute for this ticket's unresolved paging regression.
+
 ## Files read
 
 - `src/renderer/src/store/chatHistoryWriter.ts` → `createChatHistoryWriter`, `mutationSteps`, `drain`: bounded acknowledged save cursor and task yields.

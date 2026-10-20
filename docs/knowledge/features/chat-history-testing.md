@@ -281,37 +281,54 @@ acceptance; their precise host scheduling conditions were not captured.
 
 ### Counted Linux coverage-observer validation
 
-The [plan and commands](../../specs/architecture/2153-protected-history-coverage.md#validation-evidence)
-and [accepted verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2156#issuecomment-6284779714)
-record Linux x64 results on 2026-10-20. Builder runs tested clean implementation
-`172d3f959d6b1fb89368c7805885d95d44aa6076`, after main `845cf9a25196`;
-reviewed head `894c381df2bb1d9da6edbc873aaf31fa214f1a51` adds plan evidence only.
-These are recorded results, not documentation-stage test runs.
+[Current-source validation and commands](../../specs/architecture/2153-protected-history-coverage.md#reopened-current-source-validation-results--2026-10-20)
+record Linux x64 results on 2026-10-20, Node 25.8.0 and Electron 33.4.11.
+Clean builder build `c733774b645ee8673bc84c73ec3be102d2de5075` contains admitted
+main `2d8a7e323ffe74f7ba4e232483a267d8b5a0d0a1`, split-save repair `172d3f95`
+and bounded-reader repair `a17ce883`. Current-source acceptance required no
+additional implementation change. Separately, the
+[accepted verifier review](https://github.com/pyrycode/pyrycode-desktop/pull/2177)
+(stage `711a01e64d19d1c402d48ee2fdce2f3f5378eed7848259b8975179b749e34d3b`)
+checked reviewed application-gate head `9b02c253d59b06a608543734e12aa477ae943d47`,
+which includes later main changes. These are recorded results; documentation ran
+no unit, application or live tests.
 
-| Run | Executed / passed / failed / skipped | Workers and retries |
+| Run | Executed / passed / failed / skipped | Workers and named evidence |
 | --- | --- | --- |
-| Final controlled/failure regressions, `unit-final/0.json` | 23 / 23 / 0 / 0 | Node-native preparation before Electron preparation |
+| Existing observer regressions, `units/unit-q3svyjl8/0.json` | 28 / 28 / 0 / 0 | Both split-save and bounded-read contention cases below present and passed, including failure/ownership controls |
 | Five consecutive guarded paired batches, `paired-{1..5}.json` | 20 / 20 / 0 / 0 | Each 4 / 4 / 0 / 0; three configured/overlapping slots, retries zero |
 | Subsequent complete guarded replay, `recorded-full.json` | 29 / 29 / 0 / 1 | One configured/actual worker, retries zero |
-| Supplied dispatcher unit gate 4 | 9844 / 9844 / 0 / 3 | Controlled split-save case explicitly present and passed |
-| Dispatcher application gate 7, `npx playwright test --reporter=json` | 517 / 517 / 0 / 5 | Both named cases below present and passed without retry |
+| Supplied dispatcher unit gate 4, `unit-test-gate.py` | 9908 / 9908 / 0 / 3 | Both split-save and bounded-read contention cases below explicitly present and passed |
+| Dispatcher application gate 7, `npx playwright test --reporter=json` | 528 / 528 / 0 / 4 | Both named history/thread cases below present and passed once, retries zero |
 
-The paired and complete builder runs used `--profile complete-thread`. Both
+The unit cases are `waits across split saves at baseline and after dispatch` and
+`bounded protected reads leave time for received paging progress`. The supplied
+dispatcher gate report supplies unit totals above rather than the verdict's
+9,990 total; named passes agree, and the verifier confirms all 28 observer tests
+passed on the reviewed candidate. The application gate is completed separately
+from builder acceptance; the earlier candidate's accepted gate is not its proof.
+
+All six builder runs used `--profile complete-thread`. Both
 `a real daemon lazily fills a served gap after more than 200 entries written while Electron is closed`
 and `daemon-built thread streams, places an agent, reconnects, resets and reopens saved items`
-passed twice per paired batch and once in complete replay. Separately, the verifier
-confirmed each executed/passed once, retries zero, with completed exchanges in the
-dispatcher application gate. Unit totals above come from the supplied dispatcher
-gate report. Builder reports and the independent verifier summary are retained at
-`/tmp/builder-2153/` and `/tmp/verifier-2156/evidence-summary.json` respectively.
+passed twice per paired batch and once in complete replay. Every batch reached
+three overlapping tests in slots 0/1/2. Batches 1/2/4/5 recycled a completed
+worker; this changed worker identities without changing concurrency or retrying.
+The verifier independently confirmed each named case executed/passed once at
+retry zero in dispatcher gate 7, with completed history 32/63/0 and thread
+45/378/0 exchanges (matched requests/emitted frames/remaining requests).
+Builder artifacts are under `/tmp/builder-2153/reopened/`; the independent
+verifier summary is `/tmp/verifier-2177/evidence-summary.json`.
 
-All six builder guards recorded zero forbidden launches. Every paired history
-exchange matched 32 requests/emitted 63 frames; thread matched 45/emitted 378,
-with zero remaining requests per exchange. All 29 full-suite exchanges completed:
-773 matched requests, 3,216 emitted frames, zero remaining. Recycled worker
-identities in batches 2/4 reused completed slots; all five batches reached three
-overlapping tests with retries zero. The plan retains bundle hashes, report hashes,
-commands and capture provenance separately from the tested build identity.
+All six builder guards recorded zero forbidden launches. Every history exchange
+matched 32 requests/emitted 63 frames; thread matched 45/emitted 378, with zero
+remaining per exchange. All 29 full-suite exchanges completed: 773 matched
+requests, 3,216 emitted frames, zero remaining. Exchange completion establishes
+neither renderer publication nor protected durability; numeric coverage retains
+its separate progress assertion. Node checks finished before Electron native
+preparation, and every profile run restored the normal build. The plan retains
+commands, report hashes, identical seven-output bundle maps and the counted
+summary SHA-256 `2decf5ee8a0d12bdf1464e93155636f55a0639e6adec56b0aac1987f398a2f03`.
 
 Recording bytes remain unchanged: history SHA-256
 `de0b1166b6e05e0792228c07be25c20498b117914e673558222eac12cd4e6d2c`;
@@ -321,8 +338,21 @@ Both retain capture Desktop `00ec821f9380b00cf2dfc0dd4817ee15584106a5`, daemon
 `5f5b3b9ce42eda74024637f4929dd720d36c1226ce6e370eb62fbe9e6b22f7c0`.
 `real claude picks up a saved channel system prompt at Reset session` remains
 the explicit full-replay fixme/skip and was skipped in dispatcher gate 7 too.
+No timeout, sleep, retry, skip, concurrency, envelope matching, causal checkpoint,
+synchronous inspection, successful-profile retirement or paging assertion changed.
 No fresh provider/daemon or physical-effect acceptance is required or claimed;
 macOS is outside this Linux ticket's verification scope.
+
+The [earlier split-save acceptance](../../specs/architecture/2153-protected-history-coverage.md#validation-evidence)
+and [accepted verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2156#issuecomment-6284779714)
+remain distinct: builder `172d3f959d6b1fb89368c7805885d95d44aa6076` after main
+`845cf9a25196`, reviewed head `894c381df2bb1d9da6edbc873aaf31fa214f1a51`.
+Its controlled regressions passed 23 / 23 / 0 / 0; five paired batches passed
+20 / 20 / 0 / 0; complete replay recorded 29 / 29 / 0 / 1. Supplied dispatcher
+unit totals were 9844 / 9844 / 0 / 3, with the split-save case passed; application
+gate recorded 517 / 517 / 0 / 5, both named history/thread cases passed once
+without retry. Artifacts remain at `/tmp/builder-2153/` and
+`/tmp/verifier-2156/evidence-summary.json`; the original plan retains their hashes.
 
 Historical Linux outcomes at `de6e481a` remain separate: the filed full run
 `/tmp/builder-2079/replay-fixed.json` recorded 29 executed, 28 passed, 1 failed,
@@ -330,10 +360,26 @@ Historical Linux outcomes at `de6e481a` remain separate: the filed full run
 recorded 1 executed/passed, 0 failed/skipped. The former timed out on paging
 coverage with one outgoing request remaining. These counts come from the
 [retained refinement evidence](https://github.com/pyrycode/pyrycode-desktop/issues/2153#issuecomment-6284141287),
-not fresh inspection of the original full reports. The controlled old-projection
-failure (1 executed/failed, 21 unselected) establishes a pending-save observation
-mechanism; it does not establish that historical trigger. Neither the isolated
-pass nor later passing replay reclassifies the historical failure.
+not fresh inspection of the original full reports.
+
+The [reopened refinement evidence](https://github.com/pyrycode/pyrycode-desktop/issues/2153#issuecomment-6289103979)
+retains the second failure/unchanged-pass pair on `b505bf011812970b2b8048afebb735381b8e4691`:
+application gate 518 executed / 516 passed / 2 failed / 5 skipped, then a selected
+same-tree rerun 3 / 3 / 0 / 0. History failed on ArrowUp with `no-progress` despite
+32 matched requests / 63 emitted frames / zero remaining. That candidate contains
+`172d3f95` but predates `a17ce883`; the failure does not demonstrate recurrence
+after the bounded repair. The retained report SHA-256 is
+`6357d95a5b114944be2f73f747764f711ebf675884d785423e5035367ea48218`, in the
+checksummed #2125 evidence referenced by the plan.
+
+The original one-shot projection failure (1 executed/failed, 21 unselected) and
+[full-read contention failure](../../specs/architecture/2158-bounded-protected-coverage.md#validation-evidence)
+(1 executed/failed, 27 unselected) preserve the controlled failing-before proofs;
+their hashes remain in the original plans. They establish split-save observation
+and growing-read contention mechanisms, not either historical trigger. The verifier
+checked all 69 checksums in retained #2125/#2158 bundles and all 20 files in the
+earlier accepted verifier bundle. Neither historical trigger is established;
+unchanged reruns and current passing acceptance do not reclassify either failure.
 
 Legacy row-fold overlap fixtures must place the live overlap at the newest end of the newest-first
 page. Putting an unmatched older entry first exercises the intentional

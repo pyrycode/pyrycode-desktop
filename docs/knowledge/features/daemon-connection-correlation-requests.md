@@ -278,9 +278,11 @@ outbound fields by name. Unknown projections/extra query fields refuse;
 compact `thread_page` additionally requires a nonempty epoch, while version-zero
 `thread_catch_up` can initialize with an empty epoch.
 
-Compact `thread_items` accepts full ordered non-tool/agent roots and optional
-tool/agent `headers` validated with the child-summary guard, restricted to parent
-zero. Duplicate IDs across the mixed data payload fail. Headers carry
+Compact `thread_items` accepts full non-tool/agent roots with optional `order`,
+as does live root admission. Pre-delivery sends can omit it; a present order must
+remain a nonnegative safe integer. Full roots require absent or zero parent.
+Optional tool/agent `headers` use the child-summary guard with parent zero.
+Duplicate IDs across the mixed data payload fail. Headers carry
 `detail_omitted: true`; headline/error summary limits and absent optional facts
 retain the child contract. The separate successful marker has empty `items` and
 no `headers`. Correlation checks the sent projection, conversation, capture

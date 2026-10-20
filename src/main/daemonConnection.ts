@@ -3342,12 +3342,16 @@ export function createDaemonConnection(deps: DaemonConnectionDeps): DaemonConnec
   function queryThread(query: ThreadQuery, requestId: string): void {
     const id = nextEnvelopeId++
     if (!threadReceiver.register(id, requestId, query)) return
-    if (driver === null || !authenticated || stopped) { threadReceiver.fail(id, 'unavailable'); return }
-    if ('projection' in query.payload && (!compactCapable ||
-        !isRendererCommand({ type: 'queryThread', serverId: deps.serverId, requestId, query }))) { threadReceiver.fail(id, 'unavailable'); return }
-    if ((query.type === 'thread_read_tool_body' || query.type === 'thread_read_children') && (!bodyCapable ||
-        !isRendererCommand({ type: 'queryThread', serverId: deps.serverId, requestId, query }))) {
-      threadReceiver.fail(id, 'unavailable'); return
+    const refuse = (code: 'connection' | 'capability' | 'command'): void => {
+      deps.diagnosticLog?.event({ event: 'thread-query-refused', code })
+      threadReceiver.fail(id, 'unavailable')
+    }
+    if (driver === null || !authenticated || stopped) { refuse('connection'); return }
+    const detail = query.type === 'thread_read_tool_body' || query.type === 'thread_read_children'
+    if ('projection' in query.payload && !compactCapable || detail && !bodyCapable) { refuse('capability'); return }
+    if (('projection' in query.payload || detail) &&
+        !isRendererCommand({ type: 'queryThread', serverId: deps.serverId, requestId, query })) {
+      refuse('command'); return
     }
     const p = query.payload
     const payload = { conversation_id: p.conversation_id,

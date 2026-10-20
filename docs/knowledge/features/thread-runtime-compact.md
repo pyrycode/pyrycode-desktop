@@ -61,6 +61,16 @@ wrong-kind body read. Admitted full messages retain existing Markdown and attach
 rendering. Child summaries, full roots and rendered body replies are separate
 authorities.
 
+Full roots share `fullItem`'s optional-order contract in both live updates and
+query data. Queued, dropped or lost sends can omit `order` before delivery; retain
+that absence and sort it as zero without inventing a wire field. Any supplied
+order must still be a nonnegative safe integer. Full roots exclude tool/agent
+kinds and require absent or zero parent; metadata headers retain their stricter
+summary contract. Requiring order at root admission rejects a valid post-send
+interval, creates a false gap and can reject recovery data containing the same
+root. Exercise both pre-delivery and delivered representations through the main
+receiver and preload, rather than using only ordered compact fixtures.
+
 | Evidence | Authority |
 | --- | --- |
 | Root rows | Supplied root facts only; a header holds no downloaded body or descendant inventory. |
@@ -79,6 +89,17 @@ a live gap. A matching reset replaces compact scope and requests a version-zero
 newest window; failed recovery requires explicit Retry, including after Older,
 reopening or reconnect. The single initial query/live cancellation recovery is
 bounded and cannot become a refusal loop.
+
+Main's `thread-query-refused` diagnostic uses only static codes: `connection`
+for an absent driver, unauthenticated or stopped connection; `capability` for
+missing accepted compact/detail grants; `command` for failed command validation.
+These local refusals settle the registered query as `unavailable`, retain readable
+rows and clear pending work. Further live updates, Older and reconnect cannot
+automatically retry failed recovery; explicit Retry can resume from the certified
+checkpoint once the cause clears. `thread-query-sent` records transport handoff
+only. Daemon receipt requires a correlated response or explicit daemon evidence;
+neither that diagnostic nor optimistic send state supplies it. Keep automatic
+complete selection without compact grants separate from explicit compact refusal.
 
 Compact facts, headers and expansion replies never enter canonical complete items,
 owned persistence writes or unseen-content read receipts. Saved-complete restoration
@@ -188,6 +209,85 @@ new scope. Source IDs and the existing scroll-pin/layout notifications preserve
 the reader's agent and position as details change.
 
 ## Validation evidence
+
+### Post-send history and current-daemon acceptance
+
+The [accepted verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2170#issuecomment-6300270962),
+authoritative stage `cbbbab1215c66a310d44e4cca7fd5d7aaaa1fea22c58508004f6d84f25ce791c`,
+accepts macOS arm64 evidence on 2026-10-20 at `d1db6d9d`.
+The [plan](../../specs/architecture/2163-compact-send-history.md#current-daemon-before-and-after)
+retains reports under `/tmp/builder-2163/` for the named live scenario
+`loaded compact history stays usable after text send and Older completes`:
+
+| Live run/report | Executed | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| Before production edits, `live-0.41.4-before.json` | 1 | 0 | 1 | 0 |
+| Repaired committed candidate, `live-committed.json` | 1 | 1 | 0 | 0 |
+
+Both used normal Desktop and the same isolated pyry **0.41.4**, source/tag
+`4d43574874eec9450c97513adb571092de669d12`, binary SHA-256
+`92d097c027bd2e961089a51ed321e2c4c6e2c9fe79c880bbb5745c440a1ea2f0`.
+Before used Desktop `2860189f` with test-only dirty files; the repaired run used
+clean `ee719c41c3c2c497d676d4897e93da5e35e37d0f`, retry 0. The verifier
+independently inspected provenance/sequence attachments and the binary hash;
+the relevant production files and live scenario remained unchanged at review.
+Both runs established owning-host equality and accepted `interactive=true`,
+`thread=true`, `thread_expansion=true`, `thread_compact=true`.
+
+Before repair, window completion certified checkpoint 122, then malformed live
+admission and recovery failure preceded the delivered echo `(125,127]`. This
+demonstrates inbound rejection, not capability refusal or daemon receipt of the
+failed recovery. After repair, checkpoint/consumed began at 122; contiguous live
+intervals were `(122,123]`, `(123,125]`, `(125,127]` (delivered echo), `(127,129]`,
+`(129,130]`, `(130,131]`, `(131,132]`, `(132,134]` (successful turn end),
+`(134,135]`. Consumption reached 135 while checkpoint stayed 122, without recovery
+or failure. Explicit upward input issued `thread_page before_order=73`; matching
+data and its successful final marker at 135 prove daemon receipt and Older
+completion without advancing that checkpoint.
+
+The production-dispatch regression `text send through main keeps contiguous
+compact history and Older usable` in `e2e/threadBodies.test.ts` failed before
+repair on the omitted-order root; the ordered control already passed. The final
+affected run executed/passed **173, 0 failed/skipped**, including local
+refusal/Retry and invalid-present-order controls. Mounted
+`text send retains compact history and Older, genuine gap=false/true` waits for
+the authoritative echo, rendered update and, when needed, recovery completion
+before checking failure absence. The genuine-gap variant verifies catch-up from
+checkpoint 10. Both positively observe Older completion and rendered older text.
+The live scenario additionally waits for successful turn end and correlates the
+final page reply to its observed request; an optimistic bubble or unrelated
+marker cannot complete acceptance.
+
+The independently inspected managed task
+`e16fea0745ef00a5127d1e1b0e79654ed3d12a4e44537921bb56aab586934908`
+at `bad15d599b8a` recorded **533 executed/passed, 0 failed, 2 skipped, 0 retries**.
+All 11 compact, 23 hosted-view and 7 visible-tail cases were present and passed,
+including both send/Older variants, genuine-gap and retained Retry controls.
+The unfiltered three-project/four-worker capture preserved native-writer ordering;
+all 585 setup attachments reported `opened`. Its two skips were the existing
+never-shown-window hover exclusion and upstream-blocked system-prompt Reset fixme.
+Later main integration separately passed **42 executed/passed, 0 failed/skipped**
+with the native prerequisite and those three complete files, retry 0.
+
+The supplied dispatcher gate report says no recorded pass and gives **9,972 units
+executed/passed, 0 failed, 6 skipped**, without named-test evidence. The accepted
+verdict separately records **10,070 units executed/passed, 0 failed, 6 skipped**
+and **538 application tests executed/passed, 0 failed, 2 skipped** on the reviewed
+head. Keep these aggregates separate. The verdict carries forward the inspected
+named live and managed-capture outcomes above; it claims no fresh live execution.
+
+Historical failures remain failed: the earlier managed capture at `b2978707`
+recorded **532 executed, 529 passed, 3 failed, 2 skipped**, retries 0. The plan
+also retains the earlier failed capture/verdict, failed 0.41.1 controls, the
+repaired run whose premature Home did not complete Older, native-dependency/setup
+failures and competing-window focus stress failures. Subsequent passes do not
+rewrite those outcomes or establish the unreproduced hosted receiver's cause.
+Guarded complete-thread replay separately passed `daemon-built thread streams,
+places an agent, reconnects, resets and reopens saved items`: **1 executed/passed,
+0 failed/skipped**, retry 0 and zero forbidden launches. That is
+[offline compatibility evidence](../../recorded-tests.md), distinct from the
+retained current-daemon acceptance. Documentation runs only the docs guard;
+other operating systems are outside this macOS ticket's verification scope.
 
 ### Compact visible-read validation and live hold
 

@@ -393,6 +393,14 @@ arrival metadata once they use those positions.
 
 Authenticated AVL/radix nodes are cached by their complete proof within each
 transaction-local index instance, with detached node containers returned to mutation.
+The cache includes locally constructed nodes as well as verified disk reads;
+otherwise later updates in the same submission repeatedly parse, hash and validate
+nodes the operation just built. Radix proofs include the reference and path;
+sequence proofs include the reference and balance requirement. Rotations can build
+a temporarily unbalanced sequence node, so construction caches its relaxed proof
+and adds a strict proof only when its balance invariant holds. Cache lifetime never
+crosses operations, commits or fresh owners; disk nodes still require authentication.
+See the [causal regression and native comparison](chat-history-testing-native.md#reopened-slow-drain-cause-and-correction).
 Selected payload and evidence decoding is cached too. Bounded payload work alone
 can conceal thousands of repeated structural SQL/JSON reads; proof caching avoids
 that repetition without trusting plaintext hints or a proof from an earlier root.

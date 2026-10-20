@@ -5,6 +5,7 @@ type Snapshot = {
   thread: boolean
   interactive: boolean
   connections: number
+  connectionTimes: number[]
   conversationId: string
   phases: { conversationId: string; state: WireTurnState; connection: number }[]
   turnIds: string[]
@@ -18,6 +19,7 @@ type EvidenceWindow = typeof window & {
 export async function watchPhaseReconnect(page: Page): Promise<void> {
   await page.evaluate(() => {
     let connections = 0
+    const connectionTimes: number[] = []
     let thread = false
     let interactive = false
     let conversationId = ''
@@ -25,7 +27,7 @@ export async function watchPhaseReconnect(page: Page): Promise<void> {
     const turnIds = new Set<string>()
     const endedTurnIds = new Set<string>()
     const stop = window.pyry.onDaemonEvent(event => {
-      if (event.type === 'connected') { connections += 1; thread = event.ack.capabilities.includes('thread'); interactive = event.ack.capabilities.includes('interactive') }
+      if (event.type === 'connected') { connections += 1; if (connectionTimes.length < 64) connectionTimes.push(Date.now()); thread = event.ack.capabilities.includes('thread'); interactive = event.ack.capabilities.includes('interactive') }
       if (event.type === 'conversationCreated') conversationId = event.conversation.id
       if (event.type === 'turnState') {
         phases.push({ conversationId: event.conversationId, state: event.state, connection: connections })
@@ -40,7 +42,7 @@ export async function watchPhaseReconnect(page: Page): Promise<void> {
       }
     }, true)
     ;(window as EvidenceWindow).phaseReconnectEvidence = {
-      snapshot: () => ({ thread, interactive, connections, conversationId, phases: [...phases],
+      snapshot: () => ({ thread, interactive, connections, connectionTimes: [...connectionTimes], conversationId, phases: [...phases],
         turnIds: [...turnIds], endedTurnIds: [...endedTurnIds] }),
       stop
     }
@@ -49,6 +51,19 @@ export async function watchPhaseReconnect(page: Page): Promise<void> {
 
 export function readPhaseReconnect(page: Page): Promise<Snapshot> {
   return page.evaluate(() => (window as EvidenceWindow).phaseReconnectEvidence.snapshot())
+}
+
+/** Execute in the page with the connection observed at the start of this phase. */
+export async function reconnectPhase(input: { host: string; connections: number }) {
+  const snapshot = (window as EvidenceWindow).phaseReconnectEvidence.snapshot()
+  const connections = snapshot.connections
+  const dispatched = connections === input.connections
+  const at = Date.now()
+  // A captured transport close can authenticate its replacement while the scenario
+  // is awaiting the settled reply. That replacement already crosses this phase's
+  // boundary; another dispatch would consume a connection belonging to reset work.
+  if (dispatched) await window.pyry.reconnectServer(input.host)
+  return { at, connections, connectionTimes: snapshot.connectionTimes, dispatched }
 }
 
 export async function stopPhaseReconnect(page: Page): Promise<void> {

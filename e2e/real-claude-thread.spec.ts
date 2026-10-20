@@ -1,11 +1,11 @@
-import { scenarioNonce, scenarioDaemonRevision, scenarioDesktopRevision } from './fixtures/clientScenario'
+import { scenarioNonce, scenarioDaemonRevision, scenarioDesktopRevision, scenarioMode } from './fixtures/clientScenario'
 import type { Page } from '@playwright/test'
 import { markdownPlainText } from '../src/renderer/src/screens/conversation/MarkdownReader'
 import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/clientScenario'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 import { confirmCreateChat } from './fixtures/confirmCreateChat'
 
-import { watchPhaseReconnect, readPhaseReconnect } from './fixtures/phaseReconnectEvidence'
+import { watchPhaseReconnect, readPhaseReconnect, reconnectPhase } from './fixtures/phaseReconnectEvidence'
 import { createThreadReplyEvidence, renderedRepliesMatch, savedRepliesMatch, type RecordedReply } from './fixtures/threadReplyEvidence'
 import { readSavedListTitle } from './fixtures/savedListTitle'
 
@@ -64,6 +64,7 @@ test('daemon-built thread streams, places an agent, reconnects, resets and reope
     try {
       const nonce = scenarioNonce(), first = `THREAD_AGENT_${nonce}`, second = `THREAD_RESET_${nonce}`
       const composer = page.getByPlaceholder('Message…')
+      const before = await readPhaseReconnect(page)
       await page.evaluate(() => (window as ProofWindow).threadReplyEvidence.mark())
       await composer.fill(`Use the Agent tool to run a small background subagent task that replies READY. Wait for its result, then reply with only ${first}.`)
       await composer.press('Enter')
@@ -71,8 +72,15 @@ test('daemon-built thread streams, places an agent, reconnects, resets and reope
       const firstReply = await actualReply(page)
       await renderedReplies(page, [firstReply])
       await expect(page.locator('.bubble__cursor')).toHaveCount(0, { timeout: 120_000 })
-      const before = await readPhaseReconnect(page)
-      await page.evaluate(host => window.pyry.reconnectServer(host), daemon.pairFields.server)
+      // Explicit causal regression control, separate from passive diagnostics. It
+      // permits the recorded automatic reconnect to win before scenario dispatch.
+      if (scenarioMode === 'replay' && process.env.PYRY_THREAD_RECONNECT_CONTROL === 'after-authentication') {
+        await expect.poll(async () => (await readPhaseReconnect(page)).connections, { timeout: 45_000 }).toBeGreaterThan(before.connections)
+      }
+      const dispatch = await page.evaluate(reconnectPhase, { host: daemon.pairFields.server, connections: before.connections })
+      info.annotations.push({ type: 'scenario-reconnect-dispatch', description: JSON.stringify({
+        baseline: before.connections, ...dispatch
+      }) })
       await expect.poll(async () => (await readPhaseReconnect(page)).connections, { timeout: 45_000 }).toBeGreaterThan(before.connections)
       await expect(page.locator('.agent-start-marker').first()).toBeVisible()
       expect(await page.evaluate(reply => (window as ProofWindow).threadReplyEvidence.retained(reply), firstReply)).toBe(true)

@@ -333,6 +333,12 @@ export class RecordedExchange {
     return { matchedRequests: this.matched, emittedFrames: this.emitted,
       remainingRequests: this.recording.wire.filter(e => e.direction === 'client' && !this.consumed.has(e.message)).length }
   }
+  boundary() {
+    return { ...this.stats(), index: this.index, connection: this.connection,
+      nextConnection: this.recording.wire[this.index]?.connection ?? null,
+      close: this.recording.closures?.[this.closure] ?? null,
+      firstError: this.failure?.message ?? null }
+  }
   assertComplete(): void {
     if (this.failure) throw this.failure
     const remaining = this.stats().remainingRequests

@@ -175,7 +175,7 @@ export function createThreadQueryCoordinator(deps: ThreadQueryDeps) {
       hosts.set(host, h)
       const changed = h.scope?.id !== (value.conversationId ?? undefined)
       if (changed) {
-        if (h.pending && !h.pending.cancelled) {
+        if (h.pending && (!h.pending.cancelled || h.pending.terminalReceived)) {
           h.pending.cancelled = true; h.pending.batch?.abandon()
           const pending = h.pending
           if (!pending.sent || pending.terminalReceived) release(h, pending)

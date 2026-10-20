@@ -3,7 +3,9 @@ import { EventEmitter } from 'node:events'
 import type { ElectronApplication } from '@playwright/test'
 import { installPagingDurabilityEvidence } from './pagingDurabilityEvidence'
 
-afterEach(() => { delete (globalThis as any).__pagingDurability })
+afterEach(() => {
+  for (const key of ['__pagingDurability', '__observePagingWriter', '__pagingWriterObservations']) delete (globalThis as any)[key]
+})
 
 it('observes exact owners and split acknowledgements without exposing content or changing IPC', async () => {
   const ipcMain = Object.assign(new EventEmitter(), {
@@ -18,7 +20,8 @@ it('observes exact owners and split acknowledgements without exposing content or
   const contents = { send: sent }
   const app = { evaluate: async (fn: Function, owner: unknown) => fn({ ipcMain,
     webContents: { getAllWebContents: () => [contents] } }, owner) } as Pick<ElectronApplication, 'evaluate'>
-  await installPagingDurabilityEvidence(app, 'host-secret', 'chat-secret')
+  const page = { evaluate: async (fn: Function, owner: unknown) => fn(owner) } as any
+  await installPagingDurabilityEvidence(app, 'host-secret', 'chat-secret', page)
   const handler = ipcMain._invokeHandlers.get('pyry:chat-history')!
   await installPagingDurabilityEvidence(app, 'host-secret', 'chat-secret')
   expect(ipcMain._invokeHandlers.get('pyry:chat-history')).toBe(handler)
@@ -33,6 +36,16 @@ it('observes exact owners and split acknowledgements without exposing content or
     change: { metadata: { hostId: 'host-secret', conversationId: 'chat-secret', epoch: 'epoch-secret' }, items: ['content-secret'],
       persistence: { id: 'persistence-secret', part, parts: 2 } } })
   const first = request(0), second = request(1)
+  const observe = (globalThis as any).__observePagingWriter
+  observe('published', first)
+  observe('queued', first, { running: true, scheduled: false })
+  observe('yielded', first)
+  observe('resumed', first)
+  observe('queued', { ...first, serverId: 'peer' })
+  const rendererTrace = (globalThis as any).__pagingWriterObservations
+  expect(rendererTrace.map((e: any) => e.stage)).toEqual(['published', 'queued', 'yielded', 'resumed'])
+  expect(rendererTrace.every((e: any) => e.sameOwner && e.sameEpoch)).toBe(true)
+  expect(rendererTrace[1]).toMatchObject({ running: true, scheduled: false })
   expect(await handler({}, first)).toBe(result)
   expect(await handler({}, second)).toBe(result)
   expect(original.mock.calls.map(call => call[1])).toEqual([first, second])
@@ -50,7 +63,7 @@ it('observes exact owners and split acknowledgements without exposing content or
   await handler({}, { ...first, conversationId: 'peer' })
   expect(trace).toHaveLength(count)
   for (const value of ['host-secret', 'chat-secret', 'epoch-secret', 'persistence-secret', 'content-secret'])
-    expect(JSON.stringify(trace)).not.toContain(value)
+    expect(JSON.stringify([trace, rendererTrace])).not.toContain(value)
 })
 
 it.each([false, true])('retains a classified failure and committed prefix=%s without retrying a mutation', async prefix => {

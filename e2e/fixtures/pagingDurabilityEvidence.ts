@@ -1,9 +1,29 @@
-import type { ElectronApplication } from '@playwright/test'
+import type { ElectronApplication, Page } from '@playwright/test'
 
 /** Read-only checkpoints. Exact coordinates stay inside the isolated main process. */
 export async function installPagingDurabilityEvidence(
-  app: Pick<ElectronApplication, 'evaluate'>, host: string, chat: string
+  app: Pick<ElectronApplication, 'evaluate'>, host: string, chat: string, page?: Pick<Page, 'evaluate'>
 ): Promise<void> {
+  await page?.evaluate(owner => {
+    const state = globalThis as any
+    const observations: unknown[] = []
+    let epoch: string | undefined
+    state.__pagingWriterObservations = observations
+    if (typeof document !== 'undefined') document.addEventListener('keydown', event => {
+      if ((event.key === 'Home' || event.key === 'ArrowUp') && event.target instanceof Element &&
+        event.target.closest('.conversation__thread'))
+        observations.push({ stage: 'input', ms: Date.now(), type: event.key, trusted: event.isTrusted })
+    }, true)
+    state.__observePagingWriter = (stage: string, request: any, fields: object = {}) => {
+      if (request?.serverId !== owner.host || request?.conversationId !== owner.chat) return
+      const metadata = request.change?.metadata
+      if (stage === 'published') epoch = metadata?.epoch
+      observations.push({ stage, ms: Date.now(), sameEpoch: epoch !== undefined && epoch === metadata?.epoch,
+        sameOwner: metadata?.hostId === owner.host && metadata?.conversationId === owner.chat,
+        items: request.change?.items.length, ranges: request.change?.ranges?.length,
+        start: request.change?.ranges?.at(-1)?.start, completion: request.change?.completion !== undefined, ...fields })
+    }
+  }, { host, chat })
   await app.evaluate(({ ipcMain, webContents }, owner) => {
     const state = globalThis as any
     const handlers = (ipcMain as any)._invokeHandlers

@@ -11,6 +11,7 @@ import { readReplayMainProcess } from './fixtures/replayNativeStorage'
 import { readHistoryCoverage } from './fixtures/historyCoverage'
 
 import { installHistoryQueryEvidence } from './fixtures/historyQueryEvidence'
+import { installPagingDurabilityEvidence } from './fixtures/pagingDurabilityEvidence'
 import { watchPhaseReconnect, readPhaseReconnect } from './fixtures/phaseReconnectEvidence'
 
 // Synchronous inspection bypasses Electron's collected inspector-promise path.
@@ -108,6 +109,8 @@ test('a real daemon lazily fills a served gap after more than 200 entries writte
       const pair = await daemon.mintPairing()
       await withIsolatedElectronApp(async ({ page: clean, app: cleanApp }) => {
         await installHistoryQueryEvidence(cleanApp, 'page')
+        await installPagingDurabilityEvidence(cleanApp, daemon.pairFields.server, conversationId)
+        try {
         await pairFromUnpairedLaunch(clean, encodePairingPayload({ ...pair, relay: `${relay.url}/v1/client` }))
         await clean.locator('.channel-list__row-open').filter({ hasText: channel }).click()
         const history = clean.locator('.conversation__thread')
@@ -148,6 +151,10 @@ test('a real daemon lazily fills a served gap after more than 200 entries writte
           previous = position
         }
         expect(await mainRead(cleanApp, () => (globalThis as any).__threadPageAsks.includes('legacy'))).toBe(false)
+        } finally {
+          const observations = await mainRead(cleanApp, () => (globalThis as any).__pagingDurability.observations)
+          await testInfo.attach('protected-paging-durability', { contentType: 'application/json', body: Buffer.from(JSON.stringify(observations)) })
+        }
       })
       await testInfo.attach('thread-saved-history-evidence', { contentType: 'application/json',
         body: Buffer.from(JSON.stringify({ daemonRevision: revision, savedCheckpoint, resumed: true, legacyRequests: 0 })) })

@@ -37,3 +37,7 @@ One deliverable: reduce the bounded rollback fixture's redundant storage work wh
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-20
+
+## Revisions
+
+2026-10-20: the 16-item controlled probe executed three cases: turn and header passed every invariant; index failed specifically because only two bounded turns preceded its trigger. Use 64 items for index and 16 for turn/header instead of uniformly using 64. Authenticated-index flushing yields additional work before the turn/header faults, but the index fault fires at the first flush insertion. Every case retains the same minimum eight full 16-unit turns, unchanged failure injection, real storage and default replay scheduler. Reuse the rollback-reading owner for replay as planned. The failed probe is retained at `/tmp/builder-2155/probe-16.{log,json}`; it is diagnostic evidence, not an acceptance pass.

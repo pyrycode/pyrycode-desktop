@@ -3,11 +3,13 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { appWindow, attachLaunchFate, createLaunchFateLog, launchIsolatedApp } from './fixtures/desktopIsolation'
-import { assertReplayNativeStorage } from './fixtures/replayNativeStorage'
+import { assertReplayNativeStorage, readReplayMainProcess } from './fixtures/replayNativeStorage'
 
 function assertSuccessfulNativeProbe(response: { exceptionDetails?: unknown; result: { value?: unknown } }): void {
   if (response.exceptionDetails !== undefined) throw new Error('Native prerequisite control inspection failed')
-  if (response.result.value !== true) throw new Error('Native prerequisite control did not observe successful SQLite probe')
+  const value = response.result.value
+  if (!value || typeof value !== 'object' || !('ready' in value) || value.ready !== true ||
+    !('stage' in value) || value.stage !== 'complete') throw new Error('Native prerequisite control did not observe successful SQLite probe')
 }
 
 for (const { name, response, category } of [
@@ -49,55 +51,109 @@ for (const { name, response, category } of [
   })
 }
 
-test('missing inspector values do not diagnose native failure on launch or profile relaunch', async ({}, testInfo) => {
-  const directory = await mkdtemp(join(tmpdir(), 'pyry-native-observation-'))
-  const fate = createLaunchFateLog()
-  const observations: { launch: number; sqliteReady: boolean; missingResult: boolean }[] = []
-  const env = { ...process.env }
-  delete env.ELECTRON_RENDERER_URL
-  try {
-    for (const launch of [0, 1]) {
-      const app = await launchIsolatedApp({ args: ['.', `--user-data-dir=${directory}`], env, fate })
-      const child = app.process()
-      try {
-        await appWindow(app)
-        // One client-owned marker proves that the second process reads the saved profile.
-        expect(await app.evaluate(({ app }, reopening) => {
-          const fs = require('node:fs'), path = require('node:path')
-          const marker = path.join(app.getPath('userData'), 'native-observation-marker')
-          if (!reopening) fs.writeFileSync(marker, 'saved')
-          return fs.readFileSync(marker, 'utf8') === 'saved'
-        }, launch === 1)).toBe(true)
-
-        // Forward every evaluation to this actual process. Drop only the first result's
-        // value, after recording its boolean; no test-supplied success reaches the gate.
-        const session = (app as any)._connection.toImpl(app)._nodeSession
-        let reads = 0
-        const controlled = { _connection: { toImpl: () => ({ _nodeSession: {
-          send: async (method: string, params: object) => {
-            const response = await session.send(method, params)
-            assertSuccessfulNativeProbe(response)
-            const missingResult = reads++ === 0
-            observations.push({ launch, sqliteReady: response.result.value === true, missingResult })
-            return missingResult ? { ...response, result: {} } : response
+for (const { name, historical, formatting } of [
+  { name: 'missing inspector values do not diagnose native failure on launch or profile relaunch', historical: false, formatting: false },
+  { name: 'historical native probe uses separate initial and saved-profile processes', historical: true, formatting: false },
+  { name: 'cold native prerequisite survives active stack formatting on launch and relaunch', historical: false, formatting: true },
+  { name: 'historical cold native probe fails during stack formatting in separate processes', historical: true, formatting: true }
+]) {
+  test(name, async ({}, testInfo) => {
+    const directory = await mkdtemp(join(tmpdir(), 'pyry-native-observation-'))
+    const fate = createLaunchFateLog()
+    const observations: { launch: number; sqliteReady: boolean; missingResult: boolean; binding: string }[] = []
+    const prerequisites: unknown[] = []
+    const originalProbe: string[] = []
+    const env = { ...process.env }
+    delete env.ELECTRON_RENDERER_URL
+    try {
+      for (const launch of [0, 1]) {
+        const app = await launchIsolatedApp({ args: ['.', `--user-data-dir=${directory}`], env, fate })
+        const child = app.process()
+        try {
+          await appWindow(app)
+          const bindingState = async () => {
+            const loaded = await readReplayMainProcess(app, () =>
+              Object.keys(require.cache).some(path => /[/\\]better_sqlite3\.node$/.test(path)))
+            return loaded === true ? 'warm' : loaded === false ? 'cold' : 'unavailable'
           }
-        } }) } } as unknown as ElectronApplication
-        await assertReplayNativeStorage(controlled)
-        expect(reads).toBe(2)
-      } finally {
-        await fate.closeWatched(app)
-        expect(child.exitCode !== null || child.signalCode !== null).toBe(true)
+          const session = (app as any)._connection.toImpl(app)._nodeSession
+          const duringStackFormatting = { _connection: { toImpl: () => ({ _nodeSession: {
+            send: (method: string, params: { expression: string }) => session.send(method, {
+              ...params, expression: `(() => {
+                const previous = Error.prepareStackTrace;
+                let value;
+                Error.prepareStackTrace = () => { value = (${params.expression}); return ''; };
+                try { void new Error().stack; return value; }
+                finally { Error.prepareStackTrace = previous; }
+              })()`
+            })
+          } }) } } as unknown as ElectronApplication
+          expect(await bindingState()).toBe('cold')
+          // Historical comparisons own separate processes and cannot warm the prerequisite.
+          if (historical) {
+            for (const formatted of [formatting, false]) {
+              const binding = await bindingState()
+              const originalReady = await readReplayMainProcess(formatted ? duringStackFormatting : app, ({ app }) => {
+                try {
+                  const Database = process.getBuiltinModule('module').createRequire(`${app.getAppPath()}/package.json`)('better-sqlite3')
+                  const database = new Database(':memory:')
+                  try { database.prepare('SELECT 1').get(); return true }
+                  finally { database.close() }
+                } catch { return false }
+              })
+              originalProbe.push(originalReady === true ? 'complete' : originalReady === false ? 'native-false' : 'unavailable')
+              observations.push({ launch, sqliteReady: originalReady === true, missingResult: false, binding })
+              expect(originalReady === !formatted).toBe(true)
+            }
+          } else {
+            // This is the first native operation on each initial/relaunched process.
+            const binding = await bindingState()
+            await assertReplayNativeStorage(formatting ? duringStackFormatting : app,
+              value => { prerequisites.push({ launch, binding, ...value }) })
+            let reads = 0
+            const controlled = { _connection: { toImpl: () => ({ _nodeSession: {
+              send: async (method: string, params: object) => {
+                const binding = await bindingState()
+                const response = await session.send(method, params)
+                // Forward genuine failure unchanged; omit only an observed successful result.
+                if (response.result.value?.ready === false) return response
+                assertSuccessfulNativeProbe(response)
+                const missingResult = reads++ === 0
+                observations.push({ launch, sqliteReady: true, missingResult, binding })
+                return missingResult ? { ...response, result: {} } : response
+              }
+            } }) } } as unknown as ElectronApplication
+            await assertReplayNativeStorage(controlled, value => { prerequisites.push({ launch, binding: 'warm', ...value }) })
+            expect(reads).toBe(2)
+          }
+          expect(await app.evaluate(({ app }, reopening) => {
+            const fs = require('node:fs'), path = require('node:path')
+            const marker = path.join(app.getPath('userData'), 'native-observation-marker')
+            if (!reopening) fs.writeFileSync(marker, 'saved')
+            return fs.readFileSync(marker, 'utf8') === 'saved'
+          }, launch === 1)).toBe(true)
+        } finally {
+          await fate.closeWatched(app)
+          expect(child.exitCode !== null || child.signalCode !== null).toBe(true)
+        }
       }
+      expect(observations.map(({ binding, ...value }) => value)).toEqual([0, 1].flatMap(launch => historical ? [
+        { launch, sqliteReady: !formatting, missingResult: false },
+        { launch, sqliteReady: true, missingResult: false }
+      ] : [
+        { launch, sqliteReady: true, missingResult: true },
+        { launch, sqliteReady: true, missingResult: false }
+      ]))
+      expect(originalProbe).toEqual(!historical ? [] : formatting
+        ? ['native-false', 'complete', 'native-false', 'complete'] : Array(4).fill('complete'))
+    } finally {
+      await testInfo.attach('native-prerequisite-observations', {
+        body: JSON.stringify(observations), contentType: 'application/json'
+      })
+      await testInfo.attach('original-native-probe', { body: JSON.stringify(originalProbe), contentType: 'application/json' })
+      await testInfo.attach('replay-native-storage', { body: JSON.stringify(prerequisites), contentType: 'application/json' })
+      await attachLaunchFate(testInfo, fate)
+      await rm(directory, { recursive: true, force: true })
     }
-    expect(observations).toEqual([0, 1].flatMap(launch => [
-      { launch, sqliteReady: true, missingResult: true },
-      { launch, sqliteReady: true, missingResult: false }
-    ]))
-  } finally {
-    await testInfo.attach('native-prerequisite-observations', {
-      body: JSON.stringify(observations), contentType: 'application/json'
-    })
-    await attachLaunchFate(testInfo, fate)
-    await rm(directory, { recursive: true, force: true })
-  }
-})
+  })
+}

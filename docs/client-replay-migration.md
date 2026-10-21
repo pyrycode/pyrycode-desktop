@@ -172,7 +172,14 @@ History's `mainRead` now uses synchronous inspection to bypass persistent
 awaited-inspector promise loss after relaunch, polling only unavailable reads
 within the existing five-second bound. Valid false/empty observations retain
 their original assertions. The replay SQLite prerequisite uses the same scoped
-adapter; a false probe still rejects the addon with its rebuild diagnostic.
+adapter; validated static native failures and conclusive boolean false still
+reject immediately with the rebuild diagnostic. The probe explicitly resolves
+the SQLite package root before native loading, separating `resolve`/`load` from
+`open`/`query`/`close` without relying on nested V8 stack formatting. A successful
+recorded exchange cannot replace genuine local SQLite operations. The
+[cold-process controls and counted Linux evidence](knowledge/features/development-verification-replay-native-storage.md#counted-linux-cold-loading-validation)
+exercise the prerequisite first on initial and saved-profile launches; historical
+comparisons run in separate processes to avoid warming the binding under test.
 Isolation read-back retains its existing bounded transient-error treatment and
 all isolation matchers. History observer installation inspects the actual IPC
 listener after a lost acknowledgement; a guarded installation can run again only

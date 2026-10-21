@@ -115,15 +115,29 @@ its catch-up cursor after a profile restart.
 
 On initial launch and every profile relaunch, the shared replay fixture probes
 `better-sqlite3` in Electron's main process before device binding and pairing. It
-loads the application's installed addon, opens and queries an in-memory database
-and closes it. Only explicit boolean `true` permits startup. Explicit `false`
-immediately produces the static diagnostic, without further polling:
-`Replay requires working Electron SQLite; run npm run rebuild:electron before replay.`
-Load/open/query/close failures return false; native errors and paths are not
-exposed. Missing or non-boolean observations, including truthy values, poll every
-100 ms within the existing five-second bound and end with
-`Replay main-process inspection unavailable` if no conclusive boolean arrives.
-Fatal inspector errors propagate immediately. This prerequisite check does not prove
+resolves the installed SQLite package root, loads the genuine addon with
+`bindings`' explicit `module_root`, passes it through `Database`'s `nativeBinding`
+option, then opens, queries and closes an in-memory database. Implicit native
+discovery during active V8 stack formatting can fail even with a healthy addon;
+explicit root discovery removes that first-use dependency while retaining the
+package's supported search locations.
+
+Only validated `{ ready: true, stage: 'complete' }` or boolean `true` permits
+startup. Validated failure observations distinguish `resolve`, `load`, `open`,
+`query` and `close`, with a static category from `module-not-found`, `native-load`,
+`type-error`, `error`, `non-error`. If query and close both fail, the query remains
+primary and `cleanup` records the close category. Failure immediately produces
+`Replay requires working Electron SQLite (<stage>/<category>); run npm run rebuild:electron before replay.`
+Conclusive boolean `false` still rejects immediately with the same diagnostic
+without the classification. Neither result by itself establishes an ABI cause.
+The prerequisite forwards only reconstructed static fields; no paths, exception
+text/stacks or arbitrary inspector values enter the diagnostic attachment.
+
+Missing or unrecognized observations, including truthy values and unvalidated
+objects, report `unavailable` and poll every 100 ms within the existing five-second
+bound, ending with `Replay main-process inspection unavailable` if inconclusive.
+Inspection exceptions report `inspection-failed` separately and propagate
+immediately, including fatal errors. This prerequisite check does not prove
 protected-profile persistence or current provider behavior; see the
 [native-storage diagnosis and Linux replay evidence](knowledge/features/development-verification-replay-native-storage.md#replay-native-storage-prerequisite).
 
@@ -131,12 +145,32 @@ The prerequisite and history's `mainRead` use synchronous inspector evaluation
 to bypass persistent collected promises after profile relaunch. The generic
 reader preserves valid `false`, zero, null, undefined, empty strings, arrays and
 objects, rejects promise results, and selects a fresh current-process inspector
-session on every call. Boolean-only classification belongs to the prerequisite;
+session on every call. Native-readiness validation belongs to the prerequisite;
 an empty history read remains valid. Controls must use static categories or
 derived booleans rather than asserting raw inspector exception/value fields,
 which can leak content before reader sanitization. Playwright upgrades must
 retain these contracts. See the [inspection contract](knowledge/features/e2e-harness-context-recovery.md#persistent-awaited-inspector-loss)
 and [counted Linux relaunch evidence](knowledge/features/development-verification-replay-native-storage.md#replay-inspection-after-profile-relaunch).
+
+Cold first-use controls must run the classified prerequisite before any other
+native operation on both initial and saved-profile processes. Historical-probe
+comparisons use separately owned processes so they cannot warm the tested binding.
+The [accepted cold-loading evidence](knowledge/features/development-verification-replay-native-storage.md#counted-linux-cold-loading-validation)
+retains Linux x64 causal units **57 executed / 55 passed / 2 failed / 0 skipped**
+before correction and **57 / 57 / 0 / 0** afterward, plus actual-Electron
+**7 / 6 / 1 / 0** before correction and **7 / 7 / 0 / 0** afterward. The
+`cold native prerequisite survives active stack formatting on launch and relaunch`
+case fails before repair and passes afterward with real SQLite; separate historical
+formatter controls preserve cold false followed by success outside formatting.
+The post-correction complete-thread paired batch passes both exact history/thread
+cases twice: **4 / 4 / 0 / 0**, three overlapping workers, retries zero, ten complete
+process prerequisites, zero remaining requests or forbidden launches. Node checks,
+build and Electron-native preparation finish sequentially before execution.
+The linked reference retains build/input/report hashes, capture provenance,
+fixture-contract rework and complete-gate counts. Historical macOS explicit-false
+results remain failed with their original stage unknown; the demonstrated
+first-use mechanism does not recover their attribution. macOS is outside this
+Linux ticket's verification scope; no fresh provider/daemon run is claimed.
 
 The [accepted native-observation evidence](knowledge/features/development-verification-replay-native-storage.md#counted-linux-native-observation-validation)
 records Linux x64 on 2026-10-20, clean compiled repair

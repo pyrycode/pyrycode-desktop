@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ElectronApplication } from '@playwright/test'
 import { assertReplayNativeStorage, probeReplayNativeStorage, readReplayMainProcess } from './replayNativeStorage'
 import { NOT_YET_AVAILABLE } from './mainProcessRead'
+import { createRequire } from 'node:module'
 
 const electron = { app: { getAppPath: () => '/fixture/app' } }
 
@@ -12,12 +13,52 @@ function inspectedApp(send: (method: string, params: any) => Promise<any>) {
 function runProbe(load: Parameters<typeof probeReplayNativeStorage>[1]) {
   return inspectedApp(async (_method, params) => {
     const value = new Function('require', 'process', `return ${params.expression}`)(
-      () => electron, { getBuiltinModule: () => ({ createRequire: () => load }) })
+      () => electron, { getBuiltinModule: (name: string) => name === 'path' ? { dirname: () => '/fixture/app' } :
+        { createRequire: () => Object.assign(
+          (id: string) => id === 'bindings' ? () => ({}) : load!('/fixture/app/package.json', () => {}),
+          { resolve: () => 'better-sqlite3' }) } })
     return { result: { value } }
   })
 }
 
 describe('replay native storage prerequisite', () => {
+  it('classifies first-use lazy native binding failure through the default adapter as load', () => {
+    const require = createRequire(import.meta.url)
+    const binding = require.resolve('bindings', { paths: [require.resolve('better-sqlite3')] })
+    const loader = require(binding)
+    const cached = require.cache[binding]!
+    cached.exports = () => { throw Object.assign(new Error('PRIVATE_LAZY_NATIVE_PATH'), { code: 'ERR_DLOPEN_FAILED' }) }
+    try {
+      expect(probeReplayNativeStorage({ app: { getAppPath: () => process.cwd() } }))
+        .toEqual({ ready: false, stage: 'load', category: 'native-load' })
+    } finally { cached.exports = loader }
+  })
+
+  it('establishes cold native readiness during an active V8 stack formatter', () => {
+    const previous = Error.prepareStackTrace
+    let observation: unknown
+    Error.prepareStackTrace = () => {
+      observation = probeReplayNativeStorage({ app: { getAppPath: () => process.cwd() } })
+      return ''
+    }
+    try { void new Error().stack } finally { Error.prepareStackTrace = previous }
+    expect(observation).toEqual({ ready: true, stage: 'complete' })
+  })
+
+  it('distinguishes a loaded binding rejecting a genuine open through the default adapter', () => {
+    const require = createRequire(import.meta.url)
+    const binding = require.resolve('bindings', { paths: [require.resolve('better-sqlite3')] })
+    const loader = require(binding)
+    const cached = require.cache[binding]!
+    cached.exports = () => ({ isInitialized: true, Database: class {
+      constructor() { throw new Error('PRIVATE_SQLITE_OPEN') }
+    } })
+    try {
+      expect(probeReplayNativeStorage({ app: { getAppPath: () => process.cwd() } }))
+        .toEqual({ ready: false, stage: 'open', category: 'error' })
+    } finally { cached.exports = loader }
+  })
+
   it('checks storage when the inspector loses every awaitPromise acknowledgement', async () => {
     const send = vi.fn(async (_method: string, params: { awaitPromise: boolean }) => {
       if (params.awaitPromise) throw new Error('Protocol error (Runtime.evaluate): Promise was collected')
@@ -43,7 +84,7 @@ describe('replay native storage prerequisite', () => {
       return UnavailableDatabase
     }
     await expect(assertReplayNativeStorage(runProbe(load)))
-      .rejects.toThrow(/^Replay requires working Electron SQLite; run npm run rebuild:electron before replay\.$/)
+      .rejects.toThrow(/^Replay requires working Electron SQLite \((load|open)\/error\); run npm run rebuild:electron before replay\.$/)
   })
 
   it('opens, queries and closes a fresh database for each process probe', () => {
@@ -55,8 +96,8 @@ describe('replay native storage prerequisite', () => {
     }
     const paths: string[] = []
     const load = (path: string) => { paths.push(path); return Database }
-    expect(probeReplayNativeStorage(electron, load)).toBe(true)
-    expect(probeReplayNativeStorage(electron, load)).toBe(true)
+    expect(probeReplayNativeStorage(electron, load)).toEqual({ ready: true, stage: 'complete' })
+    expect(probeReplayNativeStorage(electron, load)).toEqual({ ready: true, stage: 'complete' })
     expect(paths).toEqual(['/fixture/app/package.json', '/fixture/app/package.json'])
     expect(operations).toEqual([':memory:', 'SELECT 1', 'close', ':memory:', 'SELECT 1', 'close'])
   })
@@ -67,7 +108,7 @@ describe('replay native storage prerequisite', () => {
       prepare() { return { get: () => { throw new Error('PRIVATE_QUERY_FAILURE') } } }
       close() { closed++ }
     }
-    expect(probeReplayNativeStorage(electron, () => Database)).toBe(false)
+    expect(probeReplayNativeStorage(electron, () => Database)).toEqual({ ready: false, stage: 'query', category: 'error' })
     expect(closed).toBe(1)
   })
 
@@ -132,7 +173,67 @@ describe('replay native storage prerequisite', () => {
       prepare() { return { get: () => 1 } }
       close() { throw new Error('PRIVATE_CLOSE_FAILURE') }
     }
-    expect(probeReplayNativeStorage(electron, () => Database)).toBe(false)
+    expect(probeReplayNativeStorage(electron, () => Database)).toEqual({ ready: false, stage: 'close', category: 'error' })
+  })
+
+  it.each(['resolve', 'load', 'open', 'query', 'close'] as const)('classifies %s failure without native details', stage => {
+    const fail = () => { throw Object.assign(new Error('PRIVATE_NATIVE_PATH'), { code: 'MODULE_NOT_FOUND' }) }
+    class Database {
+      constructor() { if (stage === 'open') fail() }
+      prepare() { if (stage === 'query') fail(); return { get: () => 1 } }
+      close() { if (stage === 'close') fail() }
+    }
+    const result = probeReplayNativeStorage(electron, (_path, mark) => {
+      mark(stage === 'resolve' ? 'resolve' : 'load')
+      if (stage === 'load' || stage === 'resolve') fail()
+      return Database
+    })
+    expect(result).toEqual({ ready: false, stage, category: 'module-not-found' })
+  })
+
+  it('preserves query failure when close also throws', () => {
+    class Database {
+      prepare(): never { throw new TypeError('PRIVATE_QUERY') }
+      close() { throw new Error('PRIVATE_CLOSE') }
+    }
+    expect(probeReplayNativeStorage(electron, () => Database)).toEqual({
+      ready: false, stage: 'query', category: 'type-error', cleanup: 'error'
+    })
+  })
+
+  it.each([
+    ['native loader', Object.assign(new Error('PRIVATE_PATH'), { code: 'ERR_DLOPEN_FAILED' }), 'native-load'],
+    ['unknown code', Object.assign(new Error('PRIVATE_PATH'), { code: 'PRIVATE_CODE' }), 'error'],
+    ['non-error', { path: 'PRIVATE_PATH' }, 'non-error']
+  ])('keeps %s exception categories content-free', (_name, error, category) => {
+    expect(probeReplayNativeStorage(electron, (_path, mark) => {
+      mark('load'); throw error
+    })).toEqual({ ready: false, stage: 'load', category })
+  })
+
+  it('rejects a classified native failure immediately and only observes static fields', async () => {
+    const observe = vi.fn()
+    const send = vi.fn(async () => ({ result: { value: {
+      ready: false, stage: 'open', category: 'native-load', path: 'PRIVATE_PATH', stack: 'PRIVATE_STACK'
+    } } }))
+    await expect(assertReplayNativeStorage(inspectedApp(send), observe))
+      .rejects.toThrow('Replay requires working Electron SQLite (open/native-load)')
+    expect(observe).toHaveBeenCalledOnce()
+    expect(observe).toHaveBeenCalledWith({ ready: false, stage: 'open', category: 'native-load' })
+    expect(send).toHaveBeenCalledOnce()
+  })
+
+  it('distinguishes unavailable and failed inspection without forwarding inspector content', async () => {
+    vi.useFakeTimers()
+    try {
+      const observe = vi.fn()
+      const send = vi.fn().mockResolvedValueOnce({ result: { value: 'PRIVATE_VALUE' } })
+        .mockResolvedValue({ result: {}, exceptionDetails: { text: 'PRIVATE_EXCEPTION' } })
+      const outcome = assertReplayNativeStorage(inspectedApp(send), observe).catch(error => error)
+      await vi.advanceTimersByTimeAsync(100)
+      expect((await outcome).message).toBe('Replay main-process inspection failed')
+      expect(observe.mock.calls).toEqual([[{ stage: 'unavailable' }], [{ stage: 'inspection-failed' }]])
+    } finally { vi.useRealTimers() }
   })
 
   it('bounds persistent inspection loss without claiming the addon is unavailable', async () => {

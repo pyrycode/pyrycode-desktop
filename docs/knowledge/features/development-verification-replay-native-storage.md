@@ -19,16 +19,63 @@ The probe proves addon load/open/query/close, not protected-profile persistence.
 History IPC cannot substitute for this pre-pair check because it requires paired
 host membership.
 
-Only explicit `true` permits startup. Explicit `false` fails immediately, without
-another poll, with `Replay requires working Electron SQLite; run npm run
-rebuild:electron before replay.` Native load, open, query and close errors all
-produce that false probe without exposing their details. An absent value or any
-non-boolean value is inconclusive, including truthy strings, numbers and objects.
-These observations and transient inspector loss retain the five-second deadline
-and 100 ms polling interval; persistent unavailability ends with the distinct
-`Replay main-process inspection unavailable` diagnostic. Fatal inspector errors
-propagate immediately. Neither truthiness nor generic empty-value handling can
-classify native readiness.
+The probe returns `{ ready: true, stage: 'complete' }` only after genuine addon
+load, database open, `SELECT 1` and close all succeed. A native failure returns
+`ready: false` with one static stage and category:
+
+| Field | Allowed values / meaning |
+| --- | --- |
+| `stage` | `resolve`, `load`, `open`, `query`, `close` identify the failed operation |
+| `category` | `module-not-found`, `native-load`, `type-error`, `error`, `non-error` classify the exception without its text |
+| `cleanup` | Optional category for a close failure after query failure; the primary query stage/category remain intact |
+
+The prerequisite validates and reconstructs these fields before notifying its
+observer, discarding arbitrary inspector fields. It accepts validated complete
+observations and still accepts conclusive boolean `true`. Validated failures or
+boolean `false` reject immediately, without another poll. Classified failures use
+`Replay requires working Electron SQLite (<stage>/<category>); run npm run rebuild:electron before replay.`
+Boolean false retains the same diagnostic without the parenthesized classification.
+Neither form exposes native messages, paths or stacks or establishes an ABI cause.
+
+Missing or unrecognized observations, including truthy strings, numbers and
+unvalidated objects, remain inconclusive. These and transient inspector loss
+retain the five-second deadline and 100 ms polling interval, reporting static
+`unavailable` observations. Persistent unavailability ends with
+`Replay main-process inspection unavailable`. Inspection exceptions report
+`inspection-failed` separately from native failure and propagate immediately,
+including fatal session/transport errors. The generic reader's values remain
+unchanged; validation belongs to the prerequisite.
+
+### Cold native loading and process controls
+
+`better-sqlite3` loads its addon lazily inside `Database`. Treating its JavaScript
+import as completed native loading misclassifies loader errors as `open` failures.
+Implicit `bindings.getFileName` discovery also depends on `Error.prepareStackTrace`:
+when inspection interrupts an active V8 stack formatter, V8 suppresses the nested
+formatter, and first-use discovery can throw even with a healthy native artifact.
+The probe resolves the installed package root, supplies it as `module_root` to
+the package's existing `bindings` loader while the stage is `load`, and passes
+the genuine addon through `Database`'s `nativeBinding` option before attempting
+`open`. This preserves supported native search locations without pinning a binary
+path, retrying a failure or manufacturing readiness.
+
+In [`replay-native-storage.spec.ts`](../../../e2e/replay-native-storage.spec.ts),
+the classified prerequisite is the first native operation on each owned initial
+and saved-profile process. A prior successful historical probe would warm the
+binding and hide its first-use failure. Historical-algorithm comparisons therefore
+own separate processes; static `cold`/`warm`/`unavailable` observations describe
+binding state without exposing cache paths. Controls exercise active stack
+formatting and normal loading with real SQLite, retain saved-marker/profile and
+process-exit assertions, and then test missing-result handling using further
+genuine probes. Unit controls distinguish default-adapter load failure from a
+loaded binding rejecting open, and preserve query failure when close also fails.
+
+The replay lifecycle collects per-process validated observations before device
+binding and writes the `replay-native-storage` attachment during teardown.
+Direct unit invocations of `_clientReplay` must supply its third test-info argument: the retirement
+adapter models `Pick<TestInfo, 'attach'>` and supplies an asynchronous attachment
+stub. Omitting it throws during teardown and can replace the expected retirement
+error; preserving retirement assertions requires honoring this fixture contract.
 
 Finish pre-verify's Node rebuild before Electron-native preparation and browser
 checks; running them concurrently can change the addon underneath a launched app.
@@ -89,18 +136,19 @@ synchronous-inspection regressions and both relaunch replay checks. See the
 for valid empty values, bounded unavailability and mutation boundaries.
 
 The generic reader preserves `false`, zero, null, undefined, empty strings, arrays
-and objects. It rejects promise-returning callbacks; the boolean-only decision
+and objects. It rejects promise-returning callbacks; native-observation validation
 belongs to `assertReplayNativeStorage`, not to history's `mainRead`. Missing
 inspector values must therefore remain valid generic observations while the
-prerequisite waits for a conclusive boolean. Fresh session selection and the
+prerequisite waits for a conclusive result. Fresh session selection and the
 original native load/open/query/close checks remain required after relaunch.
 
 Assertions on raw inspector fields can leak exception descriptions, stacks,
 paths or unexpected values before the shared reader sanitizes them. The
 actual-Electron control uses static failure categories and asserts derived
-booleans for content-free message/stack checks. It forwards genuine SQLite probes,
-omitting only the first successful result per process; a test-supplied success
-would conceal the very prerequisite being checked.
+booleans for content-free message/stack checks. After the cold prerequisite
+succeeds, its missing-result wrapper omits the first of two further genuine
+successful probe results per process and forwards the second. A test-supplied
+success would conceal the very prerequisite being checked.
 
 The [verifier evidence](https://github.com/pyrycode/pyrycode-desktop/pull/2073#issuecomment-6221253088)
 records Linux x64 on 2026-10-16, implementation `db6c6bb9`, reviewed head
@@ -256,6 +304,140 @@ It contains the builder log but none of those raw paired artifacts and no artifa
 pointers; the raw files are unavailable on the execution host. These historical
 counts remain reported evidence rather than independently parsed results. New
 acceptance never replaces that failure or supplies its missing causal observation.
+
+## Counted Linux cold-loading validation
+
+These retained Linux x64 results, 2026-10-20–21, were accepted by the
+[PR #2207 verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2207#issuecomment-6305773535),
+authoritative accepted stage
+`c1a554150e9605690eedbd4e432a86611f3ddb39d0ff7993f76135ce03dfbb94`,
+reviewed head `bde37dd75b089bc83123d7b57e148a4a2a89c94b`.
+They are recorded evidence, not documentation-stage executions. The
+[plan's recovery validation](../../specs/architecture/2204-replay-native-false.md#recovery-validation--linux-x64-2026-10-20)
+and [fixture-contract rework](../../specs/architecture/2204-replay-native-false.md#verifier-rework--2026-10-21)
+retain commands, report/log hashes, native classifications and earlier failures.
+
+| Check | Executed / passed / failed / skipped | Artifact under `/tmp/builder-2204/` |
+| --- | --- | --- |
+| Default-adapter / formatter units before correction | 57 / 55 / 2 / 0 | `recovery-causal-unit-red.log` |
+| Actual-Electron formatter regression before correction | 7 / 6 / 1 / 0 | `recovery-causal-electron-red.json` |
+| Repaired native units / final pre-verify | 57 / 57 / 0 / 0 | `recovery-unit-final/`, `recovery-pre-verify-final.log` |
+| Repaired complete Electron control spec | 7 / 7 / 0 / 0 | `recovery-electron-final.json` |
+| Post-correction guarded complete-thread paired acceptance | 4 / 4 / 0 / 0 | `recovery-paired-final.json` |
+| Retirement adapter before its fix | 9 / 1 / 8 / 0 | `rework-20261021/retirement-red.log` |
+| Repaired retirement and native units | 66 / 66 / 0 / 0 | `rework-20261021/affected-green.log` |
+| Final structured retirement controls | 9 / 9 / 0 / 0 | `rework-20261021/unit-final/` |
+| Supplied dispatcher unit gate 4 | 10016 / 10016 / 0 / 3 | Supplied gate report |
+| Supplied dispatcher application gate 7 | 539 / 538 / 1 / 4 | Supplied gate report |
+
+### Causal controls and gate boundaries
+
+The default-adapter units
+`classifies first-use lazy native binding failure through the default adapter as load`
+and `establishes cold native readiness during an active V8 stack formatter`
+fail before correction and pass in the repaired 57-test run; the companion
+`distinguishes a loaded binding rejecting a genuine open through the default adapter`
+keeps loading distinct from opening.
+
+The actual-Electron case
+`cold native prerequisite survives active stack formatting on launch and relaunch`
+is present and fails in the causal red report, then passes in the final
+7 executed / 7 passed / 0 failed / 0 skipped spec. The separate case
+`historical cold native probe fails during stack formatting in separate processes`
+also passes there: the old algorithm returns false cold on initial launch and
+saved-profile relaunch, then succeeds outside formatting with the same addon.
+Both classified modes establish cold readiness before further probes. All eight
+owned control processes exit zero without teardown failure. The original
+missing-inspector-values case and three content-free diagnostic controls pass
+in the same final spec. This proves a first-use mechanism with genuine local
+SQLite operations, without inferring an ABI mismatch.
+
+The accepted verdict confirms all seven native controls and both named paired
+scenarios passed on their first attempt in application gate 7. The supplied
+gate report explicitly confirms the two formatter cases and both paired titles
+passed in that **539 executed / 538 passed / 1 failed / 4 skipped** run. Its
+unrelated failure, `Fetch bulk cancellation never promotes a queued mutation on document-bind`,
+remains failed and is tracked by [#2208](https://github.com/pyrycode/pyrycode-desktop/issues/2208).
+The verdict reports the separate dispatcher rerun as **2 executed / 2 passed /
+0 failed / 0 skipped** and acceptance under the flaky-failure policy; it does
+not turn the original gate into a failure-free run. The verdict separately
+reports **10114 executed / 10114 passed / 0 failed / 3 skipped** units, including
+all nine retirement controls. That total differs from the supplied gate-4
+summary and is retained as a separate reported observation. The supplied report
+has no overall pass marker; the authoritative verifier stage is accepted.
+
+The initial fixture integration regression remains retained: its complete unit
+gate recorded **10114 / 10106 / 8 / 3**, and the exact eight-case comparison
+failed on the PR while passing on unchanged main. The third-argument attachment
+stub repair preserves every retirement, forwarding, deadline, cleanup and causal
+error assertion. Its affected 66-test run includes all nine retirement and 57
+native controls; this adapter-only rework claims no new builder Electron run.
+
+### Paired acceptance and provenance
+
+Both exact cases are present and passed twice in `recovery-paired-final.json`:
+
+- `a real daemon lazily fills a served gap after more than 200 entries written while Electron is closed`
+- `daemon-built thread streams, places an agent, reconnects, resets and reopens saved items`
+
+The command uses `node scripts/run-offline-replay.mjs --profile complete-thread`
+with exactly those two titles, `--fully-parallel --workers 3 --repeat-each 2 --retries 0`.
+Configured and actually overlapping worker slots are 0/1/2, overlapping from
+23:54:07.086 through at least 23:54:13.461 UTC on 2026-10-20; slot 0 reuse has
+worker index 3. All ten per-process prerequisites complete. Every history exchange
+matches 32 requests / emits 63 frames / has zero remaining; each thread exchange
+is 45 / 378 / 0. There are zero forbidden launches, retries, skips or top-level
+report errors. Captures, full envelopes, causal checkpoints and original
+application assertions remain unchanged.
+
+Executed build is `2a9fa07724d78eb24845280ddf45f50fe01225d3`, dirty=false,
+profile `complete-thread`. Each browser JSON has matching `.log` and `-results/`
+artifacts. `recovery-summary.json` retains worker intervals, classifications,
+launch fates, seven compiled bundle hashes, report/log hashes and capture
+provenance. SHA-256 identities:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Causal Electron red | `619a093f5e0837f28be0ed0a80f7686bd0be8ed24eae94eb9d030b24ccea0285` |
+| Final Electron | `ed063a3f926406b4c657005bf7a688d496cff265b0229a41a2f9a07d8014f24b` |
+| Final paired | `0b4e50019b8de512ece0cbe1d61805a2d07d687f57bbd9a612e9e2dcb7bd4964` |
+| Recovery summary | `23273b79997ceb8ee3e5701d3c001edfad624611d819e5b5df052ee17a828aa2` |
+
+History input remains
+`de0b1166b6e05e0792228c07be25c20498b117914e673558222eac12cd4e6d2c`;
+thread remains `53a3db11cfab2d5041b511d7be4d030ab5b2b8449b7fdb3ea1d7e5e3db552ae3`.
+Capture provenance remains Desktop `00ec821f9380b00cf2dfc0dd4817ee15584106a5`,
+daemon `58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`, daemon binary
+`5f5b3b9ce42eda74024637f4929dd720d36c1226ce6e370eb62fbe9e6b22f7c0`.
+All Node checks and build finish before Electron native preparation; builds,
+rebuilds and execution are sequential. Final pre-verify, strict harness typecheck
+and build pass; the final native artifact is
+`1aebb6e757848aee805967d82dc09ce25b7797964e2d4afe7222dfabf4eaf9fc`.
+The subsequent adapter rework also passes all five pre-verify checks and build.
+No test/build job remains running at builder handoff. These results establish
+local native readiness and captured-client behavior; no fresh provider/daemon
+acceptance was requested. macOS is outside this Linux ticket's verification scope.
+
+### Historical explicit false remains unattributed
+
+The #2191 macOS arm64 batch remains **4 executed / 2 passed / 2 failed / 0 skipped**,
+three workers, retries zero, executed `f2a58a2e`, dirty=true, complete-thread.
+Both saved-profile failures explicitly returned false before protected paging:
+thread **38 matched / 345 emitted / 7 remaining**, history **10 / 21 / 22**.
+No rebuild overlapped execution. Original retention paths are
+`/tmp/builder-2191/index-candidate-paired.json`, its same-stem `.log` and
+`index-candidate-results/`; the reported report hash is
+`e8c076dd31d05cf5f7e380cf3c76c88db74db086cc32db36d56377ddb9b7c1e7`.
+The retrieved bundle under `/tmp/builder-2204/evidence-2191/` contains the builder
+log without the full original report/results or artifact pointers. These remain
+reported counts; no missing failed-stage provenance is reconstructed.
+
+The controlled stack-discovery defect does not attribute those historical
+failures to this mechanism, an ABI mismatch or index-flush caches. Keep them
+separate from #2191's paging stall, #2153's saved-only assertion and #2201's
+reconnect failure. Earlier diagnostic paired passes in the plan remain diagnostic,
+and every earlier failure remains failed; none is replaced by post-correction
+acceptance or establishes an unrelated repair dependency.
 
 ## Effort scenario proof ownership
 

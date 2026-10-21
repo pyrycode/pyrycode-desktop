@@ -70,11 +70,52 @@ describe('canonical fake thread publisher', () => {
       items: [], final: true, from_version: 1 })
     expect(query(thread, 'thread_catch_up', { epoch: 'epoch-a', version: 2 })).toHaveLength(1)
     const replaced = query(thread, 'thread_catch_up', { epoch: 'retired', version: 100 })
-    expect(rows(replaced).map(i => i.id)).toEqual([3, 4])
-    expect(replaced.at(-1)?.payload).not.toHaveProperty('from_version')
+    expect(replaced).toMatchObject([{ type: 'thread_reset', in_reply_to: 99,
+      payload: { conversation_id: 'a', epoch: 'epoch-a', version: 2 } }])
+    expect(replaced).toHaveLength(1)
+    expect(replaced[0].payload).not.toHaveProperty('items')
     thread.setConversation({ ...seed(), epoch: 'replacement', version: 1, items: [item(1, 'reused identity')] })
-    expect(rows(query(thread, 'thread_catch_up', { epoch: 'epoch-a', version: 2 }))[0].content.text).toBe('reused identity')
-    expect(query(thread).at(-1)?.payload.epoch).toBe('replacement')
+    expect(query(thread, 'thread_catch_up', { epoch: 'epoch-a', version: 2 }, 101)).toMatchObject([
+      { type: 'thread_reset', in_reply_to: 101, payload: { epoch: 'replacement', version: 1 } }])
+    const opening = query(thread, 'thread_catch_up', { epoch: 'replacement', version: 0 }, 102)
+    expect(rows(opening)[0].content.text).toBe('reused identity')
+    expect(opening.every(r => r.in_reply_to === 102 && r.payload.epoch === 'replacement')).toBe(true)
+    expect(opening.at(-1)?.payload).toMatchObject({ final: true, continuation: 0, older_exists: false })
+  })
+
+  it.each([undefined, null, '10', -1, 1.5, Infinity, Number.MAX_SAFE_INTEGER, 10])(
+    'rejects unpageable authored order %s atomically at every mutation boundary', order => {
+      const invalid = { ...item(4), order } as ThreadItem
+      expect(() => createCanonicalThread({ conversations: [{ ...seed(), items: [item(1), invalid] }] }))
+        .toThrow('canonical order must be unique, nonnegative and safely bounded')
+      const thread = createCanonicalThread({ conversations: [seed()], windowSize: 1 })
+      const before = query(thread)
+      expect(() => thread.setConversation({ ...seed(), epoch: 'invalid', items: [item(1), invalid] })).toThrow(/canonical order/)
+      expect(() => thread.publish(update('thread_item_added', { version: 2, item: invalid }))).toThrow(/canonical order/)
+      expect(() => thread.publish(update('thread_item_changed', { version: 2, item_id: 3, base_rev: 1, rev: 2,
+        changes: { order: order ?? null } }))).toThrow(/canonical order/)
+      expect(query(thread)).toEqual(before)
+    })
+
+  it('visits every retained fact once across one-item windows and order changes', () => {
+    const thread = createCanonicalThread({ conversations: [{ ...seed(), items: [
+      { ...item(1), order: 0 }, item(2), { ...item(3), order: Number.MAX_SAFE_INTEGER - 1 }
+    ] }], windowSize: 1 })
+    thread.publish(update('thread_item_added', { version: 2, item: item(4) }))
+    thread.publish(update('thread_item_changed', { version: 3, item_id: 4, base_rev: 1, rev: 2, changes: { order: 15 } }))
+    let page = query(thread, 'thread_catch_up', { limit: 1 })
+    const seen: number[] = []
+    for (let n = 0; n < 4; n++) {
+      expect(rows(page)).toHaveLength(1)
+      const certificate = page.at(-1)!.payload
+      expect(rows(page)[0].order).toBeGreaterThanOrEqual(certificate.lower_order)
+      expect(rows(page)[0].order).toBeLessThan(certificate.upper_order)
+      seen.push(rows(page)[0].id)
+      expect(certificate.older_exists).toBe(n < 3)
+      page = query(thread, 'thread_page', { before_order: certificate.continuation, limit: 1 })
+    }
+    expect(seen).toEqual([3, 2, 4, 1])
+    expect(rows(page)).toEqual([])
   })
 
   it('accepts one ordered same-revision suffix companion', () => {

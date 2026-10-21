@@ -44,6 +44,31 @@ test('canonical facts open, stream, page and reconnect without the adapter', asy
   expect(requests.some(r => r.type === 'request_history')).toBe(false)
 })
 
+test('canonical epoch replacement resets a positive checkpoint and recovers reused identity', async ({ launchPairedApp }) => {
+  const requests: (Envelope & { payload: Record<string, unknown> })[] = []
+  const thread = createCanonicalThread({ conversations: [{ summary: SEEDED_ROW, epoch: route.epoch,
+    version: 7, items: [{ ...item(1, 'Retired epoch content'), rev: 5 }] }] })
+  const { page, daemon, forwarder } = await launchPairedApp({ threadMode: 'canonical', thread,
+    helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
+      requests.push(decodeEnvelope(bytes) as Envelope & { payload: Record<string, unknown> }); return []
+    } })
+  await expect(page.getByText('Retired epoch content', { exact: true })).toBeVisible()
+  thread.setConversation({ summary: SEEDED_ROW, epoch: 'replacement-epoch', version: 2,
+    items: [item(1, 'Reused identity replacement'), item(2, 'Replacement epoch content')] })
+  forwarder.dropClientLeg()
+  await expect(page.getByText('Replacement epoch content', { exact: true })).toBeVisible()
+  const catchups = requests.filter(r => r.type === 'thread_catch_up')
+  expect(catchups.map(r => r.payload)).toEqual(expect.arrayContaining([
+    expect.objectContaining({ epoch: route.epoch, version: 7 }),
+    expect.objectContaining({ epoch: 'replacement-epoch', version: 0 })
+  ]))
+  await expect(page.getByText('Reused identity replacement', { exact: true })).toHaveCount(1)
+  await expect(page.getByText('Retired epoch content', { exact: true })).toHaveCount(0)
+  daemon.pushFrame(frame({ type: 'thread_text_append', payload: { conversation_id: SEEDED_ROW.id,
+    epoch: 'replacement-epoch', version: 3, item_id: 1, base_rev: 1, rev: 2, text: ' appended' } }))
+  await expect(page.getByText('Reused identity replacement appended', { exact: true })).toBeVisible()
+})
+
 test('canonical defaults keep colliding conversation and item identities isolated per host', async ({ launchPairedApp }) => {
   const publisher = (name: string, text: string) => createCanonicalThread({ conversations: [{
     summary: { ...SEEDED_ROW, name, current_session_id: 'explicit-session' }, epoch: route.epoch,

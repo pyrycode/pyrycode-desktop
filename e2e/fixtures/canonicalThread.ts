@@ -18,6 +18,13 @@ const encode = (type: string, payload: unknown, request?: Envelope) => encodeEnv
   id: request?.id ?? 1, type, ts: stamp, payload, ...(request ? { in_reply_to: request.id } : {})
 })
 const ordered = (items: ThreadItem[]) => [...items].sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.id - b.id)
+function validateOrders(items: ThreadItem[]): void {
+  const orders = items.map(i => i.order)
+  // A strict before_order cursor cannot traverse ties or unordered facts within a bounded window.
+  if (orders.some(order => typeof order !== 'number' || !Number.isSafeInteger(order) ||
+    order < 0 || order >= Number.MAX_SAFE_INTEGER) || new Set(orders).size !== orders.length)
+    throw Error('canonical order must be unique, nonnegative and safely bounded')
+}
 
 /** One host's authored daemon facts. No legacy input, acceptance or session inference. */
 export function createCanonicalThread(options: { conversations: CanonicalConversation[]; windowSize?: number }) {
@@ -26,6 +33,7 @@ export function createCanonicalThread(options: { conversations: CanonicalConvers
     const copy = structuredClone(facts)
     if (new Set(copy.items.map(i => i.id)).size !== copy.items.length)
       throw Error('canonical duplicate item identity')
+    validateOrders(copy.items)
     scopes.set(copy.summary.id, { ...copy, changed: new Map(copy.items.map(i => [i.id, copy.version])) })
   }
   for (const facts of options.conversations) setConversation(facts)
@@ -66,7 +74,9 @@ export function createCanonicalThread(options: { conversations: CanonicalConvers
         next = { ...held, rev: p.rev, content: { ...content, text: content.text + update.payload.text } }
       }
     }
-    s.items = [...s.items.filter(i => i.id !== next.id), next]
+    const items = [...s.items.filter(i => i.id !== next.id), next]
+    validateOrders(items)
+    s.items = items
     s.companion = update.type === 'thread_item_changed' ? { id: next.id, rev: next.rev } : undefined
     s.changed.set(next.id, p.version); s.version = p.version
     return [bytes]
@@ -74,6 +84,9 @@ export function createCanonicalThread(options: { conversations: CanonicalConvers
   function window(request: Envelope): Uint8Array[] {
     const p = request.payload as Extract<ThreadQuery, { type: 'thread_catch_up' | 'thread_page' }>['payload'] &
       { version?: number; before_order?: number }, s = scope(p.conversation_id)
+    const route = { conversation_id: p.conversation_id, epoch: s.epoch, version: s.version }
+    if (request.type === 'thread_catch_up' && (p.version ?? 0) > 0 && p.epoch !== s.epoch)
+      return [encode('thread_reset', route, request)]
     const increment = request.type === 'thread_catch_up' && p.epoch === s.epoch && (p.version ?? 0) > 0
     const all = ordered(s.items)
     const eligible = request.type === 'thread_page' ? all.filter(i => (i.order ?? 0) < (p.before_order ?? 0)) : all
@@ -81,7 +94,6 @@ export function createCanonicalThread(options: { conversations: CanonicalConvers
     const items = increment ? all.filter(i => (s.changed.get(i.id) ?? 0) > (p.version ?? 0)) : eligible.slice(-limit)
     const older = !increment && eligible.length > items.length
     const lower = older ? items[0]?.order ?? 0 : 0
-    const route = { conversation_id: p.conversation_id, epoch: s.epoch, version: s.version }
     const frames: Uint8Array[] = []
     let batch: ThreadItem[] = []
     const data = () => encode('thread_items', { ...route, items: batch, final: false } satisfies ThreadReply['payload'], request)

@@ -1,6 +1,6 @@
 import { afterAll, afterEach, expect, it, vi } from 'vitest'
 import { setImmediate as nextTurn } from 'node:timers/promises'
-import type { ElectronApplication, Page } from '@playwright/test'
+import type { ElectronApplication, Page, TestInfo } from '@playwright/test'
 import { encodeEnvelope } from '../../src/main/transport/codec'
 import { RecordedExchange, type Recording } from './recordedExchange'
 import { clientAppLifecycle } from './clientAppLifecycle'
@@ -44,10 +44,10 @@ const recording = (): Recording => ({
 })
 type ReplayHook = (deps: { daemon: object; exchange: RecordedExchange; recording: Recording;
   relay?: { whenServerFramesForwarded: (count: number) => Promise<void> } },
-  use: () => Promise<void>) => Promise<void>
+  use: () => Promise<void>, info: Pick<TestInfo, 'attach'>) => Promise<void>
 const registeredHook = (registered as unknown as { _clientReplay: [ReplayHook, object] })._clientReplay[0]
-const replayHook: ReplayHook = (deps, use) => registeredHook({ ...deps,
-  relay: deps.relay ?? { whenServerFramesForwarded: async () => {} } } as any, use)
+const replayHook = (deps: Parameters<ReplayHook>[0], use: Parameters<ReplayHook>[1]) => registeredHook({ ...deps,
+  relay: deps.relay ?? { whenServerFramesForwarded: async () => {} } } as any, use, { attach: async () => {} })
 
 afterAll(() => { vi.unstubAllEnvs() })
 afterEach(() => {

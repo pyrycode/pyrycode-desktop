@@ -14,6 +14,7 @@ import {
 import type { FakeDaemon, FakeDaemonOptions } from '../../src/main/transport/fakeDaemon'
 import { startFakeDaemonForTest, type FakeDaemonSetupAttempt } from './fakeDaemonSetup'
 import { createScriptedThread } from './scriptedThread'
+import { selectThreadPublisher, type ThreadPublisherOptions } from './threadPublisher'
 import { decodeEnvelope, encodeEnvelope } from '../../src/main/transport/codec'
 import { LOOPBACK_RELAY_ENV_FLAG } from '../../src/main/relayPolicy'
 import { TEST_SECRET_BACKEND_ENV_FLAG } from '../../src/main/secretBackend'
@@ -149,10 +150,7 @@ export function emptyThreadWindow(request: Envelope): Uint8Array {
 /** Reply-scripting options passed straight through to `startFakeDaemon`. `url` is fixture-supplied
  *  (from the forwarder); everything else (`buildReply`, `buildReplyFrames`, `helloAck`, plus future
  *  daemon knobs) passes through, so a spec scripts daemon replies without editing the fixture. */
-export type LaunchPairedAppOptions = Omit<FakeDaemonOptions, 'url'> & {
-  /** Native fixtures own every thread reply, including deliberately unanswered requests. */
-  threadMode?: 'scripted' | 'native'
-}
+export type LaunchPairedAppOptions = Omit<FakeDaemonOptions, 'url'> & ThreadPublisherOptions
 
 /** Launch-lifecycle control, orthogonal to the daemon-reply `options` (#466). One flag couples two
  *  inseparable behaviours: a reused *paired* dir MUST skip the pairing drive (the paste→Pair→Confirm
@@ -332,13 +330,12 @@ export const test = base.extend<PairedAppFixtures>({
         const attempts: FakeDaemonSetupAttempt[] = []
         // Explicit thread fixtures retain their exact wire scripts. Existing event scripts use a
         // daemon-side publisher, never the retired renderer path. Native also permits old-host tests.
-        const { threadMode, ...daemonOptions } = serverOptions
-        const native = threadMode === 'native'
-        const bridge = native ? undefined : createScriptedThread({ history: scriptedHistory })
-        if (bridge) threadBridges.push(bridge)
+        const { threadMode, thread, ...daemonOptions } = serverOptions
+        const bridge = selectThreadPublisher(serverOptions, scriptedHistory)
+        if (bridge && 'setDeviceId' in bridge) threadBridges.push(bridge)
         const replies = (bytes: Uint8Array): Uint8Array[] => daemonOptions.buildReplyFrames
           ? daemonOptions.buildReplyFrames(bytes) : daemonOptions.buildReply ? [daemonOptions.buildReply(bytes)]
-            : decodeEnvelope(bytes).type === 'list_conversations'
+            : threadMode !== 'canonical' && decodeEnvelope(bytes).type === 'list_conversations'
               ? [seedConversationsFrame(serverId === SECOND_SERVER_ID ? SECOND_SEEDED_ROW : SEEDED_ROW)] : []
         try {
           const rawDaemon = await startFakeDaemonForTest({
@@ -346,7 +343,7 @@ export const test = base.extend<PairedAppFixtures>({
             url: forwarder.url,
             buildReplyFrames: bytes => {
               const frames = replies(bytes)
-              const history = bridge?.historyRequest(bytes)
+              const history = bridge && 'historyRequest' in bridge ? bridge.historyRequest(bytes) : null
               // The optional alias is a SCRIPT INPUT only. The authenticated client sent a real thread
               // request; scripts observing outbound protocol should inspect the first call, not this alias.
               if (history && !frames.some(frame => decodeEnvelope(frame).type.startsWith('thread_')))

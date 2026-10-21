@@ -50,3 +50,15 @@ None. Cleaner shape considered: reuse the compatibility adapter's storage; rejec
 
 ## Scope check
 One independently useful shared-harness deliverable, four observable acceptance criteria. Estimate 650 written lines including plan, two new exported fixture contracts at most, one launcher integration, fewer than ten fixture rejection branches. Analogue `8d2f3a03` wrote 365 publisher + 125 test lines. No in-flight feature branches overlap the planned files at initial fetch.
+
+## Revisions
+2026-10-21: Selection lives in `e2e/fixtures/threadPublisher.ts`, so a throwing adapter factory proves bypass without starting Playwright. The focused compiler exposed existing unknown-payload annotations in `scriptedThread`; `ScriptEnvelope` and local payload casts clarify authored test inputs without changing runtime logic. No production changes.
+
+The existing native protocol permits one same-version/revision append immediately after a field change. Preserve that explicit companion, consume it once and clear it on intervening item updates; `accepts one ordered same-revision suffix companion` covers it. `setConversation` explicitly replaces facts/epoch, with reused identity checked by the checkpoint control. A second Electron case checks default authored summaries and colliding identities across two canonical hosts. Total remains below 650 written lines and the numeric ceilings.
+
+## Builder verification — macOS
+- Final `origin/main` merge: already current at `aba135ed6e4c`.
+- Pre-verify: all five checks pass; affected canonical units 8 executed/passed, 0 failed/skipped. Combined canonical + preserved adapter units: 19 executed/passed, 0 failed/skipped.
+- `npm run typecheck`, `npm run typecheck:client-tests`, focused fixture/unit/scenario TypeScript check and `npm run build`: pass. Focused config is `/tmp/builder-2210/tsconfig.focused.json` and includes both new test inputs, importing the publisher, selector and launcher.
+- Approved focused Electron helper: 3 executed/passed, 0 failed/skipped, including the configured native writer prerequisite and both canonical scenarios. The initial attempt failed the native prerequisite before the canonical scenario ran (1 executed/failed, 1 not run); rebuilding `better-sqlite3` for Electron restored the prerequisite. No assertions changed.
+- Complete configured macOS suite is requested against the pushed implementation revision through the managed `desktop-fake-suite` route; counted result will be retained here. Linux is outside this run's verification scope. No fresh provider/encryption/physical-effect acceptance is claimed.

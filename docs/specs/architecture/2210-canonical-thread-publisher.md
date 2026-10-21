@@ -64,3 +64,23 @@ The existing native protocol permits one same-version/revision append immediatel
 - Complete configured macOS suite is requested against the pushed implementation revision through the managed `desktop-fake-suite` route; counted result will be retained here. Linux is outside this run's verification scope. No fresh provider/encryption/physical-effect acceptance is claimed.
 
 Managed full-suite handoff: task `09802b99bcacd958fef1cc0a1c1c5f51e4d85af6705056b6c32d8be37eb58baf`, candidate `c08993cfa27b5936234bbc191c47504b544e2b69`, recipe/capability `desktop-fake-suite`. Still queued at handoff; no full-suite pass or counts claimed. On return, read this task's fresh JSON/list logs and all setup attachments, inspect failures/skips/retries, and commit the required counted evidence before advancing. The dispatcher holds this builder stage while the requested task is open.
+
+## Returned full-suite evidence — 2026-10-21
+The managed task above is complete; its builder hold is resolved. Retrieved all six artifacts with `fleet-task.py read` into `/tmp/builder-2210/native-result-20261021/desktop/`. This evidence covers implementation revision `c08993cfa27b5936234bbc191c47504b544e2b69` on macOS (`macbook`), run `7d501698eb1ee3817dd0edfe272ec854f84bdbcbfc71350e1757a3796814ac4a`. Subsequent commits only record evidence in this plan.
+
+- Full configured `playwright.config.ts` suite: **543 executed, 543 passed, 0 failed, 2 skipped, 0 retries/flaky**; JSON has no global errors and the list log agrees. Started `2026-10-21T06:24:00.100Z`, duration 703.257 seconds. Original configuration matches this branch byte for byte: four workers, native-writer/clipboard/parallel projects, no grep/shard and zero configured retries.
+- Both `canonical-thread.spec.ts` scenarios passed: authored opening/stream/page/reconnect without the adapter, and colliding identities across canonical hosts. Native writer prerequisite passed. All 29 active captured-client cases passed; no fresh provider/encryption/physical-effect claim. Linux is outside this macOS ticket's verification scope.
+- Two preserved exclusions: `desktop-isolation.spec.ts` / `an independent input-enabled cover preserves isolated hover` skips because a never-shown window receives no pointer; `recorded-clients.spec.ts` / `real claude picks up a saved channel system prompt at Reset session` is the existing reset-prompt fixme documented in `docs/recorded-tests.md` and `docs/client-replay-migration.md` (report reason `unspecified`). Neither counts as passed.
+- Inspected all **589** fake-daemon setup attachments and their 589 unique capture references: every attempt is 1, outcome/responder `opened`, matching dial/listener, connection and upgrade observed, valid method/upgrade/key/version, no rejected upgrade, parser error or failure class. No missing attachment references, retries or launcher failures.
+- Execution log confirms dependency installation, build and native preparation before the full suite. No source, configuration, recording or assertion changes were needed on return; earlier failed prerequisite evidence remains recorded above.
+
+Artifacts remain retrievable through this ticket's managed task. SHA-256:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `capture.json` | `29f265a045b518146242349b4676b20ccfb8517bc53b5c602a18c1c5904987ab` |
+| `playwright.json` | `a7299ef446d598cba6679e6e95ba16fbe707e5f5d70154c631967f88b3c365a9` |
+| `playwright.list.log` | `47874ce9c82a32bfe7c3217d59a8171b0e4eb2405a697c64e87978cd41e8bb69` |
+| `fake-daemon-setup.json` | `8ad875fd88e7fadcc1bf131063764c032e9f3e361c2ef30774027ef602b29f75` |
+| `execution.log` | `78705686366f733803b4d2e67e165302348f1022a3d1c463c5bfaafa3126666b` |
+| `playwright.config.ts` | `0d1fb967aa3b3d66275b736ec63bc55142dff69708eb297cce6ff3d4898d2643` |

@@ -114,6 +114,111 @@ the edge cases these tests cover.
 the single-daemon fixture cannot exercise at all — with one held connection every arm behaves exactly as
 before, which is what AC5 asked `npm run e2e` to demonstrate with no spec edits, and it does.
 
+## Compact attachment acceptance and reopening
+
+An upload completing proves storage, not the accepted message's attachment facts.
+`e2e/threadBodies.test.ts` exercises `compact full-root attachment authority through
+main, repaired facts=false/true` through the real receiver, preload, compact runtime,
+scoped send settlement and presentation adapter. ID-only historical content retires
+the owning local row but produces no accepted attachment. Repaired full content
+draws the daemon's ID/name, distinct from the optimistic metadata, after queued
+acceptance, delivered replacement, repeated replacement and genuine catch-up with
+separate data/final frames. A peer device cannot settle the send; existing
+`threadSendStore.test.ts` controls additionally cover host/conversation isolation and
+unusable identities. Neither comparison creates complete items, reads disk history,
+resends or requests hidden body/child detail.
+
+The historical input is `e2e/recordings/claude-attachment.json`, SHA-256
+`6d54b1aa7ae9bf9a0967e30279439dab8cfe6dd12c574b78594da8e51b56aaba`, captured
+from Desktop `00ec821f9380b00cf2dfc0dd4817ee15584106a5` and daemon
+`58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`. Its queued root carries one
+`attachment_ids` entry without `attachments`; changed content also lacks those
+facts. This retained comparison does not invent a Desktop defect. Daemon
+[#3693](https://github.com/pyrycode/pyrycode/issues/3693) records accepted stored
+facts and [#3694](https://github.com/pyrycode/pyrycode/issues/3694) preserves them.
+No Desktop production change was needed with the repaired full-root payload.
+
+`e2e/real-compact-attachment.spec.ts` retains the normal automatic projection path.
+Its `compact attachment survives owning echo, replacements, navigation and fresh
+online restart` scenario uploads a synthetic image through the existing picker path,
+observes owning queued/delivered roots, then checks exactly one accepted row, no
+queued/local duplicate and a decoded 64px image. It exercises the existing open IPC;
+only the picker and external viewer handoff are stubbed. Navigation and restart
+each select a newly dispatched owning compact query and require its matching
+delivered root's attachment ID/name before that same request's later successful
+final. Observers filter host/conversation/device/message identity. Fresh restart
+requires version zero, successful daemon retrieval, zero sends/body reads and
+complete persisted history status `missing`.
+
+A completed query plus a retained rendered row can pass while no fresh attachment
+data arrived. `completedAttachmentDelivery` in `e2e/fixtures/compactAttachmentEvidence.ts`
+pins root/request identity, delivered status, attachment facts and event order.
+Its 11 focused tests reject retained/live roots, other requests, missing data/final,
+reversed order and mismatched root/attachment/name/status. Keep replay's
+[client-only evidence boundary](../../recorded-tests.md): the historical recording
+and offline assertions cannot establish current daemon retrieval or provider behavior.
+The unchanged live provider-color assertion remains separate.
+
+For mounted SQLite checks, finish the Node unit gate before preparing Electron's
+native dependency with `npm run rebuild:electron`. The unit gate prepares SQLite
+for Node; overlapping it with mounted history inspection can produce `unreadable`
+instead of the expected `missing`. Restore the Electron native build after that
+gate, before launching the mounted scenario.
+
+### Retained Linux attachment evidence
+
+The [accepted verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2247#issuecomment-6386699705)
+at `9ae4f170f48388f7d02e9986158d837b0224fa32`, authoritative stage
+`7eb1249a52d062e41235e6ec3b91a779260b4df02d67ac3adcc3665dd1bb3461`, inspected
+the corrected live report. The exact mounted scenario above was present and passed
+on Linux, **1 executed, 1 passed, 0 failed, 0 skipped, retry 0**, starting
+`2026-10-24T16:16:28.832Z`, report duration 9.506 seconds. Executed Desktop was
+clean normal build `a1791abd6d6b1049daf2c87a668d048b5588b6ab`, after main merge
+`928f28feba29`; the reviewed head adds evidence only. The daemon was
+`/opt/pyry-test-daemon/pyry`, clean pyry 0.43.0, source
+`94bd216633c49d6f87f775da1f492d321b90e0c3`, SHA-256
+`e669aa7f717d41ba91ade23f84158ac4208dbc66563613e25bc49b090ad449ff`.
+The verifier checked ancestry of both repairs (`478250b9` and `299d90fa`). Initial
+and fresh-page owning handshakes each report `interactive=true`, `thread=true`,
+`thread_expansion=true`, `thread_compact=true`.
+
+Root id 1 retains attachment `16165e61-992a-40bf-8235-606bad1210d2`, filename
+`compact-authority.png`, from queued rev 1 through delivered rev 7. Navigation's
+version-zero request `192e3b7a-979a-43b3-8fcb-6a4cd0c42bc5` supplies its root at
+event 69 and final at 70; fresh-process version-zero request
+`8a1b0e18-5b27-400e-8ad9-bff47a0bfa02` supplies them at 37 and 38. Each barrier
+precedes row/image assertions. Fresh reopening records one successful real daemon
+retrieval, zero sends/body reads and complete-history `missing`. Required live
+acceptance is satisfied, with no operator live hold remaining for this attachment
+scenario. This establishes fresh online reopening, not complete compact persistence.
+
+The controlled final-only predicate run executed 11 cases: **3 passed, 8 failed,
+0 skipped**. The corrected targeted run executed/passed **199, 0 failed/skipped**
+across correlation, full-root integration and scoped-settlement files. Final
+pre-verify executed/passed all **11 affected cases, 0 failed/skipped**. The verdict
+confirms all 11 correlation and 175 `threadBodies` cases present and passed in its
+unit gate: **10,144 executed/passed, 0 failed, 3 skipped**. The supplied dispatcher
+gate report separately gives **10,045 executed/passed, 0 failed, 3 skipped**, without
+named-test evidence; keep these aggregates separate. Both report **542 application/
+replay tests executed/passed, 0 failed, 4 skipped**; the verdict records no retries.
+Those aggregate client results are separate from live acceptance. The unchanged
+real attachment/provider-color scenario separately executed/passed **1, 0 failed/skipped**.
+
+The [earlier failed verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2247#issuecomment-6386386281)
+remains failed for missing root-to-request correlation. Its mounted report recorded
+**1 executed/passed, 0 failed/skipped**, but cannot certify the fresh-delivery
+assertion later repaired. Exploratory launch, sidebar-selection, SQLite/native
+setup, interrupted-install and build-provenance failures remain failures, as does
+the concurrent `unreadable` attempt. They are retained in the
+[plan's evidence record](../../specs/architecture/2164-compact-attachment-continuity.md#request-correlated-linux-rework-acceptance).
+The corrected report is `/tmp/builder-2164/rework/live-correlated.log`, SHA-256
+`64995aae4479af7c0a84f73d2e48e8cd04a05693eaea7a7b215df447dd4e30d7`;
+decoded `provenance.json`, `accepted-and-reopened.json`, `fresh-online-delivery.json`
+and `complete-history-reading.json` accompany it. The accepted stage identifies
+the retained evidence bundle when worker-local paths are unavailable. Verification
+inspected these counted results; documentation runs only the docs guard. macOS is
+outside this Linux ticket's verification scope.
+
 ## Related
 
 - [Attachment upload](attachment-upload.md) — the parent document.

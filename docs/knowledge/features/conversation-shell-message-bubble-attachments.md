@@ -7,6 +7,28 @@ a picture (#1045, click-to-open in the OS viewer #869). Split out of the parent 
 sections together outgrew the size cap `npm run check:docs` enforces; the parent's
 [§ What stays untouched](conversation-shell-message-bubble.md#what-stays-untouched) is what points here.
 
+## Accepted thread attachment facts
+
+The production thread surface adapts daemon `user_message.content.attachments`
+through `threadItemPresentation`; each supported record supplies string
+`attachment_id` and `filename` fields. Compact user roots are full messages and
+reuse these same image/file slots. An ID-only `attachment_ids` array supplies no
+display name, even when the daemon has stored the file. The composer upload's local
+filename is not authority for the accepted row. Scoped send settlement retires the
+optimistic row independently of whether the daemon supplied attachment facts.
+
+Daemon [#3693](https://github.com/pyrycode/pyrycode/issues/3693) supplies accepted
+stored attachment facts; [#3694](https://github.com/pyrycode/pyrycode/issues/3694)
+preserves them through delivery. Existing Desktop production rendering needed no
+correction once those facts arrived. Accepted rows keep the existing scoped
+preview/open and file-download paths, with escaped filename display and main-process
+retrieval. Equal text or IDs belonging to another host/conversation/device cannot
+replace the owning send's facts. See
+[scoped rendering](conversation-shell-timeline-render.md#scoped-identity-expansion-and-attachments)
+and [counted compact acceptance](attachment-upload-testing.md#retained-linux-attachment-evidence).
+Fresh online reopening obtains new daemon full roots and bytes; compact attachment
+facts do not become complete persisted history.
+
 ## The attachment file row (#815, #816)
 
 A settled, non-image attachment on a sent message draws as `.bubble__file`: an outlined document glyph
@@ -77,7 +99,8 @@ if `.bubble`'s `word-break` is ever narrowed, that spec is what goes red.
 \#815, was rendered nowhere at all (asserted by `attachmentUploadCopy.test.ts` and
 `ComposerAttach.test.tsx`). It and the extension label reach the DOM as auto-escaped React children only
 — never an attribute, a `title`, an `alt`, a URL, or `dangerouslySetInnerHTML` — the [daemon-text
-rendering ruling](../../../CLAUDE.md) extended to a name the client itself, not the daemon, produced.
+rendering ruling](../../../CLAUDE.md). Accepted thread names come from daemon facts;
+the original composer-backed row used the upload result's name.
 `attachmentId` (the host-side storage handle the download action needs) is deliberately not rendered
 anywhere — it reaches the click closure only. The row does **not** sanitise, trim or normalise the name:
 `sanitizeAttachmentFilename` already re-runs in main on the value a save builds a path from, and a second

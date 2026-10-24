@@ -12,7 +12,8 @@ const live: SessionStateFamily[] = ['modal_shown', 'question_shown', 'turn_state
   'mcp_status', 'slash_command_list', 'model_list', 'reply_suggestion', 'session_error']
 const controls = new Set<string>([...live, 'modal_dismissed', 'question_dismissed', 'session_state_cleared',
   'session_settings_updated', 'conversations', 'conversation_created', 'conversation_renamed',
-  'conversation_archived', 'conversation_promoted', 'conversation_updated', 'error', 'pong', 'thread_children', 'thread_tool_body'])
+  'conversation_archived', 'conversation_promoted', 'conversation_updated', 'error', 'pong', 'thread_children', 'thread_tool_body',
+  'apps', 'app_updated', 'app_removed', 'app_cancelled', 'app_response', 'app_response_chunk'])
 const stamp = '2026-10-21T00:00:00Z'
 const encode = (type: string, payload: unknown, request?: Envelope) => encodeEnvelope({
   id: request?.id ?? 1, type, ts: stamp, payload, ...(request ? { in_reply_to: request.id } : {})

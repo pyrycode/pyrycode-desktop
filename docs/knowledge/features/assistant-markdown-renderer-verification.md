@@ -150,7 +150,8 @@ Static markup and unchanged DOM identity cannot prove a skipped render.
 [`e2e/progressive-markdown.spec.ts`](../../../e2e/progressive-markdown.spec.ts) uses
 mounted V8 function counters for frozen-render skips and bounded probing, plus a
 scoped parser breakpoint to prove later inputs exclude frozen source. It also covers
-definition invalidation, pending presentation and both raw-source settlement triggers.
+definition invalidation, pending presentation and explicit completion at both the
+end-of-message and former tool-boundary raw-source settlement points.
 [`e2e/assistant-whitespace.spec.ts`](../../../e2e/assistant-whitespace.spec.ts) checks
 computed styles and geometry for markdown-owned whitespace and cursor placement.
 
@@ -199,3 +200,30 @@ and 4 skipped. Both “settled rows skip deltas and unrelated group toggles whil
 active reply renders” and “progressive presentation, parser/render reuse and
 raw-source settlement” were present and passed. This is counted mounted evidence
 for settled reuse alongside the existing progressive proof.
+
+## Canonical streamed-text fixtures
+
+[`assistant-parent-text.spec.ts`](../../../e2e/assistant-parent-text.spec.ts),
+[`assistant-whitespace.spec.ts`](../../../e2e/assistant-whitespace.spec.ts) and
+[`progressive-markdown.spec.ts`](../../../e2e/progressive-markdown.spec.ts) use
+authored canonical facts through the actual application. Their local builders
+supply current-session summaries, ordered items with explicit sessions and
+numeric agent-parent IDs, and `content.ts` for rendered message times. Appends
+retain the item ID and advance exact-base revisions and thread versions; separate
+assistant items preserve segments around tools and resumed parent lanes. The
+[fixture contract](e2e-harness.md#scripted-and-native-thread-fixtures) leaves
+correlated thread queries to the shared publisher.
+
+Completion explicitly changes status to `finished` and activity to `false`.
+The progressive cases first observe the tool and still-streaming presentation,
+then complete the assistant item and require raw unfinished syntax to return.
+Inferring completion from tool arrival would defeat this control. The standard
+whitespace reply cohort finishes each prior message and leaves its final tail
+running/active. Keep the send responder's exact conversation guard, trusted Send
+and expansion clicks, positive rendered barriers, measured layout and cursor
+assertions, and mounted CDP parser/render counters. The migration retains all
+193 original assertion expressions and adds six positive processing barriers.
+
+The [counted Linux validation](development-verification-replay-validation.md#canonical-streamed-text-validation)
+records 20 owned cases passing in both focused and configured runs, retained
+earlier failures, focused compiler coverage and unchanged replay/live boundaries.

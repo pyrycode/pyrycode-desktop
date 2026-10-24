@@ -172,11 +172,64 @@ it. Scripted compatibility aliases for `request_history` are test inputs only;
 the assembled app sends `thread_catch_up` and `thread_page`. Tests of outbound
 protocol must observe the actual request rather than count the alias invocation.
 
+[`live-user-receipts.spec.ts`](../../../e2e/live-user-receipts.spec.ts) uses native
+mode with explicit canonical publisher composition. Delegate valid pushes to
+`thread.publish` and query replies to `thread.reply`, retaining correlated data
+and separate final certificates. Deliver repeated and conflicting full items
+directly: automatic canonical interception rejects duplicate authoring before
+the app sees it, while the compatibility adapter can swallow conflicts and
+substitute locally sent text. Keep publisher validation intact. Advance delivery
+versions while holding equal/older item revisions, so the controls exercise held
+content protection rather than stale-envelope rejection. Restore the publisher's
+known authoritative facts and current version with `setConversation` before
+publishing the later assistant processing marker. See the
+[receipt assertions](development-verification-evidence-that-cannot-pass-too-early.md#evidence-that-cannot-pass-too-early)
+and [counted Linux validation](development-verification-replay-validation.md#canonical-receipt-validation).
+
+[`queueSettlementThread.ts`](../../../e2e/fixtures/queueSettlementThread.ts)
+shares authored facts between `queued-own-settlement.spec.ts` and
+`queue-delivery-evidence.spec.ts`. The five settlement orders use the same native
+composition for repeated/equal/older full-item controls; treatment and installed
+observer coverage select canonical mode. Removal-first changes the held user
+item to `written` before delivery; receipt-first probes a later full fact with an
+older revision. Neither changes the accepted item identity or authoritative text.
+Observe the continuing assistant append before checking duplicate absence, row
+counts, connected handles, transcript order and retained expanded tool results.
+
+An actual `thread_catch_up` request alone cannot establish that compatibility
+translation was bypassed: the scripted adapter also receives that request.
+Hold explicit user acceptance while assistant content renders, then require zero
+authoritative user rows before publishing the matching device/message fact.
+This detects the adapter's inferred acceptance from assistant activity.
+
+The mounted queue observer subscribes through `createQueueTurnEvidence` and stops
+in `finally`. Delivery removes the queued identity while preserving the connected
+row; its completion snapshot must still be false. Require two ordered turns,
+each with its own marker and exactly one normal `turn_end`. `SECOND_` plus `DONE`
+must accumulate into the second marker, but even that full text cannot complete
+the oracle before its terminal fact. Keep the shared real/replay oracle intact.
+See [counted Linux validation](development-verification-replay-validation.md#canonical-queue-settlement-validation).
+
 Compatibility remains available to unmigrated siblings; eventual fixture removal
 belongs to [#2246](https://github.com/pyrycode/pyrycode-desktop/issues/2246).
 The queue migration is one slice of
 [#2211](https://github.com/pyrycode/pyrycode-desktop/issues/2211)'s full acceptance;
 the separate status and paging repairs remain with #2153 and #2191.
+
+The three [streamed-text fixtures](assistant-markdown-renderer-verification.md#canonical-streamed-text-fixtures)
+also select canonical mode, advertising `interactive` and complete `thread`
+capabilities. Each local builder supplies the session/current-session binding,
+ordered items and numeric agent-parent IDs; appends advance item revisions and
+thread versions. Rendered message times belong in `content.ts`, not solely in the
+envelope: omitting that fact loses the time suffix checked by `bubbleTextExactly`.
+Author `status: 'finished', active: false` explicitly for settlement, including
+after a tool appears, and preserve the standard whitespace cohort's active tail.
+Its `buildReplyFrames` returns content only for a `send_message` addressed to
+`SEEDED_ROW.id`; other requests return no custom frames so the canonical publisher
+can answer actual correlated queries. These cases bypass legacy translation and
+history aliases. Focused TypeScript checking must include all three specs and
+imported helpers explicitly; app/client-test projects alone exclude these fake
+specs. See [counted Linux validation](development-verification-replay-validation.md#canonical-streamed-text-validation).
 
 History responses are split into bounded item batches and end with a separate
 completion marker. The default empty-thread wait must complete before a spec

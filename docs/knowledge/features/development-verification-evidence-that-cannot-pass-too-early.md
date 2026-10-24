@@ -82,10 +82,25 @@ arrives. See the [named regression and counted Linux evidence](composer-send-lim
 A streaming assistant row includes cursor and metadata text, so an exact-text locator
 can miss a visible delivery marker. Target the assistant role wrapper with `hasText`
 for the positive barrier, then assert duplicate absence. In
-[`live-user-receipts.spec.ts`](../../../e2e/live-user-receipts.spec.ts), a later
-`assistant_delta` on the same encrypted stream proves the preceding receipts passed
-through the mounted app before the one-row checks; an immediate count alone could
-pass before either receipt arrived.
+[`live-user-receipts.spec.ts`](../../../e2e/live-user-receipts.spec.ts), the opening
+canonical assistant fact must render before checking the actual `thread_catch_up`
+request. Capture the public device identity and outbound `message_id`, then hold
+acceptance until the optimistic row is visible. An unrelated canonical assistant
+marker must leave that local row visible without the daemon timestamp, with
+accepted daemon text absent. Command receipt and assistant activity cannot establish
+acceptance. The explicit matching user fact and an exact-base revision supply
+different authoritative text and daemon time.
+
+After repeated full items and conflicting equal/older revisions, a later canonical
+assistant item on the same encrypted stream proves processing before checking
+unchanged text/time, one row per peer/own message and absent conflicts. User-row
+text includes the timestamp in the same container: exact `getByText` absence can
+pass while a conflicting row is visible, and exact presence can miss a pending
+row. Inspect `.message-row--user` with `hasText`/`toContainText` after the positive
+barrier. Keep the original assertions as well. The
+[native fixture exception](e2e-harness.md#scripted-and-native-thread-fixtures)
+preserves the raw controls; the [validation record](development-verification-replay-validation.md#canonical-receipt-validation)
+retains the legacy adapter's failed authoritative-text oracle.
 
 Visible assistant text can also precede `turn_end` processing. A whole-row replay
 snapshot taken then includes the streaming cursor, so normal settlement can look

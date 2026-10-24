@@ -5,6 +5,18 @@ See [development verification](development-verification.md) for the topic map.
 
 ## Layout and input
 
+[`user-whitespace.spec.ts`](../../../e2e/user-whitespace.spec.ts) uses canonical
+facts for six delivered and three queued cases. For each ordered composer send,
+observe the local row and Sending state with no supplied row, then accept using
+the public `window.pyry.deviceIdentity()` device ID and captured outbound message
+ID. Require the canonical row, exact text, settled count and no Sending before
+measuring. An optimistic echo can pass geometry without daemon acceptance.
+Queued items carry distinct positive queue handles; compare their heights with
+their own queued control because delivered metadata changes height. Keep mounted
+computed styles, glyph positions, line-height deltas, containment, chrome-inheritance
+checks and tolerances, including the hostile token plus 200 trailing spaces.
+See [counted Linux evidence](development-verification-replay-validation.md#canonical-user-whitespace-validation).
+
 Opacity compounds through ancestors: a label's computed opacity can be 1 while
 its enclosing row still fades everything to 0.5. Class strings and static markup
 cannot establish the painted emphasis. Measure the visible label and every ancestor

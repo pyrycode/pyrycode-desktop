@@ -1,0 +1,53 @@
+# Canonical background task drawer interaction gate
+
+## Files read
+- `e2e/background-task-drawer.spec.ts` → `capturingFake`, `turnState` and the continuous mounted scenario: preserve all six ordered interaction phases.
+- `e2e/fixtures/canonicalThread.ts` → `createCanonicalThread`: explicit retained facts, correlated query data and separate final certificates.
+- `e2e/fixtures/launchPairedApp.ts` → `LaunchPairedAppOptions`, `SEEDED_ROW`: canonical selection and initial conversation activation.
+- `e2e/status-icon-local-send.spec.ts` → scoped turn controls, complete-thread capability and opening-query observation.
+- `src/renderer/src/screens/conversation/threadTaskPresentation.ts` → `threadTaskPresentations`: membership, attribution, description and active lifecycle derive from linked task facts.
+- `src/renderer/src/screens/conversation/threadItemPresentation.ts` → `taskLinked`: raw task and tool identities must match their link.
+- `src/shared/wire/thread.ts` → `ThreadItem`: explicit session, agent, order and revision.
+- `CLAUDE.md`, `docs/knowledge/INDEX.md`, `docs/knowledge/features/e2e-harness.md`, `docs/knowledge/features/development-verification.md`, `docs/knowledge/features/development-verification-evidence-that-cannot-pass-too-early.md` → fixture ownership, canonical authoring and positive processing barriers.
+- `docs/recorded-tests.md`, `docs/client-replay-migration.md`, `playwright.config.ts`, `tsconfig.client-tests.json` → native/replay boundaries, configured prerequisite and focused TypeScript coverage.
+
+## Context
+Deliver one continuous mounted drawer gate using authored canonical facts, from #2227 / #2213 / feature root #2209. Only this spec and plan change. No production or visual change, documentation requirement or ADR. The remote feature-branch overlap check found no other branch editing the owned spec. Reuse merged canonical helpers; #2228's outcome changes are unnecessary here.
+
+## Design
+Create one canonical publisher with two preseeded conversation scopes. Each summary explicitly names its current session; each scope has its own epoch, version 1 and one shown active running `tool_call` item, with explicit session/Claude attribution, item identity, unique order and revision 1. The content's task and tool IDs match `task_link.task_id` and `task_link.tool_call_id`, with the original task description.
+
+Select `{ threadMode: 'canonical', thread }` and advertise complete thread capability. `capturingFake` records outbound envelopes and answers the initial list with only the first scoped summary. It supplies no content or history aliases. The publisher owns actual thread query replies and final certificates. Observe positive task content and the conversation's actual version-zero `thread_catch_up` at each opening. Assert no legacy history request was observed.
+
+Keep the original pill/menu/Close toggles, open outline, nonmodal send, geometry at both sizes, overlay Escape arbitration, focused-composer stop, idle Escape and conversation switch in their existing order. Sending remains an outbound observation, with explicit conversation/text identity checks; it does not accept a user row. Session-scoped thinking/idle controls carry matching envelope provenance and cannot alter task membership. Announce the second summary only at the original switch step; positively observe its task before asserting the first task's absence. No subsequent canonical item updates or acceptance are needed.
+
+## State + concurrency model
+No new production state or async tasks. The publisher synchronously retains authored seeds. Existing fixture teardown owns Electron, daemon and relay lifetimes. Keep one launch and one continuous drive, using existing awaited DOM and outbound-capture barriers. Finish Node checks before Electron ABI preparation; no native rebuild or output rebuild overlaps mounted execution.
+
+## State transitions and identity reuse
+Every row is covered by `the drawer toggles from the pill, leaves the composer usable, takes one Escape and survives a switch`.
+
+| Event | Oracle |
+| --- | --- |
+| First conversation opens | One running task pill, authored task visible after opening, actual scoped catch-up. |
+| Drawer repeatedly opens/closes | Original pill outline, menu and Close assertions; one continuous mount. |
+| Composer sends while drawer open | Typed value, exactly one captured send with owning conversation/text, drawer remains visible. |
+| Overlay and drawer both open | First Escape closes drawer only; second closes overlay. |
+| Scoped thinking, focused Escape | Stop visible before keypress, exactly one captured owning-conversation interrupt, drawer stays visible. |
+| Scoped idle, same focused Escape | Send visible before keypress, drawer closes with no second interrupt; task remains available. |
+| Switch conversations while open | Selected row identity, second scoped catch-up and second task content, first task absent, open treatment retained. |
+
+## Error handling
+No new failure or rejection branches. Keep existing identity/count/geometry controls and timeouts. Invalid canonical authoring fails at the existing publisher boundary. No compatibility path supplies content.
+
+## Testing strategy
+- First add the actual opening-query assertion to the existing legacy scenario and observe its expected failure, then migrate setup.
+- After the final merge of main: pre-verify with affected canonical publisher units; app and client-test typechecks; focused strict TypeScript including the owned spec and imported helpers; build.
+- Run the owned Playwright spec on Linux with retries zero and configured native-writer prerequisite. Record source/build identity, exact named test and executed/passed/failed/skipped counts, including failed evidence.
+- Dispatcher owns the complete configured application gate including captured clients, canonical activation, protected history/storage and native prerequisites; verifier checks matching counted evidence. No duplicate full-suite run here. Existing live-only assertions remain required in their original tiers; no fresh provider/encryption/physical-effect proof is introduced. Other operating systems are outside scope.
+
+## Open Questions
+None. All contracts are supplied by merged helpers; preserve compatibility for unmigrated siblings.
+
+## Scope check
+One independently useful mounted behaviour, three acceptance criteria, approximately 210 written lines including plan/evidence, zero production files, zero new exports, one migrated consumer and zero new production rejection branches. Both sketch and written-plan counts fit every ceiling. The analogous #2255 implementation added 59 and deleted 32 scenario lines; its plan/evidence added 69.

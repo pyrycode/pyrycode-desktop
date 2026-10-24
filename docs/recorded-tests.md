@@ -182,6 +182,16 @@ matching complete Linux gate retains captured-client replay, canonical activatio
 captured history, protected storage and original live-only assertions. No fresh
 provider, encryption or additional physical-effect proof is introduced.
 
+The [canonical side-action validation](knowledge/features/development-verification-replay-validation.md#canonical-side-action-validation)
+records all three `message-side-actions.spec.ts` cases passing on authored facts
+and correlated opening/query replies. Exact supplied send identities and the
+finished attached reply precede the independent partial stream. Trusted Copy,
+different-value control, OS clipboard readback and `stream-copy-readiness` remain
+in the serial `clipboard` project with `native-writer`; replay cannot replace
+them. The matching complete Linux gate retains canonical activation, captured
+history, protected storage, captured-client replay and original live-only
+assertions/exclusions. No new live proof is required; #2212 owns combined acceptance.
+
 On initial launch and every profile relaunch, the shared replay fixture probes
 `better-sqlite3` in Electron's main process before device binding and pairing. It
 resolves the installed SQLite package root, loads the genuine addon with

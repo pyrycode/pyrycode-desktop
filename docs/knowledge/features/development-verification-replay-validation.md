@@ -643,6 +643,67 @@ encryption or additional physical-effect proof was introduced. Compatibility
 remains for unmigrated siblings; #2212/#2209 retain combined feature acceptance,
 and #2153/#2191 remain separate repairs.
 
+## Canonical side-action validation
+
+The [PR #2275 verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2275#issuecomment-6388813234),
+accepted stage `060d5dea2f4b45e1ddd9d966633a9660a49ae53592068b89013b7ed811654900`,
+records PASS on Linux x86_64, 2026-10-24, at
+`5e3b01e33ace9147463dd8da2422e5fcc9f724cc`. Normal build provenance names that
+revision with `sourceDirty: false`. Implementation is unchanged from builder
+revision `b58259bfd5c7c296570bc6f872a57906cb120826`; the next commit records evidence.
+These are retained runs. The [plan](../../specs/architecture/2264-canonical-message-side-actions.md#builder-verification--linux-x86_64-2026-10-24)
+retains commands, focused TypeScript inputs and report hashes.
+
+| Retained Linux check | Executed / passed / failed / skipped |
+| --- | --- |
+| Builder three owned cases plus native prerequisite, retries zero | 4 / 4 / 0 / 0 |
+| Builder canonical-publisher units | 17 / 17 / 0 / 0 |
+| Supplied dispatcher unit gate 4, JUnit counts | 10045 / 10045 / 0 / 3 |
+| Complete configured application gate 7, `npx playwright test --reporter=json` | 542 / 542 / 0 / 4 |
+
+Unit totals use the supplied counted report; the verdict prose's larger 10,144
+aggregate is not used. All three owned tests were present and passed in both the
+builder run and matching complete gate, in the serialized `clipboard` project:
+
+- `copy and reply do not increase short or multi-line bubble heights or neighbour gaps`
+- `copy and reply hover layers surround only the pointed glyph without changing layout or keyboard focus`
+- `side copy and row cap retain sizing while metadata expands on hover and focus`
+
+The prerequisite `finite protected writer backlog preserves native keyboard and both event loops`
+was present and passed in both runs. The complete gate used four workers,
+zero retries and zero flaky results. All 29 captured-client cases passed with
+29 exchange receipts, zero remaining requests and no reported mismatch.
+Canonical activation/reconnect, captured history and protected native storage
+passed. This matching gate supplies complete-suite evidence once, superseding
+the earlier pending note. Full application log SHA-256:
+`7c6c00e389573d71adb0a00819e9efd649e07f9ee18f3db2cc5b09424831b2a8`.
+
+The [fixture contract](e2e-harness.md#scripted-and-native-thread-fixtures) and
+[message-bubble testing](conversation-shell-message-bubble-testing.md#streaming-copy-input-readiness)
+retain exact accepted identities, attached-reply terminal settlement, the active
+partial/cursor, prior different clipboard value, trusted Copy receipt and exact
+OS clipboard readback. `stream-copy-readiness` retained equal consecutive bounds
+and scroll geometry with focus/hover true. Layout, metadata, attachment, queued
+geometry/dequeue and standalone-offer assertions remain. Production and shared
+harness code are unchanged.
+
+Builder pre-verify passed 5/5; application/client-test typechecks, focused
+TypeScript checking of the owned spec/imported helpers/preload declarations and
+build passed. Verifier typechecks, docs guard, install, build and Electron
+preparation passed. The test-first legacy-content control remains failed:
+2 executed, 1 passed prerequisite, 1 failed owned case, 0 skipped, retries zero.
+It is not acceptance evidence.
+
+The four application skips remain two macOS badge cases, macOS window reopen
+and the existing system-prompt Reset fixme; three units were skipped. No skip
+counts as passed. macOS is outside this Linux ticket's verification scope.
+The [recorded-test contract](../../recorded-tests.md) and
+[migration inventory](../../client-replay-migration.md) retain original live-only
+assertions/exclusions. No fresh provider, encryption or additional physical-effect
+proof is required or claimed; native clipboard proof remains distinct from replay.
+\#2212 retains combined acceptance; compatibility remains for unmigrated siblings,
+with #2153/#2191 separate repairs.
+
 ## Counted Linux compatibility validation
 
 These are retained results accepted by the

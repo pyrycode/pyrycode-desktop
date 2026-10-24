@@ -72,7 +72,7 @@ The exact finished attached reply and absent cursor precede the independently
 authored running stream. Queue cancellation checks the outgoing conversation
 and queue handle; it does not establish daemon removal. See the
 [fixture contract](e2e-harness.md#scripted-and-native-thread-fixtures) and
-[counted Linux migration evidence](development-verification-replay-validation.md#canonical-side-action-validation).
+[counted Linux migration evidence](development-verification-replay-validation-canonical-message-lifecycle-diagnostics-validation.md#canonical-side-action-validation).
 
 ### Streaming copy input readiness
 

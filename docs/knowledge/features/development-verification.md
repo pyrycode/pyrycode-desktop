@@ -109,16 +109,16 @@ replacements, additions and changes; rejection preserves retained facts/checkpoi
 Boundary controls cover order zero, the maximum supported order, repositioning and
 one-item backward traversal without omissions or duplicates.
 
-The [canonical publisher verification record](development-verification-replay-validation.md#canonical-publisher-verification)
-retains named regressions and provenance: configured Linux application gate
-542 executed/passed, 0 failed, 4 skipped; retained macOS candidate run 544
-executed/passed, 0 failed, 2 skipped, both with zero retries. Default captured replay,
+The [canonical publisher record](development-verification-replay-validation-canonical-publisher-verification.md#canonical-publisher-verification)
+records named regressions: Linux application gate 542 executed/passed, 0 failed,
+4 skipped; retained macOS run 544 executed/passed, 0 failed, 2 skipped, both with
+zero retries. Default captured replay,
 native prerequisites and live-only assertions retain the boundaries in
 [recorded tests](../../recorded-tests.md) and the
 [migration inventory](../../client-replay-migration.md). These results add no fresh
 provider, encryption or physical-effect acceptance; no second-OS run is required.
 
-See [counted Linux compatibility validation](development-verification-replay-validation.md#counted-linux-compatibility-validation)
+See [counted Linux compatibility validation](development-verification-replay-validation-canonical-message-lifecycle-diagnostics-validation.md#counted-linux-compatibility-validation)
 for profile controls, retained failures and successful committed-input replay.
 
 ## Captured-close client tails

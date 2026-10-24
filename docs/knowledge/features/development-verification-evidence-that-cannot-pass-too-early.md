@@ -50,7 +50,7 @@ so acceptance cannot leave a local duplicate. Complete the assistant with an
 exact-base revision and require exact whole-bubble text plus cursor removal.
 Keep the wrong-conversation send guard and the default arm's lack of assistant
 facts: neither a misrouted send nor a command echo may satisfy the exact reply
-oracle. See the [counted Linux validation](development-verification-replay-validation.md#canonical-send-and-stream-validation).
+oracle. See the [counted Linux validation](development-verification-replay-validation-canonical-publisher-verification.md#canonical-send-and-stream-validation).
 
 The reset regression in
 [`composer-context-claude-reading.spec.ts`](../../../e2e/composer-context-claude-reading.spec.ts),
@@ -99,7 +99,7 @@ pass while a conflicting row is visible, and exact presence can miss a pending
 row. Inspect `.message-row--user` with `hasText`/`toContainText` after the positive
 barrier. Keep the original assertions as well. The
 [native fixture exception](e2e-harness.md#scripted-and-native-thread-fixtures)
-preserves the raw controls; the [validation record](development-verification-replay-validation.md#canonical-receipt-validation)
+preserves the raw controls; the [validation record](development-verification-replay-validation-canonical-publisher-verification.md#canonical-receipt-validation)
 retains the legacy adapter's failed authoritative-text oracle.
 
 Visible assistant text can precede canonical completion. A whole-row replay
@@ -120,7 +120,7 @@ establishes acceptance. Advance the same queued item to delivered, then redelive
 that accepted item through a higher revision. Keep the later rendered assistant
 replay barrier before comparing unchanged rows and one user row per message;
 settlement and replay processing are separate observations. The
-[canonical offline validation](development-verification-replay-validation.md#canonical-offline-held-delivery-validation)
+[canonical offline validation](development-verification-replay-validation-canonical-queue-settlement-validation.md#canonical-offline-held-delivery-validation)
 records the current nine-scenario coverage and Linux evidence; the
 [delivery verification](daemon-connection-disconnected-delivery.md#delivery-verification)
 retains the earlier controlled reproduction.
@@ -374,7 +374,7 @@ distinct synthetic sentinels, plain-only formats, pointer/keyboard activation,
 focus and geometry assertions in the serial `clipboard` project behind
 `native-writer`. An optimistic user bubble or stale matching clipboard could
 otherwise satisfy a copy assertion without proving the intended source. See
-[counted Linux clipboard evidence](development-verification-replay-validation.md#canonical-clipboard-validation).
+[counted Linux clipboard evidence](development-verification-replay-validation-canonical-message-lifecycle-diagnostics-validation.md#canonical-clipboard-validation).
 
 ## Question-answer interpretation and freshness
 

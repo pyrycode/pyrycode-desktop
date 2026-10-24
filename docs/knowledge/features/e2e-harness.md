@@ -147,6 +147,20 @@ certificates; it does not infer acceptance from composer sends or assistant acti
 Correlated session-settings replies retain `mid_turn_input`, context reading and
 explicit session provenance; live turn controls name the owning conversation.
 
+The legacy launcher calls the custom reply builder with the actual thread query
+before invoking its history alias. Observing `thread_catch_up` alone therefore
+cannot prove adapter bypass. In
+[`background-task-drawer.spec.ts`](../../../e2e/background-task-drawer.spec.ts),
+wait for the authored task description, require the owning conversation's
+version-zero catch-up, then assert zero captured `request_history` aliases.
+The [legacy red control](../../specs/architecture/2269-canonical-background-task-drawer.md#revisions)
+rendered the task and observed the real query but still captured one alias.
+Preseed both canonical scopes while listing only the first conversation at
+pairing; announce the second at the switch step and observe its task before
+asserting the first task's absence. Keep the single mounted interaction sequence.
+Session-bound thinking/idle controls arbitrate composer Escape without changing
+task membership; a captured send alone does not accept a user item.
+
 [`message-side-actions.spec.ts`](../../../e2e/message-side-actions.spec.ts) keeps
 its single-consumer fixture local and creates it afresh for each of three cases.
 It supplies an empty opening window, summary/current session, epoch, ordered

@@ -378,6 +378,16 @@ status displays one user row without queue actions while awaiting the eventual
 echo or placement; it does not assert final delivery. Terminal or hidden items
 can settle a send even when they are the first observed revision.
 
+The mounted [receipt scenario](../../../e2e/live-user-receipts.spec.ts) holds
+acceptance through an unrelated assistant marker, then explicitly supplies the
+captured device/message pair with different daemon text and time. Repeated full
+items and conflicting equal/older revisions at advancing delivery versions must
+preserve that accepted content and one row per peer/own message. Conflicts replace
+text rather than append a valid same-revision suffix, which has a separate
+extension contract. The [native fixture exception](e2e-harness.md#scripted-and-native-thread-fixtures)
+and [ordered row assertions](development-verification-evidence-that-cannot-pass-too-early.md#evidence-that-cannot-pass-too-early)
+prevent adapter inference or premature absence checks from satisfying this proof.
+
 Queued actions use genuine `content.queued_msg_id` handles with owning coordinates.
 Send now additionally requires the session's reported capability. The canonical
 mounted queue scenarios in

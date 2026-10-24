@@ -195,6 +195,64 @@ history, protected-storage coverage, native prerequisites and original live-only
 assertions. This test-only migration establishes no fresh provider, real-daemon,
 encryption or physical-effect proof and introduces no visual change.
 
+## Canonical receipt validation
+
+The [PR #2253 verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2253#issuecomment-6387337075),
+accepted stage `679496ad52a57a1ae235a15923915150f2a562b25ff2cd6bd57a20b134d4e79f`,
+records PASS on Linux x86_64, 2026-10-24, at
+`10b430a584d77bd32051e49cae5e80991962e5e7`. Normal-profile build provenance
+identifies that clean revision. The owned receipt spec is unchanged from builder
+implementation `b2aa72d17ca6831636ac73e188c6506fec8336dd` through documentation's
+starting head `0e45c7769f4f6062fbf959ff7bb5268a7c925dd5`. These are retained results;
+documentation runs only the docs guard. The
+[plan](../../specs/architecture/2249-canonical-user-receipts.md#verification--linux)
+retains commands, artifact locations and hashes.
+
+| Retained Linux check | Executed / passed / failed / skipped |
+| --- | --- |
+| Builder owned spec plus native writer prerequisite, `--retries 0` | 2 / 2 / 0 / 0 |
+| Builder send-store units | 13 / 13 / 0 / 0 |
+| Builder canonical-publisher and item-store units | 56 / 56 / 0 / 0 |
+| Supplied dispatcher unit gate 4, JUnit counts | 10045 / 10045 / 0 / 3 |
+| Complete configured application gate 7, `npx playwright test --reporter=json` | 542 / 542 / 0 / 4 |
+
+Unit totals use the supplied counted report; verifier prose separately lists
+10,144, so that larger aggregate is not used here. The verdict confirms all
+13 send-store, 39 item-store and 17 canonical-publisher tests passed. Both named
+mounted tests were present and passed in the builder run and application gate 7:
+
+- `live user envelopes draw with daemon time and preserve one optimistic echo`
+- `finite protected writer backlog preserves native keyboard and both event loops`
+
+The complete gate used four workers and all three configured projects, without
+selection/shard filters, retries, flaky outcomes or report errors. All 29
+captured-client scenarios passed with zero remaining requests; shared captured
+scenarios reported ready/complete native storage, including saved-profile
+processes. The captured thread case matched 45 requests and emitted 378 frames.
+Application report SHA-256:
+`70158357534304e6d07cf178983898405e7d7132df84245b9bd617ed2a88f58f`.
+The matching configured gate supplies complete-suite proof once.
+
+Builder pre-verify passed all five checks; application/client-test typechecks,
+focused TypeScript checking including the owned spec (absent from the normal
+client-test include list), and build passed. Node checks preceded Electron-native
+preparation. Verifier install, docs guard, application typecheck/build and native
+preparation passed; its `--no-suite` pre-verify passed three checks and intentionally
+skipped two, supplied by subsequent unit/build gates. Retained legacy-authority
+and initial selector failures each executed 2 tests: 1 passed, 1 failed, 0 skipped,
+retries zero. The legacy failure detects adapter substitution of local text;
+neither failure is converted into a pass.
+
+The four application skips are two macOS badge cases, macOS window reopen and the
+existing system-prompt-reset fixme. The three unit skips require explicit live
+relay/Noise credentials; no skip counts as passed. macOS is outside this Linux
+ticket's verification scope. These authored facts and historical captures add no
+fresh provider/daemon, encryption or physical-effect proof. The
+[recorded-test contract](../../recorded-tests.md) and
+[migration inventory](../../client-replay-migration.md) preserve captured history,
+protected storage, native prerequisites and original live-only assertions.
+[#2211](https://github.com/pyrycode/pyrycode-desktop/issues/2211) retains combined acceptance.
+
 ## Counted Linux compatibility validation
 
 These are retained results accepted by the

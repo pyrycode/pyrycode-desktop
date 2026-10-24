@@ -147,6 +147,23 @@ certificates; it does not infer acceptance from composer sends or assistant acti
 Correlated session-settings replies retain `mid_turn_input`, context reading and
 explicit session provenance; live turn controls name the owning conversation.
 
+[`message-side-actions.spec.ts`](../../../e2e/message-side-actions.spec.ts) keeps
+its single-consumer fixture local and creates it afresh for each of three cases.
+It supplies an empty opening window, summary/current session, epoch, ordered
+items and advancing versions in canonical mode. After observing version-zero
+catch-up, it reads the public device identity and binds each delivered user fact
+to that identity and the captured outbound message ID. Wait for the exact supplied
+read row and authoritative row count: repeated text or an optimistic attachment
+echo can otherwise satisfy a text-only barrier. Finished assistant facts carry
+explicit terminal status; settle the exact attached reply without a cursor before
+publishing the independent running assistant. Queued user and attachment-offer
+facts keep explicit handles/attachment identities, and Drop still observes the
+exact outbound `dequeue_message`. The production upload bridge is unchanged.
+Retain the serial clipboard project, native prerequisite and
+[trusted Copy readiness](conversation-shell-message-bubble-testing.md#streaming-copy-input-readiness);
+authored facts and replay cannot replace OS clipboard activation/readback.
+See [counted Linux validation](development-verification-replay-validation.md#canonical-side-action-validation).
+
 For an own send, capture its outbound `message_id` and obtain the authenticated
 public identity through `window.pyry.deviceIdentity()`. Supply both on the accepted
 `user_message`; keep the item ID distinct from `content.queued_msg_id`. Drop waits
@@ -189,6 +206,29 @@ known authoritative facts and current version with `setConversation` before
 publishing the later assistant processing marker. See the
 [receipt assertions](development-verification-evidence-that-cannot-pass-too-early.md#evidence-that-cannot-pass-too-early)
 and [counted Linux validation](development-verification-replay-validation.md#canonical-receipt-validation).
+
+[`message-lifecycle-diagnostics.spec.ts`](../../../e2e/message-lifecycle-diagnostics.spec.ts)
+uses the same native composition for exact duplicate acceptance. Require rendered
+opening content and the actual version-zero `thread_catch_up`. Keep idle and
+running sends at exactly `message-queued`, `message-sent` while an assistant fact
+renders; activity must not acknowledge either send. Accept the running send only
+with a queued full `user_message` matching the captured message ID and public
+device identity. A field-change update alone does not acknowledge a send.
+Repeat that identical item/revision/content at advancing delivery versions, then
+resynchronize retained items/version with `setConversation` before publishing the
+later assistant marker. Otherwise the marker can conflict with the directly
+delivered version instead of proving that repetition was processed.
+
+After the marker renders, require one connected authoritative queued row, its
+unchanged text and exactly one `message-acknowledged`. Click its real Drop button
+and check exactly one `dequeue_message` for the queue handle distinct from the
+item ID, followed by one local `message-dropped` with `user-cancel-request`.
+This records a cancellation request; it does not prove daemon removal. Preserve
+the sent connection UUID, four running-message records and two queued records
+before exercising unknown-conversation refusal through both typed IPC channels.
+That control yields only queued/dropped with `route-refused` and no third send.
+Both `TEXT_SECRET` log exclusions follow positive lifecycle observations,
+including refusal. See [counted Linux validation](development-verification-replay-validation.md#canonical-message-lifecycle-diagnostics-validation).
 
 [`queueSettlementThread.ts`](../../../e2e/fixtures/queueSettlementThread.ts)
 shares authored facts between `queued-own-settlement.spec.ts` and

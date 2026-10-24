@@ -164,6 +164,34 @@ protected storage/native prerequisites and all 29 captured-client exchanges.
 Original live-only assertions remain required; this synthetic migration adds no
 fresh provider, encryption or physical-effect proof. #2211 retains combined acceptance.
 
+The [canonical message lifecycle diagnostics validation](knowledge/features/development-verification-replay-validation.md#canonical-message-lifecycle-diagnostics-validation)
+records native duplicate full-item delivery, one acknowledgment, the real local
+Drop request, route refusal and content-free logs in `message-lifecycle-diagnostics.spec.ts`.
+Its matching complete Linux gate passes the owned case and native prerequisite,
+retaining captured-client replay, canonical activation, captured history and
+protected-storage coverage. Original live-only assertions remain required;
+authored facts add no fresh provider, encryption or physical-effect proof.
+Combined feature acceptance remains with #2211.
+
+The [canonical clipboard validation](knowledge/features/development-verification-replay-validation.md#canonical-clipboard-validation)
+records `message-copy.spec.ts` and `code-block-copy.spec.ts` passing on authored
+facts with explicit message acceptance. Their real Electron OS clipboard
+writes/readback remain in the serial `clipboard` project with its `native-writer`
+prerequisite; captured replay cannot replace these native interactions. The
+matching complete Linux gate retains captured-client replay, canonical activation,
+captured history, protected storage and original live-only assertions. No fresh
+provider, encryption or additional physical-effect proof is introduced.
+
+The [canonical side-action validation](knowledge/features/development-verification-replay-validation.md#canonical-side-action-validation)
+records all three `message-side-actions.spec.ts` cases passing on authored facts
+and correlated opening/query replies. Exact supplied send identities and the
+finished attached reply precede the independent partial stream. Trusted Copy,
+different-value control, OS clipboard readback and `stream-copy-readiness` remain
+in the serial `clipboard` project with `native-writer`; replay cannot replace
+them. The matching complete Linux gate retains canonical activation, captured
+history, protected storage, captured-client replay and original live-only
+assertions/exclusions. No new live proof is required; #2212 owns combined acceptance.
+
 On initial launch and every profile relaunch, the shared replay fixture probes
 `better-sqlite3` in Electron's main process before device binding and pairing. It
 resolves the installed SQLite package root, loads the genuine addon with

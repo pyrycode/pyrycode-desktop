@@ -1,30 +1,70 @@
-import type { Locator } from '@playwright/test'
-import { test, expect, seedConversationsFrame, SEEDED_ROW } from './fixtures/launchPairedApp'
+import type { Locator, Page } from '@playwright/test'
+import { createCanonicalThread } from './fixtures/canonicalThread'
+import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import { ATTACHMENT_UPLOAD_EVENT_CHANNEL } from '../src/shared/ipc/attachmentUpload'
 import type { AttachmentUploadEvent } from '../src/shared/ipc/attachmentUpload'
-import type { SendMessagePayload } from '../src/shared/wire/types'
+import type { Envelope, SendMessagePayload } from '../src/shared/wire/types'
+import type { ThreadItem, ThreadUpdate } from '../src/shared/wire/thread'
 
 const TS = '2026-10-05T12:00:00Z'
 const LONG = 'Long message uses the available thread width. '.repeat(45)
 const SHORT = 'Hi'
-let dequeues = 0
-const frames = (inbound: Uint8Array): Uint8Array[] => {
-  const envelope = decodeEnvelope(inbound)
-  if (envelope.type === 'dequeue_message') { dequeues++; return [] }
-  if (envelope.type !== 'send_message') return [seedConversationsFrame()]
-  const payload = envelope.payload as SendMessagePayload
-  const turnId = payload.message_id
-  return [
-    encodeEnvelope({ id: 19, type: 'message', ts: TS, payload: { ...payload, role: 'user',
-      attachments: payload.attachment_ids?.map(id => ({ attachment_id: id, filename: 'report.pdf' })) } }),
-    encodeEnvelope({ id: 20, type: 'assistant_delta', ts: TS, payload: {
-      conversation_id: SEEDED_ROW.id, turn_id: turnId, seq: 0, text: payload.text
-    } }),
-    encodeEnvelope({ id: 21, type: 'turn_end', ts: TS, payload: {
-      conversation_id: SEEDED_ROW.id, turn_id: turnId, stop_reason: 'end_turn'
-    } })
-  ]
+const SESSION = 'side-actions-session'
+const route = { conversation_id: SEEDED_ROW.id, epoch: 'side-actions-epoch' }
+
+function sideActions() {
+  let version = 1, nextId = 0, deviceId: string | undefined
+  const requests: Envelope[] = []
+  const sends: { payload: SendMessagePayload; user: ThreadItem; assistant: ThreadItem }[] = []
+  const thread = createCanonicalThread({ conversations: [{
+    summary: { ...SEEDED_ROW, current_session_id: SESSION }, epoch: route.epoch, version, items: []
+  }] })
+  const item = (kind: string, content: Record<string, unknown>, status = 'finished'): ThreadItem => ({
+    id: ++nextId, order: nextId * 10, rev: 1, kind, status,
+    active: status === 'running' || status === 'queued', shown: true, summary: '',
+    session: SESSION, content: { ts: TS, ...content }
+  })
+  const add = (item: ThreadItem): Uint8Array => {
+    const update: ThreadUpdate = { type: 'thread_item_added', payload: { ...route, version: ++version, item } }
+    return encodeEnvelope({ id: 100 + version, ts: TS, ...update })
+  }
+  const frames = (inbound: Uint8Array): Uint8Array[] => {
+    const envelope = decodeEnvelope(inbound)
+    requests.push(envelope)
+    if (envelope.type !== 'send_message') return []
+    const payload = envelope.payload as SendMessagePayload
+    if (payload.conversation_id !== SEEDED_ROW.id || deviceId === undefined)
+      throw new Error('Unexpected send scope or missing public device identity')
+    const user = { ...item('user_message', { text: payload.text, device_id: deviceId,
+      message_id: payload.message_id, attachments: payload.attachment_ids?.map(attachment_id => ({
+        attachment_id, filename: 'report.pdf'
+      })) }, 'delivered'), turn: payload.message_id }
+    const assistant = { ...item('assistant_message', { text: payload.text }), turn: payload.message_id }
+    sends.push({ payload, user, assistant })
+    return [add(user), add(assistant), encodeEnvelope({ id: 200 + version, type: 'turn_state', ts: TS,
+      session_id: SESSION, payload: { conversation_id: SEEDED_ROW.id, state: 'idle' } })]
+  }
+  return { item, add, requests, sends,
+    options: { threadMode: 'canonical' as const, thread,
+      helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: frames },
+    async ready(page: Page) {
+      await expect.poll(() => requests.find(e => e.type === 'thread_catch_up')?.payload)
+        .toMatchObject({ conversation_id: SEEDED_ROW.id, version: 0 })
+      const identity = await page.evaluate(() => window.pyry.deviceIdentity())
+      if (!identity.ok) throw new Error('Public device identity unavailable')
+      deviceId = identity.deviceId
+    },
+    async accepted(page: Page, count: number) {
+      await expect.poll(() => sends.length).toBe(count)
+      const sent = sends[count - 1]
+      await expect(page.locator(`[data-read-row="${sent.user.id}"] [data-thread-role="user"]`))
+        .toContainText(sent.payload.text)
+      await expect(page.locator('[data-read-row] [data-thread-role="user"]')).toHaveCount(count)
+      await expect(page.locator('[data-thread-role="user"]')).toHaveCount(count)
+      return sent
+    }
+  }
 }
 
 const geometry = (bubble: Locator) => bubble.evaluate(el => {
@@ -57,10 +97,13 @@ const dimensions = (bubble: Locator) => bubble.evaluate(el => {
 })
 
 test('copy and reply do not increase short or multi-line bubble heights or neighbour gaps', async ({ launchPairedApp }) => {
-  const { page, app } = await launchPairedApp({ buildReplyFrames: frames })
+  const scenario = sideActions()
+  const { page, app } = await launchPairedApp(scenario.options)
+  await scenario.ready(page)
   for (const [index, text] of [SHORT, LONG.slice(0, 240), SHORT].entries()) {
     await page.getByPlaceholder('Message…').fill(text)
     await page.getByRole('button', { name: 'Send' }).click()
+    await scenario.accepted(page, index + 1)
     await expect(page.locator('.bubble__markdown')).toHaveCount(index + 1)
   }
   for (const width of [800, 1280]) {
@@ -108,9 +151,12 @@ test('copy and reply do not increase short or multi-line bubble heights or neigh
 })
 
 test('copy and reply hover layers surround only the pointed glyph without changing layout or keyboard focus', async ({ launchPairedApp }) => {
-  const { page, app } = await launchPairedApp({ buildReplyFrames: frames })
+  const scenario = sideActions()
+  const { page, app } = await launchPairedApp(scenario.options)
+  await scenario.ready(page)
   await page.getByPlaceholder('Message…').fill(SHORT)
   await page.getByRole('button', { name: 'Send' }).click()
+  await scenario.accepted(page, 1)
   await expect(page.locator('.bubble__markdown')).toHaveCount(1)
   const layer = (button: Locator) => button.evaluate(el => {
     const style = getComputedStyle(el, '::before')
@@ -191,10 +237,13 @@ test('copy and reply hover layers surround only the pointed glyph without changi
 })
 
 test('side copy and row cap retain sizing while metadata expands on hover and focus', async ({ launchPairedApp }, testInfo) => {
-  const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: frames })
-  for (const text of [LONG, SHORT]) {
+  const scenario = sideActions()
+  const { page, app, daemon } = await launchPairedApp(scenario.options)
+  await scenario.ready(page)
+  for (const [index, text] of [LONG, SHORT].entries()) {
     await page.getByPlaceholder('Message…').fill(text)
     await page.getByRole('button', { name: 'Send' }).click()
+    await scenario.accepted(page, index + 1)
     await expect(page.locator('.bubble__markdown')).toHaveCount(text === SHORT ? 2 : 1)
     await expect(page.locator('.bubble__markdown').last()).toHaveText(text)
     await expect(page.locator('.bubble__cursor')).toHaveCount(0)
@@ -284,7 +333,9 @@ test('side copy and row cap retain sizing while metadata expands on hover and fo
   } satisfies AttachmentUploadEvent })
   await page.getByPlaceholder('Message…').fill('Attached report')
   await page.getByRole('button', { name: 'Send' }).click()
-  const attached = users.last()
+  const sentAttachment = await scenario.accepted(page, 3)
+  expect(sentAttachment.payload.attachment_ids).toEqual(['side-copy-upload'])
+  const attached = page.locator(`[data-read-row="${sentAttachment.user.id}"] [data-thread-role="user"]`)
   const attachment = attached.locator('.bubble__file')
   await expect(attachment).toBeVisible()
   await page.mouse.move(0, 0)
@@ -295,14 +346,15 @@ test('side copy and row cap retain sizing while metadata expands on hover and fo
   await expect(attached.locator('.bubble__meta-time')).toBeVisible()
   expect((await dimensions(attached))[1]).toBeGreaterThan(attachedSize[1])
 
-  // The attachment is an optimistic user echo; wait for its daemon reply and turn_end
-  // to commit before injecting an independent streaming turn.
+  // Settle the exact supplied reply and terminal state before the independent stream.
   await expect(assistants).toHaveCount(3)
   await expect(assistants.nth(2).locator('.bubble__markdown')).toHaveText('Attached report')
+  await expect(page.locator(`[data-read-row="${sentAttachment.assistant.id}"] .bubble__markdown`))
+    .toHaveText('Attached report')
   await expect(page.locator('.bubble__cursor')).toHaveCount(0)
-  daemon.pushFrame(encodeEnvelope({ id: 30, type: 'assistant_delta', ts: TS, payload: {
-    conversation_id: SEEDED_ROW.id, turn_id: 'stream', seq: 0, text: 'Streaming partial reply'
-  } }))
+  daemon.pushFrame(scenario.add({ ...scenario.item('assistant_message', {
+    text: 'Streaming partial reply'
+  }, 'running'), turn: 'stream' }))
   const tail = assistants.filter({ hasText: 'Streaming partial reply' })
   await expect(assistants).toHaveCount(4)
   await expect(tail).toHaveCount(1)
@@ -346,9 +398,9 @@ test('side copy and row cap retain sizing while metadata expands on hover and fo
     await streamCopy.evaluate(el => el.removeAttribute('data-copy-activation'))
   }
 
-  daemon.pushFrame(encodeEnvelope({ id: 31, type: 'queue_state', ts: TS, payload: {
-    conversation_id: SEEDED_ROW.id, queued: [{ queued_msg_id: 1, text: LONG, ts: TS }]
-  } }))
+  daemon.pushFrame(scenario.add(scenario.item('user_message', {
+    queued_msg_id: 1, text: LONG, device_id: 'other-device', message_id: 'queued-side-action'
+  }, 'queued')))
   const queued = page.locator('.message-row--queued')
   await expect(queued).toBeVisible()
   await expect(queued.locator('.message-actions--queued')).toHaveCount(1)
@@ -371,14 +423,15 @@ test('side copy and row cap retain sizing while metadata expands on hover and fo
   expect(q.gap).toBeCloseTo(12, 0)
   expect(q.centered).toBeCloseTo(0, 0)
   await queued.getByRole('button', { name: 'Drop queued message' }).click()
-  await expect.poll(() => dequeues).toBe(1)
+  await expect.poll(() => scenario.requests.filter(e => e.type === 'dequeue_message').length).toBe(1)
+  expect(scenario.requests.find(e => e.type === 'dequeue_message')?.payload)
+    .toEqual({ conversation_id: SEEDED_ROW.id, queued_msg_id: 1 })
 
   // Standalone file offers share base row classes but keep their original width and chrome.
-  daemon.pushFrame(encodeEnvelope({ id: 32, type: 'attachment_offered', ts: TS, payload: {
-    conversation_id: SEEDED_ROW.id,
+  daemon.pushFrame(scenario.add({ ...scenario.item('notice', {
     attachment_id: '4a5b6c7d-8e9f-4a0b-8c9d-4e5f6a7b8c9d',
     filename: 'report'.repeat(40) + '.pdf'
-  } }))
+  }), subtype: 'attachment_offered' }))
   const offer = page.locator('.bubble--attachment-offer')
   await expect(offer).toBeVisible()
   await expect(offer.locator('..')).not.toHaveClass(/message-row--text/)

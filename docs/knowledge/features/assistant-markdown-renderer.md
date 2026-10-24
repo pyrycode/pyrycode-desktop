@@ -340,6 +340,17 @@ for computed typography, spacing, progressive rendering and retained counted
 evidence. Static server renders establish markup; Electron checks establish
 computed styles and mounted behavior.
 
+The [canonical external-link cases](assistant-markdown-renderer-verification.md#canonical-external-link-fixtures)
+observe the opening thread query and absence of anchors before a trusted composer
+send to the opened conversation. Keep that route guard: an unconditional fixture
+reply could hide a send routed elsewhere. Complete the authored assistant item
+with an exact-base revision; assistant activity supplies no user acceptance.
+Before clicking, replace main-process `shell.openExternal` with the recorder.
+Observe exactly one expected URL there before checking unchanged window count,
+document URL and visible composer. Otherwise an inert link could satisfy every
+navigation absence check. These cases prove application handoff routing without
+launching a browser or Obsidian.
+
 The [canonical streamed-text cohort](assistant-markdown-renderer-verification.md#canonical-streamed-text-fixtures)
 authors sessions, numeric parent identities, revisioned appends and completion in
 the three existing attribution/whitespace/progressive specs. Put the rendered

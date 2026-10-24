@@ -47,7 +47,7 @@ raw `textContent` reads in the real-claude tier — see
 e2e](real-claude-liveness-e2e.md#assertions--content-agnostic-two-turn-liveness) for the fix and the sweep
 method that finds the next one.
 
-**Side-actions geometry and reveal** (`e2e/message-side-actions.spec.ts`, fake transport): both sides
+**Side-actions geometry and reveal** (`e2e/message-side-actions.spec.ts`, canonical fake transport): both sides
 with long and short text at 800/1280/1800 window widths, centred 900px outer cap, 40px insets,
 13px stretching actions column, 12px row gap, centred copy/reply stack, both glyph sizes, 12px glyph
 spacing, separate targets and thread overflow containment. Centring copy alone would reject the
@@ -61,6 +61,18 @@ and Cancel activation without copy/reply/meta, and guards standalone-offer sizin
 Queued geometry, fixture setup and counted browser/visual evidence are in
 [queued-action testing](conversation-shell-conversation-and-modals.md#queued-action-testing). Static tests establish
 the image-button markup; the row's `:focus-within` rule applies to image buttons too.
+
+All three scenarios use fresh local `createCanonicalThread` fixtures, including
+the empty opening catch-up, queued user and standalone attachment offer. Each
+send must render its supplied `data-read-row` with the actual public device ID
+and outbound message ID; optimistic text alone cannot settle it. Distinct item
+IDs/orders and message-based turn IDs keep repeated “Hi” sends separate.
+The upload-completion IPC seam retains explicit attachment IDs and filenames.
+The exact finished attached reply and absent cursor precede the independently
+authored running stream. Queue cancellation checks the outgoing conversation
+and queue handle; it does not establish daemon removal. See the
+[fixture contract](e2e-harness.md#scripted-and-native-thread-fixtures) and
+[counted Linux migration evidence](development-verification-replay-validation.md#canonical-side-action-validation).
 
 ### Streaming copy input readiness
 
@@ -88,6 +100,8 @@ offset/content height with both focus and hover held. Ordinary `Locator.click()`
 must produce a trusted click receipt and replace the real OS clipboard with exactly
 “Streaming partial reply”. An earlier OS readback must equal “Hi”, so stale matching
 contents from a preceding execution cannot make the final assertion pass.
+The `stream-copy-readiness` attachment retains the consecutive geometry, focus
+and hover observations; canonical input migration preserves this native proof.
 Row-cap, geometry, metadata hover/focus, attachment, queued/drop and standalone-offer
 assertions remain, as do clipboard-project serialization and
 [desktop isolation](e2e-harness-desktop-isolation.md#desktop-isolation-default-tier-launches).

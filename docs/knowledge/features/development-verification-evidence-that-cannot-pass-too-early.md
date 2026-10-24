@@ -348,6 +348,34 @@ genuine hook-to-main receiver and observer lifetime evidence from the reviewed
 head. No native focus recovery or fresh live provider behavior is established;
 other operating systems are outside this macOS ticket's verification scope.
 
+## Canonical clipboard fixtures
+
+[`message-copy.spec.ts`](../../../e2e/message-copy.spec.ts) and
+[`code-block-copy.spec.ts`](../../../e2e/code-block-copy.spec.ts) start with empty
+canonical conversations and explicit current-session metadata. The publisher
+owns correlated opening/page/catch-up replies; the request observer returns no
+fabricated content. Capture the trusted composer send and check its conversation
+and text before publishing reply facts. Require rendered Markdown or code blocks
+before checking the opening `thread_catch_up`; reject `request_history` and
+`history_page` aliases. A recorded send alone proves neither delivery nor rendering.
+
+Message copy first renders an active assistant item and cursor, then checks zero
+authoritative user rows. Only the explicit delivered user fact, using the submitted
+text, captured `message_id` and public device ID, may replace the local echo.
+Require its numeric `[data-read-row]` wrapper and one total user bubble before
+settling the assistant. User order 10 precedes assistant order 20 even though
+acceptance arrives later; versions advance 2 → 3 → 4, and settlement changes the
+assistant from revision 1 to 2 with `base_rev: 1`. Cursor removal and the rendered
+heading establish settled Markdown before copying its original source. Code copy
+can publish its finished assistant item directly after the send guard.
+
+Canonical facts change fixture input only. Keep Electron OS clipboard readback,
+distinct synthetic sentinels, plain-only formats, pointer/keyboard activation,
+focus and geometry assertions in the serial `clipboard` project behind
+`native-writer`. An optimistic user bubble or stale matching clipboard could
+otherwise satisfy a copy assertion without proving the intended source. See
+[counted Linux clipboard evidence](development-verification-replay-validation.md#canonical-clipboard-validation).
+
 ## Question-answer interpretation and freshness
 
 Selected-label mention order cannot establish answer delivery: correct contrastive prose

@@ -50,3 +50,6 @@ None. The merged publisher supplies the required complete-thread route without s
 
 ## Scope check
 Forecast approximately 350 written lines including this plan, zero production files, zero new exported types/components/stores, zero external consumer migrations, three acceptance criteria and zero production rejection branches; below every builder ceiling. Recheck the final diff before publishing.
+
+## Revisions
+2026-10-24: The first focused cohort exposed missing authored message timestamps: `bubbleTextExactly` requires the original rendered time suffix. Supply `content.ts` directly, as read by `timestamp` in `threadItemPresentation.ts`, in all three local message builders. Preserve every original assertion and timeout. This is a missing fixture fact within the original migration, with no production expansion. Failed evidence remains in `/tmp/builder-2223/focused.json` and `focused-results/`.

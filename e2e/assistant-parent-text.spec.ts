@@ -11,9 +11,9 @@ function parentThread() {
   const thread = createCanonicalThread({ conversations: [{ summary: { ...SEEDED_ROW, current_session_id: session },
     epoch: route.epoch, version, items: [] }] })
   const frame = (update: ThreadUpdate) => encodeEnvelope({ id: version, ts, ...update })
-  const add = (id: number, kind: string, content: unknown, parent = 0, active = kind !== 'assistant_message'): Uint8Array => frame({
+  const add = (id: number, kind: string, content: Record<string, unknown>, parent = 0, active = kind !== 'assistant_message'): Uint8Array => frame({
     type: 'thread_item_added', payload: { ...route, version: ++version, item: {
-      id, order: id * 10, rev: 1, kind, content, parent, session, turn: 'parent-text-turn',
+      id, order: id * 10, rev: 1, kind, content: { ...content, ts }, parent, session, turn: 'parent-text-turn',
       status: active ? 'running' : 'finished', active, shown: true, summary: ''
     } satisfies ThreadItem }
   })

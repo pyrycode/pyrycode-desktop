@@ -15,7 +15,7 @@ function markdownThread() {
     revisions.set(id, 1)
     const item: ThreadItem = { id, order: id * 10, rev: 1, session, turn: `turn-${id}`,
       kind: tool ? 'tool_call' : 'assistant_message', status: 'running', active: true, shown: true, summary: '',
-      content: tool ? { name: 'Read', input_summary: 'synthetic.ts', result: null } : { text } }
+      content: tool ? { name: 'Read', input_summary: 'synthetic.ts', result: null } : { text, ts: '2026-10-07T00:00:00Z' } }
     return frame({ type: 'thread_item_added', payload: { ...route, version: ++version, item } })
   }
   const revision = (id: number) => {

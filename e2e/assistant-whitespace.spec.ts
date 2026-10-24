@@ -255,7 +255,7 @@ function whitespaceThread(streamingSource?: string) {
   const add = (id: number, text: string) => {
     revisions.set(id, 1)
     const item: ThreadItem = { id, order: id * 10, rev: 1, kind: 'assistant_message', session,
-      turn: `turn-${id}`, status: 'running', active: true, shown: true, summary: '', content: { text } }
+      turn: `turn-${id}`, status: 'running', active: true, shown: true, summary: '', content: { text, ts: FIXED_TS } }
     return frame({ type: 'thread_item_added', payload: { ...route, version: ++version, item } })
   }
   const revision = (id: number) => {

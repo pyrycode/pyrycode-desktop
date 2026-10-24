@@ -660,16 +660,16 @@ Credentialed live acceptance remains pending in the live runbook.
 
 [`e2e/hosted-app-links.spec.ts`](../../../e2e/hosted-app-links.spec.ts) clicks links
 in the production conversation renderer through privileged preload/IPC and inspects
-native hosted content and fake-daemon dispatch. `launchPairedApp` uses legacy
-non-UUID host IDs; use `skipPairing` and spec-local canonical UUIDv4 pairing for
-this grammar instead of silently testing targets the parser must refuse.
+native content and fake-daemon dispatch. Use `skipPairing` and spec-local UUIDv4
+pairing; the launcher's default IDs fail this grammar. Each host owns a canonical
+publisher with explicit summary/session and epoch; equal app IDs retain their
+owning conversations.
+Observe version-zero `thread_catch_up` and rendered links; reject `request_history`
+aliases, including during reconnect.
 
-The configured verifier gate on `fd19fde4bd34febc3111693f2171d62a520015a4`,
-2026-10-15, ran `npx playwright test --reporter=json`: **436 executed, 436 passed,
-0 failed, 3 skipped**. All four named cases below were present and passed, as
-confirmed by the dispatcher gate report and
-[final verifier PASS](https://github.com/pyrycode/pyrycode-desktop/pull/2005#issuecomment-6191844871).
-The skips were three macOS-only badge/window lifecycle cases on Linux.
+[Linux evidence](development-verification-replay-validation-canonical-publisher-verification.md#canonical-hosted-link-validation)
+records 4/4 owned cases and 1/1 native prerequisite passed, 0 failed/skipped.
+Complete gate: 542 executed/passed, 0 failed, 4 skipped.
 
 | Passed scenario | Behavior covered |
 | --- | --- |

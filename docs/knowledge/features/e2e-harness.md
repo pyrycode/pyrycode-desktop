@@ -147,6 +147,34 @@ certificates; it does not infer acceptance from composer sends or assistant acti
 Correlated session-settings replies retain `mid_turn_input`, context reading and
 explicit session provenance; live turn controls name the owning conversation.
 
+[`hosted-app-links.spec.ts`](../../../e2e/hosted-app-links.spec.ts) selects canonical
+mode separately for both hosts, including `control.secondServer` and reconnect
+frames. Keep spec-local UUID pairing: the launcher's default non-UUID host IDs
+would exercise parser refusal instead of routing. Each publisher starts with an
+empty window, the original owning conversation, explicit summary/current session,
+epoch and version. Hosts intentionally share an app ID and item IDs, so sharing
+one publisher would destroy ownership isolation. Observe the opening
+`thread_catch_up` at version zero, rendered links and a second query after reconnect;
+reject every `request_history` alias. Running assistant facts carry explicit
+sessions and safe unique orders. Settlement changes the same item's exact base
+revision and adds a finished `turn_end` fact; wait for actual preload receipt and
+cursor removal before settled activation. No send or inferred acceptance is needed.
+
+The canonical publisher allows only the six hosted frame types `apps`,
+`app_updated`, `app_removed`, `app_cancelled`, `app_response` and
+`app_response_chunk` in addition to its existing controls. These pass through as
+the original byte object, preserving envelope IDs, `in_reply_to`, app/release
+identity, revisions, resource headers and chunk data without changing retained
+thread facts. A withheld `list_apps` reply stays empty; an allowance must not
+manufacture discovery completion. The regression
+`passes hosted replies and updates byte-for-byte without changing thread facts`
+exercises both `publish` and `reply`, repeats delivery and compares subsequent
+thread queries unchanged. Retired `assistant_delta`, `message`, `history_page`
+and legacy `turn_end` frames remain rejected. Reader attachment passthrough is a
+separate additive extension; preserve both allowances when integrating it.
+See [hosted-link processing barriers](development-verification.md#hosted-app-link-verification)
+and [counted Linux validation](development-verification-replay-validation-canonical-publisher-verification.md#canonical-hosted-link-validation).
+
 The legacy launcher calls the custom reply builder with the actual thread query
 before invoking its history alias. Observing `thread_catch_up` alone therefore
 cannot prove adapter bypass. In

@@ -32,6 +32,10 @@ Playwright's `_electron` API launches the project's **own** `electron` binary an
 
 Build before launching and leave `out/` unchanged until Electron tests finish. A concurrent
 rebuild replaces the renderer assets and can invalidate launch evidence.
+Pre-verify already owns Node-native preparation; a redundant concurrent manual
+rebuild can collide in the native build directory before units execute. Finish
+that preparation and Node checks before Electron-native preparation and mounted
+execution; keep the native output unchanged until those checks finish.
 
 ### Launch-hook readiness
 
@@ -215,6 +219,23 @@ belongs to [#2246](https://github.com/pyrycode/pyrycode-desktop/issues/2246).
 The queue migration is one slice of
 [#2211](https://github.com/pyrycode/pyrycode-desktop/issues/2211)'s full acceptance;
 the separate status and paging repairs remain with #2153 and #2191.
+
+[`status-icon-local-send.spec.ts`](../../../e2e/status-icon-local-send.spec.ts)
+selects canonical mode and waits for its opening fact before checking the actual
+version-zero `thread_catch_up`. To test identity rejection independently, give the
+foreign-device queued fact the captured outgoing message ID, and the id-less fact
+the authenticated own-device ID. Both rows must render while `Sending…` and the
+spinner remain; otherwise one missing identity field could mask a broken check
+of the other. Only the matching device/message fact advances to `Waiting for Claude`.
+Delivery revises that same item with its original queue handle and distinct text;
+observe the delivered text before checking queue, feedback and spinner absence.
+Thinking, idle and failure controls name the bound session and conversation.
+After idle, an ordered assistant marker must render before checking absent feedback
+and spinning, alongside the still-visible icon. The second send's exact failure
+copy similarly precedes clearing assertions. These controls retain the local
+pre-acceptance interval without treating command receipt or activity as acceptance;
+they add no duplicate-wire proof. See the
+[counted Linux validation](development-verification-replay-validation.md#canonical-local-send-status-validation).
 
 The three [streamed-text fixtures](assistant-markdown-renderer-verification.md#canonical-streamed-text-fixtures)
 also select canonical mode, advertising `interactive` and complete `thread`

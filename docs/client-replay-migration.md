@@ -98,6 +98,16 @@ strict replay and causal validation. Every original live-only assertion remains;
 this migration adds no fresh provider, encryption or physical-effect proof.
 Compatibility remains for unmigrated siblings; #2211 owns combined acceptance.
 
+The mounted `status-icon-local-send.spec.ts` selects canonical mode with explicit
+device/message acceptance and lifecycle revisions. Its
+[counted Linux evidence](knowledge/features/development-verification-replay-validation.md#canonical-local-send-status-validation)
+retains the ordered local feedback/icon controls and complete configured gate,
+including canonical activation, captured history and protected-storage/native
+coverage. Every original live-only assertion remains; authored facts add no fresh
+provider, encryption or physical-effect proof. Compatibility remains for unmigrated
+siblings; #2211 owns combined acceptance, with #2169's missing-acceptance recovery
+and #2153/#2191 repairs separate.
+
 Encryption interoperability, handshakes, reconnect transport, real process
 liveness, native platform integration, and daemon/tool filesystem effects cannot
 be established by application-message replay. Their live checks remain required.

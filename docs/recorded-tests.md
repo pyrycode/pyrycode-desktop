@@ -121,6 +121,13 @@ pass. Those authored cases exercise canonical activation and queue controls;
 captured history, protected storage, native prerequisites and the original
 live-only assertions retain their existing proof requirements.
 
+The [canonical send/stream validation](knowledge/features/development-verification-replay-validation.md#canonical-send-and-stream-validation)
+records the authored pending-to-accepted user row and active/completed reply in
+`send-and-stream.spec.ts`. Its matching complete Linux application gate includes
+all 29 captured-client cases and the native writer prerequisite; that gate
+supplies complete-suite proof once. Authored fake facts add no fresh provider,
+encryption or physical-effect proof, and preserve the replay/live boundaries above.
+
 On initial launch and every profile relaunch, the shared replay fixture probes
 `better-sqlite3` in Electron's main process before device binding and pairing. It
 resolves the installed SQLite package root, loads the genuine addon with

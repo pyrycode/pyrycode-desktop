@@ -60,6 +60,13 @@ protected-storage coverage, native prerequisites and every original live-only
 assertion in place. The live queue and interrupt scenarios in the inventory
 continue to own real child consumption/stopping and filesystem effects.
 
+The mounted `send-and-stream.spec.ts` also uses authored canonical facts. Its
+[counted Linux evidence](knowledge/features/development-verification-replay-validation.md#canonical-send-and-stream-validation)
+covers explicit own-device/message acceptance and exact active/completed replies,
+alongside the complete configured application/replay gate. This synthetic client
+coverage preserves captured history, protected storage, native prerequisites and
+the original live-only assertions; it adds no fresh provider or physical-effect proof.
+
 Encryption interoperability, handshakes, reconnect transport, real process
 liveness, native platform integration, and daemon/tool filesystem effects cannot
 be established by application-message replay. Their live checks remain required.

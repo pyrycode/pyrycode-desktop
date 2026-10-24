@@ -1,9 +1,11 @@
 import type { Locator, Page } from '@playwright/test'
 import { test, expect, SEEDED_ROW, SECOND_SEEDED_ROW } from './fixtures/launchPairedApp'
 import { conversationStateFake } from './fixtures/conversationStateFake'
+import { createCanonicalThread } from './fixtures/canonicalThread'
 import { confirmCreateChat } from './fixtures/confirmCreateChat'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
-import type { SendMessagePayload } from '../src/shared/wire/types'
+import type { ConversationCreatedPayload, ConversationSummary, SendMessagePayload } from '../src/shared/wire/types'
+import type { ThreadUpdate } from '../src/shared/wire/thread'
 
 const TS = '2026-07-07T12:00:00.000Z'
 const USER = 'A user "quote"\nsecond line'
@@ -11,15 +13,46 @@ const PARTIAL = '# Heading\nA "literal" quote'
 const SUFFIX = '\n```ts\nconst x = 1\n```'
 const SOURCE = PARTIAL + SUFFIX
 const DRAFT = '  Existing draft  '
+const SESSION = 'reply-session'
+const EPOCH = 'reply-epoch'
+
+// Every host owns its own facts, including when conversation and item IDs coincide.
+function replyHost(rows: ConversationSummary[] = [SEEDED_ROW]) {
+  const summaries = rows.map(row => ({ ...row, current_session_id: SESSION }))
+  const thread = createCanonicalThread({ conversations: summaries.map(summary => ({
+    summary, epoch: EPOCH, version: 1, items: []
+  })) })
+  // The pairing drive opens one discovered row; other registered chats are announced afterward.
+  const controls = conversationStateFake({ conversations: summaries.slice(0, 1) })
+  return { threadMode: 'canonical' as const, thread, buildReplyFrames: (inbound: Uint8Array) => {
+    const request = decodeEnvelope(inbound)
+    expect(request.type).not.toBe('request_history')
+    if (!['list_conversations', 'create_conversation'].includes(request.type)) return []
+    return controls(inbound).map(bytes => {
+      const frame = decodeEnvelope(bytes)
+      if (frame.type !== 'conversation_created') return bytes
+      const summary: ConversationSummary = { ...frame.payload as ConversationCreatedPayload,
+        is_archived: false, last_message_ts: TS, current_session_id: SESSION }
+      thread.setConversation({ summary, epoch: EPOCH, version: 1, items: [] })
+      return encodeEnvelope({ ...frame, payload: summary })
+    })
+  } }
+}
 const quote = (label: string, text: string): string => `${label}:\n"${text}"\n`
-const assistant = (text: string, seq = 0) => encodeEnvelope({
-  id: 20 + seq, type: 'assistant_delta', ts: TS,
-  payload: { conversation_id: SEEDED_ROW.id, turn_id: 'reply-turn', seq, text }
+const route = { conversation_id: SEEDED_ROW.id, epoch: EPOCH }
+const update = (event: ThreadUpdate) => encodeEnvelope({ id: 20, ts: TS, ...event })
+const assistant = (text: string, seq = 0) => update(seq === 0 ? {
+  type: 'thread_item_added', payload: { ...route, version: 3, item: {
+    id: 20, order: 20, rev: 1, kind: 'assistant_message', status: 'running', active: true,
+    shown: true, summary: '', session: SESSION, turn: 'reply-turn', content: { text }
+  } }
+} : {
+  type: 'thread_text_append', payload: { ...route, version: 4, item_id: 20, base_rev: 1, rev: 2, text }
 })
-const turnEnd = () => encodeEnvelope({
-  id: 30, type: 'turn_end', ts: TS,
-  payload: { conversation_id: SEEDED_ROW.id, turn_id: 'reply-turn', stop_reason: 'end_turn' }
-})
+const turnEnd = (baseRev = 1) => update({ type: 'thread_item_changed', payload: {
+  ...route, version: 5, item_id: 20, base_rev: baseRev, rev: baseRev + 1,
+  changes: { status: 'finished', active: false, ended_order: 21 }
+} })
 
 async function openRow(page: Page, name: string): Promise<void> {
   await page.locator('.channel-list__row').filter({ hasText: name })
@@ -37,7 +70,7 @@ declare global { interface Window { heldReplyDrain: { received: () => number; re
 
 test('held suffix distinguishes visible partial content from current-source readiness', async ({ launchPairedApp }, info) => {
   const { page, daemon } = await launchPairedApp({
-    buildReplyFrames: conversationStateFake({ conversations: [SEEDED_ROW] })
+    ...replyHost()
   })
   daemon.pushFrame(assistant(PARTIAL))
   const row = page.locator('.message-row--daemon').filter({ hasText: 'literal' })
@@ -85,7 +118,7 @@ test('held suffix distinguishes visible partial content from current-source read
   let sourceReady = false
   try {
     daemon.pushFrame(assistant(SUFFIX, 1))
-    daemon.pushFrame(turnEnd())
+    daemon.pushFrame(turnEnd(2))
     await expect.poll(() => page.evaluate(() => window.heldReplyDrain.received())).toBe(1)
     await page.waitForTimeout(100) // Challenge the runtime's 50 ms timer fallback too.
     await expect(markdown).toBeVisible()
@@ -121,21 +154,30 @@ test('held suffix distinguishes visible partial content from current-source read
 })
 
 test('pointer and keyboard replies append current source, focus once, and send the edited quote intact', async ({ launchPairedApp }) => {
-  const fake = conversationStateFake({ conversations: [SEEDED_ROW] })
+  const host = replyHost()
   const sent: SendMessagePayload[] = []
-  const { page, daemon, app } = await launchPairedApp({ buildReplyFrames: inbound => {
+  const { page, daemon, app } = await launchPairedApp({ ...host, buildReplyFrames: inbound => {
     const frame = decodeEnvelope(inbound)
     if (frame.type === 'send_message') {
       sent.push(frame.payload as SendMessagePayload)
       return []
     }
-    return fake(inbound)
+    return host.buildReplyFrames(inbound)
   } })
   await page.setViewportSize({ width: 1280, height: 800 })
   const input = page.locator('.composer__input')
   await input.fill(USER)
   await page.getByRole('button', { name: 'Send', exact: true }).click()
   await expect.poll(() => sent.length).toBe(1)
+  const identity = await page.evaluate(() => window.pyry.deviceIdentity())
+  expect(identity.ok).toBe(true)
+  if (!identity.ok) throw new Error('Authenticated device identity unavailable')
+  daemon.pushFrame(update({ type: 'thread_item_added', payload: { ...route, version: 2, item: {
+    id: 10, order: 10, rev: 1, kind: 'user_message', status: 'delivered', active: false,
+    shown: true, summary: '', session: SESSION, turn: 'reply-turn', content: {
+      text: USER, device_id: identity.deviceId, message_id: sent[0].message_id, ts: TS
+    }
+  } } }))
   daemon.pushFrame(assistant(PARTIAL))
   const assistantRow = page.locator('.message-row--daemon').filter({ hasText: 'literal' })
   const reply = assistantRow.getByRole('button', { name: 'Reply to message' })
@@ -147,7 +189,7 @@ test('pointer and keyboard replies append current source, focus once, and send t
 
   // The same mounted control must read the latest streamed source at activation.
   daemon.pushFrame(assistant(SUFFIX, 1))
-  daemon.pushFrame(turnEnd())
+  daemon.pushFrame(turnEnd(2))
   await expect(assistantRow.locator('.bubble__markdown pre code')).toHaveText('const x = 1\n')
   await expect(assistantRow.locator('.bubble__cursor')).toHaveCount(0)
   await reply.focus()
@@ -201,9 +243,9 @@ test('pointer and keyboard replies append current source, focus once, and send t
   expect(geometry.opacity).toBe('1')
   await reply.hover()
   expect(await reply.evaluate(el => getComputedStyle(el).backgroundColor)).toBe('rgba(0, 0, 0, 0)')
-  await page.screenshot({ path: '/tmp/builder-1779/reply-1280.png', animations: 'disabled' })
+  await page.screenshot({ path: '/tmp/builder-2263/reply-1280.png', animations: 'disabled' })
   await page.setViewportSize({ width: 800, height: 800 })
-  await page.screenshot({ path: '/tmp/builder-1779/reply-800.png', animations: 'disabled' })
+  await page.screenshot({ path: '/tmp/builder-2263/reply-800.png', animations: 'disabled' })
   await page.setViewportSize({ width: 1280, height: 800 })
 
   await page.locator('.conversation__overflow-trigger').click()
@@ -237,22 +279,22 @@ test('pointer and keyboard replies append current source, focus once, and send t
 test('inline permission replies focus immediately without dismissal replay, and drafts and focus stay isolated on chat switch', async ({ launchPairedApp }) => {
   const other = { ...SEEDED_ROW, id: 'other-reply-chat', name: 'Other reply discussion' }
   const { page, daemon } = await launchPairedApp({
-    buildReplyFrames: conversationStateFake({ conversations: [SEEDED_ROW] })
+    ...replyHost([SEEDED_ROW, other])
   })
   daemon.pushFrame(encodeEnvelope({ id: 39, type: 'conversations', ts: TS,
-    payload: { conversations: [SEEDED_ROW, other] } }))
+    payload: { conversations: [SEEDED_ROW, other].map(row => ({ ...row, current_session_id: SESSION })) } }))
   const input = page.locator('.composer__input')
   const reply = page.getByRole('button', { name: 'Reply to message' })
   const permission = page.locator('.conversation__thread .permission-panel')
   const showPermission = (id: string): void => daemon.pushFrame(encodeEnvelope({
-    id: 40, type: 'modal_shown', ts: TS, payload: {
+    id: 40, type: 'modal_shown', ts: TS, session_id: SESSION, payload: {
       conversation_id: SEEDED_ROW.id, modal_id: id, class: 'permission',
       title: 'Read a file', prompt: 'Allow reading the file?', default_to_no: true,
       options: [{ id: 'deny', label: 'Deny' }], default_option_id: 'deny'
     }
   }))
   const dismissPermission = (id: string): void => daemon.pushFrame(encodeEnvelope({
-    id: 41, type: 'modal_dismissed', ts: TS,
+    id: 41, type: 'modal_dismissed', ts: TS, session_id: SESSION, conversation_id: SEEDED_ROW.id,
     payload: { modal_id: id, outcome: 'remote', source: 'remote' }
   }))
   daemon.pushFrame(assistant(SOURCE))
@@ -318,9 +360,9 @@ test('inline permission replies focus immediately without dismissal replay, and 
 test('reply isolates equal conversation ids across hosts', async ({ launchPairedApp }) => {
   const secondRow = { ...SECOND_SEEDED_ROW, id: SEEDED_ROW.id }
   const { page, servers } = await launchPairedApp({
-    buildReplyFrames: conversationStateFake({ conversations: [SEEDED_ROW] })
+    ...replyHost()
   }, { secondServer: {
-    buildReplyFrames: conversationStateFake({ conversations: [secondRow] })
+    ...replyHost([secondRow])
   } })
   const input = page.locator('.composer__input')
   await openRow(page, secondRow.name as string)
@@ -350,7 +392,7 @@ test('reply isolates equal conversation ids across hosts', async ({ launchPaired
 
 test('reply appends and focuses in a reopened saved offline chat', async ({ launchPairedApp }) => {
   const { page, daemon, forwarder, servers } = await launchPairedApp({
-    buildReplyFrames: conversationStateFake({ conversations: [SEEDED_ROW] })
+    ...replyHost()
   })
   daemon.pushFrame(assistant(SOURCE))
   daemon.pushFrame(turnEnd())
@@ -384,9 +426,9 @@ test('received history is saved for equal ids on different hosts and replies reo
   const secondRow = { ...SECOND_SEEDED_ROW, id: SEEDED_ROW.id }
   const secondSource = 'Only the second host supplied this reply'
   const { page, servers } = await launchPairedApp({
-    buildReplyFrames: conversationStateFake({ conversations: [SEEDED_ROW] })
+    ...replyHost()
   }, { secondServer: {
-    buildReplyFrames: conversationStateFake({ conversations: [secondRow] })
+    ...replyHost([secondRow])
   } })
   const savedReplies = async (serverId: string) => {
     const result = await page.evaluate(host => window.pyry.chatHistory({

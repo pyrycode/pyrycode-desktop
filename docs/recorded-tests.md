@@ -6,6 +6,12 @@ The scenario inventory, protected tickets and live-only proof boundaries are in 
 
 ## Replay contract
 
+The [integrated send/queue acceptance](knowledge/features/development-verification-replay-validation-canonical-queue-settlement-validation.md#integrated-send-and-queue-acceptance)
+records #2211's exact combined candidate, counted Linux gate and all eight child
+records. Its 24 canonical cohort cases and 29 active replays passed; native writer
+and protected-history checks passed separately within the same configured gate.
+Existing exclusions and live-only proof requirements below remain binding.
+
 Each `e2e/recordings/*.json` identifies its source Desktop commit, daemon source revision and binary checksum, Claude version, capture time and authenticated capabilities. Version 2 also records sequential authenticated connection lifetimes and explicit test-side causal checkpoints. Observed retryable transport closes carry their actual close code and message prefix; replay forwards every preceding frame before closing the local socket. Version 1 remains readable for older captures from PR #2036.
 
 Capture preserves raw close positions and each call's actual connection identity.
@@ -214,6 +220,19 @@ replay, canonical activation, captured history, protected storage/native coverag
 and original live-only assertions/exclusions. No new live proof is required;
 \#2212 retains integrated acceptance and #2273's native timing failure remains
 separate from this migration's passes.
+
+The [canonical external-link validation](knowledge/features/assistant-markdown-renderer-verification.md#canonical-external-link-fixtures)
+records both `assistant-link-opens-externally.spec.ts` cases passing on authored
+facts with correlated opening queries, trusted Send and exact-base completion.
+The main-process shell recorder proves exact web/Obsidian handoff routing without
+launching an OS application; denied actions stay text and navigation/window
+checks follow the positive handoff barrier. The complete configured Linux gate
+passed both cases and all 29 captured-client scenarios, canonical activation,
+captured history, protected storage and the native-writer prerequisite. Its
+unrelated initial failure remains recorded alongside the accepted rerun.
+Original live-only assertions and exclusions remain required; this migration
+adds no fresh provider, encryption or physical-effect proof. #2212 retains
+complete acceptance, with #2153/#2191 separate repairs.
 
 On initial launch and every profile relaunch, the shared replay fixture probes
 `better-sqlite3` in Electron's main process before device binding and pairing. It

@@ -250,8 +250,11 @@ layout change; `left | right\n\nnext` is not a pending header. Fences need no vi
 completion: the parser renders an unclosed fence as code after its opening line ends,
 and an end-of-input closing candidate growing into `` ```x `` stays code content.
 
-Either `turn_end` or a following tool row unmounts the helper and renders original
-`item.text` through full `AssistantMarkdown`. Without pending inline/header syntax,
+Explicit assistant-item completion (`status: 'finished'`, `active: false`) unmounts
+the helper and renders original `item.text` through full `AssistantMarkdown`.
+A following tool row or unrelated control does not complete a canonical message;
+fixtures must author the completion even at a former tool-boundary settlement.
+Without pending inline/header syntax,
 streaming content matches settlement apart from whitespace between top-level blocks
 (cursor and metadata excluded). Unfinished syntax may correct: final `**bold` becomes
 literal `**bold`. [#1751](../../specs/architecture/1751-progressive-assistant-markdown.md)
@@ -336,6 +339,13 @@ See [Assistant Markdown verification](assistant-markdown-renderer-verification.m
 for computed typography, spacing, progressive rendering and retained counted
 evidence. Static server renders establish markup; Electron checks establish
 computed styles and mounted behavior.
+
+The [canonical streamed-text cohort](assistant-markdown-renderer-verification.md#canonical-streamed-text-fixtures)
+authors sessions, numeric parent identities, revisioned appends and completion in
+the three existing attribution/whitespace/progressive specs. Put the rendered
+message timestamp in `content.ts`: an envelope timestamp alone leaves the exact
+bubble-text time suffix absent. Keep the standard whitespace cohort's final item
+active so the cursor and streaming branch remain exercised beside settled replies.
 
 ## Related
 

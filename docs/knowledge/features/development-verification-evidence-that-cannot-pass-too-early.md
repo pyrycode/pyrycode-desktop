@@ -31,6 +31,27 @@ Optimistic state can disappear in the same frame when the fake immediately repli
 Hold the fake response, assert the optimistic state, then send the correlated reply.
 A rejection can distinguish states whose successful renderings look identical.
 
+In [`send-and-stream.spec.ts`](../../../e2e/send-and-stream.spec.ts), local pending
+and accepted user bubbles share visible markup. Exact bubble text alone would
+miss premature settlement: the authoritative outer `[data-read-row]` wrapper
+distinguishes them. Use the canonical publisher to answer the actual opening
+`thread_catch_up` query and wait for its authored opening fact before filling the
+composer and clicking Send. Hold authored responses while checking one exact
+user bubble and zero user bubbles inside an authoritative wrapper, including
+after the daemon captures the outbound command.
+
+Release the active assistant fact and require exact `REPLY_TEXT` in its Markdown
+body plus a visible cursor before rechecking that the user bubble remains local.
+That rendered reply is the positive processing barrier; assistant activity never
+proves user acceptance. Only then publish the delivered user fact with the public
+device ID from `window.pyry.deviceIdentity()` and the captured outbound
+`message_id`. Require one authoritative user bubble and one total user bubble,
+so acceptance cannot leave a local duplicate. Complete the assistant with an
+exact-base revision and require exact whole-bubble text plus cursor removal.
+Keep the wrong-conversation send guard and the default arm's lack of assistant
+facts: neither a misrouted send nor a command echo may satisfy the exact reply
+oracle. See the [counted Linux validation](development-verification-replay-validation.md#canonical-send-and-stream-validation).
+
 The reset regression in
 [`composer-context-claude-reading.spec.ts`](../../../e2e/composer-context-claude-reading.spec.ts),
 `reset completion requests context once and refreshes footer and gauge without a message`,
@@ -61,10 +82,25 @@ arrives. See the [named regression and counted Linux evidence](composer-send-lim
 A streaming assistant row includes cursor and metadata text, so an exact-text locator
 can miss a visible delivery marker. Target the assistant role wrapper with `hasText`
 for the positive barrier, then assert duplicate absence. In
-[`live-user-receipts.spec.ts`](../../../e2e/live-user-receipts.spec.ts), a later
-`assistant_delta` on the same encrypted stream proves the preceding receipts passed
-through the mounted app before the one-row checks; an immediate count alone could
-pass before either receipt arrived.
+[`live-user-receipts.spec.ts`](../../../e2e/live-user-receipts.spec.ts), the opening
+canonical assistant fact must render before checking the actual `thread_catch_up`
+request. Capture the public device identity and outbound `message_id`, then hold
+acceptance until the optimistic row is visible. An unrelated canonical assistant
+marker must leave that local row visible without the daemon timestamp, with
+accepted daemon text absent. Command receipt and assistant activity cannot establish
+acceptance. The explicit matching user fact and an exact-base revision supply
+different authoritative text and daemon time.
+
+After repeated full items and conflicting equal/older revisions, a later canonical
+assistant item on the same encrypted stream proves processing before checking
+unchanged text/time, one row per peer/own message and absent conflicts. User-row
+text includes the timestamp in the same container: exact `getByText` absence can
+pass while a conflicting row is visible, and exact presence can miss a pending
+row. Inspect `.message-row--user` with `hasText`/`toContainText` after the positive
+barrier. Keep the original assertions as well. The
+[native fixture exception](e2e-harness.md#scripted-and-native-thread-fixtures)
+preserves the raw controls; the [validation record](development-verification-replay-validation.md#canonical-receipt-validation)
+retains the legacy adapter's failed authoritative-text oracle.
 
 Visible assistant text can also precede `turn_end` processing. A whole-row replay
 snapshot taken then includes the streaming cursor, so normal settlement can look

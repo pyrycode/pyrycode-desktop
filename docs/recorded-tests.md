@@ -121,6 +121,30 @@ pass. Those authored cases exercise canonical activation and queue controls;
 captured history, protected storage, native prerequisites and the original
 live-only assertions retain their existing proof requirements.
 
+The [canonical send/stream validation](knowledge/features/development-verification-replay-validation.md#canonical-send-and-stream-validation)
+records the authored pending-to-accepted user row and active/completed reply in
+`send-and-stream.spec.ts`. Its matching complete Linux application gate includes
+all 29 captured-client cases and the native writer prerequisite; that gate
+supplies complete-suite proof once. Authored fake facts add no fresh provider,
+encryption or physical-effect proof, and preserve the replay/live boundaries above.
+
+The [canonical receipt validation](knowledge/features/development-verification-replay-validation.md#canonical-receipt-validation)
+records native exact-wire duplicate/conflict delivery with explicit canonical
+publisher replies in `live-user-receipts.spec.ts`. Its matching complete Linux
+gate includes the owned receipt case, all 29 captured-client scenarios and native
+prerequisites. This synthetic acceptance/text/time proof retains captured-history,
+protected-storage and live-only coverage; combined acceptance remains with #2211.
+
+The [canonical streamed-text validation](knowledge/features/development-verification-replay-validation.md#canonical-streamed-text-validation)
+records all 20 attribution, whitespace and progressive-Markdown cases in
+`assistant-parent-text.spec.ts`, `assistant-whitespace.spec.ts` and
+`progressive-markdown.spec.ts` passing on authored facts with explicit completion
+and an active final tail. The matching complete Linux gate also passes canonical
+activation, captured history, protected storage/native prerequisites and all 29
+captured-client scenarios. Original live-only assertions and exclusions remain;
+these synthetic cases add no fresh provider, encryption or physical-effect proof.
+Compatibility remains for unmigrated siblings; #2153 and #2191 are separate repairs.
+
 On initial launch and every profile relaunch, the shared replay fixture probes
 `better-sqlite3` in Electron's main process before device binding and pairing. It
 resolves the installed SQLite package root, loads the genuine addon with

@@ -1,13 +1,11 @@
 import type { Page, Locator } from '@playwright/test'
-import { test, expect, seedConversationsFrame, SEEDED_ROW } from './fixtures/launchPairedApp'
+import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
 import { bubbleTextExactly } from './fixtures/bubbleText'
 import { capturePairedApp } from './fixtures/capturePairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
-import type {
-  AssistantDeltaPayload,
-  SendMessagePayload,
-  TurnEndPayload
-} from '../src/shared/wire/types'
+import { createCanonicalThread } from './fixtures/canonicalThread'
+import type { SendMessagePayload } from '../src/shared/wire/types'
+import type { ThreadItem, ThreadUpdate } from '../src/shared/wire/thread'
 
 // The assistant-bubble whitespace e2e (#607, reworked by #609) — the liveness proof for "an assistant
 // reply's whitespace comes from the right place". It ships WITH the fix because it is the only tier that
@@ -33,10 +31,8 @@ import type {
 // `[data-thread-role="assistant"]` locator, so adding turns to its stream would break it on
 // strict-mode multiplicity. #601 set the precedent of shipping the liveness proof as its own spec.
 //
-// EVERY PUSHED FRAME IS ONE A REAL DAEMON PRODUCES (the standing fake-tier rule): an `assistant_delta`
-// plus its `turn_end`, repeated per turn — the send-and-stream stream, and the #601 multi-turn shape. The
-// LAST turn is deliberately left open (a delta with no `turn_end`), which is equally real: it is the
-// stream mid-flight, and it is the only way to put an in-progress tail on screen beside settled bubbles.
+// Authored canonical messages carry explicit completion updates. The last item remains active,
+// putting an in-progress tail on screen beside settled bubbles without inferring completion.
 //
 // SECRET HYGIENE (carried from the siblings): every assertion reads computed style, geometry or counts;
 // the reply texts, conversation_id and turn ids are non-secret display & routing literals. The pairing
@@ -52,8 +48,7 @@ const STREAM_TIMEOUT_MS = 15_000
 const REPLY_ENVELOPE_ID = 1
 const FIXED_TS = '2026-07-07T12:00:00.000Z'
 
-// One send, answered with six TURNS. The first five each carry an `assistant_delta` plus its `turn_end`,
-// so each lands SETTLED in its own bubble; the sixth carries a delta only, so it is the in-progress tail.
+// One send receives ordered completed messages followed by an active in-progress tail.
 // Three of the settled texts are read as COMPARISONS AGAINST THE FIRST, which is what keeps this spec free
 // of magic numbers: no expected pixel height, no expected width, no font metric. The one number it does
 // name — the 16px block rhythm — is read from the --space-4 token at runtime.
@@ -83,7 +78,7 @@ const CODE_TEXT = ['```', LONG_TOKEN_TEXT, '```'].join('\n')
 // positionally (CONTROL / SPACE_RUN / CODE / RHYTHM / LANG_CODE / TAIL) and a turn added in the middle
 // would shift every index above it. #721 APPENDS one after this block, which is the case that rule does
 // not cover: appending shifts exactly one constant, TAIL, and TAIL is last by construction because the
-// open, `turn_end`-less delta has to remain the final frame. No second <h2> for the original reason in
+// active item has to remain last. No second <h2> for the original reason in
 // reverse — #628's readHeadingTypeMetrics resolves `.bubble__markdown h2` and would go strict-mode
 // ambiguous.
 //
@@ -165,7 +160,7 @@ const TAIL_TEXT = ['First line.', 'Second line.', 'Third line.'].join('\n')
 // APPENDED after LANG_CODE rather than inserted, which is the rule this file's header states for
 // itself: the reply stream is indexed positionally and a turn added in the middle would shift every
 // index above it. Appending shifts exactly one constant, TAIL, and TAIL stays last by construction —
-// the open, turn_end-less delta has to remain the final frame.
+// the active tail has to remain last.
 //
 // All three alignment markers are present so the bubble also carries #1079's AC1 shape, though the
 // per-column alignment claim itself is the unit tier's (AssistantMarkdown.test.tsx): it is a property
@@ -185,7 +180,7 @@ const TABLE_TEXT = [
 // would hide that item's bullet too, and only a list containing one can tell the two apart.
 //
 // APPENDED after TABLE, for the reason #1079 states above: appending shifts exactly one constant, TAIL,
-// and TAIL stays last by construction because the open turn_end-less delta has to be the final frame.
+// and TAIL stays last by construction because the active item has to remain last.
 const STRUCK_WORD = 'withdrawn'
 const TASK_TEXT = [
   '- [ ] open item',
@@ -248,59 +243,42 @@ const THREE_DIGIT_MARKER_PX = 40
 // mistaken for an assistant one by text.
 const PROMPT_TEXT = 'answer me in several shapes'
 
-// --- Spec-local frame builders (the seedConversationsFrame idiom): each seals one envelope through the
-// production codec, deterministic id/ts. ---
-
-const assistantDeltaFrame = (turn: number, text: string, seq = 0): Uint8Array =>
-  encodeEnvelope({
-    id: REPLY_ENVELOPE_ID,
-    type: 'assistant_delta',
-    ts: FIXED_TS,
-    payload: {
-      conversation_id: SEEDED_ROW.id,
-      turn_id: `turn-${turn}`,
-      seq,
-      text
-    } satisfies AssistantDeltaPayload
-  })
-
-const turnEndFrame = (turn: number): Uint8Array =>
-  encodeEnvelope({
-    id: REPLY_ENVELOPE_ID,
-    type: 'turn_end',
-    ts: FIXED_TS,
-    payload: {
-      conversation_id: SEEDED_ROW.id,
-      turn_id: `turn-${turn}`,
-      stop_reason: 'end_turn'
-    } satisfies TurnEndPayload
-  })
-
-/**
- * One buildReplyFrames dispatching on the decoded inbound type. `send_message` -> the ordered five-turn
- * stream (four closed, the last left open); every other inbound (the auto-fired `list_conversations`) ->
- * the shared one-row seed, since a scripted buildReplyFrames overrides the fixture's default arm.
- *
- * #448 regression guard, carried from send-and-stream: the send arm replies only when the inbound
- * `conversation_id` is the OPENED row's id. A client regression to a hardcoded/placeholder id gets no
- * reply frames and the stream wait times out, mirroring the real daemon's KnownConversation rejection.
- */
-const buildReplyFrames = (inbound: Uint8Array): Uint8Array[] => {
-  const envelope = decodeEnvelope(inbound)
-  switch (envelope.type) {
-    case 'send_message': {
-      const payload = envelope.payload as SendMessagePayload
-      if (payload.conversation_id !== SEEDED_ROW.id) return []
-      const settled = SETTLED_TEXTS.flatMap((text, index) => [
-        assistantDeltaFrame(index + 1, text),
-        turnEndFrame(index + 1)
-      ])
-      // The open tail: a delta with no turn_end, so this item stays the still-growing one.
-      return [...settled, assistantDeltaFrame(REPLY_TEXTS.length, TAIL_TEXT)]
-    }
-    default:
-      return [seedConversationsFrame()]
+/** Authored facts; every launch owns its identities, revisions and correlated query replies. */
+function whitespaceThread(streamingSource?: string) {
+  const route = { conversation_id: SEEDED_ROW.id, epoch: 'whitespace' }
+  const session = 'whitespace-session'
+  let version = 1
+  const revisions = new Map<number, number>()
+  const thread = createCanonicalThread({ conversations: [{ summary: { ...SEEDED_ROW, current_session_id: session },
+    epoch: route.epoch, version, items: [] }] })
+  const frame = (update: ThreadUpdate) => encodeEnvelope({ id: REPLY_ENVELOPE_ID, ts: FIXED_TS, ...update })
+  const add = (id: number, text: string) => {
+    revisions.set(id, 1)
+    const item: ThreadItem = { id, order: id * 10, rev: 1, kind: 'assistant_message', session,
+      turn: `turn-${id}`, status: 'running', active: true, shown: true, summary: '', content: { text, ts: FIXED_TS } }
+    return frame({ type: 'thread_item_added', payload: { ...route, version: ++version, item } })
   }
+  const revision = (id: number) => {
+    const base_rev = revisions.get(id)
+    if (base_rev === undefined) throw Error('Missing authored whitespace item')
+    revisions.set(id, base_rev + 1)
+    return { ...route, version: ++version, item_id: id, base_rev, rev: base_rev + 1 }
+  }
+  const finish = (id: number) => frame({ type: 'thread_item_changed', payload: {
+    ...revision(id), changes: { status: 'finished', active: false }
+  } })
+  const buildReplyFrames = (inbound: Uint8Array): Uint8Array[] => {
+    const envelope = decodeEnvelope(inbound)
+    if (envelope.type !== 'send_message') return []
+    // Preserve the exact opened-conversation guard: a wrong route receives no content.
+    if ((envelope.payload as SendMessagePayload).conversation_id !== SEEDED_ROW.id) return []
+    if (streamingSource !== undefined) return [add(1, streamingSource)]
+    return [...SETTLED_TEXTS.flatMap((text, index) => [add(index + 1, text), finish(index + 1)]),
+      add(REPLY_TEXTS.length, TAIL_TEXT)]
+  }
+  return { options: { threadMode: 'canonical' as const, thread, buildReplyFrames,
+    helloAck: { capabilities: ['interactive', 'thread'] } }, add, finish,
+    append: (id: number, text: string) => frame({ type: 'thread_text_append', payload: { ...revision(id), text } }) }
 }
 
 const assistantBubble = (page: Page, index: number): Locator =>
@@ -958,10 +936,10 @@ const readThreadWidths = (page: Page): Promise<{ scrollWidth: number; clientWidt
  * the previous name wrong by appending a sixth turn, and every gate below already derives from
  * REPLY_TEXTS rather than from a number written down.
  *
- * The gate is the SETTLED code bubble's exact text: its turn_end has landed, so an exact match proves the
+ * The gate is the settled code bubble's exact text: an exact match proves the
  * stream reached at least that far and that the markdown path produced it. That text is deliberately the
  * whitespace-free one — the single text in this spec on which `toHaveText`'s normalisation cannot make a
- * wait silently vacuous. The bubble count then covers the open tail, which carries no turn_end to wait on.
+ * wait silently vacuous. The bubble count then covers the intentionally active tail.
  */
 async function streamTheReplies(page: Page): Promise<void> {
   const assistantBubbles = page.locator('[data-thread-role="assistant"]')
@@ -975,7 +953,7 @@ async function streamTheReplies(page: Page): Promise<void> {
 test('markdown owns whitespace on the in-progress tail and settled bubble', async ({
   launchPairedApp
 }) => {
-  const { page } = await launchPairedApp({ buildReplyFrames })
+  const { page } = await launchPairedApp(whitespaceThread().options)
 
   await streamTheReplies(page)
 
@@ -994,7 +972,7 @@ test('markdown owns whitespace on the in-progress tail and settled bubble', asyn
 test('a settled reply takes its whitespace from markdown, not from the plain-text rule', async ({
   launchPairedApp
 }) => {
-  const { page } = await launchPairedApp({ buildReplyFrames })
+  const { page } = await launchPairedApp(whitespaceThread().options)
 
   await streamTheReplies(page)
 
@@ -1013,7 +991,7 @@ test('a settled reply takes its whitespace from markdown, not from the plain-tex
 test('a fenced code block wraps inside the bubble measure rather than spilling out of it', async ({
   launchPairedApp
 }) => {
-  const { page } = await launchPairedApp({ buildReplyFrames })
+  const { page } = await launchPairedApp(whitespaceThread().options)
 
   await streamTheReplies(page)
 
@@ -1036,7 +1014,7 @@ test('a fenced code block wraps inside the bubble measure rather than spilling o
 test('markdown blocks keep heading spacing and flush bubble edges', async ({
   launchPairedApp
 }) => {
-  const { page } = await launchPairedApp({ buildReplyFrames })
+  const { page } = await launchPairedApp(whitespaceThread().options)
 
   await streamTheReplies(page)
 
@@ -1060,13 +1038,8 @@ test('markdown blocks keep heading spacing and flush bubble edges', async ({
 })
 
 test('streaming markdown blocks keep heading spacing through settlement', async ({ launchPairedApp }) => {
-  const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: inbound => {
-    const envelope = decodeEnvelope(inbound)
-    if (envelope.type !== 'send_message') return [seedConversationsFrame()]
-    return (envelope.payload as SendMessagePayload).conversation_id === SEEDED_ROW.id
-      ? [assistantDeltaFrame(1, RHYTHM_TEXT + '\n\n```ts\nconst value = 1\n```\n\nFinal paragraph.\n')]
-      : []
-  } })
+  const facts = whitespaceThread(RHYTHM_TEXT + '\n\n```ts\nconst value = 1\n```\n\nFinal paragraph.\n')
+  const { page, app, daemon } = await launchPairedApp(facts.options)
   await page.getByPlaceholder('Message…').fill(PROMPT_TEXT)
   await page.getByRole('button', { name: 'Send' }).click()
   const bubble = assistantBubble(page, 0)
@@ -1074,7 +1047,7 @@ test('streaming markdown blocks keep heading spacing through settlement', async 
   await expect(bubble.locator('.bubble__markdown > *')).toHaveCount(7)
   for (const phase of ['streaming', 'settled']) {
     if (phase === 'settled') {
-      daemon.pushFrame(turnEndFrame(1))
+      daemon.pushFrame(facts.finish(1))
       await expect(bubble.locator('.bubble__cursor')).toHaveCount(0)
     }
     for (const width of [1280, 800]) {
@@ -1086,7 +1059,7 @@ test('streaming markdown blocks keep heading spacing through settlement', async 
       expect(rhythm.firstOffsetPx).toBeCloseTo(0, 1)
       expect(rhythm.lastOffsetPx).toBeCloseTo(0, 1)
       await page.locator('.conversation__thread').evaluate(el => { el.scrollTop = 0 })
-      await capturePairedApp(app, page, `/tmp/builder-2107/${phase}-${width}.png`)
+      await capturePairedApp(app, page, `/tmp/builder-2223/rhythm-${phase}-${width}.png`)
     }
   }
 })
@@ -1103,24 +1076,23 @@ for (const width of [1280, 800]) {
       ['- Before list heading.', ...nested.slice(1).map(line => `  ${line}`)].join('\n'),
       '###### Last heading'
     ].join('\n\n')
-    const { page, app, daemon } = await launchPairedApp({})
+    const facts = whitespaceThread()
+    const { page, app, daemon } = await launchPairedApp(facts.options)
     await app.evaluate(({ BrowserWindow }, value) => BrowserWindow.getAllWindows()[0].setSize(value, 800), width)
     for (const [index, text] of [source, ...levels.map(level => `${'#'.repeat(level)} Heading only`)].entries()) {
       const turn = index + 41
-      daemon.pushFrame(assistantDeltaFrame(turn, text))
+      daemon.pushFrame(facts.add(turn, text))
       const bubble = page.locator('[data-thread-role="assistant"]').last()
       const markdown = bubble.locator('.bubble__markdown')
       await expect(bubble.locator('.bubble__cursor')).toBeVisible()
       await expect(markdown.locator(':scope > *')).toHaveCount(index === 0 ? 19 : 1)
       for (const phase of ['streaming', 'appended', 'settled']) {
         if (phase === 'appended') {
-          daemon.pushFrame(encodeEnvelope({ id: 1, type: 'assistant_delta', ts: FIXED_TS, payload: {
-            conversation_id: SEEDED_ROW.id, turn_id: `turn-${turn}`, seq: 1, text: '\n\nAppended paragraph.'
-          } satisfies AssistantDeltaPayload }))
+          daemon.pushFrame(facts.append(turn, '\n\nAppended paragraph.'))
           await expect(markdown.locator(':scope > :last-child')).toHaveText('Appended paragraph.')
         }
         if (phase === 'settled') {
-          daemon.pushFrame(turnEndFrame(turn))
+          daemon.pushFrame(facts.finish(turn))
           await expect(bubble.locator('.bubble__cursor')).toHaveCount(0)
         } else {
           await expect(bubble.locator('.bubble__cursor')).toBeVisible()
@@ -1168,12 +1140,8 @@ test('all six markdown heading levels share the scale while streaming and settle
     '> ## Quoted heading',
     '- ###### List heading'
   ].join('\n\n') + '\n\n'
-  const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: inbound => {
-    const envelope = decodeEnvelope(inbound)
-    if (envelope.type !== 'send_message') return [seedConversationsFrame()]
-    return (envelope.payload as SendMessagePayload).conversation_id === SEEDED_ROW.id
-      ? [assistantDeltaFrame(1, source)] : []
-  } })
+  const facts = whitespaceThread(source)
+  const { page, app, daemon } = await launchPairedApp(facts.options)
   await page.getByPlaceholder('Message…').fill(PROMPT_TEXT)
   await page.getByRole('button', { name: 'Send' }).click()
   const bubble = assistantBubble(page, 0)
@@ -1181,10 +1149,10 @@ test('all six markdown heading levels share the scale while streaming and settle
   await expect(bubble.getByRole('heading')).toHaveCount(8)
   for (const phase of ['streaming', 'appended', 'settled']) {
     if (phase === 'appended') {
-      daemon.pushFrame(assistantDeltaFrame(1, 'More streamed text.', 1))
+      daemon.pushFrame(facts.append(1, 'More streamed text.'))
       await expect(bubble.locator('.bubble__markdown > p').last()).toHaveText('More streamed text.')
     } else if (phase === 'settled') {
-      daemon.pushFrame(turnEndFrame(1))
+      daemon.pushFrame(facts.finish(1))
       await expect(bubble.locator('.bubble__cursor')).toHaveCount(0)
     }
     for (const width of [1280, 800]) {
@@ -1204,7 +1172,7 @@ test('all six markdown heading levels share the scale while streaming and settle
       }
       if (phase !== 'appended') {
         await page.locator('.conversation__thread').evaluate(el => { el.scrollTop = 0 })
-        await capturePairedApp(app, page, `/tmp/builder-2106/${phase}-${width}.png`)
+        await capturePairedApp(app, page, `/tmp/builder-2223/type-${phase}-${width}.png`)
       }
     }
   }
@@ -1213,7 +1181,7 @@ test('all six markdown heading levels share the scale while streaming and settle
 test('consecutive blocks one level inside a list item or a blockquote keep their 8 px rhythm', async ({
   launchPairedApp
 }) => {
-  const { page } = await launchPairedApp({ buildReplyFrames })
+  const { page } = await launchPairedApp(whitespaceThread().options)
 
   await streamTheReplies(page)
 
@@ -1252,7 +1220,7 @@ test('consecutive blocks one level inside a list item or a blockquote keep their
 test('a list indents from the spacing scale and leaves its marker room to paint', async ({
   launchPairedApp
 }) => {
-  const { page } = await launchPairedApp({ buildReplyFrames })
+  const { page } = await launchPairedApp(whitespaceThread().options)
 
   await streamTheReplies(page)
 
@@ -1304,7 +1272,7 @@ test('a list indents from the spacing scale and leaves its marker room to paint'
 test('inline code reads as code in every container, at whatever step that container is typed at', async ({
   launchPairedApp
 }) => {
-  const { page } = await launchPairedApp({ buildReplyFrames })
+  const { page } = await launchPairedApp(whitespaceThread().options)
 
   await streamTheReplies(page)
 
@@ -1374,7 +1342,7 @@ test('inline code reads as code in every container, at whatever step that contai
 test('none of the inline-code treatment reaches the contents of a fenced block', async ({
   launchPairedApp
 }) => {
-  const { page } = await launchPairedApp({ buildReplyFrames })
+  const { page } = await launchPairedApp(whitespaceThread().options)
 
   await streamTheReplies(page)
 
@@ -1404,7 +1372,7 @@ test('none of the inline-code treatment reaches the contents of a fenced block',
 test('a fenced code block wears the desktop chrome, every value read from the token beside it', async ({
   launchPairedApp
 }) => {
-  const { page } = await launchPairedApp({ buildReplyFrames })
+  const { page } = await launchPairedApp(whitespaceThread().options)
 
   await streamTheReplies(page)
 
@@ -1481,7 +1449,7 @@ test('a fenced code block wears the desktop chrome, every value read from the to
 test('a fence with no language draws no bar and no line where the bar would be', async ({
   launchPairedApp
 }) => {
-  const { page } = await launchPairedApp({ buildReplyFrames })
+  const { page } = await launchPairedApp(whitespaceThread().options)
 
   await streamTheReplies(page)
 
@@ -1504,7 +1472,7 @@ test('a fence with no language draws no bar and no line where the bar would be',
 test('a table too wide for the bubble scrolls inside itself, pushing neither the bubble nor the thread', async ({
   launchPairedApp
 }) => {
-  const { page } = await launchPairedApp({ buildReplyFrames })
+  const { page } = await launchPairedApp(whitespaceThread().options)
 
   await streamTheReplies(page)
 
@@ -1540,7 +1508,7 @@ test('a table too wide for the bubble scrolls inside itself, pushing neither the
 test('a task list draws two distinguishable inert marks, and struck text reads as struck', async ({
   launchPairedApp
 }) => {
-  const { page } = await launchPairedApp({ buildReplyFrames })
+  const { page } = await launchPairedApp(whitespaceThread().options)
 
   await streamTheReplies(page)
 

@@ -46,3 +46,20 @@ No new application failure mode. Missing typed device identity, malformed outbou
 
 ## Open Questions
 None.
+
+## Verification — 2026-10-24
+Linux x86_64. Final tested implementation/merge revision: `919ceb8808bddd7243e294ecdb97e5f8bf2c049a`, containing main `d192a094243e`. The normal build provenance records that exact revision with `sourceDirty: false`. Subsequent plan evidence changes do not alter the tested source.
+
+| Check | Executed / passed / failed / skipped | Retained evidence |
+| --- | --- | --- |
+| Red mounted control on plan revision `34d15bc3f9a3fc6d18dd846c7f27ba20a83faf86` plus `red-control.patch` | 2 / 1 / 1 / 0 | `/tmp/builder-2250/red.json`, `red.stderr`, `red-results/` |
+| Final affected canonical publisher units | 17 / 17 / 0 / 0 | `build/dispatcher-tests/unit-rdiff3uw/0.json`, `0.audit.json`, `dispatcher.xml`; `/tmp/builder-2250/pre-verify.log` |
+| Final owned spec plus configured native prerequisite | 2 / 2 / 0 / 0 | `/tmp/builder-2250/final.json`, `final.stderr`, `final-results/` |
+
+The red control passed the native prerequisite and failed specifically because `[data-read-row="1"]` had no canonical user row after the first local send. The intermediate migrated run also passed both cases (`/tmp/builder-2250/green.json`); neither historical result replaces final-head proof.
+
+Final command: `npx playwright test e2e/user-whitespace.spec.ts --retries=0 --reporter=json --output=/tmp/builder-2250/final-results`. The exact owned scenario, `a user message draws the line breaks, blank lines, space runs and indents it was typed with`, executed/passed once; `finite protected writer backlog preserves native keyboard and both event loops` also executed/passed once. Both used retry zero; report errors and flaky results are zero. No assertion was skipped, and all original measurement helpers, geometry assertions, controls and tolerances remain unchanged.
+
+Pre-verify passed all five checks after the final merge, including `npm run typecheck` and the affected units. `npm run typecheck:client-tests`, a temporary focused TypeScript configuration including the owned spec, and `npm run build` passed. Logs are `/tmp/builder-2250/{client-typecheck,owned-typecheck,build}.log`; Electron-native preparation/provenance was restored after Node units (`electron-preparation.log`). The owned spec SHA-256 is `f9a48e1a62a7e826506981592948c108b30de8f64503451f400d0cb0375c2b9e`.
+
+The complete configured application/replay/protected-storage gate remains pending with dispatcher/verifier owners; no duplicate complete-suite run was requested. macOS and fresh provider/encryption/physical-effect proof are outside this ticket's scope. Final authored work remains below the admitted estimate: one spec plus this plan, zero production or shared-fixture edits and zero exported surfaces.

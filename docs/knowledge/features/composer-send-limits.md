@@ -6,7 +6,7 @@ Part of [Composer send](composer-send.md).
 
 Reply drafting remains available in saved/offline chats. Equal-ID drafts on separate hosts are isolated;
 [the controlled composer](composer-send-internals.md#3-the-controlled-composer--conversationscreentsx)
-distinguishes that behavior from the history-persistence limitation tracked in #1811.
+distinguishes draft isolation from the separately checked protected-history persistence.
 
 - **Not connected** ([#31](../codebase/31.md); the caption retired by [#968](../codebase/968.md)) — while the open host’s status is not `connected`, the send button is `disabled` and the `handleSubmit` early-return inerts the Enter path. No `sendCommand`, no echo, input not cleared. The textarea stays enabled (drafting allowed); the control re-enables reactively on connect. `composerAvailability` never touches `status.error`, so no daemon-supplied string reaches this gate at all; the same non-connected state shows [the Top overlay’s connection explanation](conversation-shell-chrome.md#connection-banner-279), which owns one atomic polite connection/restoration announcement. Reconnect and Re-pair use overlay Error action pills; the composer status row has no connection chip or button.
 - **Whitespace-only / empty input** — early `return false`; no send, no dispatch, no clear (AC1).
@@ -31,8 +31,9 @@ distinguishes that behavior from the history-persistence limitation tracked in #
   Static renderer tests still cannot execute effects or input handlers.
   `copyMessageText.test.ts` pins both quote labels, literal multiline/embedded-quote text, draft
   separators, long sources and repeated append. `e2e/message-reply.spec.ts` covers activation,
-  focus/caret, editing/send, host isolation and offline drafting; counted passes and the history skip
-  are recorded in [message-bubble testing](conversation-shell-message-bubble-testing.md#testing).
+  focus/caret, editing/send, host isolation and offline drafting. Its equal-ID persistence case
+  polls both protected records before and after reopening; see
+  [canonical reply coverage](conversation-shell-message-bubble-testing.md#canonical-reply-fixtures).
 - **`auto-grow` on the textarea shipped in #1056** — `field-sizing: content` plus a `max-height` on `.composer__input`, no TSX change; the box grows a line at a time to a five-line ceiling, then scrolls. See [Composer message box § the auto-grow](conversation-shell-composer-message-box.md#the-box-grows-with-the-draft-to-a-five-line-ceiling-1056).
 - **Refused submissions have no take, ID or clock effects.** Whitespace-only input,
   a null conversation or missing host returns before `newMessageId`,

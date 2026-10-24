@@ -264,6 +264,79 @@ no fresh provider, live relay/encryption or additional physical-effect proof was
 required or performed. Compatibility remains for unmigrated siblings; #2212
 retains complete feature acceptance and #2153/#2191 remain separate repairs.
 
+## Canonical reply validation
+
+The accepted [PR #2274 verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2274#issuecomment-6389243666),
+stage `4a6a0228fc6e8d72ef4a811183779571043d512a51db63be990e465b86d5ae2e`,
+records PASS on Linux x64, 2026-10-24, for reviewed candidate
+`dc15b8b8cd0e840d1c19ee60bbd31e1352985f65`. Normal build provenance identifies
+that revision with clean source. The owned spec is unchanged from builder
+candidate `6dde32e24ee9a966715a844297dd1a3a13583f63` through documentation
+base `347f011d0cc5950a1489176f8ea0917bfa174ab6`. These are retained results;
+documentation runs only the docs guard. The
+[harness contract](e2e-harness.md#scripted-and-native-thread-fixtures) records
+per-host canonical publishers, explicit acceptance/session/terminal facts and
+created-chat registration. [Reply coverage](conversation-shell-message-bubble-testing.md#canonical-reply-fixtures)
+retains the preload/drain and protected-storage proof boundaries.
+
+| Retained Linux check | Executed / passed / failed / skipped |
+| --- | --- |
+| Builder focused reply spec, configured clipboard project, retries zero | 6 / 6 / 0 / 0 |
+| Builder focused native-writer prerequisite, retries zero | 1 / 1 / 0 / 0 |
+| Builder canonical fixture units | 17 / 17 / 0 / 0 |
+| Supplied dispatcher unit gate 4, JUnit counts | 10045 / 10045 / 0 / 3 |
+| Complete configured application gate 7, `npx playwright test --reporter=json` | 542 / 542 / 0 / 4 |
+| Complete gate captured-client subset | 29 / 29 / 0 / 1 |
+
+Use the supplied counted unit report rather than the verdict prose's 10,144
+aggregate. All six named reply scenarios were present and passed in both the
+focused builder run and the complete application gate:
+
+- `held suffix distinguishes visible partial content from current-source readiness`
+- `pointer and keyboard replies append current source, focus once, and send the edited quote intact`
+- `inline permission replies focus immediately without dismissal replay, and drafts and focus stay isolated on chat switch`
+- `reply isolates equal conversation ids across hosts`
+- `reply appends and focuses in a reopened saved offline chat`
+- `received history is saved for equal ids on different hosts and replies reopen offline`
+
+The complete gate used three configured/actual workers and zero retries.
+All 29 active captured-client cases passed; the original reset-system-prompt
+fixme remains excluded. Canonical activation, saved-history resume with zero
+legacy requests, protected history with production encryption and the native-writer
+prerequisite passed. The inspected protected thread/history exchanges completed
+45 requests / 378 frames and 32 requests / 63 frames, both with zero remaining
+requests; all 33 replay native-storage observations reported readiness/completion.
+The matching configured gate supplies complete-suite evidence once.
+
+Focused report: `/tmp/builder-2263/final-focused-followup.json`. Builder
+pre-verify passed five checks; application, client-test and focused reply-spec
+TypeScript checks (including imported helpers), and Linux build passed. Evidence
+remains under `/tmp/builder-2263/`: `final-pre-verify.log`,
+`final-typecheck-client-tests.log`, `final-typecheck-focused.log`,
+`tsconfig.reply.json` and `final-build.log`. Dispatcher install, docs guard,
+application typecheck/build and sequential Electron native preparation passed;
+the application report is `logs/verifier-gate_#2263_7.log` in the agents repository.
+
+The earlier clean-candidate native timing failure in
+`/tmp/builder-2263/final-focused.json` remains failed evidence: 1 executed,
+0 passed, 1 failed and 6 dependent skips, zero retries. Main heartbeat
+1823.882337 ms exceeded the unchanged 1000 ms bound. It is tracked separately in
+[#2273](https://github.com/pyrycode/pyrycode-desktop/issues/2273); the follow-up
+pass and complete green gate establish no causal repair. The initial canonical
+fixture attempt also remains failed (7 executed, 4 passed, 3 failed, 0 skipped);
+its corrections are reflected in the final focused pass.
+
+The four application skips are two macOS badge cases, macOS window reopen and
+the existing system-prompt Reset fixme; no skip counts as a pass. macOS is
+outside this Linux ticket's verification scope. The
+[recorded-test contract](../../recorded-tests.md) and
+[migration inventory](../../client-replay-migration.md) retain captured-history,
+protected-storage/native prerequisites and original live-only assertions.
+No new live proof is required or claimed; authored facts and replay do not prove
+fresh provider/daemon behavior or additional physical effects. Compatibility
+remains for unmigrated siblings; #2212 retains integrated feature acceptance,
+with #2153/#2191 separate repairs. No production or visual change ships here.
+
 ## Counted Linux compatibility validation
 
 These are retained results accepted by the

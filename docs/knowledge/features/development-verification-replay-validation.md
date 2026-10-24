@@ -457,6 +457,106 @@ acceptance under [#2209](https://github.com/pyrycode/pyrycode-desktop/issues/220
 this slice does not complete that parent acceptance. #2153 and #2191 remain separate
 repairs.
 
+## Canonical offline held-delivery validation
+
+The [PR #2258 verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2258#issuecomment-6388256293)
+and accepted stage `2bab738cd99d3d576c3d66f80a4feea0fd4b9120a2afbccbc894b7d79583bd27`
+record PASS on Linux x64, 2026-10-24, at
+`e64c72a36761440713a1076dfa409014f9169a98`. Normal-profile build provenance
+identifies that revision with `sourceDirty: false`. All three owned specs are
+unchanged from builder implementation/build revision
+`4ee2d3beab8a6cc38fcc5e9a9bdc95b152a73d01`. These are retained results;
+documentation runs only the docs guard. The
+[plan](../../specs/architecture/2222-canonical-offline-held-delivery.md#validation-evidence--2026-10-24)
+retains focused commands, artifacts and earlier failures.
+
+All nine cases in
+[`disconnected-message-delivery.spec.ts`](../../../e2e/disconnected-message-delivery.spec.ts),
+[`offline-conversation-actions.spec.ts`](../../../e2e/offline-conversation-actions.spec.ts)
+and [`offline-held-responses.spec.ts`](../../../e2e/offline-held-responses.spec.ts)
+select canonical publishers independently on every fake host. Authored summaries,
+current sessions, items and updates supply content through correlated thread
+queries, including reconnect and reopen. The local `event` helpers retain
+connection/ownership, attachment and prompt controls without translating content;
+neither legacy content nor history aliases supply the thread. Shared fixtures
+and compatibility for unmigrated siblings remain unchanged.
+
+Reconnect modes retain intercepted commands, socket-write observations, original
+send identity/text/order, waiting/not-sent contrast, queued-to-delivered facts and
+other-host drafts. The [settlement and replay barriers](development-verification-evidence-that-cannot-pass-too-early.md#evidence-that-cannot-pass-too-early)
+require running cursors before finished revisions, then same-identity redelivery
+and a rendered processing marker before one-row assertions. Offline actions retain
+held text, attachments, draft/queue state, local copying/reopening and explicit
+post-reconnect actions. The unopened chat's unverified live item stays hidden
+until its first connected query; rendered content precedes the exact one-query
+assertion, and Home adds no request. Permission/trust and question cases retain
+selections, independent answers, drafts, pre-opened confirmations, rejection
+notices and forced-click/keyboard controls. Unavailable, missing and ambiguous
+owners cannot submit or fetch attachments; a connected second host still works.
+
+| Retained Linux check | Executed / passed / failed / skipped |
+| --- | --- |
+| Builder three owned specs plus native writer prerequisite, retries zero | 10 / 10 / 0 / 0 |
+| Builder canonical-publisher units | 17 / 17 / 0 / 0 |
+| Supplied dispatcher unit gate 4, JUnit counts | 10045 / 10045 / 0 / 3 |
+| Initial complete configured application gate 7, retries zero | 542 / 541 / 1 / 4 |
+| Captured-client subset of that initial gate | 28 / 27 / 1 / 1 |
+| Separate same-tree rerun of the failing replay and two prerequisites, retries zero | 3 / 3 / 0 / 0 |
+
+Unit totals use the supplied counted gate report; verifier prose lists 10,144,
+so that larger aggregate is not used here. The verdict confirms all nine owned
+cases were present and passed in both the focused builder run and configured gate:
+
+- `accepted disconnected messages drain and settle: automatic`
+- `accepted disconnected messages drain and settle: explicit`
+- `accepted disconnected messages drain and settle: terminal`
+- `held reading, draft and queue survive offline actions, reopening and copying; another host and reconnect work`
+- `pre-opened action menu and missing, connecting, failed or ambiguous ownership cannot submit`
+- `offline opening does not consume first-history eligibility`
+- `permission and trust retain selection offline, including pre-opened confirmation and keyboard attempts`
+- `questions preserve independent picks and draft offline; a second connected host answers`
+- `all unavailable statuses and missing or ambiguous ownership block both prompt families`
+
+The genuine prerequisite
+`finite protected writer backlog preserves native keyboard and both event loops`
+also passed in both runs. The initial application's sole failure was captured
+`daemon-session-settings` →
+`real daemon persists a session-settings write and returns it on a fresh read`,
+tracked in [#2265](https://github.com/pyrycode/pyrycode-desktop/issues/2265).
+That named scenario and both prerequisites were present and passed in the
+separate rerun. The dispatcher accepted this flake disposition; the original
+full run remains 1 failed, with retries zero throughout. Its exact-candidate
+gate supplies configured acceptance without another complete-suite run.
+
+Builder pre-verify passed five checks; application/client-test typechecks, focused
+TypeScript checking including all three specs, imported helpers/declarations and
+`canonicalThread.test.ts`, and build passed. Verifier repeated client-test and
+focused TypeScript checking successfully. Its `--no-suite` pre-verify passed
+three checks and intentionally skipped two supplied by subsequent gates. Install,
+docs guard, build/typecheck and Electron native preparation passed. Evidence
+references include dispatcher `logs/verifier-gate_#2222_7.log`, retained
+`.failure-1792868037892.log`, separate
+`2026-10-24T18-53-58-060Z_verifier-gate-rerun_#2222.log` and compiler logs under
+`/tmp/verifier-2258/`.
+
+Earlier builder failures remain failures: canonical activation rejected the old
+`assistant_delta` (2 executed, 1 passed prerequisite, 1 failed owned case,
+0 skipped); the first migrated run used unsupported `streaming` status
+(10 executed, 4 passed, 6 failed, 0 skipped). Correcting authored status to
+`running`, then `finished`, preserved assertions and timeouts. Premature-build
+and SQLite-ABI attempts each failed the prerequisite alone; no owned case ran.
+
+The four configured skips were two macOS badge cases, macOS window reopen and
+the existing system-prompt-reset exclusion. The captured subset retains that
+reset skip; none counts as passed. macOS is outside this Linux ticket's scope.
+The [recorded-test contract](../../recorded-tests.md) and
+[migration inventory/exclusions](../../client-replay-migration.md) preserve
+captured-client history/replay, protected storage, native prerequisites and
+original live-only assertions. No fresh provider/daemon, encryption or
+physical-effect proof is introduced. No production or visual behavior changed;
+[#2211](https://github.com/pyrycode/pyrycode-desktop/issues/2211) retains combined
+feature acceptance.
+
 ## Counted Linux compatibility validation
 
 These are retained results accepted by the

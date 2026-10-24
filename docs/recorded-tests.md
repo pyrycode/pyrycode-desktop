@@ -223,6 +223,18 @@ Original live-only assertions and exclusions remain required; this migration
 adds no fresh provider, encryption or physical-effect proof. #2212 retains
 complete acceptance, with #2153/#2191 separate repairs.
 
+The [canonical hosted-link validation](knowledge/features/development-verification-replay-validation-canonical-publisher-verification.md#canonical-hosted-link-validation)
+records all four `hosted-app-links.spec.ts` scenarios passing on independent
+canonical host/session facts, including reconnect, with the native-writer
+prerequisite counted separately. Mounted routing retains drafts, native view
+identity, pairing, delayed-reply/discovery barriers and zero external handoff.
+The complete configured Linux gate retains captured-client replay, canonical
+activation, captured history and protected storage/native prerequisites. Original
+live-only assertions and exclusions remain required; this fixture migration adds
+no fresh provider, relay, encryption or physical-effect proof. #2212 retains
+complete acceptance and #1929 owns broader real hosted integration; macOS is
+outside this Linux ticket's scope.
+
 On initial launch and every profile relaunch, the shared replay fixture probes
 `better-sqlite3` in Electron's main process before device binding and pairing. It
 resolves the installed SQLite package root, loads the genuine addon with

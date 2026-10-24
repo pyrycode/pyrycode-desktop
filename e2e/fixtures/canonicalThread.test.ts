@@ -19,6 +19,34 @@ const rows = (replies: ReturnType<typeof query>) => replies.flatMap(r => r.paylo
 const update = (type: string, payload: unknown) => frame(type, { conversation_id: 'a', epoch: 'epoch-a', ...payload as object })
 
 describe('canonical fake thread publisher', () => {
+  it('passes hosted replies and updates byte-for-byte without changing thread facts', () => {
+    const thread = createCanonicalThread({ conversations: [seed()] }), before = query(thread)
+    const app_id = '22222222-2222-4222-8222-222222222222'
+    const record = { app_id, title: 'Hosted', state: 'running', desired: 'available',
+      active_release: '1.0.0', pending_release: null, last_error: null, revision: 2 }
+    const request = frame('list_apps', {}, { id: 44 })
+    expect(thread.reply(request, [])).toEqual([]) // Held discovery must stay held.
+    const frames = [
+      frame('apps', { revision: 2, items: [record], next_cursor: null }, { id: 900, in_reply_to: 44 }),
+      frame('app_updated', record, { id: 901 }),
+      frame('app_removed', { app_id, revision: 3 }, { id: 902 }),
+      frame('app_cancelled', { app_id, request_id: 45 }, { id: 903, in_reply_to: 46 }),
+      frame('app_response', { app_id, release_version: '1.0.0', status: 200,
+        headers: { 'content-type': 'text/html' }, size_bytes: 5, total_chunks: 1,
+        sha256: 'a'.repeat(64) }, { id: 904, in_reply_to: 45 }),
+      frame('app_response_chunk', { app_id, index: 0, data: 'SG9zdCE=' }, { id: 905, in_reply_to: 45 })
+    ]
+    for (const bytes of frames) {
+      expect(thread.publish(bytes)[0]).toBe(bytes)
+      expect(thread.reply(request, [bytes])[0]).toBe(bytes)
+      expect(decodeEnvelope(thread.reply(request, [bytes])[0])).toEqual(decodeEnvelope(bytes))
+    }
+    expect(thread.reply(request, frames)).toEqual(frames)
+    expect(query(thread)).toEqual(before)
+    for (const type of ['assistant_delta', 'message', 'history_page', 'turn_end'])
+      expect(() => thread.publish(frame(type, {}))).toThrow(/unsupported/)
+  })
+
   it('certifies bounded ordered windows and empty threads', () => {
     const thread = createCanonicalThread({ conversations: [seed()], windowSize: 2 })
     const opening = query(thread)

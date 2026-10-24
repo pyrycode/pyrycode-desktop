@@ -141,6 +141,61 @@ protected-storage/native prerequisites and original live-only assertions.
 This authored-fact migration adds no fresh provider, daemon, encryption or
 physical-effect proof, and no visual implementation change.
 
+## Canonical hosted-link validation
+
+The accepted [PR #2279](https://github.com/pyrycode/pyrycode-desktop/pull/2279)
+verifier stage `81cce60a74f92d029ed4598a79abc7f9bc61548a0990c0973556c2a163519c58`
+records PASS on Linux, 2026-10-24, for
+`39429adb27dac3a0ada7d0532b477ba2dfa7f817`. Normal build provenance matches that
+clean candidate. Builder execution used
+`a4691fe80f3cda60c0a56108373176a64731e424`; the verdict confirms the three
+implementation inputs are unchanged between those revisions. These are retained
+results, not documentation-stage test executions.
+
+| Retained Linux check | Executed / passed / failed / skipped |
+| --- | --- |
+| Builder four hosted-link cases, normal configuration, retries zero | 4 / 4 / 0 / 0 |
+| Builder configured native-writer prerequisite, separately counted | 1 / 1 / 0 / 0 |
+| Builder canonical-publisher/selection units | 18 / 18 / 0 / 0 |
+| Supplied dispatcher unit gate 4, JUnit counts | 10046 / 10046 / 0 / 3 |
+| Complete configured application gate 7, `npx playwright test --reporter=json` | 542 / 542 / 0 / 4 |
+
+All four [hosted-link cases](development-verification.md#hosted-app-link-verification)
+are present and passed in both mounted runs: `streaming and settled links preserve
+conversation drafts`, `latest host selection survives delayed replies`,
+`invalid and unpaired links stay bounded` and `links reuse discovery recovery`.
+The named prerequisite `finite protected writer backlog preserves native keyboard
+and both event loops` also passed in both. The verdict confirms all 18 publisher
+tests passed, including `passes hosted replies and updates byte-for-byte without
+changing thread facts`. Unit totals above use the supplied counted report;
+verifier prose lists 10,145, so that larger aggregate is not used here.
+
+Builder pre-verify passed 5/5 checks, including `npm run typecheck` and fixture
+units. `npm run typecheck:client-tests`, focused TypeScript checking of
+`e2e/hosted-app-links.spec.ts`, `e2e/fixtures/canonicalThread.ts`,
+`e2e/fixtures/canonicalThread.test.ts` and their imports, and `npm run build`
+passed. Node checks completed before Electron-native preparation. The focused
+compiler check matters because the normal client-test include list omits this
+fake spec. Builder evidence is `/tmp/builder-2270/mounted.json`,
+`/tmp/builder-2270/mounted-results/` and `build/dispatcher-tests/unit-s2952ced/`,
+retained in bundle `c3d2712d213554362872820c960ddaa7c8f0c0bb7e7b70ad130f19049374810d`.
+Verifier evidence is `verifier-gate_#2270_7.log` and
+`build/dispatcher-tests/unit-uogvdne7/0.json`. The accepted verdict reused the
+dispatcher gates; no duplicate full-suite execution was needed.
+
+The complete configured gate preserves captured-client replay, canonical
+activation, captured history and protected-storage/native prerequisites. Its four
+skips remain the three macOS-only badge/window cases and the existing real-Claude
+system-prompt Reset fixme; none counts as passed. macOS is outside this Linux
+ticket's scope. The [recorded-test contract](../../recorded-tests.md) and
+[migration inventory](../../client-replay-migration.md) retain every original
+live-only assertion. These authored fake scenarios add no fresh provider, relay,
+encryption or physical-effect proof. Broader real hosted integration remains
+separately owned by #1929; #2212 retains complete feature acceptance, and
+\#2153/#2191 remain separate repairs. Reader attachment support had not landed in
+the reviewed candidate; integrating its additive allowance must preserve the six
+hosted allowances and their regression.
+
 ## Canonical send-and-stream validation
 
 The [PR #2252 verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2252#issuecomment-6387177626),

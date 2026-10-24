@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
-import { test, expect, SEEDED_ROW, SECOND_SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
+import { test, expect, SEEDED_ROW, SECOND_SEEDED_ROW } from './fixtures/launchPairedApp'
+import { createCanonicalThread } from './fixtures/canonicalThread'
+import type { ThreadItem } from '../src/shared/wire/thread'
 import type { LaunchPairedAppOptions, LaunchControl, PairedApp } from './fixtures/launchPairedApp'
 import { pairFromUnpairedLaunch, pairAnotherServerFromSettings } from './fixtures/pairingArrival'
 import type { Page, ElectronApplication } from '@playwright/test'
@@ -23,6 +25,7 @@ async function launch(start: (options?: LaunchPairedAppOptions, control?: Launch
   await pairFromUnpairedLaunch(page, payload(0, FIRST_SERVER_ID))
   await page.getByRole('button', { name: 'Seeded discussion', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled()
+  await threadRequested(a)
   if (b && pairSecond) {
     await pairAnotherServerFromSettings(page, payload(1, SECOND_SERVER_ID))
     await expect(page.getByRole('button', { name: 'Server two chat', exact: true })).toBeVisible()
@@ -31,6 +34,11 @@ async function launch(start: (options?: LaunchPairedAppOptions, control?: Launch
 }
 function scenario(second = false) {
   let id = 2000, revision = 1, state = 'running', hold = false, missing = false
+  let version = 1
+  const summary = { ...(second ? SECOND_SEEDED_ROW : SEEDED_ROW),
+    current_session_id: second ? 'hosted-second-session' : 'hosted-first-session' }
+  const route = { conversation_id: summary.id, epoch: second ? 'hosted-second-epoch' : 'hosted-first-epoch' }
+  const thread = createCanonicalThread({ conversations: [{ summary, epoch: route.epoch, version, items: [] }] })
   const capabilities = ['thread', 'hosted_apps_v1']
   const seen: any[] = [], held: Uint8Array[] = []
   const frame = (type: string, payload: unknown, reply?: number) => Buffer.from(JSON.stringify({
@@ -38,14 +46,30 @@ function scenario(second = false) {
   }))
   const record = () => ({ app_id: appId, title: `${second ? 'Second' : 'First'} app ${revision}`, state,
     desired: 'available', active_release: '1.0.0', pending_release: null, last_error: null, revision })
-  return { seen, held, frame, hold(value = true) { hold = value },
+  return { seen, held, frame, route, hold(value = true) { hold = value },
+    add(text: string, conversation: string, turn: string) {
+      expect(conversation).toBe(summary.id)
+      const item: ThreadItem = { id: 1, order: 10, rev: 1, session: summary.current_session_id, turn,
+        kind: 'assistant_message', status: 'running', active: true, shown: true, summary: '',
+        content: { text, ts: '2026-10-15T10:00:00Z' } }
+      return frame('thread_item_added', { ...route, version: ++version, item })
+    },
+    finish() {
+      return [frame('thread_item_changed', { ...route, version: ++version, item_id: 1, base_rev: 1, rev: 2,
+        changes: { status: 'finished', active: false } }),
+      frame('thread_item_added', { ...route, version: ++version, item: {
+        id: 2, order: 20, rev: 1, session: summary.current_session_id, turn: 'links', kind: 'turn_end',
+        status: 'finished', active: false, shown: true, summary: '', content: { stop_reason: 'end_turn' }
+      } satisfies ThreadItem })]
+    },
     support(value: boolean) { capabilities.splice(0, capabilities.length, 'thread', ...(value ? ['hosted_apps_v1'] : [])) },
     update(next = state) { state = next; revision++; return frame('app_updated', record()) },
     remove() { missing = true; revision++; return frame('app_removed', { app_id: appId, revision }) },
-    options: { helloAck: { server_id: second ? SECOND_SERVER_ID : FIRST_SERVER_ID, capabilities },
+    options: { threadMode: 'canonical' as const, thread,
+    helloAck: { server_id: second ? SECOND_SERVER_ID : FIRST_SERVER_ID, capabilities },
     buildReplyFrames(bytes: Uint8Array) {
       const r = JSON.parse(Buffer.from(bytes).toString()); seen.push(r)
-      if (r.type === 'list_conversations') return [seedConversationsFrame(second ? SECOND_SEEDED_ROW : undefined)]
+      if (r.type === 'request_history') throw Error('Canonical hosted links must not use legacy history aliases')
       if (r.type === 'list_apps') {
         const reply = frame('apps', { revision, items: missing ? [] : [record()], next_cursor: null }, r.id)
         if (hold) { held.push(reply); return [] }
@@ -98,7 +122,14 @@ async function discovered(app: ElectronApplication, deliver: () => void, code = 
   finally { stream.removeListener('data', observe) }
 }
 function reply(s: ReturnType<typeof scenario>, text: string, conversation = SEEDED_ROW.id, turn = 'links') {
-  return s.frame('assistant_delta', { conversation_id: conversation, turn_id: turn, seq: 0, text })
+  return s.add(text, conversation, turn)
+}
+async function threadRequested(s: ReturnType<typeof scenario>) {
+  await expect.poll(() => s.seen.filter(r => r.type === 'thread_catch_up').length).toBeGreaterThan(0)
+  const requests = s.seen.filter(r => r.type === 'thread_catch_up')
+  expect(requests[0].payload).toMatchObject({ conversation_id: s.route.conversation_id, epoch: '', version: 0 })
+  expect(requests.every(r => r.payload.conversation_id === s.route.conversation_id)).toBe(true)
+  expect(s.seen.some(r => r.type === 'request_history')).toBe(false)
 }
 const status = (page: Page) => page.locator('.hosted-pane [role=status]')
 const link = (page: Page, name: string) => page.locator('.bubble__markdown').getByRole('button', { name, exact: true })
@@ -117,10 +148,10 @@ test('streaming and settled links preserve conversation drafts', async ({ launch
   await expect(link(page, 'Pending')).toBeVisible()
   await expect(page.locator('.bubble__cursor')).toBeVisible()
   const walks = s.seen.filter(r => r.type === 'list_apps').length
-  mkdirSync('/tmp/builder-2002', { recursive: true })
+  mkdirSync('/tmp/builder-2270', { recursive: true })
   for (const width of [1280, 800]) {
     await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setContentSize(width, 800), width)
-    await page.screenshot({ path: `/tmp/builder-2002/links-${width}.png`, animations: 'disabled' })
+    await page.screenshot({ path: `/tmp/builder-2270/links-${width}.png`, animations: 'disabled' })
   }
   await link(page, 'Pending').focus(); await page.keyboard.press('Enter')
   const first = await ready(page, app)
@@ -138,7 +169,7 @@ test('streaming and settled links preserve conversation drafts', async ({ launch
         ((bounds.y + y) * size.width + bounds.x) * 4, y * childSize.width * 4, (y + 1) * childSize.width * 4)
       return nativeImage.createFromBitmap(bitmap, size).toPNG().toString('base64')
     })
-    writeFileSync(`/tmp/builder-2002/pane-${width}.png`, Buffer.from(capture, 'base64'))
+    writeFileSync(`/tmp/builder-2270/pane-${width}.png`, Buffer.from(capture, 'base64'))
   }
   await returnToChat(page)
   expect(await native(app)).toEqual([])
@@ -151,7 +182,7 @@ test('streaming and settled links preserve conversation drafts', async ({ launch
       if (event.type === 'threadUpdate' && event.update.type === 'thread_item_added' && event.update.payload.item.kind === 'turn_end' && event.update.payload.item.turn === 'links') { (window as any).linkTurnSettled = true; off() }
     }, true)
   })
-  daemon.pushFrame(s.frame('turn_end', { conversation_id: SEEDED_ROW.id, turn_id: 'links', stop_reason: 'end_turn' }))
+  for (const frame of s.finish()) daemon.pushFrame(frame)
   await expect.poll(() => page.evaluate(() => (window as any).linkTurnSettled)).toBe(true)
   await expect(page.locator('.bubble__cursor')).toHaveCount(0)
   await link(page, 'Pending').click(); await ready(page, app)
@@ -206,6 +237,7 @@ test('latest host selection survives delayed replies', async ({ launchPairedApp 
   const { page, app, servers } = await launch(launchPairedApp, a, b)
   await noHandoff(app)
   await returnToChat(page, true)
+  await threadRequested(b)
   await page.getByPlaceholder('Message…').fill('second host draft')
   servers[1].daemon.pushFrame(reply(b, `[A](${url()}) [B](${url(SECOND_SERVER_ID)})`, SECOND_SEEDED_ROW.id))
   await expect(link(page, 'A')).toBeVisible()
@@ -304,5 +336,7 @@ test('links reuse discovery recovery', async ({ launchPairedApp }) => {
   await ready(page, app)
   daemon.pushFrame(s.remove()); await expect(status(page)).toHaveText('App unavailable')
   expect(await native(app)).toEqual([])
+  await threadRequested(s)
+  expect(s.seen.filter(r => r.type === 'thread_catch_up').length).toBeGreaterThan(1)
   await assertNoHandoff(app)
 })

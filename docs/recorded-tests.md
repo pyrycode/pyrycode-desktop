@@ -128,6 +128,13 @@ all 29 captured-client cases and the native writer prerequisite; that gate
 supplies complete-suite proof once. Authored fake facts add no fresh provider,
 encryption or physical-effect proof, and preserve the replay/live boundaries above.
 
+The [canonical receipt validation](knowledge/features/development-verification-replay-validation.md#canonical-receipt-validation)
+records native exact-wire duplicate/conflict delivery with explicit canonical
+publisher replies in `live-user-receipts.spec.ts`. Its matching complete Linux
+gate includes the owned receipt case, all 29 captured-client scenarios and native
+prerequisites. This synthetic acceptance/text/time proof retains captured-history,
+protected-storage and live-only coverage; combined acceptance remains with #2211.
+
 On initial launch and every profile relaunch, the shared replay fixture probes
 `better-sqlite3` in Electron's main process before device binding and pairing. It
 resolves the installed SQLite package root, loads the genuine addon with

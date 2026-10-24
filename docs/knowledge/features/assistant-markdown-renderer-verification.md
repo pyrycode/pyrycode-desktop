@@ -201,6 +201,78 @@ active reply renders” and “progressive presentation, parser/render reuse and
 raw-source settlement” were present and passed. This is counted mounted evidence
 for settled reuse alongside the existing progressive proof.
 
+## Canonical external-link fixtures
+
+Both cases in [`assistant-link-opens-externally.spec.ts`](../../../e2e/assistant-link-opens-externally.spec.ts)
+use independent `createCanonicalThread` publishers with an empty opening thread,
+explicit current session and epoch. `launchPairedApp` selects canonical mode,
+bypassing the compatibility adapter for content, query replies and reconnect
+wiring. The shared publisher retains authored facts and supplies correlated
+thread data with separate final certificates; neither `request_history` nor
+`history_page` is used.
+
+Each case observes the actual opening `thread_catch_up` for the seeded conversation
+at version zero and no rendered anchors, then the matching `send_message` after
+trusted Send before accepting the rendered reply. On receiving that send, the
+helper supplies an assistant item: ID 1, order 10,
+revision 1, running/active, with explicit session, turn and `content.ts`. The terminal
+change advances thread version 2 to 3 and item revision 1 to 2 with `base_rev: 1`,
+`status: 'finished'` and `active: false`. Sends to another conversation return no
+reply. No accepted user row is required or inferred from assistant activity.
+
+The mounted renderer must produce the exact web/Obsidian link text and href;
+the denied Obsidian `new` action stays visible as text, leaving exactly one anchor.
+Before clicking, each case stubs main-process `shell.openExternal` and records its
+calls. The positive barrier is exactly one expected URL, followed by unchanged
+window count, document URL and visible composer. Preserve the 15-second reply and
+10-second handoff timeouts. The recorder prevents any OS application launch;
+rendered text or unchanged navigation alone cannot prove a working handoff.
+
+### Counted Linux validation
+
+The [plan](../../specs/architecture/2268-external-link-canonical-facts.md) and
+[PR #2277](https://github.com/pyrycode/pyrycode-desktop/pull/2277) retain builder
+evidence at clean revision `204a1b0c21d64565f322e38eab18b78052414043` on Linux
+x86_64. The authoritative verifier PASS record reviewed
+`5cd6e5b582e3cfb14de6c822cf895829c14128d1`; only plan/evidence changed after the
+tested implementation. Counts below use the dispatcher's gate report for the
+complete runs, preserving the initial application failure.
+
+| Recorded run | Executed | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| Builder canonical publisher units | 17 | 17 | 0 | 0 |
+| Builder owned mounted cases, retries zero | 2 | 2 | 0 | 0 |
+| Dispatcher complete unit gate | 10045 | 10045 | 0 | 3 |
+| Dispatcher complete application gate | 542 | 541 | 1 | 4 |
+| Dispatcher same-tree rerun of unrelated failure and supporting cases | 3 | 3 | 0 | 0 |
+
+Both named cases were present and passed in the focused run on retry zero and
+in the complete application gate:
+
+- `clicking a link in an assistant reply opens it in the OS browser`
+- `clicking an Obsidian open link hands it to the OS, and other Obsidian actions stay text`
+
+The preceding builder red control executed both: 2 executed, 0 passed, 2 failed,
+0 skipped, rejecting legacy `assistant_delta` after Send. Standard and client-test
+typechecks, build and focused TypeScript checking passed. The focused compiler
+file list explicitly includes this spec, launcher, canonical publisher/unit and
+publisher selection; `tsconfig.client-tests.json` alone excludes this spec.
+Node native preparation preceded units; Electron preparation preceded mounted
+execution. The retained Playwright JSON SHA-256 is
+`fd33f0ea9329d4565c4b0b85043b5f9fd01aa28a325900fd31496cfbab5e11e7`.
+
+The complete gate passed both owned cases, all 29 captured-client replay cases,
+canonical activation, captured/saved history, protected storage and the
+native-writer prerequisite. The unrelated `thread-update-burst.spec.ts` failure
+remains recorded; its successful same-tree rerun supplied the dispatcher-accepted
+green outcome. The reset-prompt fixme and three other existing skips remain
+excluded. This is retained evidence, not a documentation test run or fresh live
+provider, encryption or physical-effect proof. Preserve the original live-only
+assertions and exclusions in [recorded tests](../../recorded-tests.md) and the
+[replay inventory](../../client-replay-migration.md). Complete feature acceptance
+remains with #2212; #2153 and #2191 remain separate repairs. macOS is outside
+this Linux ticket's verification scope.
+
 ## Canonical streamed-text fixtures
 
 [`assistant-parent-text.spec.ts`](../../../e2e/assistant-parent-text.spec.ts),

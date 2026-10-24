@@ -1,10 +1,8 @@
-import { test, expect, seedConversationsFrame, SEEDED_ROW } from './fixtures/launchPairedApp'
+import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
+import { createCanonicalThread } from './fixtures/canonicalThread'
 import { encodeEnvelope, decodeEnvelope } from '../src/main/transport/codec'
-import type {
-  AssistantDeltaPayload,
-  SendMessagePayload,
-  TurnEndPayload
-} from '../src/shared/wire/types'
+import type { Envelope, SendMessagePayload } from '../src/shared/wire/types'
+import type { ThreadUpdate } from '../src/shared/wire/thread'
 
 // Clicking an allowed link opens it in the OS browser (#610 AC3) — the one criterion of that ticket no
 // server-render test can express. The unit tier (AssistantMarkdown.test.tsx) owns the allowlist itself,
@@ -43,6 +41,8 @@ const OPEN_TIMEOUT_MS = 10_000
 // denies the in-app window, so nothing in this run resolves or fetches it.
 const FIXED_TS = '2026-07-07T12:00:00.000Z'
 const TURN_ID = 'turn-1'
+const SESSION = 'external-link-session'
+const ROUTE = { conversation_id: SEEDED_ROW.id, epoch: 'external-link-epoch' }
 const LINK_URL = 'https://link.example/target'
 const LINK_TEXT = 'the link'
 // Markdown link syntax, so the anchor can only exist if AssistantMarkdown's `a` override built it. The
@@ -51,53 +51,40 @@ const LINK_TEXT = 'the link'
 const REPLY_TEXT = `Follow [${LINK_TEXT}](${LINK_URL}) for the details.`
 const TYPED_TEXT = 'hello from the composer'
 
-const assistantDeltaFrame = (text: string): Uint8Array =>
-  encodeEnvelope({
-    id: 99,
-    type: 'assistant_delta',
-    ts: FIXED_TS,
-    payload: {
-      conversation_id: SEEDED_ROW.id,
-      turn_id: TURN_ID,
-      seq: 0,
-      text
-    } satisfies AssistantDeltaPayload
-  })
+const updateFrame = (id: number, update: ThreadUpdate): Uint8Array =>
+  encodeEnvelope({ id, ts: FIXED_TS, ...update })
 
-// The turn_end is load-bearing here, not framing: a still-growing reply renders as plain text, and only a
-// SETTLED one renders through .bubble__markdown — so without this frame there is no anchor to click.
-const turnEndFrame = (): Uint8Array =>
-  encodeEnvelope({
-    id: 100,
-    type: 'turn_end',
-    ts: FIXED_TS,
-    payload: {
-      conversation_id: SEEDED_ROW.id,
-      turn_id: TURN_ID,
-      stop_reason: 'end_turn'
-    } satisfies TurnEndPayload
-  })
-
-// The send-and-stream shape: `send_message` → the ordered [assistant_delta, turn_end] stream; every other
-// inbound (the auto-fired `list_conversations`) → the shared one-row seed, since a scripted
-// buildReplyFrames overrides the fixture's default arm. The #448 guard rides along — the send arm answers
-// only the OPENED row's conversation_id, so a client regression to a placeholder id gets no frames and the
-// positive control times out, mirroring the real daemon's rejection.
-const replyFramesFor =
-  (replyText: string) =>
-  (inbound: Uint8Array): Uint8Array[] => {
+// Author content only after the trusted send to the opened conversation. The canonical publisher
+// answers list/thread queries, retains revisions and never infers user acceptance from this reply.
+const replyFramesFor = (replyText: string) => {
+  const requests: Envelope[] = []
+  const thread = createCanonicalThread({ conversations: [{
+    summary: { ...SEEDED_ROW, current_session_id: SESSION },
+    epoch: ROUTE.epoch, version: 1, items: []
+  }] })
+  const buildReplyFrames = (inbound: Uint8Array): Uint8Array[] => {
     const envelope = decodeEnvelope(inbound)
+    requests.push(envelope)
     switch (envelope.type) {
       case 'send_message': {
         const payload = envelope.payload as SendMessagePayload
         if (payload.conversation_id !== SEEDED_ROW.id) return []
-        return [assistantDeltaFrame(replyText), turnEndFrame()]
+        return [
+          updateFrame(99, { type: 'thread_item_added', payload: { ...ROUTE, version: 2,
+            item: { id: 1, order: 10, rev: 1, kind: 'assistant_message', status: 'running',
+              active: true, shown: true, summary: '', session: SESSION, turn: TURN_ID,
+              content: { text: replyText, ts: FIXED_TS } } } }),
+          updateFrame(100, { type: 'thread_item_changed', payload: { ...ROUTE, version: 3,
+            item_id: 1, base_rev: 1, rev: 2, changes: { status: 'finished', active: false } } })
+        ]
       }
       default:
-        return [seedConversationsFrame()]
+        return []
     }
   }
-const buildReplyFrames = replyFramesFor(REPLY_TEXT)
+  return { requests, options: { threadMode: 'canonical' as const, thread,
+    helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames } }
+}
 
 // The main-process global the stub records into. A property on globalThis rather than a closure variable,
 // because each app.evaluate call runs its own function in that process and shares nothing else.
@@ -106,10 +93,17 @@ const RECORDER_KEY = '__pyryOpenedExternally'
 test('clicking a link in an assistant reply opens it in the OS browser', async ({
   launchPairedApp
 }) => {
-  const { page, app } = await launchPairedApp({ buildReplyFrames })
+  const { requests, options } = replyFramesFor(REPLY_TEXT)
+  const { page, app } = await launchPairedApp(options)
+
+  await expect.poll(() => requests.find(request => request.type === 'thread_catch_up'))
+    .toMatchObject({ payload: { conversation_id: SEEDED_ROW.id, version: 0 } })
+  await expect(page.locator('.bubble__markdown a')).toHaveCount(0)
 
   await page.getByPlaceholder('Message…').fill(TYPED_TEXT)
   await page.getByRole('button', { name: 'Send' }).click()
+  await expect.poll(() => requests.find(request => request.type === 'send_message'))
+    .toMatchObject({ payload: { conversation_id: SEEDED_ROW.id, text: TYPED_TEXT } })
 
   // POSITIVE CONTROL, per window-reopen-converges.spec.ts. Without it a "nothing opened" failure could not
   // be told apart from a reply that never rendered a link at all — and the deny-first rendering this
@@ -163,6 +157,8 @@ test('clicking a link in an assistant reply opens it in the OS browser', async (
   // reading of the same claim: a navigated window loses the whole React app.
   expect(page.url()).toBe(documentUrlBefore)
   await expect(page.getByPlaceholder('Message…')).toBeVisible()
+  expect(requests.map(request => request.type)).not.toContain('request_history')
+  expect(requests.map(request => request.type)).not.toContain('history_page')
 })
 
 // Obsidian `open` links reach the operating system through the SAME window-open path, and this is the
@@ -177,10 +173,17 @@ const OBSIDIAN_REPLY_TEXT = `Open [the note](${OBSIDIAN_URL}) but not [the write
 test('clicking an Obsidian open link hands it to the OS, and other Obsidian actions stay text', async ({
   launchPairedApp
 }) => {
-  const { page, app } = await launchPairedApp({ buildReplyFrames: replyFramesFor(OBSIDIAN_REPLY_TEXT) })
+  const { requests, options } = replyFramesFor(OBSIDIAN_REPLY_TEXT)
+  const { page, app } = await launchPairedApp(options)
+
+  await expect.poll(() => requests.find(request => request.type === 'thread_catch_up'))
+    .toMatchObject({ payload: { conversation_id: SEEDED_ROW.id, version: 0 } })
+  await expect(page.locator('.bubble__markdown a')).toHaveCount(0)
 
   await page.getByPlaceholder('Message…').fill(TYPED_TEXT)
   await page.getByRole('button', { name: 'Send' }).click()
+  await expect.poll(() => requests.find(request => request.type === 'send_message'))
+    .toMatchObject({ payload: { conversation_id: SEEDED_ROW.id, text: TYPED_TEXT } })
 
   const anchor = page.locator('.bubble__markdown a')
   await expect(anchor).toHaveAttribute('href', OBSIDIAN_URL, { timeout: STREAM_TIMEOUT_MS })
@@ -223,4 +226,6 @@ test('clicking an Obsidian open link hands it to the OS, and other Obsidian acti
   )
   expect(page.url()).toBe(documentUrlBefore)
   await expect(page.getByPlaceholder('Message…')).toBeVisible()
+  expect(requests.map(request => request.type)).not.toContain('request_history')
+  expect(requests.map(request => request.type)).not.toContain('history_page')
 })

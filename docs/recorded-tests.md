@@ -6,6 +6,12 @@ The scenario inventory, protected tickets and live-only proof boundaries are in 
 
 ## Replay contract
 
+The [integrated send/queue acceptance](knowledge/features/development-verification-replay-validation-canonical-queue-settlement-validation.md#integrated-send-and-queue-acceptance)
+records #2211's exact combined candidate, counted Linux gate and all eight child
+records. Its 24 canonical cohort cases and 29 active replays passed; native writer
+and protected-history checks passed separately within the same configured gate.
+Existing exclusions and live-only proof requirements below remain binding.
+
 Each `e2e/recordings/*.json` identifies its source Desktop commit, daemon source revision and binary checksum, Claude version, capture time and authenticated capabilities. Version 2 also records sequential authenticated connection lifetimes and explicit test-side causal checkpoints. Observed retryable transport closes carry their actual close code and message prefix; replay forwards every preceding frame before closing the local socket. Version 1 remains readable for older captures from PR #2036.
 
 Capture preserves raw close positions and each call's actual connection identity.

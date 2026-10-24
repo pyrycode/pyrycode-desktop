@@ -83,6 +83,64 @@ in place. They establish no fresh provider, encryption or physical-effect claim.
 Linux is the accepted verifier's execution OS; macOS results are retained earlier
 evidence, not a requested second-OS run or fresh documentation-stage execution.
 
+## Canonical queue-action validation
+
+The accepted [PR #2251](https://github.com/pyrycode/pyrycode-desktop/pull/2251)
+verifier stage `c56a445bd9b94aa9fffe47394d0a56c66d10e6ad5df2bd0eb65d9ea8b91d06d9`
+records PASS on Linux, 2026-10-24, for
+`7449d6bf716b418d6d151663b7e42049ff832c4e`. Its normal-profile build reports
+`sourceDirty: false`. Builder implementation/build revision
+`4b91565b943b8f75793e2820be7aeca1cf0c75d0` differs only by plan evidence.
+These are retained runs, not documentation-stage executions. The
+[plan](../../specs/architecture/2221-canonical-queue-actions.md#validation-evidence--2026-10-24)
+retains exact commands and artifact paths.
+
+| Retained Linux check | Executed / passed / failed / skipped |
+| --- | --- |
+| Builder owned specs, `--retries 0`, including native writer prerequisite | 4 / 4 / 0 / 0 |
+| Builder canonical-publisher units | 17 / 17 / 0 / 0 |
+| Supplied dispatcher unit gate 4, JUnit counts | 10045 / 10045 / 0 / 3 |
+| Complete configured application gate 7, `npx playwright test --reporter=json` | 542 / 542 / 0 / 4 |
+
+Unit totals use the supplied counted gate report; verifier prose separately
+lists 10,144, so that larger total is not used here. The verdict confirms all
+17 canonical-publisher units passed. All three owned cases were present and
+passed in both the builder run and configured application gate:
+
+- `queued backlog renders distinctly, drops a queued message, and interrupts a running turn`
+- `queued actions keep Figma geometry, full opacity, isolated hover and keyboard focus at 800 and 1280`
+- `Send now sends one send_queued_now and keeps the message one row through delivery (#1726)`
+
+The complete gate used four workers and all three configured projects without
+selection/shard filters, retries, flaky results or report errors. The native
+protected-writer prerequisite and all 29 captured-client scenarios passed; their
+recorded exchanges left zero requests and reported no mismatch. This configured
+run supplies complete-suite evidence without a second full run for the migration.
+Builder pre-verify passed 5/5 checks. Application/client-test typechecks, focused
+TypeScript checking including both changed specs, imported canonical helpers and
+preload declarations, and final build passed. Verifier pre-verify's `--no-suite`
+intentionally skipped unit/typecheck checks; later unit/build gates supplied them.
+Install, docs guard and Electron preparation also passed.
+
+The failed exploratory runs remain failures: canonical mode rejected the old
+`assistant_delta` (2 executed, 1 passed, 1 intended failure, 0 skipped); the first
+migration checked idle before local-send acceptance (4 executed, 3 passed,
+1 failed, 0 skipped). Another candidate run overlapped the Node native rebuild:
+its prerequisite alone executed and failed (1 executed, 0 passed, 1 failed;
+the three owned cases did not run). It supplies no queue acceptance or established
+production cause. Finish Node-native unit work before restoring the Electron ABI
+and running mounted checks; then preserve the same output until they finish.
+The final sequential 4/4 pass retains all assertions and timeouts.
+
+The four application skips are two macOS badge cases, macOS window reopen and
+the existing system-prompt Reset fixme; none counts as passed. macOS is outside
+this Linux ticket's verification scope. Captures are historical October 16/19
+inputs. The [recorded-test contract](../../recorded-tests.md) and
+[inventory/exclusions](../../client-replay-migration.md) retain captured-history,
+protected-storage/native prerequisites and original live-only assertions.
+This authored-fact migration adds no fresh provider, daemon, encryption or
+physical-effect proof, and no visual implementation change.
+
 ## Counted Linux compatibility validation
 
 These are retained results accepted by the

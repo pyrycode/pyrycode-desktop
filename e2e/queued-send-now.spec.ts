@@ -1,17 +1,27 @@
 import { isDeepStrictEqual } from 'node:util'
 import type { Locator } from '@playwright/test'
-import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
+import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type { Envelope, SendMessagePayload, SessionSettingsPayload } from '../src/shared/wire/types'
+import { createCanonicalThread } from './fixtures/canonicalThread'
+import type { ThreadItem, ThreadUpdate } from '../src/shared/wire/thread'
 
 // #1726, fake transport: Send now on a queued row. The session-settings reply reports
 // `mid_turn_input: true`, a message is queued behind a running turn, and Send now is clicked. The click
-// sends exactly one `send_queued_now` naming the row and writes nothing to the thread; the row stays
-// queued until a `queue_state` omits it, and the daemon's user `message` push for it draws no second row.
+// sends exactly one `send_queued_now` naming the queue handle and writes nothing to the thread;
+// an authoritative delivered revision changes the same item into one user row.
 // Every assertion reads DOM roles/counts and captured frames; the texts and ids are non-secret literals.
 const ROUNDTRIP_TIMEOUT_MS = 15_000
 const FIXED_TS = '2026-10-05T12:00:00.000Z'
 const QUEUED_TEXT = 'Send me now please'
+const SESSION = 'session-1726'
+const route = { conversation_id: SEEDED_ROW.id, epoch: 'queue-actions' }
+const frame = (update: ThreadUpdate): Uint8Array => encodeEnvelope({ id: 1, ts: FIXED_TS, ...update })
+const item = (id: number, kind: 'user_message' | 'assistant_message',
+  status: 'queued' | 'delivered' | 'finished', content: Record<string, unknown>): ThreadItem => ({
+  id, order: id, rev: 1, kind, status, active: status === 'queued', shown: true,
+  summary: '', session: SESSION, content
+})
 
 const queuedGeometry = (row: Locator) => row.evaluate(el => {
   const bubble = el.querySelector('.bubble')!
@@ -46,24 +56,27 @@ const hoverLayer = (button: Locator) => button.evaluate(el => {
 })
 
 test('queued actions keep Figma geometry, full opacity, isolated hover and keyboard focus at 800 and 1280', async ({ launchPairedApp }) => {
-  const { page, app, daemon } = await launchPairedApp({ buildReplyFrames: bytes => {
+  const captured: Envelope[] = []
+  const thread = createCanonicalThread({ conversations: [{ summary: { ...SEEDED_ROW,
+    current_session_id: SESSION }, epoch: route.epoch, version: 1,
+    items: [item(10, 'assistant_message', 'finished', { text: 'Earlier reply' })] }] })
+  const { page, app, daemon } = await launchPairedApp({ threadMode: 'canonical', thread,
+    helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
     const envelope = decodeEnvelope(bytes)
-    if (envelope.type === 'list_conversations') return [seedConversationsFrame()]
+    captured.push(envelope)
     if (envelope.type === 'request_session_settings') return [sessionSettingsFrame(envelope.id)]
     return []
   } })
   await expect(page.locator('.composer__context')).toHaveText('Context: 25%')
-  // Establish a received live timeline before supplying its queue; a local-history pane hides queues.
-  daemon.pushFrame(encodeEnvelope({ id: 1, type: 'assistant_delta', ts: FIXED_TS, payload: {
-    conversation_id: SEEDED_ROW.id, turn_id: 'geometry', seq: 0, text: 'Earlier reply'
-  } }))
   await expect(page.locator('[data-thread-role="assistant"]')).toHaveCount(1)
-  daemon.pushFrame(encodeEnvelope({ id: 2, type: 'queue_state', ts: FIXED_TS, payload: {
-    conversation_id: SEEDED_ROW.id, queued: [
-      { queued_msg_id: 1, text: 'Hi', ts: FIXED_TS },
-      { queued_msg_id: 2, text: 'Wrapping queued message stays inside the thread. '.repeat(6) + 'x'.repeat(90), ts: FIXED_TS }
-    ]
-  } }))
+  expect(captured.find(e => e.type === 'thread_catch_up')?.payload).toMatchObject({
+    conversation_id: SEEDED_ROW.id, version: 0
+  })
+  daemon.pushFrame(frame({ type: 'thread_item_added', payload: { ...route, version: 2,
+    item: item(20, 'user_message', 'queued', { queued_msg_id: 1, text: 'Hi', ts: FIXED_TS }) } }))
+  daemon.pushFrame(frame({ type: 'thread_item_added', payload: { ...route, version: 3,
+    item: item(30, 'user_message', 'queued', { queued_msg_id: 2,
+      text: 'Wrapping queued message stays inside the thread. '.repeat(6) + 'x'.repeat(90), ts: FIXED_TS }) } }))
   const rows = page.locator('.message-row--queued')
   await expect(rows).toHaveCount(2)
   for (const width of [800, 1280]) {
@@ -91,7 +104,7 @@ test('queued actions keep Figma geometry, full opacity, isolated hover and keybo
       expect(before.actionsOpacity).toBe('1')
       if (index === 0) expect(before.bubble.height).toBe(52)
       else expect(before.bubble.height).toBeGreaterThan(52)
-      await page.screenshot({ path: `/tmp/builder-1868/queued-rest-${width}-${index}.png` })
+      await page.screenshot({ path: `/tmp/builder-2221/queued-rest-${width}-${index}.png` })
       for (const [button, sibling, ordinal] of [[send, cancel, 0], [cancel, send, 1]] as const) {
         const glyph = before.glyphs[ordinal]
         const bounds = before.buttons[ordinal]
@@ -112,7 +125,7 @@ test('queued actions keep Figma geometry, full opacity, isolated hover and keybo
         expect(bounds.bottom - hovered.bottom).toBeCloseTo(glyph.bottom + 4, 5)
         expect((await hoverLayer(sibling)).content).toBe('none')
         expect(await queuedGeometry(row)).toEqual(before)
-        if (index === 0) await row.screenshot({ path: `/tmp/builder-1868/queued-hover-${width}-${ordinal}.png` })
+        if (index === 0) await row.screenshot({ path: `/tmp/builder-2221/queued-hover-${width}-${ordinal}.png` })
         await page.mouse.move(0, 0)
         expect((await hoverLayer(button)).content).toBe('none')
       }
@@ -127,11 +140,12 @@ test('queued actions keep Figma geometry, full opacity, isolated hover and keybo
         expect(focus).toEqual({ visible: true, outline: 'solid', width: '1px' })
         expect((await hoverLayer(button)).content).toBe('none')
         expect(await queuedGeometry(row)).toEqual(before)
-        if (index === 0) await row.screenshot({ path: `/tmp/builder-1868/queued-focus-${width}-${ordinal}.png` })
+        if (index === 0) await row.screenshot({ path: `/tmp/builder-2221/queued-focus-${width}-${ordinal}.png` })
         await page.keyboard.press('Tab')
       }
     }
   }
+  expect(captured.filter(e => e.type === 'request_history')).toHaveLength(0)
 })
 
 function sessionSettingsFrame(inReplyTo: number): Uint8Array {
@@ -140,8 +154,9 @@ function sessionSettingsFrame(inReplyTo: number): Uint8Array {
     type: 'session_settings',
     ts: FIXED_TS,
     in_reply_to: inReplyTo,
+    session_id: SESSION,
     payload: {
-      session_id: 'session-1726',
+      session_id: SESSION,
       model: 'seeded-model',
       effort: 'low',
       yolo: false,
@@ -157,17 +172,20 @@ test('Send now sends one send_queued_now and keeps the message one row through d
   launchPairedApp
 }) => {
   const captured: Envelope[] = []
+  const thread = createCanonicalThread({ conversations: [{ summary: { ...SEEDED_ROW,
+    current_session_id: SESSION }, epoch: route.epoch, version: 1,
+    items: [item(10, 'assistant_message', 'finished', { text: 'Send-now route ready' })] }] })
   const { page, daemon } = await launchPairedApp({
+    threadMode: 'canonical', thread, helloAck: { capabilities: ['interactive', 'thread'] },
     buildReplyFrames: (bytes) => {
       const envelope = decodeEnvelope(bytes)
       captured.push(envelope)
-      if (envelope.type === 'list_conversations') return [seedConversationsFrame()]
       if (envelope.type === 'request_session_settings') return [sessionSettingsFrame(envelope.id)]
       return []
     }
   })
   const push = (type: string, payload: Record<string, unknown>): void => daemon.pushFrame(encodeEnvelope({
-    id: 1, type, ts: FIXED_TS, payload: { conversation_id: SEEDED_ROW.id, ...payload }
+    id: 1, type, ts: FIXED_TS, session_id: SESSION, payload: { conversation_id: SEEDED_ROW.id, ...payload }
   }))
   const sent = (): SendMessagePayload[] =>
     captured.filter((e) => e.type === 'send_message').map((e) => e.payload as SendMessagePayload)
@@ -175,17 +193,28 @@ test('Send now sends one send_queued_now and keeps the message one row through d
 
   // The context reading arrives in the same reply as the flags, so once it shows the flag is held too.
   await expect(page.locator('.composer__context')).toHaveText('Context: 25%', { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(page.getByText('Send-now route ready', { exact: true })).toBeVisible()
+  expect(framesOf('thread_catch_up')[0]?.payload).toMatchObject({ conversation_id: SEEDED_ROW.id, version: 0 })
+  const identity = await page.evaluate(() => window.pyry.deviceIdentity())
+  expect(identity.ok).toBe(true)
+  if (!identity.ok) throw new Error('authenticated device identity unavailable')
 
   const composer = page.getByPlaceholder('Message…')
   await composer.fill('Start the first task')
   await composer.press('Enter')
   await expect.poll(() => sent().length, { timeout: ROUNDTRIP_TIMEOUT_MS }).toBe(1)
+  daemon.pushFrame(frame({ type: 'thread_item_added', payload: { ...route, version: 2,
+    item: item(20, 'user_message', 'delivered', { text: 'Start the first task',
+      message_id: sent()[0].message_id, device_id: identity.deviceId, ts: FIXED_TS }) } }))
   push('turn_state', { state: 'responding' })
   await composer.fill(QUEUED_TEXT)
   await composer.press('Enter')
   await expect.poll(() => sent().length, { timeout: ROUNDTRIP_TIMEOUT_MS }).toBe(2)
   const messageId = sent()[1]?.message_id
-  push('queue_state', { queued: [{ queued_msg_id: 1, message_id: messageId, text: QUEUED_TEXT, ts: FIXED_TS }] })
+  expect(messageId).toEqual(expect.any(String))
+  const acceptedContent = { message_id: messageId, device_id: identity.deviceId, text: QUEUED_TEXT, ts: FIXED_TS }
+  daemon.pushFrame(frame({ type: 'thread_item_added', payload: { ...route, version: 3,
+    item: item(30, 'user_message', 'queued', { ...acceptedContent, queued_msg_id: 1 }) } }))
 
   const queuedRow = page.locator('.conversation__thread .message-row--queued', { hasText: QUEUED_TEXT })
   const sendNow = queuedRow.getByRole('button', { name: 'Send queued message now' })
@@ -220,14 +249,25 @@ test('Send now sends one send_queued_now and keeps the message one row through d
   await expect(rowsFor).toHaveCount(1)
   await expect(page.locator('[data-thread-role="user"]')).toHaveCount(userRowsBefore)
 
-  // The daemon's acknowledgement: a backlog without it, then its user `message` push, same message_id.
-  push('queue_state', { queued: [] })
+  // Delivery revises the same daemon item, retaining authenticated message identity.
+  daemon.pushFrame(frame({ type: 'thread_item_changed', payload: { ...route, version: 4,
+    item_id: 30, base_rev: 1, rev: 2, changes: { status: 'delivered', active: false, content: acceptedContent } } }))
   await expect(queuedRow).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
-  push('message', { message_id: messageId, role: 'user', text: QUEUED_TEXT })
-  push('assistant_delta', { turn_id: 'first', seq: 1, text: 'Read it mid-turn.' })
+  await expect(rowsFor).toHaveCount(1)
+  await expect(page.locator('[data-thread-role="user"]', { hasText: QUEUED_TEXT })).toHaveCount(1)
+  // A later authoritative delivery of that identity must not add a second row.
+  daemon.pushFrame(frame({ type: 'thread_item_changed', payload: { ...route, version: 5,
+    item_id: 30, base_rev: 2, rev: 3, changes: { status: 'delivered', content: acceptedContent } } }))
+  daemon.pushFrame(frame({ type: 'thread_item_added', payload: { ...route, version: 6,
+    item: item(40, 'assistant_message', 'finished', { text: 'Read it mid-turn.' }) } }))
   await expect(page.locator('[data-thread-role="assistant"]', { hasText: 'Read it mid-turn.' }))
     .toHaveCount(1, { timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(rowsFor).toHaveCount(1)
   await expect(page.locator('[data-thread-role="user"]', { hasText: QUEUED_TEXT })).toHaveCount(1)
   await expect(page.getByRole('button', { name: 'Send queued message now' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Drop queued message' })).toHaveCount(0)
+  expect(framesOf('send_queued_now')).toHaveLength(1)
+  expect(framesOf('dequeue_message')).toHaveLength(0)
+  expect(sent()).toHaveLength(2)
+  expect(framesOf('request_history')).toHaveLength(0)
 })

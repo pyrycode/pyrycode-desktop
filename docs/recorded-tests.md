@@ -113,6 +113,14 @@ native addon ABIs; a successful Node unit run does not establish that Electron
 can open SQLite. Replay needs working local storage to restore saved history and
 its catch-up cursor after a profile restart.
 
+Finish the Node unit gate before Electron ABI preparation, then keep native
+rebuilds out of mounted execution. The
+[canonical queue-action evidence](knowledge/features/development-verification-replay-validation.md#canonical-queue-action-validation)
+retains an overlapping-rebuild prerequisite failure and the later sequential
+pass. Those authored cases exercise canonical activation and queue controls;
+captured history, protected storage, native prerequisites and the original
+live-only assertions retain their existing proof requirements.
+
 On initial launch and every profile relaunch, the shared replay fixture probes
 `better-sqlite3` in Electron's main process before device binding and pairing. It
 resolves the installed SQLite package root, loads the genuine addon with

@@ -130,6 +130,35 @@ exact computed treatment; those local observations retain styling sensitivity.
 
 ### Scripted and native thread fixtures
 
+For authored facts, select `{ threadMode: 'canonical', thread }` with one
+`createCanonicalThread` per host; see the
+[canonical publisher contract](development-verification.md#source-and-contract-checks).
+[`queued-backlog-interrupt.spec.ts`](../../../e2e/queued-backlog-interrupt.spec.ts)
+and [`queued-send-now.spec.ts`](../../../e2e/queued-send-now.spec.ts) use this route
+for all three mounted cases. They observe actual `thread_catch_up` requests and
+rendered content, with no `request_history` alias. Author summary/current-session
+binding, item sessions, epoch, unique orders, advancing versions and exact-base
+revisions. The publisher supplies correlated query data and separate final
+certificates; it does not infer acceptance from composer sends or assistant activity.
+Correlated session-settings replies retain `mid_turn_input`, context reading and
+explicit session provenance; live turn controls name the owning conversation.
+
+For an own send, capture its outbound `message_id` and obtain the authenticated
+public identity through `window.pyry.deviceIdentity()`. Supply both on the accepted
+`user_message`; keep the item ID distinct from `content.queued_msg_id`. Drop waits
+for a hidden dropped revision, and Send now waits for a delivered revision of the
+same item. Backlog coverage keeps the delivered row and two distinct queued rows
+inside the thread, including an unmatched message, with one row per message and
+no separate queue region. Dropping one preserves both unrelated rows.
+Capturing either command is a barrier for checking that the queued row
+and actions remain. After repeated delivery, observe the subsequent assistant
+content before asserting uniqueness. For interrupt, observe accepted/rendered
+local sends before the idle baseline: idle alone cannot settle an unaccepted send.
+Thinking mounts both Stop and the running indicator; the captured interrupt leaves
+both mounted until daemon idle. Geometry, opacity, wrapping, isolated hover and
+keyboard focus remain checked at 800 and 1280. See
+[counted Linux validation](development-verification-replay-validation.md#canonical-queue-action-validation).
+
 `launchPairedApp` defaults to `threadMode: 'scripted'`. Its test-only publisher in
 `e2e/fixtures/scriptedThread.ts` translates event scripts into daemon-authored
 items, appends, revisions, session readings and certified query replies. It never
@@ -142,6 +171,12 @@ and deliberate old-daemon handshakes. Native thread, activation and frame tests 
 it. Scripted compatibility aliases for `request_history` are test inputs only;
 the assembled app sends `thread_catch_up` and `thread_page`. Tests of outbound
 protocol must observe the actual request rather than count the alias invocation.
+
+Compatibility remains available to unmigrated siblings; eventual fixture removal
+belongs to [#2246](https://github.com/pyrycode/pyrycode-desktop/issues/2246).
+The queue migration is one slice of
+[#2211](https://github.com/pyrycode/pyrycode-desktop/issues/2211)'s full acceptance;
+the separate status and paging repairs remain with #2153 and #2191.
 
 History responses are split into bounded item batches and end with a separate
 completion marker. The default empty-thread wait must complete before a spec

@@ -192,6 +192,21 @@ The queue migration is one slice of
 [#2211](https://github.com/pyrycode/pyrycode-desktop/issues/2211)'s full acceptance;
 the separate status and paging repairs remain with #2153 and #2191.
 
+The three [streamed-text fixtures](assistant-markdown-renderer-verification.md#canonical-streamed-text-fixtures)
+also select canonical mode, advertising `interactive` and complete `thread`
+capabilities. Each local builder supplies the session/current-session binding,
+ordered items and numeric agent-parent IDs; appends advance item revisions and
+thread versions. Rendered message times belong in `content.ts`, not solely in the
+envelope: omitting that fact loses the time suffix checked by `bubbleTextExactly`.
+Author `status: 'finished', active: false` explicitly for settlement, including
+after a tool appears, and preserve the standard whitespace cohort's active tail.
+Its `buildReplyFrames` returns content only for a `send_message` addressed to
+`SEEDED_ROW.id`; other requests return no custom frames so the canonical publisher
+can answer actual correlated queries. These cases bypass legacy translation and
+history aliases. Focused TypeScript checking must include all three specs and
+imported helpers explicitly; app/client-test projects alone exclude these fake
+specs. See [counted Linux validation](development-verification-replay-validation.md#canonical-streamed-text-validation).
+
 History responses are split into bounded item batches and end with a separate
 completion marker. The default empty-thread wait must complete before a spec
 pushes live content. Otherwise initial recovery can erase the intended live test

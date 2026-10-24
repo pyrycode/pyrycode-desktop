@@ -135,6 +135,16 @@ gate includes the owned receipt case, all 29 captured-client scenarios and nativ
 prerequisites. This synthetic acceptance/text/time proof retains captured-history,
 protected-storage and live-only coverage; combined acceptance remains with #2211.
 
+The [canonical streamed-text validation](knowledge/features/development-verification-replay-validation.md#canonical-streamed-text-validation)
+records all 20 attribution, whitespace and progressive-Markdown cases in
+`assistant-parent-text.spec.ts`, `assistant-whitespace.spec.ts` and
+`progressive-markdown.spec.ts` passing on authored facts with explicit completion
+and an active final tail. The matching complete Linux gate also passes canonical
+activation, captured history, protected storage/native prerequisites and all 29
+captured-client scenarios. Original live-only assertions and exclusions remain;
+these synthetic cases add no fresh provider, encryption or physical-effect proof.
+Compatibility remains for unmigrated siblings; #2153 and #2191 are separate repairs.
+
 On initial launch and every profile relaunch, the shared replay fixture probes
 `better-sqlite3` in Electron's main process before device binding and pairing. It
 resolves the installed SQLite package root, loads the genuine addon with

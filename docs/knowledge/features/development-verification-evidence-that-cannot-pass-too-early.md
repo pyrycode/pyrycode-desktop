@@ -31,6 +31,27 @@ Optimistic state can disappear in the same frame when the fake immediately repli
 Hold the fake response, assert the optimistic state, then send the correlated reply.
 A rejection can distinguish states whose successful renderings look identical.
 
+In [`send-and-stream.spec.ts`](../../../e2e/send-and-stream.spec.ts), local pending
+and accepted user bubbles share visible markup. Exact bubble text alone would
+miss premature settlement: the authoritative outer `[data-read-row]` wrapper
+distinguishes them. Use the canonical publisher to answer the actual opening
+`thread_catch_up` query and wait for its authored opening fact before filling the
+composer and clicking Send. Hold authored responses while checking one exact
+user bubble and zero user bubbles inside an authoritative wrapper, including
+after the daemon captures the outbound command.
+
+Release the active assistant fact and require exact `REPLY_TEXT` in its Markdown
+body plus a visible cursor before rechecking that the user bubble remains local.
+That rendered reply is the positive processing barrier; assistant activity never
+proves user acceptance. Only then publish the delivered user fact with the public
+device ID from `window.pyry.deviceIdentity()` and the captured outbound
+`message_id`. Require one authoritative user bubble and one total user bubble,
+so acceptance cannot leave a local duplicate. Complete the assistant with an
+exact-base revision and require exact whole-bubble text plus cursor removal.
+Keep the wrong-conversation send guard and the default arm's lack of assistant
+facts: neither a misrouted send nor a command echo may satisfy the exact reply
+oracle. See the [counted Linux validation](development-verification-replay-validation.md#canonical-send-and-stream-validation).
+
 The reset regression in
 [`composer-context-claude-reading.spec.ts`](../../../e2e/composer-context-claude-reading.spec.ts),
 `reset completion requests context once and refreshes footer and gauge without a message`,

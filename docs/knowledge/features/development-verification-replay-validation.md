@@ -457,6 +457,67 @@ acceptance under [#2209](https://github.com/pyrycode/pyrycode-desktop/issues/220
 this slice does not complete that parent acceptance. #2153 and #2191 remain separate
 repairs.
 
+## Canonical local-send status validation
+
+The [PR #2261 verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2261#issuecomment-6388233969)
+and accepted stage `a2e502344c4d50bae9e666c02f837f1170830f9adad8040d9f92eb4bb60d0e9c`
+record PASS on Linux x64, 2026-10-24, at
+`d8306dcd12468b9627b150cf985ca9017880be65`. Normal build provenance identifies
+that revision with `sourceDirty: false`. The owned spec is unchanged from builder
+implementation `ecb1e40d901c11c5754f88d9df63b4ce2a3306c9`. These are retained
+results; documentation runs only the docs guard. The
+[plan](../../specs/architecture/2255-canonical-local-send-status.md#validation-evidence)
+retains commands and artifact paths, and the
+[fixture contract](e2e-harness.md#scripted-and-native-thread-fixtures) explains the
+independent identity controls and positive delivery/idle barriers.
+
+| Retained Linux check | Executed / passed / failed / skipped |
+| --- | --- |
+| Builder owned spec plus native writer prerequisite, retries zero | 2 / 2 / 0 / 0 |
+| Builder canonical-publisher/selection units | 17 / 17 / 0 / 0 |
+| Builder send-store units | 13 / 13 / 0 / 0 |
+| Supplied dispatcher unit gate 4, JUnit counts | 10045 / 10045 / 0 / 3 |
+| Complete configured application gate 7, `npx playwright test --reporter=json` | 542 / 542 / 0 / 4 |
+
+Unit totals use the supplied counted report; the verifier prose's larger 10,144
+aggregate is not used. Both named mounted tests were present and passed in the
+builder's final focused run and the configured application gate:
+
+- `the status row reads Sending, then Waiting for Claude, then Thinking, with the icon turning throughout`
+- `finite protected writer backlog preserves native keyboard and both event loops`
+
+The complete gate used four workers and all three configured projects without
+shard filtering, retries, flaky results or report errors. Canonical activation,
+protected saved-history cases and all 29 captured-client exchanges passed, with
+zero remaining requests and no request mismatch. Inputs retain October 16/19
+capture provenance. This matching configured gate supplies complete-suite evidence
+once. Reports remain referenced as
+`/work/Projects/pyrycode-desktop-agents/logs/verifier-gate_#2255_{1..7}.log`
+and their corresponding stderr logs.
+
+Builder pre-verify passed all five checks; `npm run typecheck`,
+`npm run typecheck:client-tests`, focused TypeScript checking including the owned
+spec and imported helpers/declarations, and build passed. Verifier install, docs
+guard, application typecheck/build and Electron-native preparation passed.
+Node preparation preceded units, then Electron preparation preceded mounted
+execution. The initial overlapping manual/pre-verify preparation failed before
+any units executed; the later sequential preparation passed. The legacy opening
+oracle remains a recorded failure: 2 executed, 1 passed native prerequisite,
+1 failed owned case, 0 skipped, retries zero. Builder artifacts are referenced
+under `/tmp/builder-2255/`; no failed run becomes a pass.
+
+The four application skips are two macOS badge cases, macOS window reopen and
+the existing system-prompt Reset fixme; three unit skips require live relay
+credentials. No skip counts as passed. macOS is outside this Linux ticket's
+verification scope. The [recorded-test contract](../../recorded-tests.md) and
+[migration inventory](../../client-replay-migration.md) preserve captured history,
+protected storage, native prerequisites and original live-only assertions.
+Authored facts and captured replay add no fresh provider, encryption or
+physical-effect proof, and this migration adds no duplicate-wire proof or visual
+change. Compatibility remains for unmigrated siblings; #2211 retains combined
+acceptance. #2153/#2191 remain separate repairs and #2169 owns missing-acceptance
+recovery.
+
 ## Counted Linux compatibility validation
 
 These are retained results accepted by the

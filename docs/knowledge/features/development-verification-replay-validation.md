@@ -618,6 +618,66 @@ change. Compatibility remains for unmigrated siblings; #2211 retains combined
 acceptance. #2153/#2191 remain separate repairs and #2169 owns missing-acceptance
 recovery.
 
+## Canonical message lifecycle diagnostics validation
+
+The accepted [PR #2262](https://github.com/pyrycode/pyrycode-desktop/pull/2262)
+verifier stage `55e809cbc71518a7b9d985c2a584e3b67e52e675d9d8917499561e6074cc5bfc`
+records PASS on Linux x86_64, 2026-10-24, at
+`cb7dfb9592a220222053d4093ef74fe2a73d655f`. Normal build provenance identifies
+that revision with `sourceDirty: false`. The owned spec is unchanged from builder
+candidate `51aa1c28753ca6430f55487a63e42960d3c11f15` and through documentation
+base `1273338bb5c5cf062b5d306d4dd8aa1280a7c9b2`. These are retained results;
+documentation runs only the docs guard. The
+[plan](../../specs/architecture/2256-message-lifecycle-diagnostics.md#builder-validation--linux-x86_64-2026-10-24)
+retains commands and artifact paths; the
+[fixture contract](e2e-harness.md#scripted-and-native-thread-fixtures) explains
+native duplicate delivery and publisher resynchronization before the rendered
+processing barrier.
+
+| Retained Linux check | Executed / passed / failed / skipped |
+| --- | --- |
+| Builder owned case plus native writer prerequisite, retries zero | 2 / 2 / 0 / 0 |
+| Builder lifecycle and canonical-publisher units | 23 / 23 / 0 / 0 |
+| Builder pre-verify lifecycle units, within five passed checks | 6 / 6 / 0 / 0 |
+| Supplied dispatcher unit gate 4, JUnit counts | 10045 / 10045 / 0 / 3 |
+| Complete configured application gate 7, `npx playwright test --reporter=json` | 542 / 542 / 0 / 4 |
+
+Unit totals use the supplied counted gate report; the verdict prose's larger
+10,144 aggregate is not used. Both named mounted tests were present and passed
+once in the final builder run and the configured application gate:
+
+- `idle and running composer submissions reach diagnostics, and drop is a local request`
+- `finite protected writer backlog preserves native keyboard and both event loops`
+
+The complete gate used retries zero and reported zero flaky results. The accepted
+verdict confirms captured-client scenarios, canonical activation, captured history,
+packaged protected-history encryption/reopen and the native writer/keyboard/event-loop
+prerequisite passed. This matching configured gate supplies complete-suite
+evidence once. References are dispatcher
+`logs/verifier-gate_#2256_{1..7}.log` and
+`build/dispatcher-tests/native-preparation.json`.
+
+Builder typecheck, client-test typecheck, focused TypeScript checking including
+the changed spec and imported helpers/declarations, and build passed. Verifier
+install, docs guard, build and Electron-native preparation passed; pre-verify
+passed three enabled checks, with typecheck/unit steps disabled by `--no-suite`.
+Builder Node checks finished before final Electron preparation and mounted
+execution. The legacy opening-content control remains failed evidence:
+2 executed, 1 passed native prerequisite, 1 failed owned case, 0 skipped, retries
+zero. Builder artifacts and their hashes remain referenced under
+`/tmp/builder-2256/`; that failure is not final acceptance.
+
+The application gate skipped two macOS badge cases, window reopen and the existing
+live-only system-prompt Reset case; three units were skipped. None counts as
+passed. macOS is outside this Linux ticket's verification scope. The
+[recorded-test contract](../../recorded-tests.md) and
+[migration inventory](../../client-replay-migration.md) preserve original live-only
+assertions. Authored facts and captured replay add no fresh provider/daemon,
+encryption-interoperability or physical-effect proof. Compatibility remains for
+unmigrated siblings; #2211 retains combined acceptance, #2153/#2191 remain separate
+repairs and #2169 owns missing-acceptance recovery. No production or visual change
+ships in this migration.
+
 ## Counted Linux compatibility validation
 
 These are retained results accepted by the

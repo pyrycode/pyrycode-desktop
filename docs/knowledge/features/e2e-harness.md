@@ -164,6 +164,30 @@ Retain the serial clipboard project, native prerequisite and
 authored facts and replay cannot replace OS clipboard activation/readback.
 See [counted Linux validation](development-verification-replay-validation-canonical-message-lifecycle-diagnostics-validation.md#canonical-side-action-validation).
 
+[`message-reply.spec.ts`](../../../e2e/message-reply.spec.ts) keeps its
+single-consumer `replyHost` local. Every host, including `secondServer`, gets a
+fresh canonical publisher even when conversation, session, epoch and item IDs
+coincide. Register each opened chat with an explicit summary/current session and
+empty item set; register a created chat before returning `conversation_created`.
+During pairing, expose only the first discovered row; additional chat scopes can
+already be registered, but announce them after pairing completes. An active
+assistant needs `status: 'running'`: the wire accepts the string `streaming`, but
+the renderer does not display that status. Only list/create controls reach
+`conversationStateFake`; the publisher owns correlated thread queries, while
+offline reopening reads saved canonical items. Author the delivered user fact
+with the captured send/device identities, assistant additions, exact-base suffix
+appends and explicit finished/inactive revisions. Assistant activity cannot
+accept the user's send.
+
+Keep `quote`, `expectDraftEnd` and the held drain's actual preload receipt
+observation. Continue publication while frame/timer drains are held. Receipt can
+coexist with a visible partial source; the exact rendered suffix and absent cursor settle
+current-source readiness. Saved/offline tests poll protected `readThread` records,
+including both equal-ID hosts before reopening and both independent records
+afterward. Draft or DOM isolation cannot replace that persistence barrier.
+See [reply fixture assertions](conversation-shell-message-bubble-testing.md#canonical-reply-fixtures)
+and [counted Linux validation](development-verification-replay-validation-canonical-message-lifecycle-diagnostics-validation.md#canonical-reply-validation).
+
 For an own send, capture its outbound `message_id` and obtain the authenticated
 public identity through `window.pyry.deviceIdentity()`. Supply both on the accepted
 `user_message`; keep the item ID distinct from `content.queued_msg_id`. Drop waits

@@ -67,6 +67,13 @@ alongside the complete configured application/replay gate. This synthetic client
 coverage preserves captured history, protected storage, native prerequisites and
 the original live-only assertions; it adds no fresh provider or physical-effect proof.
 
+The mounted `live-user-receipts.spec.ts` uses canonical facts and correlated replies
+with the [native delivery exception](knowledge/features/e2e-harness.md#scripted-and-native-thread-fixtures)
+for raw duplicate/conflicting full items. Its [counted Linux evidence](knowledge/features/development-verification-replay-validation.md#canonical-receipt-validation)
+proves device/message acceptance, authoritative text/time and one-row identity.
+The complete configured gate retains captured history, protected storage and native
+prerequisites. Live-only assertions are unchanged; #2211 owns combined acceptance.
+
 Encryption interoperability, handshakes, reconnect transport, real process
 liveness, native platform integration, and daemon/tool filesystem effects cannot
 be established by application-message replay. Their live checks remain required.

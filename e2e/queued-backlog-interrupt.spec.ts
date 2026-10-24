@@ -1,328 +1,145 @@
 import { isDeepStrictEqual } from 'node:util'
-import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
+import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
+import { createCanonicalThread } from './fixtures/canonicalThread'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
-import type {
-  Envelope,
-  QueuedItem,
-  QueueStatePayload,
-  TurnStatePayload,
-  DequeueMessagePayload,
-  SendMessagePayload,
-  WireTurnState
-} from '../src/shared/wire/types'
+import type { Envelope, SendMessagePayload, WireTurnState } from '../src/shared/wire/types'
+import type { ThreadItem, ThreadUpdate } from '../src/shared/wire/thread'
 
-// Fake-stack UI e2e for three already-shipped, server-push-driven flows the queue/turn wiring exposes,
-// none of it covered today (#427, sibling of #425/#426/#451/#452): the QUEUED-BACKLOG render (#294 over
-// the replacement-truth queue store #293), DROPPING a queued message (#296/#300), and INTERRUPTING a
-// running turn (#215 indicator + #307 control). It drives them end-to-end through renderer → IPC → main →
-// Noise wire → decode (the send half) and back over daemon.pushFrame (the reflecting-state half) on the
-// launchPairedApp fixture (#433). Zero production code.
-//
-// ONE test() block, ONE launch (the run-config precedent, NOT #423/#426's two-block split). Those siblings
-// split only for one-way-per-launch state (a promotion that can't un-happen; the FIFO reject residue).
-// This ticket has no such trap: the queue store and the timeline `phase` are independent and each is fully
-// re-settable within one launch by pushing a fresh snapshot/state, so a single continuous drive covers
-// every AC and doesn't triple the ~60s real-handshake launch cost.
-//
-// THREE load-bearing facts a naive clone of the template would miss (read from the code, not inferred):
-//   1. queue_state MUST carry conversation_id === SEEDED_ROW.id. ConversationScreen reads
-//      selectBacklogFor(activeConversation.id) — the read #1009 hoisted out of the backlog's own control and
-//      #1214 kept, now as the fold's input, so the routing is unchanged across both — and list-open records
-//      the clicked SEEDED_ROW as active
-//      (PairedShell.tsx), so activeConversation.id === 'seed-conversation'. A snapshot under any other id
-//      lands in the store but is selected by nothing → zero rows render, SILENTLY (the run-config
-//      session-id gate analogue). turn_state has no such gate (timelineBridge drops its conversation_id,
-//      ADR 0004) — set it to SEEDED_ROW.id anyway for realism.
-//   2. subscribeQueue resets backlogs on every `connected` event (the #197 reconnect reconcile, scoped
-//      by #1138 to the conversations the reconnecting server has listed — with one server that is every
-//      conversation this spec touches). The fixture's completion signal (Send enabled) is gated on that
-//      same `connected`, so by the time launchPairedApp resolves `connected` has already fired; no
-//      rekey/reconnect happens in this spec, so no further `connected` wipes the backlog. Push
-//      queue_state ONLY AFTER launch resolves — never before.
-//   3. Interrupt phase-gating: isTurnRunning(phase) is `thinking || responding`, and since #648 the same
-//      running-turn reading gates the ThinkingIndicator too. So turn_state{thinking} lights BOTH the
-//      interrupt button and the running indicator; turn_state{idle} returns `phase` to idle and retracts
-//      BOTH — the crisp "both gone" assertion. turn_end is NOT the quiescing signal (it appends a turn
-//      boundary but does not reset `phase`, threadTimeline.ts); only turn_state{idle} retracts the
-//      phase-gated controls. TurnPhase has no literal `running` — do not push that value.
-//      SINCE #650 THE TWO CONTROLS NO LONGER SHARE ONE GATE, and the delivered-echo plant below is exactly
-//      where that bites: the composer's accept opens the working indicator LOCALLY, through a scalar beside
-//      `phase` that the interrupt control cannot see. So after the plant the indicator is already mounted
-//      while `phase` is still idle, and the interrupt leg's "thinking mounts the running indicator" half
-//      would assert against an element that was on screen the whole time. The plant closes its own window
-//      with a turn_state{idle} to keep that half honest — see the AC block.
-//
-// TWO-PART ASSERTION PER MUTATION (both drop and interrupt are non-optimistic — dropQueuedMessage.ts /
-// sendInterrupt.ts only emit a frame, the store is never mutated locally): (a) act, (b) expect.poll the
-// captured OUTBOUND frame — the send-half proof (#425/#456 precedent), because the DOM alone cannot prove
-// the send landed — then (c) daemon.pushFrame the reflecting state and assert the DOM change (the dropped
-// row leaves only when the fresh queue_state omitting it arrives; the interrupt controls retract only when
-// turn_state{idle} arrives).
-//
-// SECRET HYGIENE (carried verbatim from the siblings): every assertion reads DOM text/roles/counts and
-// captured wire frames only; queued_msg_id / conversation_id / the item texts are non-secret routing &
-// display literals; the pairing plumbing (synthetic token, fake static key) lives in launchPairedApp and is
-// never echoed. No failure diagnostic serialises a token, key, or plaintext.
-
-// The renderer → preload → main → Noise → loopback round-trip is fast in-process, so a short headroom over
-// Playwright's 5s default suffices for a cold runner (the siblings' value).
+// Mounted actions retain the real composer/IPC/Noise path. Only authored daemon
+// facts accept messages, remove queued rows or settle a running turn.
 const ROUNDTRIP_TIMEOUT_MS = 15_000
-
-// Fixed reply framing — the fakeDaemon convention (no Date.now(), no randomness). The app never dedupes
-// pushes by envelope id, so one fixed REPLY_ENVELOPE_ID is reused across every pushed frame.
-const REPLY_ENVELOPE_ID = 1
 const FIXED_TS = '2026-07-07T12:00:00.000Z'
-
-// One delivered user row (planted via a real composer Send — the fake no-ops send_message, the optimistic
-// echo renders) to contrast the queued rows against. Its text differs from both queued texts so the
-// role-partition assertion is unambiguous by text as well as by data-thread-role.
+const SESSION = 'queue-interrupt-session'
+const route = { conversation_id: SEEDED_ROW.id, epoch: 'queue-interrupt-epoch' }
 const DELIVERED_TEXT = 'A delivered user message'
+const QUEUED_A = { queued_msg_id: 1, text: 'First queued task', ts: FIXED_TS }
+const QUEUED_B = { queued_msg_id: 2, text: 'Second queued task', ts: FIXED_TS,
+  message_id: 'an-id-no-echo-in-this-window-carries' }
+const frame = (update: ThreadUpdate): Uint8Array => encodeEnvelope({ id: 1, ts: FIXED_TS, ...update })
 
-// Two queued items with distinct texts + ids. "Keyed by queued_msg_id" is proven behaviorally by the
-// dequeue step (a DOM React key is not an inspectable attribute; correct keying = removing exactly the
-// omitted row while the other stays).
-//
-// #1213: each item also carries the `message_id` of the `send_message` that produced it
-// (pyrycode#2092) — the key that lets a drop take the sending window's own timeline echo out too. A's is
-// NOT a literal: it is the id the renderer minted for its real composer send, read off the captured frame
-// at run time (`sentMessageId` below), because a client-minted UUID cannot be known in advance and a
-// fabricated one would correlate with nothing. B's IS a fabricated literal, and deliberately — it is the
-// "an item whose id matches no local echo" case, which must remove nothing.
-//
-// ⭐ NOTHING TYPECHECKS `e2e/` (no tsconfig includes it; Playwright strips types with esbuild), and
-// `message_id` is OPTIONAL, so a fixture that omitted it would compile, run, and simply fail to correlate
-// with no red anywhere. That is why it is spelled out here rather than left to the type to demand.
-const QUEUED_A: Omit<QueuedItem, 'message_id'> = {
-  queued_msg_id: 1,
-  text: 'First queued task',
-  ts: FIXED_TS
-}
-const QUEUED_B: QueuedItem = {
-  queued_msg_id: 2,
-  text: 'Second queued task',
-  ts: FIXED_TS,
-  message_id: 'an-id-no-echo-in-this-window-carries'
-}
-
-// Spec-local frame builders (the seedConversationsFrame idiom): each seals one pushed envelope via the
-// production codec, deterministic id/ts. Both carry conversation_id === SEEDED_ROW.id (fact 1).
-
-// A replacement-truth queue snapshot — the whole current backlog, not a delta (queueStore #293).
-function queueStateFrame(items: readonly QueuedItem[]): Uint8Array {
-  return encodeEnvelope({
-    id: REPLY_ENVELOPE_ID,
-    type: 'queue_state',
-    ts: FIXED_TS,
-    payload: { conversation_id: SEEDED_ROW.id, queued: [...items] } satisfies QueueStatePayload
-  })
-}
-
-// The coarse turn-phase scalar (thinking mounts the interrupt controls, idle retracts them — fact 3).
 function turnStateFrame(state: WireTurnState): Uint8Array {
-  return encodeEnvelope({
-    id: REPLY_ENVELOPE_ID,
-    type: 'turn_state',
-    ts: FIXED_TS,
-    payload: { conversation_id: SEEDED_ROW.id, state } satisfies TurnStatePayload
-  })
+  return encodeEnvelope({ id: 1, type: 'turn_state', ts: FIXED_TS, session_id: SESSION,
+    payload: { conversation_id: SEEDED_ROW.id, state } })
 }
 
-/**
- * The spec-local capturing reply factory (the #456 capturingWorkspaceFake shape). The fake daemon runs in
- * the TEST process (via the loopback forwarder), so a spec-held `captured` array written here is directly
- * readable from the test body. Only list_conversations needs a reply (the seeded launch row); send_message
- * (the delivered-echo plant), dequeue_message and interrupt are all captured for the send-half proof but
- * need NO reply — their reflecting state (queue_state / turn_state) is pushed explicitly by the test. The
- * closure is stateless (discrimination is by envelope `type` only); the double-decode (capture, then
- * dispatch) is pure and harmless, exactly as run-config's factory does.
- */
-function capturingQueueInterruptFake(captured: Envelope[]): (inbound: Uint8Array) => Uint8Array[] {
-  return (inbound) => {
-    const env = decodeEnvelope(inbound)
-    captured.push(env)
-    switch (env.type) {
-      case 'list_conversations':
-        return [seedConversationsFrame()]
-      default:
-        return []
-    }
-  }
-}
-
-// Count captured dequeue_message frames whose payload deep-equals `expected`. `.toBe(1)` proves BOTH
-// send-once AND the exact { conversation_id, queued_msg_id } at once — the payload is fully deterministic
-// (no opaque token, unlike modal_answer #426), so a whole-payload deep-equal is correct here.
-function dequeueFramesMatching(captured: Envelope[], expected: DequeueMessagePayload): number {
-  return captured.filter((e) => e.type === 'dequeue_message' && isDeepStrictEqual(e.payload, expected))
-    .length
-}
-
-// #1213: the `message_id` the renderer minted for the composer send carrying `text`. The correlation key
-// is client-minted (crypto.randomUUID) so the spec cannot know it in advance — it reads it back off the
-// captured outbound frame, which is exactly the value the real daemon would relay into its queue_state.
-// Returns undefined until the frame lands, so it is safe to poll on.
 function sentMessageId(captured: Envelope[], text: string): string | undefined {
-  const frame = captured.find(
-    (e) => e.type === 'send_message' && (e.payload as SendMessagePayload).text === text
-  )
-  return frame === undefined ? undefined : (frame.payload as SendMessagePayload).message_id
-}
-
-// Count captured interrupt frames. Matched by `type` alone so `.toBe(1)` stays a send-once proof;
-// `interruptPayloads` below is where the payload is read, keeping the two contracts separable.
-function interruptFrames(captured: Envelope[]): number {
-  return captured.filter((e) => e.type === 'interrupt').length
-}
-
-/**
- * Every captured `interrupt` frame's payload, in order (#1092). THE PAYLOAD IS NO LONGER BARE `{}` —
- * each frame names the OPEN conversation and nothing else, because the bare form the frame carried until
- * pyrycode#2103 means the daemon's process-wide follow-active cursor, i.e. whichever chat any client last
- * sent to. Read off the CAPTURED FRAME, never the daemon's reaction: the loopback fake answers this frame
- * with nothing, so a reaction-based read would be asserting the fake rather than this client.
- */
-function interruptPayloads(captured: Envelope[]): unknown[] {
-  return captured.filter((e) => e.type === 'interrupt').map((e) => e.payload)
+  const sent = captured.find(e => e.type === 'send_message' && (e.payload as SendMessagePayload).text === text)
+  return sent === undefined ? undefined : (sent.payload as SendMessagePayload).message_id
 }
 
 test('queued backlog renders distinctly, drops a queued message, and interrupts a running turn', async ({
   launchPairedApp
 }) => {
   const captured: Envelope[] = []
-  const { page, daemon } = await launchPairedApp({
-    buildReplyFrames: capturingQueueInterruptFake(captured)
+  const opening: ThreadItem = { id: 10, order: 10, rev: 1, kind: 'assistant_message',
+    status: 'finished', active: false, shown: true, summary: '', session: SESSION,
+    content: { text: 'Queue actions ready' } }
+  const thread = createCanonicalThread({ conversations: [{ summary: { ...SEEDED_ROW,
+    current_session_id: SESSION }, epoch: route.epoch, version: 1, items: [opening] }] })
+  const { page, daemon } = await launchPairedApp({ threadMode: 'canonical', thread,
+    helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
+      captured.push(decodeEnvelope(bytes)); return []
+    } })
+  await expect(page.getByText('Queue actions ready', { exact: true })).toBeVisible()
+  expect(captured.find(e => e.type === 'thread_catch_up')?.payload).toMatchObject({
+    conversation_id: SEEDED_ROW.id, version: 0
   })
+  const identity = await page.evaluate(() => window.pyry.deviceIdentity())
+  expect(identity.ok).toBe(true)
+  if (!identity.ok) throw new Error('authenticated device identity unavailable')
 
-  // #1214: THE QUEUED ROWS LIVE IN THE THREAD NOW. `.conversation__queued` is gone as a region, so the old
-  // container-scoped locators have no container: a queued row is a `.message-row--queued` inside
-  // `.conversation__thread`, and its bubble carries data-thread-role="queued" while a delivered echo's
-  // carries "user". That role difference IS the AC "distinct from delivered" seam and it is now the ONLY
-  // seam — assert on the role attribute or the modifier, never on the .message-row--user class both wear.
   const queuedRow = (text: string) =>
     page.locator('.conversation__thread .message-row--queued', { hasText: text })
-  const dropButton = (text: string) =>
-    queuedRow(text).getByRole('button', { name: 'Drop queued message' })
+  const dropButton = (text: string) => queuedRow(text).getByRole('button', { name: 'Drop queued message' })
   const queuedBubbles = page.locator('[data-thread-role="queued"]')
   const deliveredUser = page.locator('[data-thread-role="user"]')
-  // #1213: one delivered echo, addressed by its text. The three texts in this spec share no substring, so
-  // Playwright's case-insensitive SUBSTRING `hasText` cannot select two rows at once.
-  const deliveredEcho = (text: string) =>
-    page.locator('[data-thread-role="user"]', { hasText: text })
-  // #1214: EVERY row one message draws, in whichever state — the locator AC1 ("exactly one row") is stated
-  // against. Both roles at once, because the whole point is that a message can no longer be in two.
+  const deliveredEcho = (text: string) => page.locator('[data-thread-role="user"]', { hasText: text })
   const rowsFor = (text: string) =>
     page.locator('[data-thread-role="user"], [data-thread-role="queued"]', { hasText: text })
-  const queuedRegion = page.locator('.conversation__queued')
   const interruptButton = page.getByRole('button', { name: 'Stop the running turn' })
   const runningIndicator = page.locator('.conversation__thinking')
 
-  // --- AC: queue render (distinct from delivered) ---
-  // Plant one delivered user row: the fake no-ops send_message, so the optimistic echo renders on its own
-  // with no daemon reply. Assert it lands BEFORE pushing queue_state (the echo is synchronous → no race).
   await page.getByPlaceholder('Message…').fill(DELIVERED_TEXT)
   await page.getByRole('button', { name: 'Send' }).click()
   await expect(deliveredUser).toHaveCount(1)
+  await expect.poll(() => sentMessageId(captured, DELIVERED_TEXT), { timeout: ROUNDTRIP_TIMEOUT_MS })
+    .toEqual(expect.any(String))
+  daemon.pushFrame(frame({ type: 'thread_item_added', payload: { ...route, version: 2, item: {
+    id: 20, order: 20, rev: 1, kind: 'user_message', status: 'delivered', active: false,
+    shown: true, summary: '', session: SESSION, content: { text: DELIVERED_TEXT,
+      message_id: sentMessageId(captured, DELIVERED_TEXT), device_id: identity.deviceId, ts: FIXED_TS }
+  } } }))
 
-  // #1213: a SECOND real composer send, and this one is the message the daemon will report as queued. It
-  // has to go through the composer rather than be fabricated, because only a real send mints the
-  // `message_id` that both the wire frame and the optimistic echo carry — which is the whole correlation
-  // this ticket establishes. The fake no-ops send_message here too, so this row is an echo and nothing else.
+  // The second actual send supplies a genuine local message ID. Its queued fact
+  // must replace the user echo rather than duplicate it.
   await page.getByPlaceholder('Message…').fill(QUEUED_A.text)
   await page.getByRole('button', { name: 'Send' }).click()
   await expect(deliveredUser).toHaveCount(2)
-  // Read the minted id back off the captured frame. `.poll` because the send crosses IPC → main → Noise →
-  // the loopback fake, so the frame lands a tick or two after the click.
-  await expect
-    .poll(() => sentMessageId(captured, QUEUED_A.text), { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect.poll(() => sentMessageId(captured, QUEUED_A.text), { timeout: ROUNDTRIP_TIMEOUT_MS })
     .toEqual(expect.any(String))
-  const queuedMessageId = sentMessageId(captured, QUEUED_A.text)
-
-  // #650: close the working-indicator window the accept above opened locally (fact 3). The fake no-ops
-  // send_message, so nothing else ever would — and a real daemon ends every turn with this frame anyway,
-  // including one it answered with nothing. The zero-count gate is the load-bearing half: it is what makes
-  // the interrupt leg's indicator assertion measure a MOUNT rather than an element already on screen.
   daemon.pushFrame(turnStateFrame('idle'))
   await expect(interruptButton).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
 
-  // Push the queue snapshot (AFTER launch resolved → past the `connected` backlog reset, fact 2; under
-  // SEEDED_ROW.id → selected by the active-conversation backlog, fact 1). The live subscription re-renders.
-  // #1213: A carries the id the composer just minted, so it correlates with the echo above — the shape a
-  // real daemon produces for a message THIS window sent mid-turn. B carries an id no echo here holds.
-  daemon.pushFrame(queueStateFrame([{ ...QUEUED_A, message_id: queuedMessageId }, QUEUED_B]))
+  const queuedA: ThreadItem = { id: 30, order: 30, rev: 1, kind: 'user_message', status: 'queued',
+    active: true, shown: true, summary: '', session: SESSION, content: { ...QUEUED_A,
+      message_id: sentMessageId(captured, QUEUED_A.text), device_id: identity.deviceId } }
+  daemon.pushFrame(frame({ type: 'thread_item_added', payload: { ...route, version: 3, item: queuedA } }))
+  // B matches no echo in this window and must remain a separate item.
+  daemon.pushFrame(frame({ type: 'thread_item_added', payload: { ...route, version: 4,
+    item: { ...queuedA, id: 40, order: 40, content: { ...QUEUED_B, device_id: 'synthetic-other-device' } } } }))
   await expect(queuedBubbles).toHaveCount(2, { timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(queuedRow('First queued task')).toBeVisible()
   await expect(queuedRow('Second queued task')).toBeVisible()
-
-  // --- #1214: ONE ROW PER MESSAGE, and the region is gone. ---
-  // A's echo and A's queued item are the same message, so the push does not ADD a row for A — it converts
-  // the echo already on screen. That conversion is this ticket's whole subject and it is a real 2 → 1
-  // mutation of the delivered count, driven by the push, unreachable from the pre-push state.
   await expect(deliveredUser).toHaveCount(1)
   await expect(rowsFor(QUEUED_A.text)).toHaveCount(1)
   await expect(deliveredEcho(QUEUED_A.text)).toHaveCount(0)
-  // B carries an id no echo here holds, so it draws its own row rather than attaching to somebody else's.
   await expect(rowsFor('Second queued task')).toHaveCount(1)
-  // Every queued row is IN the thread and the separate region exists nowhere on the page.
-  await expect(queuedRegion).toHaveCount(0)
+  await expect(page.locator('.conversation__queued')).toHaveCount(0)
   await expect(page.locator('.conversation__thread [data-thread-role="queued"]')).toHaveCount(2)
-  // The unrelated delivered row is untouched by the queue push (the AC "distinct" seam). It is on screen
-  // HERE, which is what makes the post-drop assertion that it SURVIVES a real check rather than a
-  // statement that was already true at launch.
   await expect(deliveredEcho(DELIVERED_TEXT)).toHaveCount(1)
 
-  // --- AC: dequeue (non-optimistic — send half proven from the captured frame, then reflect) ---
   await dropButton('First queued task').click()
-  await expect
-    .poll(() => dequeueFramesMatching(captured, { conversation_id: SEEDED_ROW.id, queued_msg_id: 1 }), {
-      timeout: ROUNDTRIP_TIMEOUT_MS
-    })
-    .toBe(1)
-  // --- #1213: the ECHO goes at the click, unlike the row. #1214: on ONE row, that pair is visible. ---
-  // The poll above is the positive wait this leg needs: it reads the drop's OWN effect (the captured
-  // dequeue frame), is unreachable from the pre-click state, and only once it has fired can the removal
-  // that rides the same click have run. A bare count here would otherwise pass before the click's async
-  // work resolved.
-  //
-  // The echo left at the click while the daemon still holds A in its backlog, so A is momentarily an
-  // UNMATCHED row: still drawn, still queued, still droppable, but now synthesized from the wire item
-  // rather than from this window's echo, and therefore at the thread's tail. That transient is the
-  // documented cost of merging #1213's optimistic echo removal with #296 AC3's non-optimistic row (the
-  // plan's § Design 8) — asserted here rather than merely described, so that if a later ticket makes the
-  // row's departure optimistic this line is what tells it the behaviour changed.
+  await expect.poll(() => captured.filter(e => e.type === 'dequeue_message').length,
+    { timeout: ROUNDTRIP_TIMEOUT_MS }).toBe(1)
+  expect(isDeepStrictEqual(captured.find(e => e.type === 'dequeue_message')?.payload,
+    { conversation_id: SEEDED_ROW.id, queued_msg_id: QUEUED_A.queued_msg_id })).toBe(true)
+  // Captured command is the barrier: the click completed but authoritative
+  // queue membership has not changed, and both unrelated rows survive.
   await expect(deliveredEcho(QUEUED_A.text)).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(rowsFor(QUEUED_A.text)).toHaveCount(1)
   await expect(queuedRow('First queued task')).toBeVisible()
-  // ONLY the dropped message is touched: the unrelated delivered row is still there, still attributed.
+  await expect(dropButton('First queued task')).toBeVisible()
+  await expect(queuedRow('Second queued task')).toBeVisible()
   await expect(deliveredEcho(DELIVERED_TEXT)).toHaveCount(1)
   await expect(deliveredUser).toHaveCount(1)
 
-  // Row A is NOT gone yet (non-optimistic — #296 AC3, unchanged by #1213/#1214: the daemon owns the
-  // backlog). Push the fresh replacement snapshot omitting A → the row leaves entirely, in BOTH roles,
-  // which is the AC "dropping it removes the row" end state.
-  daemon.pushFrame(queueStateFrame([QUEUED_B]))
+  daemon.pushFrame(frame({ type: 'thread_item_changed', payload: { ...route, version: 5,
+    item_id: queuedA.id, base_rev: 1, rev: 2, changes: { shown: false, active: false, status: 'dropped' } } }))
   await expect(queuedRow('First queued task')).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(rowsFor(QUEUED_A.text)).toHaveCount(0)
   await expect(queuedRow('Second queued task')).toBeVisible()
   await expect(queuedBubbles).toHaveCount(1)
-  // The drain half of AC4, from the other direction: that replacement snapshot also removed B's item from
-  // nothing — no echo left the thread on a snapshot, only on the click above.
   await expect(deliveredUser).toHaveCount(1)
+  await expect(deliveredEcho(DELIVERED_TEXT)).toHaveCount(1)
 
-  // --- AC: interrupt (thinking lights both controls; idle retracts both) ---
+  // The accepted queue facts are the positive processing barrier for the earlier
+  // idle control and settle the outstanding local send before the interrupt leg.
+  await expect(interruptButton).toHaveCount(0)
+  await expect(runningIndicator).toHaveCount(0)
   daemon.pushFrame(turnStateFrame('thinking'))
   await expect(interruptButton).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(runningIndicator).toBeVisible({ timeout: ROUNDTRIP_TIMEOUT_MS })
-
-  // Non-optimistic: the interrupt helper only emits the `interrupt` frame and posts no local state; the
-  // controls retract only on the daemon's turn_state{idle}, not on the click.
   await interruptButton.click()
-  await expect.poll(() => interruptFrames(captured), { timeout: ROUNDTRIP_TIMEOUT_MS }).toBe(1)
-  // #1092 AC1: the one frame names the OPEN conversation — the row `launchPairedApp` clicked to get here
-  // — and carries nothing else. `toEqual` on the whole payload rather than a property read, so a frame
-  // that also smuggled a second field reddens.
-  expect(interruptPayloads(captured)).toEqual([{ conversation_id: SEEDED_ROW.id }])
-
+  await expect.poll(() => captured.filter(e => e.type === 'interrupt').length,
+    { timeout: ROUNDTRIP_TIMEOUT_MS }).toBe(1)
+  expect(captured.filter(e => e.type === 'interrupt').map(e => e.payload))
+    .toEqual([{ conversation_id: SEEDED_ROW.id }])
+  await expect(interruptButton).toBeVisible()
+  await expect(runningIndicator).toBeVisible()
   daemon.pushFrame(turnStateFrame('idle'))
   await expect(interruptButton).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(runningIndicator).toHaveCount(0)
+  expect(captured.filter(e => e.type === 'dequeue_message')).toHaveLength(1)
+  expect(captured.filter(e => e.type === 'send_message')).toHaveLength(2)
+  expect(captured.filter(e => e.type === 'request_history')).toHaveLength(0)
 })

@@ -85,6 +85,19 @@ native prerequisites and every original live-only assertion remain in place.
 This fixture migration adds no fresh provider, encryption or physical-effect proof;
 compatibility remains for unmigrated siblings, with #2153 and #2191 separate repairs.
 
+The seven mounted cases in `queued-own-settlement.spec.ts` and
+`queue-delivery-evidence.spec.ts` use explicit canonical acceptance and lifecycle
+facts. Five settlement orders retain native duplicate/equal/older-revision probes;
+the treatment and installed-observer cases select canonical mode. The observer
+requires two ordered marker-bearing normal completions, including a split second
+marker; queue disappearance alone stays incomplete. Their
+[fixture contract](knowledge/features/e2e-harness.md#scripted-and-native-thread-fixtures)
+and [counted Linux evidence](knowledge/features/development-verification-replay-validation.md#canonical-queue-settlement-validation)
+retain canonical activation, captured history, protected-storage/native coverage,
+strict replay and causal validation. Every original live-only assertion remains;
+this migration adds no fresh provider, encryption or physical-effect proof.
+Compatibility remains for unmigrated siblings; #2211 owns combined acceptance.
+
 Encryption interoperability, handshakes, reconnect transport, real process
 liveness, native platform integration, and daemon/tool filesystem effects cannot
 be established by application-message replay. Their live checks remain required.

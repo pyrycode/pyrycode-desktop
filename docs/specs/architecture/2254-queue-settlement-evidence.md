@@ -48,3 +48,26 @@ None. Native composition is required only for deliberately invalid authoring con
 ## Revisions
 - 2026-10-24: Opening callback requests already include `thread_catch_up` under compatibility mode, so the request-only negative-control hypothesis was incorrect (2/2 including prerequisite passed). Keep actual request assertions as protocol observations; the distinguishing negative control instead challenges inferred acceptance after assistant activity. The first test-first launch was blocked by incomplete Electron installation, and the first seven-case run was held by Node/Electron SQLite ABI mismatch. Reinstalling dependencies and running the existing Electron rebuild resolved these environment failures without changing source or assertions.
 - Queue disappearance is authored as `written` before a later delivered revision for removal-first cases; receipt-first cases follow delivery with an older-revision full fact. Repeated identical facts and equal/older conflicting facts use native mode, with the publisher snapshot reset to known authoritative facts after each probe. No legacy event translation is introduced.
+
+## Builder validation — Linux, 2026-10-24
+Final test source revision: `6fddaa5a14ec35406d3e1bef3afc3d4d806a82b0`, based on merged main `257fbda1b869`. This later evidence-only plan update changes no executable input.
+
+`npx playwright test e2e/queued-own-settlement.spec.ts e2e/queue-delivery-evidence.spec.ts --retries 0 --reporter=list,json` retained the configured native-writer dependency, projects and concurrency. Final report: `/tmp/builder-2254/final-mounted.json`; log and output: `/tmp/builder-2254/final-mounted.log`, `/tmp/builder-2254/final-mounted-results`. **8 executed/passed, 0 failed/skipped/retried**, including the native prerequisite and these seven owned cases:
+
+| Case | Executed / passed / failed / skipped |
+| --- | --- |
+| queued own rows settle in stream order: removal-first | 1 / 1 / 0 / 0 |
+| queued own rows settle in stream order: receipt-first | 1 / 1 / 0 / 0 |
+| queued own rows settle in stream order: sent-now | 1 / 1 / 0 / 0 |
+| queued own rows settle in stream order: mixed-removal-first | 1 / 1 / 0 / 0 |
+| queued own rows settle in stream order: mixed-receipt-first | 1 / 1 / 0 / 0 |
+| queued and delivered treatments retain the message-area design | 1 / 1 / 0 / 0 |
+| queue evidence follows a single user row through delivery in the built app | 1 / 1 / 0 / 0 |
+
+- Pre-verify: PASS, five checks, including `npm run typecheck` and `queueTurnEvidence.test.ts` (20 executed/passed, 0 failed/skipped). Evidence: `/tmp/builder-2254/pre-verify.log` and `build/dispatcher-tests/unit-z9m4wjfy`. Publisher units: 17 executed/passed, 0 failed/skipped (`/tmp/builder-2254/publisher-unit.log`).
+- `npm run typecheck:client-tests`, focused `tsc --noEmit -p /tmp/builder-2254/tsconfig.focused.json` (both specs, helper and declarations), and final `npm run build`: passed. Build log: `/tmp/builder-2254/final-build.log`.
+- Native packaged smoke: 1 executed/passed, 0 failed/skipped, Linux x64, Electron 33.4.11, real `gnome_libsecret`, 1,000 retained items. Evidence: `/tmp/builder-1979/native-1792864574021`.
+- Retained negative control: `/tmp/builder-2254/acceptance-control.json`, log/results and `acceptance-control.spec.ts`. Native prerequisite passed; the temporary legacy-adapter control failed as intended (2 executed, 1 passed, 1 failed, 0 skipped/retried): assistant activity invented an authoritative user row while the assertion required zero. The earlier request-only control passed and proves no distinction. Initial incomplete-install and ABI-prerequisite failures remain retained separately in `red-results` and `mounted-results`; no owned case executed in those blocked runs. First successful migrated run: `mounted-2.json`, 8 executed/passed, 0 failed/skipped/retried.
+- Dispatcher/verifier owns the complete configured application gate with captured-client replay. No duplicate full-suite run, fresh provider/encryption/physical-effect proof, or macOS verification is claimed.
+
+Final scope: 199 added lines in the implementation commit plus the original 46-line plan and this evidence; zero production files, one new exported helper and two consumers. All planned lifecycle rows have mounted coverage; no open design questions remain.

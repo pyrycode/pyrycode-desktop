@@ -21,9 +21,9 @@ import type {
   MCPStatusRequestPayload,
   MCPReconnectPayload,
   MCPTogglePayload,
-  StopBackgroundTaskPayload,
-  BackgroundTask
+  StopBackgroundTaskPayload
 } from '../../src/shared/wire/types'
+import type { ThreadUpdate } from '../../src/shared/wire/thread'
 
 // The stateful `conversationStateFake` reply factory (#434) — TEST-ONLY e2e infrastructure. The fake
 // daemon (src/main/transport/fakeDaemon.ts) is reply-driven and STATELESS: a run passes `buildReplyFrames`
@@ -133,7 +133,7 @@ export interface ConversationStateFake {
   replyToBackgroundTaskStop(index: number, answer: BackgroundTaskStopAnswer): Uint8Array[]
 }
 
-export type BackgroundTaskStopAnswer = 'silent' | 'stopped' | 'refused' | { roster: readonly BackgroundTask[] }
+export type BackgroundTaskStopAnswer = 'silent' | 'refused' | Extract<ThreadUpdate, { type: 'thread_item_changed' }>
 
 
 /**
@@ -246,19 +246,13 @@ export function conversationStateFake(
     const request = taskStopRequests[index]
     if (request === undefined) throw new Error('Missing synthetic stop request')
     if (answer === 'silent') return []
-    const frame = (type: 'error' | 'background_task_updated' | 'background_task_roster', payload: unknown) =>
-      encodeEnvelope({ id: REPLY_ENVELOPE_ID, type, ts: FIXED_TS, payload,
-        ...(type === 'error' ? { in_reply_to: request.id } : {}) })
-    if (answer === 'refused') return [frame('error', {
-      code: 'background_task.refused', message: 'Synthetic refusal', retryable: false,
-      conversation_id: 'deliberately-unrelated-conversation'
-    })]
-    if (answer === 'stopped') return [frame('background_task_updated', {
-      ...request.payload, patch: '', status: 'stopped', summary: 'Synthetic stop outcome', truncated_fields: null
-    })]
-    return [frame('background_task_roster', {
-      conversation_id: request.payload.conversation_id, tasks: answer.roster, dropped_tasks: 0
-    })]
+    if (answer === 'refused') return [encodeEnvelope({ id: REPLY_ENVELOPE_ID, type: 'error',
+      ts: FIXED_TS, in_reply_to: request.id, payload: {
+        code: 'background_task.refused', message: 'Synthetic refusal', retryable: false,
+        conversation_id: 'deliberately-unrelated-conversation'
+      } })]
+    // The scenario authors lifecycle and revision; the selected publisher admits and retains it.
+    return [encodeEnvelope({ id: REPLY_ENVELOPE_ID, ts: FIXED_TS, ...answer })]
   }
 
   // The workspace-rename mutation, written once and reached two ways: the `rename_workspace` arm below

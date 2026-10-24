@@ -56,6 +56,24 @@ describe('remembered model', () => {
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => vi.useRealTimers())
 
+  it('accepts a synchronous connected baseline but cancels on a later reconnect', () => {
+    const h = harness()
+    const connected: StampedDaemonEvent = { type: 'connected', serverId: 'host', ack: {
+      server_id: 'host', conn_id: 'held', protocol_version: '2', capabilities: ['thread'] } }
+    h.model.start(chat, 'host', { ...h.deps, onDaemonEvent: listener => {
+      const off = h.deps.onDaemonEvent(listener)
+      listener(connected)
+      return off
+    } }, () => {})
+    expect(h.model.pending.getState().target).toBe('new')
+    h.list(); h.emit(settings)
+    expect(h.send).toHaveBeenCalledTimes(1)
+    h.emit(connected)
+    expect(h.model.pending.getState().target).toBeNull()
+    expect(h.writes.getState().pending.size).toBe(0)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('persists a deliberate raw pick only on its correlated confirmation and survives restart', () => {
     const h = harness('previous')
     h.writes.getState().dispatch({ type: 'changeDispatched', changeId: 'user',

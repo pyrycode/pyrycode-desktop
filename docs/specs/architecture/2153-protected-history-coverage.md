@@ -107,6 +107,379 @@ evidence live in [protected history testing](../../knowledge/features/chat-histo
 
 ## Revisions
 
+### 2026-10-20 — late subscriber startup repair
+
+The reopened contract now includes production status delivery. One useful behavior:
+saved-profile catch-up remains ready when main accepts before React mounts. The
+preload listener must exist before document load; a React effect is too late.
+Cleaner-shape check: use the existing load replay and a preload-local status cache,
+not a second renderer-to-main snapshot request with an asynchronous ordering race.
+No consumer signature, main authorization, storage, wire or relay change is needed.
+
+Additional files read:
+- `src/main/index.ts` → `openWindow`: load replays retained statuses and starts idempotently.
+- `src/main/liveWindow.ts` → `createLiveWindow`, `originOf`: four statuses, trusted stamped origins.
+- `src/preload/index.ts` → `onDaemonEvent`: currently subscribes too late; retains receipt/content filtering.
+- `src/preload/appUpdate.test.ts` → preload boundary test pattern.
+- `src/renderer/src/store/threadRuntime.ts` → `useThreadRuntime`: independent layout subscription.
+- `src/renderer/src/store/daemonEventBridge.ts` → `useDaemonEventBridge`: independent effect subscription.
+- `e2e/fixtures/launchPairedApp.ts` → native thread scripting and saved profile ownership.
+- `e2e/real-daemon-history-on-open.spec.ts` → saved checkpoint and independent protected paging.
+- `docs/knowledge/features/live-window.md`, `daemon-connection-lifecycle.md` → retained main status contract.
+- `chat-history-testing.md` → Protected paging coverage observation; `chat-history-api.md` → Owned authoritative mutations.
+- `docs/recorded-tests.md`, `docs/client-replay-migration.md`, development verification overview → guarded counted acceptance.
+
+Design: install a status-only IPC recorder during preload evaluation. Keep the last
+`connecting`, `connected`, `failed` or `disconnected` per stamped origin in a Map
+(string/null/absent remain distinct). Keep the original event, including capabilities
+and absent properties. Each `onDaemonEvent` call registers its live handler, then
+synchronously delivers retained statuses only to that listener through its existing
+receipt wrapper. No awaits mean no stale connected snapshot can overwrite a later
+failure/disconnect. No transcript, query reply or other daemon event is retained.
+Main's load replay and idempotent start remain unchanged; no healthy redial.
+
+State/concurrency: cache lifetime is one preload document, including gaps with zero
+React consumers. The recorder owns one document-lifetime IPC listener; each consumer
+removes its own handler on unsubscribe. Document destruction releases all state.
+Snapshot delivery and live IPC execute serially on the renderer thread.
+
+| Repeated event / identity | Regression |
+| --- | --- |
+| Host status precedes first/second subscription | preload status tests: independent replay without rebroadcast |
+| Connected superseded by connecting/failed/disconnected | preload status tests: latest origin status and subsequent live ordering |
+| Null, absent, prototype-shaped and multiple hosts | preload status tests: exact stamp/capabilities and distinct Map slots |
+| Unsubscribe/remount, content owner opt-in | preload status tests: removed callback stays inert, no content replay |
+| Full exit/reopen after accepted main status before React | startup spec: delayed and normal native saved-checkpoint catch-up |
+
+Error handling: no new I/O or rejection path. Existing parsing and main delivery
+remain authoritative. Retention never manufactures a connected event or logs payloads.
+The controlled startup spec uses static stage names and counts for main acceptance,
+renderer status receipt, request dispatch and received publication.
+
+Tests first: preload boundary failures before correction, then production correction.
+Adapt the retained HTTP React-mount scheduling diagnostic to native thread replies;
+prove saved baseline durability, full exit, main accepted status before releasing
+mount, one selection, exact saved-version catch-up, received newest publication and
+enabled Send. Run normal bootstrap alongside the delayed control. Preserve the
+original diagnostic red in `/tmp/builder-2153/resume/startup-boundary.*`; synthetic
+scheduling demonstrates the mechanism, not the unknown historical Linux trigger.
+All de6e481a/b505bf01/3e533963 failed/unchanged-pass evidence and the split-save and
+bounded-reader repairs remain separate and unchanged.
+
+Validation: finish Node checks (pre-verify, observer/query regressions, client-test
+typecheck, docs guard and build), then Electron native preparation and actual startup
+controls. Five consecutive complete-thread paired batches, each two named cases
+twice, three actual workers, retries zero; then full guarded recorded suite. Retain
+counts, build/profile, capture provenance and exchange/guard attachments. Dispatcher
+owns configured application gate; no fresh provider or second-OS run is required.
+
+Sizing: approximately 550–650 incremental written lines including this revision,
+production/tests and counted evidence; one production file, no new exported types,
+no API migrations, five observable criteria, no new rejection state machine. No
+remote feature branch overlaps the planned production/scenario files. No independent
+plumbing slice is useful without its regression. Open questions: none.
+
+Pending documentation stage: reconcile the production subscriber-readiness contract
+and counted execution-OS evidence in `docs/knowledge/features/live-window.md`,
+`daemon-connection-lifecycle.md` and `chat-history-testing.md`. Distinguish document
+load, accepted main status, renderer subscription, request dispatch and publication.
+Preserve historical failures/passes, unknown Linux trigger, existing causal proofs,
+capture provenance and reset-prompt exclusion; record dispatcher results separately
+from builder results. Update this plan's pending handoff when that evidence arrives.
+
+### 2026-10-20 — verifier rework: document isolation and processing barrier
+
+Answer findings 1 and 2 from the review of `98cb0144`. These are directly
+consumed regressions of the existing status-subscription behavior, with no
+independently useful production change. Incremental forecast: under 150 written
+lines including evidence; no production files, exports, API migrations or new
+failure branches. The full branch remains below 800 written lines. Remote
+feature-branch inspection found no overlap with the two test files.
+
+Additional files read: `src/main/sessionStateMetadata.test.ts` → `connected`
+and host-isolation integration: fixture currently removes the recorder while
+retaining the imported preload's Map; `src/preload/daemonStatus.test.ts` →
+fresh module-per-document pattern; `e2e/saved-profile-startup.spec.ts` →
+observer mount: final request count lacks a processing barrier;
+`e2e/visible-tail-read.spec.ts` → ordered context-usage sentinel pattern;
+`threadRuntime.ts` → `handle`: connected status dispatches opening work
+synchronously; development-verification's positive-processing-barrier contract.
+
+Reset the preload module and mocked IPC listeners together before each metadata
+case. Assert an empty initial subscription and one document recorder, then check
+host-isolated retained connected baselines separately from subsequent live stall
+delivery. Preserve accepted capabilities, provenance and unsubscribe assertions.
+For native startup, send a uniquely addressed read-only context-usage sentinel
+after mounting/unmounting the observer on the same ordered IPC/transport path.
+Require its actual fake-daemon receipt before the unchanged one-query assertion.
+No sleeps, timeout changes, synthetic completion or replay changes.
+
+Validation: reproduce the exact unit failure first; run the complete metadata
+file plus existing status, history-observer and query controls under Node. After
+the final main merge, run pre-verify, build, client-test typecheck and docs guard,
+then prepare Electron and run both startup cases. Preserve previous counted
+acceptance separately; repeat the five paired batches and full guarded recorded
+suite on macOS, with the existing reset-prompt exclusion. Dispatcher owns the
+subsequent configured application gate. Documentation handoff above stays pending.
+
+Security re-review per `builder/security-review.md`: **PASS**. Tests only:
+main remains the sole status authority; no credentials, storage, crypto, network
+policy or Electron surface changes. The sentinel uses existing validated IPC
+with a static test identity and no mutation. Diagnostics remain content-free.
+Fresh document ownership resets cache/listeners together; ordered daemon receipt
+closes the asynchronous observation gap. Existing relay, hostile-daemon, disk and
+renderer threat boundaries remain unchanged. No MUST FIX or SHOULD FIX security
+findings. Reviewer: builder, 2026-10-20.
+
+### 2026-10-20 — investigate the failed rework acceptance batch
+
+The first new paired batch on `bf14bed8` failed saved-profile catch-up at 45
+seconds (3 passed/1 failed; failed exchange 9 matched/20 emitted/23 remaining).
+The two startup controls and all 249 focused Node tests pass. This failed report
+remains `/tmp/builder-2153/rework/final-paired-1.json`; it is not repaired by an
+unchanged rerun. Add local content-free scenario observations around the resumed
+selection: latest received status/capabilities, query failure codes, received
+reply count and existing main query-observer results, attached even on failure.
+Keep the original failure separate from these diagnostic schedules and preserve
+all assertions/bounds/envelopes. No production hypothesis is adopted yet. This
+adds no authority or payload retention; the security verdict remains PASS.
+
+### Rework validation and dependency handoff — 2026-10-20
+
+macOS arm64, Node 25.8.0, Electron 33.4.11. Both verifier findings are fixed in
+`bf14bed8`: metadata cases reset the preload module and recorder/cache together,
+assert empty initial state, then distinguish the two host baselines from live
+stall delivery and unsubscribe; startup waits for a uniquely addressed read-only
+sentinel at the daemon before checking the unchanged opening-query count.
+The required numbered answers are in the publishing verdict-handoff folder.
+
+The exact original metadata selector failed 1 executed/1 failed (97 unselected)
+before correction: `rework/metadata-red.log`, SHA-256
+`026339fce917e7e7177fc25c95f95eb88a22a0cf24f63fe9498d2d84bb7a948f`.
+Prepared pre-verify passed all five checks and all 98 metadata cases on `bf14bed8`;
+`rework/units/unit-xav35peb/0.json`, SHA-256
+`60cca94ca5b46bd43ec81090d1f8f40ee990e9f3b70fe8f174e320d6023e7a97`.
+The nine existing status/model/observer/query files passed 151/151, zero skipped:
+`rework/focused-units.json`, SHA-256
+`da91556ed24ce2a4bc0e7e1403aaa4007a2086d57771af3140ae2f350ae1d7a6`.
+Client-test typecheck, docs guard and normal build passed; Node checks finished
+before Electron preparation. The approved helper passed its native-writer
+prerequisite and both startup cases (3/3, `rework/startup.log`). The explicit
+JSON startup run passed 2/2 with retries zero (`rework/startup.json`, SHA-256
+`10dbf60752686e6748c14da2f54bf965f4a0101f81efd875ab3e7d3ea0d512b2`).
+Both traces end in `observer-barrier-received`; delayed mounting preserves main
+acceptance → renderer receipt → resumed dispatch → received publication.
+
+Required counted acceptance is **not complete**. The first batch on clean
+`bf14bed8` recorded 4 executed/3 passed/1 failed, zero skipped/retries, three
+configured/overlapping workers. Its failed history exchange is 9/20/23
+(matched/emitted/remaining), saved-only at 45 seconds; no status receipt or
+main-acceptance observation was retained for that failure. Its cause remains
+unknown, and is not attributed to a missed status or to any historical trigger.
+
+The diagnostic batch on clean `1a8924dd` also recorded 4/3/1/0, retries zero,
+three configured/overlapping workers. Both resumed profiles received connected
+with thread/interactive capabilities, dispatched exactly one saved-version-2
+catch-up at main, received four replies and displayed baseline plus newest post.
+One subsequently failed the independent fresh-profile ArrowUp progress bound
+with protected `unreadable`, exchange **27/53/5**: the existing open #2191
+investigation covers this boundary and exact exchange shape. This is separate
+from the first batch's saved-only failure. No storage/query repair, retry, skip,
+sleep, longer timeout, forced flush or concurrency reduction was introduced.
+
+| Report under `/tmp/builder-2153/rework/` | Executed/passed/failed/skipped | SHA-256 |
+| --- | --- | --- |
+| `final-paired-1.json` | 4/3/1/0 | `0998dcb4a87aad5bf51a5bd6cf1bf4a84ebc4c56adaba7215e1976e6feec3358` |
+| `diagnostic-paired-1.json` | 4/3/1/0 | `73ffbe4b8dd84af1dc689e75f2dc3c986b311aa0220b0d7a4724d52553002257` |
+
+All four successful thread exchanges are 45/378/0; both successful history
+exchanges are 32/63/0. Both guards report zero forbidden launches and exit 1
+for the named scenario failure; normal build restoration succeeds. Full bundle
+maps, clean source/profile identities, original capture provenance, observations
+and counts remain in `rework/rework-counted-evidence.json`, SHA-256
+`f6a3ad93b46e32d2249cf865dc7341569d54ce131df646b652df9a154ec955f2`.
+Recording hashes remain unchanged at the history/thread values recorded above.
+Original diagnostic attachments retain synthetic fixture identities; subsequent
+attachments project the phase observer to capability booleans and counts only.
+
+Commands: the two batches use the existing guarded `node scripts/run-offline-replay.mjs
+--profile complete-thread --grep 'a real daemon lazily fills a served gap|daemon-built thread streams'
+--fully-parallel --workers=3 --repeat-each=2 --retries=0 --reporter=list,json`, with
+task-specific JSON/log/output paths. Startup JSON uses `npx playwright test
+e2e/saved-profile-startup.spec.ts --project=parallel --no-deps --retries=0
+--reporter=list,json`. All artifacts above are under `/tmp/builder-2153/`.
+
+Stop counted acceptance rather than rerunning until green. Link #2191 as the
+open dependency for the required protected-paging gate; its production repair is
+outside this ticket's explicit startup/status scope. Five consecutive passing
+batches and the subsequent full guarded suite remain pending, including explicit
+preservation of the reset-prompt fixme. The dispatcher application gate remains
+pending too. Previous passing evidence and historical failures above are retained
+separately, never reclassified by these results. Linux is outside this execution.
+Final main merge admits `75dcb379` (unrelated tests/plan only); closing Node/build
+checks are recorded below. Documentation handoff remains pending for its stage.
+
+Closing checks after the `75dcb379` main merge: pre-verify passed all five
+checks and 98/98 metadata tests, zero failed/skipped (`rework/pre-verify-final.log`,
+`rework/final-units/unit-0osgdv26/0.json`, SHA-256
+`b0c712377f2d9435adc77a7a5f6fcaca06fce437983234198b3aecd83d7dd4be`).
+Client-test typecheck, docs guard and `npm run build` passed on the final code
+(`rework/build-merged.log`, clean built revision `210eaddc`). Subsequent changes
+are evidence only. #2191 is linked as a blocker; no passing counted sequence or
+full recorded suite is claimed for this rework run.
+
+### 2026-10-20 — macOS production-delivery validation
+
+Final tested source: `33aa5fee23efd70365a829f908f6e736a8ada084`, including final
+merged main `3fd12cc640d4`, macOS arm64, Node 25.8.0, Electron 33.4.11. This
+following evidence commit changes only the plan. Pre-verify passed all five checks
+after that merge (`/tmp/builder-2153/pre-verify-merged.log`); normal build,
+client-test typecheck and docs guard passed. All nine focused Node files passed
+**151/151**, zero failed/skipped (`units-merged-prepared.log`): preload status,
+app-update, live-window, remembered-model and its boundary controls, all 28 history
+coverage controls, query-observer installation, query coordinator and runtime.
+An initial broader Node check started before the gate's Node-native preparation
+finished and failed two protected-storage controls; the sequential prepared run
+above passes. All Node work finished before final Electron preparation; no native
+rebuild overlapped any replay. Every profile run restored the normal build.
+
+Controlled startup proof: six preload regressions failed before the correction
+(`status-red.log`, SHA-256 `164eee9bb139ca1588090209d08d72ff29c9f74ddfa684a75cb676ec40fcaa4e`).
+The native startup comparison against byte-identical main production preload
+passed normal bootstrap and failed delayed mount with zero status receipts
+(`startup-causal-red.log`, SHA-256 `f835ecbbfabd0992218e44001a660dfbbdf9606cf6b317952d2ba9833b70c7a9`);
+the prerequisite writer control also passed. A preceding script-development run
+used an invalid continuation and failed baseline certification; `startup-red.log`
+is retained but is not causal evidence. Corrected final native controls passed
+**2/2**, zero failed/skipped (`startup-final.json`, SHA-256
+`719294443f3615958a119a330cb3d1acd1ee4a59c467add3ec75cf3515715a3b`).
+Delayed trace: saved profile exited → resumed handshake → main accepted connection
+→ document loaded before React → renderer received status → resumed request
+dispatched → received publication rendered. Assertions require one handshake,
+one selection, exact owning catch-up at saved version 1, baseline plus newest
+publication, enabled Send and no legacy requests. Original diagnostic
+`resume/startup-boundary.json` remains separate, SHA-256
+`a9489c619c482dbaed85b034025ee499062be2cd487342c71d8d5510e82a65a1`.
+Neither controlled schedule establishes the historical Linux trigger.
+
+Model-recall compatibility proof: the new baseline/reconnect unit failed before
+the consumer correction (`model-recall-red.log`, 27 passed/1 failed), then passed
+with all 28 remembered-model tests. Its unchanged recorded scenario passed 1/1,
+43 matched requests / 150 emitted frames / zero remaining (`model-final.json`,
+SHA-256 `7cee41967d97b1d983e8132347372cdf53a782e443c24346d70f9457a4bb7787`).
+
+Final commands from the worktree root; artifacts below use `/tmp/builder-2153/`:
+```sh
+python3 "$AGENTS_REPO_PATH/bin/pre-verify-check" --test-file src/renderer/src/store/rememberedModel.test.ts
+npm run build
+npm run typecheck:client-tests
+npm run check:docs
+npm run rebuild:electron
+PLAYWRIGHT_JSON_OUTPUT_NAME=/tmp/builder-2153/startup-final.json npx playwright test e2e/saved-profile-startup.spec.ts --project=parallel --no-deps --retries=0 --reporter=list,json --output=/tmp/builder-2153/startup-final-results
+# Five consecutive batches, N=1..5:
+PLAYWRIGHT_JSON_OUTPUT_NAME=/tmp/builder-2153/final-paired-N.json node scripts/run-offline-replay.mjs --profile complete-thread --grep 'a real daemon lazily fills a served gap|daemon-built thread streams' --fully-parallel --workers=3 --repeat-each=2 --retries=0 --reporter=list,json --output=/tmp/builder-2153/final-paired-N-results
+PLAYWRIGHT_JSON_OUTPUT_NAME=/tmp/builder-2153/final-recorded-full.json node scripts/run-offline-replay.mjs --profile complete-thread --retries=0 --reporter=list,json --output=/tmp/builder-2153/final-recorded-full-results
+```
+
+| Report | Executed/passed/failed/skipped | Configured/peak actual workers | SHA-256 |
+| --- | --- | --- | --- |
+| `final-paired-1.json` | 4/4/0/0 | 3/3 | `7c9572a40cd6ebfdd4f405bffff8a5fc4608d9883183428af0becfa263a6ad6a` |
+| `final-paired-2.json` | 4/4/0/0 | 3/3 | `1d683f937e6614b1160d0ec6d5067248bc9e3fa5f7b60c784a0fc0b94eca8c3a` |
+| `final-paired-3.json` | 4/4/0/0 | 3/3 | `cf6499b97e81c37b8c8af486c8d82fc4ea7ec6fb5095dbcf954f03bf5212c2fa` |
+| `final-paired-4.json` | 4/4/0/0 | 3/3 | `223107c25cca0ed82d1112c8979c9c04e1afd8e391213a3e44852eb410ba12ff` |
+| `final-paired-5.json` | 4/4/0/0 | 3/3 | `2d3289769edc63dce16701efade0071cb3df286e2e547e1988c6d2cec72d3240` |
+| `final-recorded-full.json` | 29/29/0/1 | 1/1 | `b8b1990ca3daa08e9e7d5dd9e570607e5288035b1612be556d22e5d8373ba6aa` |
+
+Each named history/thread case passed twice per final batch (**20 passes**), then
+once in full replay. All retries zero, no flaky results/report errors; actual peak
+overlap is three in every batch. Every guard reports zero forbidden launches.
+Every successful history exchange is **32/63/0**, thread **45/378/0** (matched /
+emitted / remaining). All 29 full exchanges total **773/3216/0**. The sole skip
+is `real claude picks up a saved channel system prompt at Reset session`.
+`summarize-status.py` asserts multiplicity, retry zero, actual overlap, guard
+outcomes, identical clean build maps, input checksums and every exchange remainder.
+Its retained output is `validation-status-summary.log`; full counted evidence is
+`counted-status-evidence.json`, SHA-256
+`e9402ae70a20597fa73e06191250dc7e8da75bb513fe8021b4ec3149f64bc152`.
+All six builds report `sourceDirty: false`, profile `complete-thread`, revision
+`33aa5fee`. Main bundle SHA-256 `0392503cdc7b6934daebc336f9ec6d5aa3cac5f4f6a24678b29c5e165efdf12c`;
+preload `53308858d05c0214442e57352e65e79b7fef59670546a02eec4b4d1e08317080`;
+renderer `142d47acd92837310fbeb0f552d7704a9928dc2b7b475f4b2ffe8c75562b061b`.
+Full bundle maps and original capture provenance remain in each log/attachment.
+History/thread recording hashes remain `de0b1166b6e05e0792228c07be25c20498b117914e673558222eac12cd4e6d2c`
+and `53a3db11cfab2d5041b511d7be4d030ab5b2b8449b7fdb3ea1d7e5e3db552ae3`;
+capture Desktop `00ec821f9380b00cf2dfc0dd4817ee15584106a5`, daemon
+`58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`, binary SHA-256
+`5f5b3b9ce42eda74024637f4929dd720d36c1226ce6e370eb62fbe9e6b22f7c0`.
+
+Earlier current-run failures remain failed evidence, all on `1dd48a53`:
+- `paired-1/2.json` each passed 4/4; `paired-3.json` failed a relaunch native
+  prerequisite (3 passed/1 failed, 10/21/22 exchange), tracked in #2190. Report
+  SHA-256 `41b903683f4b93c565de362f65936c797284486ab38bf21f243fe603a3f7f338`.
+- After native re-preparation, `accepted-paired-1.json` passed 4/4;
+  `accepted-paired-2.json` failed fresh-profile ArrowUp protected `unreadable`
+  (3 passed/1 failed, 27/53/5), tracked in #2191, SHA-256
+  `85603ed8c9e1391c5e561f4005728c2df465187f3a8ba95e683e2baf87c43c12`.
+  Byte-identical main production comparison passed 4/4 (`main-baseline.json`,
+  SHA-256 `3aa541480bcdd9859cf532a3632e45498483b4e5908ad614b0c92cd22885a15a`).
+  Its checkout provenance is intentionally dirty `1dd48a53`, with production
+  preload restored to main. This passing comparison establishes no trigger or
+  inheritance. Both investigations remain open; final acceptance does not claim
+  to repair their unknown causes or erase those failed reports.
+- `recorded-full.json` recorded 28 passed/1 failed/1 existing skip; its model
+  recall failure is this repair's regression, corrected and causally tested above.
+
+Historical `de6e481a` and `b505bf01` failure/unchanged-pass pairs and both prior
+causal repairs remain above. The distinct `3e533963` Linux failure remains as
+refiner-inspected evidence: 528 executed/527 passed/1 failed/4 skipped, history
+saved-only at 45 seconds with 9/20/23; selected unchanged rerun 4/4, history32/63/0.
+Full-report SHA-256 `f1d1f633f3de3774383e74aaf515616c19ee0c3bee28bb3968aff5dd4eb95982`,
+rerun `c45c5219a54fce7024e78f3ab9a4ac2d263254118da19074a84a8b12b84b5e10`;
+retained bundle `resume/evidence-2184/9d46d83e031db1ea8b9d7ea972fbc5a1c6a0c08c5a151f8dd6ccb28b2812c905/`.
+No new inspection or reproduction of that Linux trigger is claimed here.
+
+Dispatcher owns the subsequent configured application gate, including both named
+cases without retry; verifier checks its counted evidence separately. No fresh
+provider/daemon, encryption or physical-effect run was required or claimed.
+Linux is outside this macOS execution's verification scope.
+
+## Documentation handoff
+
+Pending documentation stage: reconcile the production subscriber-readiness
+contract and counted execution-OS evidence in `docs/knowledge/features/live-window.md`,
+`docs/knowledge/features/daemon-connection-lifecycle.md` and
+`docs/knowledge/features/chat-history-testing.md`. Distinguish document load,
+accepted main status, renderer subscription, request dispatch and publication.
+Preserve historical failures/passes, unknown Linux trigger, existing causal proofs,
+capture provenance and reset-prompt exclusion; record dispatcher results separately
+from builder results. Update this plan's pending handoff when that evidence arrives.
+
+## Security review
+
+**Verdict:** PASS
+
+- Trust boundaries: main's parsed/stamped IPC is the sole status producer. The new
+  preload cache keys only on `serverId`, never daemon `ack.server_id`; renderer
+  callers supply only a callback and cannot assert status or manufacture origins.
+- Tokens/secrets: retain only the same four status events already delivered to the
+  renderer; no pairing token, key, raw bytes or transcript enters the cache.
+- File/storage: no new disk access, paths or persistence; safeStorage is unchanged.
+- Electron surface: no new IPC/API/request. Existing context isolation, sandbox,
+  navigation guards and main-frame authorization remain unchanged.
+- Cryptography: no crypto, randomness, keys or Noise lifecycle changes.
+- Network/I/O: no new connections, retries or deadlines. Existing parsed daemon
+  status and idempotent connection startup remain authoritative.
+- Errors/logging: no production logging added; control evidence contains static
+  stage names/counts only, with no daemon text, tokens or exception payloads.
+- Concurrency: synchronous private replay avoids await races and rebroadcast;
+  per-consumer cleanup removes callbacks, document teardown owns the recorder.
+- Threat alignment: relay/daemon cannot mint cache slots through ack contents;
+  Map handles prototype-shaped trusted origins safely. Compromised renderer gains
+  no new authority or access to main-only credentials/network resources.
+
+**Reviewer:** builder (self-review per `builder/security-review.md`)
+**Date:** 2026-10-20
+
 ### 2026-10-20 — reopened current-source validation plan
 
 The reopened contract first validates the already merged split-save repair
@@ -294,3 +667,32 @@ with distinct build identities and counted named passes. Both historical
 failure/pass pairs, unknown triggers, controlled failing-before mechanisms,
 capture provenance and the reset-prompt exclusion remain preserved. Dispatch,
 publication and protected durability retain their separate proof requirements.
+
+## Revisions
+
+### 2026-10-20 — preserve model recall across the subscription baseline
+
+The complete recorded suite on `1dd48a53` exposed one regression from private
+synchronous status replay: `createRememberedModel.start` subscribes per creation
+attempt and treated the current connected baseline as a subsequent reconnect,
+cancelling recall before model/settings receipt. Extend the plan locally to
+`src/renderer/src/store/rememberedModel.ts` → `createRememberedModel` and its
+adjacent regression file. During the subscription call, connected is the baseline;
+after subscription returns, connected still cancels and cleans up the attempt.
+No callback signature or other consumer changes. The new regression fails before
+this correction, then proves normal recall submission and later reconnect cleanup.
+This is the delivery repair's directly consumed regression, not an independent
+feature. Security re-review: no new boundary, authority, retention or secret; the
+synchronous subscription contract distinguishes initial state from later lifecycle
+edges. Verdict remains PASS. Total incremental scope remains below 650 written
+lines, two production files, no new exports or API migration.
+
+Current repair documentation remains **pending** for the documentation stage:
+reconcile the production subscriber-readiness contract and counted execution-OS
+evidence in `docs/knowledge/features/live-window.md`,
+`docs/knowledge/features/daemon-connection-lifecycle.md` and
+`docs/knowledge/features/chat-history-testing.md`. Distinguish document load,
+accepted main status, renderer subscription, request dispatch and publication.
+Preserve historical failures/passes, unknown Linux trigger, existing causal proofs,
+capture provenance and reset-prompt exclusion; record dispatcher results separately
+from builder results. Update this plan's pending handoff when that evidence arrives.

@@ -75,6 +75,16 @@ import { MARKDOWN_SAVE_CHANNEL, type MarkdownSaveOutcome } from '../shared/ipc/m
 let historyReceipt: { type: string; serverId: string | null | undefined } | null = null
 let hostedAppsToken = 0
 
+// Preload runs before did-finish-load, including when React mounts after main's status replay.
+// Retain status only; transcript and query delivery still belong to their live consumers.
+const daemonStatuses = new Map<string | null | undefined, StampedDaemonEvent>()
+ipcRenderer.on(DAEMON_EVENT_CHANNEL, (_event: IpcRendererEvent, event: StampedDaemonEvent): void => {
+  switch (event.type) {
+    case 'connecting': case 'connected': case 'failed': case 'disconnected':
+      daemonStatuses.set(event.serverId, event)
+  }
+})
+
 const api = {
   deviceIdentity: (): Promise<{ ok: true; deviceId: string } | { ok: false; error: 'identity-unavailable' }> =>
     ipcRenderer.invoke('pyry:device-identity'),
@@ -325,7 +335,7 @@ const api = {
    * tests are untouched and each simply ignores the field until it needs it.
    */
   onDaemonEvent: (listener: (event: StampedDaemonEvent) => void, includeThreadUpdates = false): (() => void) => {
-    const handler = (_event: IpcRendererEvent, event: StampedDaemonEvent): void => {
+    const deliver = (event: StampedDaemonEvent): void => {
       // Content has one renderer owner. Filter before contextBridge clones it for every chrome
       // subscription; the runtime explicitly opts in and publishes coherent, ordered batches.
       if (event.type === 'threadUpdate' && !includeThreadUpdates) return
@@ -333,7 +343,10 @@ const api = {
       historyReceipt = { type: event.type, serverId: event.serverId }
       try { listener(event) } finally { historyReceipt = previous }
     }
+    const handler = (_event: IpcRendererEvent, event: StampedDaemonEvent): void => deliver(event)
     ipcRenderer.on(DAEMON_EVENT_CHANNEL, handler)
+    // Synchronous, subscriber-local replay: mounting chrome must not reopen the runtime's queries.
+    for (const status of daemonStatuses.values()) deliver(status)
     return () => ipcRenderer.removeListener(DAEMON_EVENT_CHANNEL, handler)
   },
 

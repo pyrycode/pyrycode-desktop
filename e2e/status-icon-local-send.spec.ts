@@ -1,15 +1,15 @@
-import { test, expect, SEEDED_ROW, seedConversationsFrame } from './fixtures/launchPairedApp'
+import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
+import { createCanonicalThread } from './fixtures/canonicalThread'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import type {
   Envelope,
-  QueuedItem,
-  QueueStatePayload,
   SendMessagePayload,
   TurnStatePayload,
   WireTurnState
 } from '../src/shared/wire/types'
+import type { ThreadItem, ThreadUpdate } from '../src/shared/wire/thread'
 
-// #1725: the local window now reads `Sending…` until a `queue_state` lists the sent `message_id`, then
+// #1725: the local window reads `Sending…` until a canonical user fact accepts the device/message pair, then
 // `Waiting for Claude` until the daemon's first `turn_state`; `Thinking…` comes only from the daemon. The
 // staged assertions here distinguish local acceptance, queue acknowledgement and daemon activity.
 //
@@ -51,45 +51,36 @@ const ROUNDTRIP_TIMEOUT_MS = 15_000
 // Fixed reply framing — the fakeDaemon convention (no Date.now(), no randomness).
 const REPLY_ENVELOPE_ID = 1
 const FIXED_TS = '2026-07-07T12:00:00.000Z'
+const SESSION = 'local-send-session'
+const route = { conversation_id: SEEDED_ROW.id, epoch: 'local-send-epoch' }
+const frame = (update: ThreadUpdate): Uint8Array => encodeEnvelope({ id: REPLY_ENVELOPE_ID, ts: FIXED_TS, ...update })
 
 // The message the operator sends. Its only job is to be accepted by the composer, which is what opens the
 // local window (#650) this ticket wires the icon to.
 const SENT_TEXT = 'A message whose reply has not started yet'
 
-// The coarse turn-phase scalar. A spec-local copy, as composer-status-reduced-motion.spec.ts and
-// stall-bundle.spec.ts each keep — the shipped convention; extracting a shared helper is a wider refactor
-// than this ticket. timelineBridge drops turn_state's conversation_id (ADR 0004), so the id is not a gate
-// here, but it carries SEEDED_ROW.id for realism as the siblings do.
+// Live controls must name the session and conversation that own the mounted thread.
 function turnStateFrame(state: WireTurnState): Uint8Array {
   return encodeEnvelope({
     id: REPLY_ENVELOPE_ID,
     type: 'turn_state',
     ts: FIXED_TS,
+    session_id: SESSION,
     payload: { conversation_id: SEEDED_ROW.id, state } satisfies TurnStatePayload
   })
 }
 
-// A replacement-truth queue snapshot for the seeded conversation (queued-backlog-interrupt.spec.ts's shape).
-function queueStateFrame(items: readonly QueuedItem[]): Uint8Array {
-  return encodeEnvelope({
-    id: REPLY_ENVELOPE_ID,
-    type: 'queue_state',
-    ts: FIXED_TS,
-    payload: { conversation_id: SEEDED_ROW.id, queued: [...items] } satisfies QueueStatePayload
-  })
+function queuedItem(id: number, queued_msg_id: number, content: Record<string, unknown>): ThreadItem {
+  return { id, order: id * 10, rev: 1, kind: 'user_message', status: 'queued', active: true,
+    shown: true, summary: '', session: SESSION, content: { ...content, queued_msg_id, ts: FIXED_TS } }
 }
 
-function queuedItem(message_id: string, text = SENT_TEXT): QueuedItem {
-  return { queued_msg_id: 1, text, ts: FIXED_TS, message_id }
-}
-
-// Captures every outbound envelope so the spec can read back the `message_id` the composer minted; only
-// list_conversations needs a reply (the seeded launch row).
+// Capture the minted message ID and actual thread queries; canonical replies belong to the publisher.
 function capturingFake(captured: Envelope[]): (inbound: Uint8Array) => Uint8Array[] {
   return (inbound) => {
     const env = decodeEnvelope(inbound)
     captured.push(env)
-    return env.type === 'list_conversations' ? [seedConversationsFrame()] : []
+    return []
   }
 }
 
@@ -104,7 +95,26 @@ test('the status row reads Sending, then Waiting for Claude, then Thinking, with
   launchPairedApp
 }) => {
   const captured: Envelope[] = []
-  const { page, daemon } = await launchPairedApp({ buildReplyFrames: capturingFake(captured) })
+  let version = 1
+  const opening: ThreadItem = { id: 1, order: 10, rev: 1, kind: 'assistant_message',
+    status: 'finished', active: false, shown: true, summary: '', session: SESSION,
+    content: { text: 'Canonical status thread ready' } }
+  const thread = createCanonicalThread({ conversations: [{ summary: { ...SEEDED_ROW,
+    current_session_id: SESSION }, epoch: route.epoch, version, items: [opening] }] })
+  const { page, daemon } = await launchPairedApp({ threadMode: 'canonical', thread,
+    helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: capturingFake(captured) })
+  const add = (item: ThreadItem) => daemon.pushFrame(frame({ type: 'thread_item_added',
+    payload: { ...route, version: ++version, item } }))
+  const change = (item: ThreadItem, changes: Record<string, unknown>) => daemon.pushFrame(frame({
+    type: 'thread_item_changed', payload: { ...route, version: ++version,
+      item_id: item.id, base_rev: item.rev, rev: item.rev + 1, changes } }))
+
+  await expect(page.getByText('Canonical status thread ready', { exact: true })).toBeVisible()
+  expect(captured).toContainEqual(expect.objectContaining({ type: 'thread_catch_up',
+    payload: expect.objectContaining({ conversation_id: SEEDED_ROW.id, version: 0 }) }))
+  const identity = await page.evaluate(() => window.pyry.deviceIdentity())
+  expect(identity.ok).toBe(true)
+  if (!identity.ok) throw new Error('authenticated device identity unavailable')
 
   const icon = page.locator('.composer-status__icon')
   const spinningIcon = page.locator('.composer-status__icon--spinning')
@@ -129,22 +139,34 @@ test('the status row reads Sending, then Waiting for Claude, then Thinking, with
   const messageId = sentMessageId(captured) ?? ''
 
   // --- #1725 AC4: another device's item and an id-less item do not advance the label ---
-  // The two queued rows drawing is what proves the snapshot was applied before the label is read.
+  // Both rows drawing proves processing before reading the label. Each rejects one identity field.
   const queuedRows = page.locator('[data-thread-role="queued"]')
-  daemon.pushFrame(queueStateFrame([
-    queuedItem('another-device-id', 'Queued from another device'),
-    { ...queuedItem('', 'Queued with no id'), queued_msg_id: 2 }
-  ]))
+  const foreign = queuedItem(2, 101, { device_id: 'another-device', message_id: messageId,
+    text: 'Queued from another device' })
+  const idless = queuedItem(3, 102, { device_id: identity.deviceId, text: 'Queued with no id' })
+  add(foreign)
+  add(idless)
   await expect(queuedRows).toHaveCount(2, { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(queuedRows.filter({ hasText: 'Queued from another device' })).toBeVisible()
+  await expect(queuedRows.filter({ hasText: 'Queued with no id' })).toBeVisible()
   await expect(label).toHaveText('Sending…')
-
-  // --- #1725 AC1: the daemon lists the sent id, so it holds the message ---
-  daemon.pushFrame(queueStateFrame([queuedItem(messageId)]))
-  await expect(label).toHaveText('Waiting for Claude', { timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(spinningIcon).toBeVisible()
 
+  // --- #1725 AC1: only the authenticated own-device/message fact accepts this send ---
+  change(foreign, { shown: false, active: false, status: 'dropped' })
+  change(idless, { shown: false, active: false, status: 'dropped' })
+  const acceptedContent = { device_id: identity.deviceId, message_id: messageId, text: SENT_TEXT }
+  const accepted = queuedItem(4, 103, acceptedContent)
+  add(accepted)
+  await expect(label).toHaveText('Waiting for Claude', { timeout: ROUNDTRIP_TIMEOUT_MS })
+  await expect(spinningIcon).toBeVisible()
+  await expect(queuedRows).toHaveCount(1)
+  await expect(queuedRows).toContainText(SENT_TEXT)
+
   // Canonical delivery settles local feedback. The next phase comes from live state.
-  daemon.pushFrame(queueStateFrame([]))
+  change(accepted, { status: 'delivered', active: false, content: { ...acceptedContent,
+    queued_msg_id: 103, ts: FIXED_TS, text: 'Canonical local message delivered' } })
+  await expect(page.locator('[data-thread-role="user"]', { hasText: 'Canonical local message delivered' })).toBeVisible()
   await expect(queuedRows).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(label).toHaveCount(0)
   await expect(spinningIcon).toHaveCount(0)
@@ -158,6 +180,8 @@ test('the status row reads Sending, then Waiting for Claude, then Thinking, with
   // Both halves, for ComposerStatusArea's own reason: a lone absent-modifier assertion passes vacuously
   // against a row that lost its icon entirely, and AC2's still-rendered posture is what the row is for.
   daemon.pushFrame(turnStateFrame('idle'))
+  add({ ...opening, id: 5, order: 50, content: { text: 'Canonical idle observed' } })
+  await expect(page.getByText('Canonical idle observed', { exact: true })).toBeVisible()
   await expect(spinningIcon).toHaveCount(0, { timeout: ROUNDTRIP_TIMEOUT_MS })
   await expect(icon).toBeVisible()
   await expect(label).toHaveCount(0)
@@ -168,10 +192,13 @@ test('the status row reads Sending, then Waiting for Claude, then Thinking, with
   await expect(label).toHaveText('Sending…')
   await expect(spinningIcon).toBeVisible()
   daemon.pushFrame(encodeEnvelope({ id: REPLY_ENVELOPE_ID, type: 'session_error', ts: FIXED_TS,
+    session_id: SESSION,
     payload: { conversation_id: SEEDED_ROW.id, code: 'session.blocked', message: 'Ignored daemon text' } }))
   await expect(page.locator('.top-overlay-pill--error')).toHaveText(
     'Claude did not pick up your last message. It was not delivered.')
   await expect(label).toHaveCount(0)
   await expect(spinningIcon).toHaveCount(0)
   await expect(icon).toBeVisible()
+  expect(captured.filter(e => e.type === 'send_message')).toHaveLength(2)
+  expect(captured.filter(e => e.type === 'request_history')).toHaveLength(0)
 })

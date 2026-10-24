@@ -1,21 +1,21 @@
-import { encodeEnvelope } from '../src/main/transport/codec'
+import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import { test, expect, FIRST_SERVER_ID, SECOND_SERVER_ID, SEEDED_ROW, SECOND_SEEDED_ROW, type PairedApp } from './fixtures/launchPairedApp'
 import { DAEMON_EVENT_CHANNEL } from '../src/shared/ipc/events'
 import type { RendererCommand } from '../src/shared/ipc/commands'
-import { conversationStateFake } from './fixtures/conversationStateFake'
+import { createCanonicalThread } from './fixtures/canonicalThread'
+import type { ConversationSummary } from '../src/shared/wire/types'
+import type { ThreadItem, ThreadUpdate } from '../src/shared/wire/thread'
+
+const SESSION = 'session'
+const EPOCH = 'offline-responses-epoch'
+const canonical = (row: ConversationSummary = SEEDED_ROW) => ({ threadMode: 'canonical' as const,
+  thread: createCanonicalThread({ conversations: [{ summary: { ...row, current_session_id: SESSION },
+    epoch: EPOCH, version: 1, items: [] }] }), buildReplyFrames: (bytes: Uint8Array) => {
+      expect(decodeEnvelope(bytes).type).not.toBe('request_history'); return []
+    } })
+const frame = (update: ThreadUpdate) => encodeEnvelope({ id: 1, ts: '2026-10-15T00:00:00Z', ...update })
 
 async function event(app: PairedApp, value: object): Promise<void> {
-  const content = value as { type?: string; serverId?: string; conversationId?: string; turnId?: string; seq?: number; text?: string; queued?: unknown[] }
-  if (content.type === 'assistantDelta' || content.type === 'queueState') {
-    const daemon = app.servers.find(server => server.serverId === content.serverId)?.daemon
-    if (!daemon) throw new Error('Missing fixture host')
-    daemon.pushFrame(encodeEnvelope({ id: 1, ts: '2026-10-15T00:00:00Z',
-      type: content.type === 'assistantDelta' ? 'assistant_delta' : 'queue_state', payload: {
-        conversation_id: content.conversationId, ...(content.type === 'assistantDelta'
-          ? { turn_id: content.turnId, seq: content.seq, text: content.text } : { queued: content.queued }) } }))
-    await app.page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
-    return
-  }
   await app.app.evaluate(({ BrowserWindow }, { channel, value }) => {
     BrowserWindow.getAllWindows()[0].webContents.send(channel, value)
   }, { channel: DAEMON_EVENT_CHANNEL, value: { envelopeSessionId: 'session', ...value, ...('conversations' in value && Array.isArray(value.conversations)
@@ -34,6 +34,7 @@ async function observeCommands(app: PairedApp) {
   await cdp.send('Debugger.enable')
   await app.page.evaluate(() => { (window as any).__promptCommands = [] })
   const { result } = await cdp.send('Runtime.evaluate', { expression: 'window.pyry.sendCommand' })
+  if (!result.objectId) throw new Error('Missing command observation target')
   await cdp.send('Debugger.setBreakpointOnFunctionCall', { objectId: result.objectId,
     condition: '(globalThis.__promptCommands.push(arguments[0]), false)' })
   return async () => app.page.evaluate(() => ((window as any).__promptCommands as RendererCommand[])
@@ -54,7 +55,7 @@ async function questions(app: PairedApp, conversationId = SEEDED_ROW.id, serverI
 }
 
 test('permission and trust retain selection offline, including pre-opened confirmation and keyboard attempts', async ({ launchPairedApp }) => {
-  const app = await launchPairedApp({ buildReplyFrames: conversationStateFake() })
+  const app = await launchPairedApp(canonical())
   const read = await observeCommands(app)
   const { page } = app
   await page.setViewportSize({ width: 1280, height: 800 })
@@ -100,15 +101,16 @@ test('permission and trust retain selection offline, including pre-opened confir
 })
 
 test('questions preserve independent picks and draft offline; a second connected host answers', async ({ launchPairedApp }) => {
-  const app = await launchPairedApp({ buildReplyFrames: conversationStateFake({ conversations: [SEEDED_ROW] }) },
-    { secondServer: { buildReplyFrames: conversationStateFake({ conversations: [SECOND_SEEDED_ROW] }) } })
+  const app = await launchPairedApp(canonical(), { secondServer: canonical(SECOND_SEEDED_ROW) })
   const read = await observeCommands(app)
   const { page } = app
   await page.setViewportSize({ width: 1280, height: 800 })
   await page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
   await page.getByPlaceholder('Message…').fill('Retained draft')
-  await event(app, { type: 'assistantDelta', serverId: FIRST_SERVER_ID, conversationId: SEEDED_ROW.id,
-    turnId: 'held-turn', seq: 0, text: 'Retained message' })
+  const retained: ThreadItem = { id: 10, order: 10, rev: 1, kind: 'assistant_message', status: 'running',
+    active: true, shown: true, summary: '', session: SESSION, turn: 'held-turn', content: { text: 'Retained message' } }
+  app.daemon.pushFrame(frame({ type: 'thread_item_added', payload: { conversation_id: SEEDED_ROW.id,
+    epoch: EPOCH, version: 2, item: retained } }))
   await expect(page.locator('[data-thread-role="assistant"]')).toContainText('Retained message')
   await questions(app)
   const panel = page.locator('.question-panel:not(.permission-panel)')
@@ -149,7 +151,7 @@ test('questions preserve independent picks and draft offline; a second connected
 })
 
 test('all unavailable statuses and missing or ambiguous ownership block both prompt families', async ({ launchPairedApp }) => {
-  const app = await launchPairedApp({ buildReplyFrames: conversationStateFake() })
+  const app = await launchPairedApp(canonical())
   const read = await observeCommands(app)
   const { page } = app
   for (const family of ['permission', 'question']) {

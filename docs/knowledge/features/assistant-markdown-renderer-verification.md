@@ -224,6 +224,6 @@ and expansion clicks, positive rendered barriers, measured layout and cursor
 assertions, and mounted CDP parser/render counters. The migration retains all
 193 original assertion expressions and adds six positive processing barriers.
 
-The [counted Linux validation](development-verification-replay-validation.md#canonical-streamed-text-validation)
+The [counted Linux validation](development-verification-replay-validation-canonical-publisher-verification.md#canonical-streamed-text-validation)
 records 20 owned cases passing in both focused and configured runs, retained
 earlier failures, focused compiler coverage and unchanged replay/live boundaries.

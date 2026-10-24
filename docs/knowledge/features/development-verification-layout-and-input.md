@@ -15,7 +15,7 @@ Queued items carry distinct positive queue handles; compare their heights with
 their own queued control because delivered metadata changes height. Keep mounted
 computed styles, glyph positions, line-height deltas, containment, chrome-inheritance
 checks and tolerances, including the hostile token plus 200 trailing spaces.
-See [counted Linux evidence](development-verification-replay-validation.md#canonical-user-whitespace-validation).
+See [counted Linux evidence](development-verification-replay-validation-canonical-queue-settlement-validation.md#canonical-user-whitespace-validation).
 
 Opacity compounds through ancestors: a label's computed opacity can be 1 while
 its enclosing row still fades everything to 0.5. Class strings and static markup

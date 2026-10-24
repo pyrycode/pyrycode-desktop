@@ -162,7 +162,7 @@ exact outbound `dequeue_message`. The production upload bridge is unchanged.
 Retain the serial clipboard project, native prerequisite and
 [trusted Copy readiness](conversation-shell-message-bubble-testing.md#streaming-copy-input-readiness);
 authored facts and replay cannot replace OS clipboard activation/readback.
-See [counted Linux validation](development-verification-replay-validation.md#canonical-side-action-validation).
+See [counted Linux validation](development-verification-replay-validation-canonical-message-lifecycle-diagnostics-validation.md#canonical-side-action-validation).
 
 For an own send, capture its outbound `message_id` and obtain the authenticated
 public identity through `window.pyry.deviceIdentity()`. Supply both on the accepted
@@ -178,7 +178,7 @@ local sends before the idle baseline: idle alone cannot settle an unaccepted sen
 Thinking mounts both Stop and the running indicator; the captured interrupt leaves
 both mounted until daemon idle. Geometry, opacity, wrapping, isolated hover and
 keyboard focus remain checked at 800 and 1280. See
-[counted Linux validation](development-verification-replay-validation.md#canonical-queue-action-validation).
+[counted Linux validation](development-verification-replay-validation-canonical-publisher-verification.md#canonical-queue-action-validation).
 
 `launchPairedApp` defaults to `threadMode: 'scripted'`. Its test-only publisher in
 `e2e/fixtures/scriptedThread.ts` translates event scripts into daemon-authored
@@ -205,7 +205,7 @@ content protection rather than stale-envelope rejection. Restore the publisher's
 known authoritative facts and current version with `setConversation` before
 publishing the later assistant processing marker. See the
 [receipt assertions](development-verification-evidence-that-cannot-pass-too-early.md#evidence-that-cannot-pass-too-early)
-and [counted Linux validation](development-verification-replay-validation.md#canonical-receipt-validation).
+and [counted Linux validation](development-verification-replay-validation-canonical-publisher-verification.md#canonical-receipt-validation).
 
 [`message-lifecycle-diagnostics.spec.ts`](../../../e2e/message-lifecycle-diagnostics.spec.ts)
 uses the same native composition for exact duplicate acceptance. Require rendered
@@ -228,7 +228,7 @@ the sent connection UUID, four running-message records and two queued records
 before exercising unknown-conversation refusal through both typed IPC channels.
 That control yields only queued/dropped with `route-refused` and no third send.
 Both `TEXT_SECRET` log exclusions follow positive lifecycle observations,
-including refusal. See [counted Linux validation](development-verification-replay-validation.md#canonical-message-lifecycle-diagnostics-validation).
+including refusal. See [counted Linux validation](development-verification-replay-validation-canonical-message-lifecycle-diagnostics-validation.md#canonical-message-lifecycle-diagnostics-validation).
 
 [`queueSettlementThread.ts`](../../../e2e/fixtures/queueSettlementThread.ts)
 shares authored facts between `queued-own-settlement.spec.ts` and
@@ -252,7 +252,7 @@ row; its completion snapshot must still be false. Require two ordered turns,
 each with its own marker and exactly one normal `turn_end`. `SECOND_` plus `DONE`
 must accumulate into the second marker, but even that full text cannot complete
 the oracle before its terminal fact. Keep the shared real/replay oracle intact.
-See [counted Linux validation](development-verification-replay-validation.md#canonical-queue-settlement-validation).
+See [counted Linux validation](development-verification-replay-validation-canonical-queue-settlement-validation.md#canonical-queue-settlement-validation).
 
 Compatibility remains available to unmigrated siblings; eventual fixture removal
 belongs to [#2246](https://github.com/pyrycode/pyrycode-desktop/issues/2246).
@@ -275,7 +275,7 @@ and spinning, alongside the still-visible icon. The second send's exact failure
 copy similarly precedes clearing assertions. These controls retain the local
 pre-acceptance interval without treating command receipt or activity as acceptance;
 they add no duplicate-wire proof. See the
-[counted Linux validation](development-verification-replay-validation.md#canonical-local-send-status-validation).
+[counted Linux validation](development-verification-replay-validation-canonical-queue-settlement-validation.md#canonical-local-send-status-validation).
 
 The three [streamed-text fixtures](assistant-markdown-renderer-verification.md#canonical-streamed-text-fixtures)
 also select canonical mode, advertising `interactive` and complete `thread`
@@ -290,7 +290,7 @@ Its `buildReplyFrames` returns content only for a `send_message` addressed to
 can answer actual correlated queries. These cases bypass legacy translation and
 history aliases. Focused TypeScript checking must include all three specs and
 imported helpers explicitly; app/client-test projects alone exclude these fake
-specs. See [counted Linux validation](development-verification-replay-validation.md#canonical-streamed-text-validation).
+specs. See [counted Linux validation](development-verification-replay-validation-canonical-publisher-verification.md#canonical-streamed-text-validation).
 
 History responses are split into bounded item batches and end with a separate
 completion marker. The default empty-thread wait must complete before a spec

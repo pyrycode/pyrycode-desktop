@@ -210,6 +210,19 @@ and original live-only assertions/exclusions. No new live proof is required;
 \#2212 retains integrated acceptance and #2273's native timing failure remains
 separate from this migration's passes.
 
+The [canonical external-link validation](knowledge/features/assistant-markdown-renderer-verification.md#canonical-external-link-fixtures)
+records both `assistant-link-opens-externally.spec.ts` cases passing on authored
+facts with correlated opening queries, trusted Send and exact-base completion.
+The main-process shell recorder proves exact web/Obsidian handoff routing without
+launching an OS application; denied actions stay text and navigation/window
+checks follow the positive handoff barrier. The complete configured Linux gate
+passed both cases and all 29 captured-client scenarios, canonical activation,
+captured history, protected storage and the native-writer prerequisite. Its
+unrelated initial failure remains recorded alongside the accepted rerun.
+Original live-only assertions and exclusions remain required; this migration
+adds no fresh provider, encryption or physical-effect proof. #2212 retains
+complete acceptance, with #2153/#2191 separate repairs.
+
 On initial launch and every profile relaunch, the shared replay fixture probes
 `better-sqlite3` in Electron's main process before device binding and pairing. It
 resolves the installed SQLite package root, loads the genuine addon with

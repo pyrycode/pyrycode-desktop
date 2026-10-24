@@ -163,6 +163,19 @@ and native prerequisites. Every original live-only assertion remains; this
 migration adds no fresh provider, encryption or physical-effect proof. #2211 owns
 combined acceptance; #2153/#2191 repairs and #2169 recovery remain separate.
 
+Both mounted `assistant-link-opens-externally.spec.ts` cases use authored canonical
+assistant facts and correlated query replies with legacy translation bypassed.
+Their [fixture barriers and counted Linux evidence](knowledge/features/assistant-markdown-renderer-verification.md#canonical-external-link-fixtures)
+retain the opened-conversation send guard, exact-base terminal revision, allowed
+web/Obsidian and denied-action checks, exact single-call shell recorder and
+unchanged in-app navigation/windows. Synthetic handoffs launch no OS application.
+The complete configured gate retains all 29 captured-client cases, canonical
+activation, captured history, protected storage and native prerequisites;
+the unrelated initial failure and accepted rerun remain recorded. Original
+live-only assertions/exclusions remain required. No fresh provider, encryption
+or physical-effect proof is added; #2212 owns complete acceptance, while
+\#2153/#2191 remain separate repairs. macOS is outside this Linux ticket's scope.
+
 Encryption interoperability, handshakes, reconnect transport, real process
 liveness, native platform integration, and daemon/tool filesystem effects cannot
 be established by application-message replay. Their live checks remain required.

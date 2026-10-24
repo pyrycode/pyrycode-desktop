@@ -49,3 +49,6 @@ Preserve existing terminal reconnect failure, rejected-answer notice, unavailabl
 
 ## Open Questions
 None.
+
+## Revisions
+2026-10-24: The first migrated mounted run rejected presentation of the authored `streaming` status. Inspection of `presentation` in `src/renderer/src/screens/conversation/threadItemPresentation.ts` confirms that active assistant facts use wire status `running`, then `finished`. Corrected the facts and narrowed the spec-local helper parameters; the visible cursor/settlement contract is unchanged. Also read `docs/knowledge/features/e2e-harness.md` and `thread-runtime.md` for native ABI sequencing and explicit accepted identity. Focused TypeScript checking exposed existing optional CDP object IDs and an overly narrow event-channel inference in the owned specs; explicit setup guards and a string channel preserve the same controls without unchecked observer targets.

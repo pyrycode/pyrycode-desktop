@@ -44,3 +44,7 @@ None. Native composition is required only for deliberately invalid authoring con
 
 ## Documentation handoff
 - Pending documentation stage: preserve canonical activation, captured history, protected-storage coverage and proof boundaries in `docs/recorded-tests.md` and `docs/client-replay-migration.md`. This migration introduces no fresh provider, encryption or physical-effect proof.
+
+## Revisions
+- 2026-10-24: Opening callback requests already include `thread_catch_up` under compatibility mode, so the request-only negative-control hypothesis was incorrect (2/2 including prerequisite passed). Keep actual request assertions as protocol observations; the distinguishing negative control instead challenges inferred acceptance after assistant activity. The first test-first launch was blocked by incomplete Electron installation, and the first seven-case run was held by Node/Electron SQLite ABI mismatch. Reinstalling dependencies and running the existing Electron rebuild resolved these environment failures without changing source or assertions.
+- Queue disappearance is authored as `written` before a later delivered revision for removal-first cases; receipt-first cases follow delivery with an older-revision full fact. Repeated identical facts and equal/older conflicting facts use native mode, with the publisher snapshot reset to known authoritative facts after each probe. No legacy event translation is introduced.

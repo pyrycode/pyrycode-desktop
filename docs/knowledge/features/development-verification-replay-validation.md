@@ -400,6 +400,63 @@ historical captures add no fresh provider/daemon, encryption or physical-effect
 proof. Compatibility remains for unmigrated siblings;
 [#2211](https://github.com/pyrycode/pyrycode-desktop/issues/2211) retains combined acceptance.
 
+## Canonical user-whitespace validation
+
+The [PR #2257 verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2257#issuecomment-6387959503)
+and accepted stage `1cc0b10044e8075cb2a17682b867f61e9a12f721343aa64f463d3eeb8465627b`
+record PASS on Linux x86_64 at `89fed00c2fb80c898eee964810243bb41a722615`,
+2026-10-24. Normal build provenance identifies that clean revision. The owned spec
+and relevant shared fixtures are unchanged since builder executable revision
+`919ceb8808bddd7243e294ecdb97e5f8bf2c049a`. The
+[plan](../../specs/architecture/2250-canonical-user-whitespace.md#verification--2026-10-24)
+retains builder commands, checksum and evidence references; the
+[layout topic](development-verification-layout-and-input.md#layout-and-input)
+records the acceptance and measurement boundaries.
+
+| Retained Linux check | Executed / passed / failed / skipped |
+| --- | --- |
+| Builder affected canonical-publisher units | 17 / 17 / 0 / 0 |
+| Builder owned scenario plus native writer prerequisite, retries zero | 2 / 2 / 0 / 0 |
+| Supplied dispatcher unit gate 4, JUnit counts | 10045 / 10045 / 0 / 3 |
+| Complete configured application gate 7, `npx playwright test --reporter=json` | 542 / 542 / 0 / 4 |
+| Captured-client subset of that application gate, per accepted verdict | 28 / 28 / 0 / 1 |
+
+Use the supplied counted unit report above; the verdict prose's larger aggregate
+of 10,144 is not used. The exact owned scenario,
+`a user message draws the line breaks, blank lines, space runs and indents it was typed with`,
+is present and passed once in application gate 7, as is
+`finite protected writer backlog preserves native keyboard and both event loops`.
+The builder reports both present and passed in its focused run. The complete gate
+has zero retries, flaky results or report errors. All 28 captured exchanges finished
+with zero remaining requests; captured history, packaged encrypted-history reopen
+and native-storage prerequisites passed. This matching configured run supplies
+complete-suite acceptance once, superseding the plan's earlier pending statement.
+
+Verifier install, docs guard, application typecheck/build and Electron native
+preparation passed. Its pre-verify passed three checks with two `--no-suite`
+omissions supplied by later gates. Builder pre-verify, client-test and focused
+owned-spec typechecks, and build passed. The original `/tmp/builder-2250` reports,
+traces and red-control patch were unavailable to the verifier; their detailed
+contents were not independently inspected. The plan's red control remains a
+reported failure (2 executed, 1 passed, 1 failed, 0 skipped), not final acceptance.
+Counted current-head gates supply the final proof. Evidence references include
+dispatcher `logs/verifier-gate_#2250_{1..7}.log`,
+`build/dispatcher-tests/unit-l1z7i6e_/0.json` and builder bundle
+`05202ae1c1afd0e1c89628629965fe4c8532c36ff14315746afbfb9fc1d09486`.
+
+The four application skips are two macOS badge cases, macOS window reopening and
+the existing saved-system-prompt Reset fixme; none counts as passed. macOS is
+outside this Linux ticket's verification scope. The
+[recorded-test contract](../../recorded-tests.md) and
+[migration inventory](../../client-replay-migration.md) retain original live-only
+assertions; authored facts and captured replay add no fresh provider/daemon,
+encryption-interoperability or physical-effect proof. No production, shared-fixture
+or visual behavior changed. Compatibility remains for unmigrated siblings.
+[#2211](https://github.com/pyrycode/pyrycode-desktop/issues/2211) retains combined
+acceptance under [#2209](https://github.com/pyrycode/pyrycode-desktop/issues/2209);
+this slice does not complete that parent acceptance. #2153 and #2191 remain separate
+repairs.
+
 ## Counted Linux compatibility validation
 
 These are retained results accepted by the

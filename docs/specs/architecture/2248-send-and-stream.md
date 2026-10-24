@@ -66,6 +66,28 @@ Executed candidate: `133abc4cc7262e212389d3b1b01faceda4edc522`, Linux x64, 2026-
 - Explicitly executed/passed: `send a message and see the streamed daemon reply render in the thread` and configured prerequisite `finite protected writer backlog preserves native keyboard and both event loops`. All three fake-daemon setup attachments were inspected: attempt 1, opened, matching listener/dial, valid upgrade, no rejection/parser/failure category. No new skip or timeout changes.
 - Final report SHA-256: `2dc2fc9950888833d3d5f79b357b6a13793941131f5096ae0b5b9f60dc323870`; list log `/tmp/builder-2248/final-playwright.log` SHA-256 `7a97c578921f827b22f6309d511e0e7e26e3a3907b21eb58cebabb26fc2a51fd`.
 
-**Pending dispatcher/verifier ownership:** the normal complete configured application gate, including captured-client replay and existing native prerequisites. Retain that matching candidate gate's exact revision, OS, executed/passed/failed/skipped counts and named owned-scenario result as complete-suite proof once; no duplicate full run was ordered. Existing capture/history/protected-storage and live-only assertions/exclusions are unchanged. No fresh provider, encryption or physical-effect proof is claimed. macOS is outside this ticket's verification scope.
+## Completed verifier evidence — Linux
+
+The [accepted verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2252#issuecomment-6387177626)
+records PASS at `0c417eacde1ea4cb13345553750f9dad406719ac`, Linux x86_64,
+2026-10-24, with exact-revision normal-profile build provenance and
+`sourceDirty: false`. This revision adds only plan evidence to the builder's
+tested implementation. The normal complete configured application gate executed
+542 tests: 542 passed, 0 failed, 4 skipped, 0 retries/flaky. Both
+`send a message and see the streamed daemon reply render in the thread` and
+`finite protected writer backlog preserves native keyboard and both event loops`
+were present and passed once. All 29 captured-client replay cases passed with
+773 matched requests, 3,216 emitted frames, zero remaining and zero mismatches.
+
+The supplied dispatcher unit gate report records 10,045 executed/passed,
+0 failed, 3 skipped; this counted report takes precedence over the verdict's
+10,144 prose total. The matching configured gate supplies complete-suite proof
+once; no duplicate run was ordered. Exact log/hash provenance and the completed
+documentation handoff are in the
+[canonical send/stream validation record](../../knowledge/features/development-verification-replay-validation.md#canonical-send-and-stream-validation).
+Existing captured history, protected storage, native prerequisites and live-only
+assertions/exclusions remain in place. These are retained results; no fresh
+provider, real-daemon, encryption or physical-effect proof is claimed. macOS is
+outside this ticket's verification scope.
 
 Final scope remains one round trip, four criteria, zero production files/new exports/shared fixture edits; approximately 180 added lines including this plan/evidence, below the admitted estimate and builder ceilings.

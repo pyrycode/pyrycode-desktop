@@ -39,7 +39,7 @@ Retain public identity failure as a fixture error. Canonical publisher enforces 
 - Test first: select canonical mode against the old responder and observe rejection of legacy content in the existing first scenario, then migrate inputs.
 - Run all three owned scenarios on Linux with retries zero and the configured clipboard project/native prerequisite.
 - After final main merge, run pre-verify with canonical publisher units, application/client typechecks, a scratch focused TypeScript project including this spec/imported helpers/preload declarations, and build. Prepare Node checks before Electron-native checks.
-- Preserve all original product assertions and audit the final diff. Reuse the later dispatcher/verifier’s exact-candidate complete configured application/captured-client gate once; that gate remains required and pending. No new live proof; macOS is outside this Linux ticket’s verification scope.
+- Preserve all original product assertions and audit the final diff. Reuse the dispatcher/verifier’s exact-candidate complete configured application/captured-client gate once; the accepted results below now satisfy that requirement. No new live proof; macOS is outside this Linux ticket’s verification scope.
 
 ## Open Questions
 None. The merged publisher supplies every required authored content path without shared-harness changes.
@@ -56,6 +56,24 @@ Tested implementation `b58259bfd5c7c296570bc6f872a57906cb120826`, containing mai
 - Final pre-verify: **5/5 checks passed**, including application typecheck and canonical publisher units **17 executed/passed, 0 failed/skipped**. Evidence: `/tmp/builder-2264/pre-verify.log`, `build/dispatcher-tests/unit-7hp364if`. `npm run typecheck:client-tests`, focused `npx tsc --noEmit -p /tmp/builder-2264/tsconfig.json` (owned spec, imported helpers and preload declarations), and `npm run build` passed. Node preparation completed before final Electron preparation and mounted execution; logs remain in `/tmp/builder-2264/`.
 - TypeScript assertion audit preserves all **98 original non-dequeue assertion expressions** unchanged. The original dequeue count assertion now reads per-test captured requests and additionally checks the exact conversation/queue handle. `/tmp/builder-2264/assertion-audit.log`. Source audit finds no legacy content frame types, compatibility publisher or history aliases in the owned spec.
 - Final report SHA-256: `cf546183397542c70f72f36e019564d79aedcd01681e01d8ffb637e147efcd21`; final list log: `aaaa2b7fc1510215cb65478e6a1293ef8af7e604f441e837538e1607420a2bd7`; pre-verify log: `513e3d4a7989311721023ed7143aa1af8eeea5503cd3ab00967c4761dcc0ff79`.
-- The dispatcher/verifier’s matching complete configured application/captured-client gate remains **pending** and must supply canonical activation, captured history, protected storage/native prerequisites and captured-client replay evidence once. Original live-only assertions remain unchanged; no fresh provider or physical-effect proof is claimed. macOS is outside this Linux ticket’s verification scope.
+- The dispatcher/verifier’s matching complete configured application/captured-client gate **passed** at `5e3b01e33ace9147463dd8da2422e5fcc9f724cc`: 542 executed/passed, 0 failed, 4 skipped, zero retries/flaky. The accepted verifier confirms all three owned cases, canonical activation/reconnect, captured history, protected storage/native prerequisites and all 29 captured-client cases passed. See the accepted evidence below. Original live-only assertions remain unchanged; no fresh provider or physical-effect proof is claimed. macOS is outside this Linux ticket’s verification scope.
 
 Final scope: approximately 150 added lines across the owned spec and plan, zero production files or new exports; all ceilings remain satisfied.
+
+## Accepted verifier evidence — Linux x86_64, 2026-10-24
+
+The [accepted verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2275#issuecomment-6388813234)
+reviews clean candidate `5e3b01e33ace9147463dd8da2422e5fcc9f724cc`; its only change
+after builder implementation `b58259bf` is this plan's original evidence record.
+The complete gate's three owned cases and native protected-writer/keyboard/event-loop
+prerequisite are present and passed, with the original clipboard serialization.
+All 29 captured exchanges completed with zero remaining requests and no reported
+mismatch. Four skips are two macOS badge cases, macOS window reopen and the existing
+system-prompt Reset fixme. None counts as passed.
+
+Dispatcher unit gate 4 records 10,045 executed/passed, 0 failed, 3 skipped in the
+supplied JUnit report; this counted total takes precedence over the verdict prose's
+10,144. Typechecks/build and native preparation passed. The
+[durable evidence record](../../knowledge/features/development-verification-replay-validation.md#canonical-side-action-validation)
+retains the full counts and barriers. This supersedes the earlier pending-gate
+handoff without rerunning tests. Combined family acceptance remains with #2212.

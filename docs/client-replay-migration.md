@@ -119,6 +119,19 @@ activation, captured history, protected storage and every original live-only
 assertion remain in scope. No fresh provider, encryption or additional
 physical-effect proof is introduced; #2212/#2209 retain combined acceptance.
 
+All three mounted `message-side-actions.spec.ts` scenarios use canonical facts,
+including opening, queued users and standalone attachment offers. Their
+[fixture barriers](knowledge/features/conversation-shell-message-bubble-testing.md#testing)
+require supplied device/message identity, exact attached-reply completion and
+independent active partial text before trusted Copy and exact OS clipboard
+readback. The [counted Linux evidence](knowledge/features/development-verification-replay-validation.md#canonical-side-action-validation)
+retains layout/metadata/focus checks, queue handles, attachment identity and
+`stream-copy-readiness` in the serial clipboard/native-writer configuration.
+Captured-client replay, canonical activation, captured history, protected storage,
+native prerequisites and original live-only assertions/exclusions remain intact.
+No fresh provider, encryption or additional physical-effect proof is introduced;
+\#2212 retains combined acceptance, with #2153/#2191 separate repairs.
+
 The mounted `message-lifecycle-diagnostics.spec.ts` uses explicit canonical facts
 and correlated replies in native mode to deliver repeated full acceptance items.
 Its [fixture contract](knowledge/features/e2e-harness.md#scripted-and-native-thread-fixtures)

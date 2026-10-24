@@ -147,6 +147,23 @@ certificates; it does not infer acceptance from composer sends or assistant acti
 Correlated session-settings replies retain `mid_turn_input`, context reading and
 explicit session provenance; live turn controls name the owning conversation.
 
+[`message-side-actions.spec.ts`](../../../e2e/message-side-actions.spec.ts) keeps
+its single-consumer fixture local and creates it afresh for each of three cases.
+It supplies an empty opening window, summary/current session, epoch, ordered
+items and advancing versions in canonical mode. After observing version-zero
+catch-up, it reads the public device identity and binds each delivered user fact
+to that identity and the captured outbound message ID. Wait for the exact supplied
+read row and authoritative row count: repeated text or an optimistic attachment
+echo can otherwise satisfy a text-only barrier. Finished assistant facts carry
+explicit terminal status; settle the exact attached reply without a cursor before
+publishing the independent running assistant. Queued user and attachment-offer
+facts keep explicit handles/attachment identities, and Drop still observes the
+exact outbound `dequeue_message`. The production upload bridge is unchanged.
+Retain the serial clipboard project, native prerequisite and
+[trusted Copy readiness](conversation-shell-message-bubble-testing.md#streaming-copy-input-readiness);
+authored facts and replay cannot replace OS clipboard activation/readback.
+See [counted Linux validation](development-verification-replay-validation.md#canonical-side-action-validation).
+
 For an own send, capture its outbound `message_id` and obtain the authenticated
 public identity through `window.pyry.deviceIdentity()`. Supply both on the accepted
 `user_message`; keep the item ID distinct from `content.queued_msg_id`. Drop waits

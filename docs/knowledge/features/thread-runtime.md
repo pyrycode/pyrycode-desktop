@@ -379,8 +379,20 @@ echo or placement; it does not assert final delivery. Terminal or hidden items
 can settle a send even when they are the first observed revision.
 
 Queued actions use genuine `content.queued_msg_id` handles with owning coordinates.
-Send now additionally requires the session's reported capability. Complete task
-membership, activity and saved attribution come from linked daemon items. Compact
+Send now additionally requires the session's reported capability. The canonical
+mounted queue scenarios in
+[`queued-backlog-interrupt.spec.ts`](../../../e2e/queued-backlog-interrupt.spec.ts)
+and [`queued-send-now.spec.ts`](../../../e2e/queued-send-now.spec.ts) author these
+handles separately from item IDs. Their own-message facts explicitly carry the
+authenticated device and captured message IDs: send commands, assistant activity
+and idle controls cannot substitute for acceptance. Checking idle before that
+acceptance can mistake a still-pending send for a running-state failure. Exact-base
+hidden/dropped and delivered revisions drive row changes; clicking Drop, Send now
+or Stop supplies no authoritative content or idle transition. The
+[fixture guidance](e2e-harness.md#scripted-and-native-thread-fixtures) retains
+processing barriers, compatibility scope and counted validation.
+
+Complete task membership, activity and saved attribution come from linked daemon items. Compact
 additionally admits current-session live task identities with an actual task ID and
 explicit owning-summary agent, without inventing tool linkage. No legacy roster
 supplies membership. Stop retains agent and owning-host capability checks; see

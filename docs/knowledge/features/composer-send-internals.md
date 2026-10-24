@@ -134,15 +134,17 @@ and literal content remain intact. The append diagnostic contains only a static 
 **Focus requests belong to the pane, not retained drafts.** Each reply increments a counter passed
 through `ComposerSlot`. After the value commits, `Composer`'s layout effect focuses the existing
 type-ahead textarea ref and collapses selection at `textarea.value.length`, on the empty line below
-the quote. Permission coverage keeps the latest request pending; consuming it while hidden would
-lose focus on reveal. When coverage clears and the textarea is available, repeated covered replies
-focus the final draft once. Later typing or permission cycles do not replay it. Switching chats
-remounts the pane and discards pending focus while retaining the quoted draft.
+the quote. It consumes each request once when the input ref is available. Inline permission leaves
+the composer visible, so pointer and keyboard replies focus immediately while the panel remains.
+Later editing, dismissal or another permission cycle cannot replay that focus or overwrite the
+caret. Switching chats remounts the pane without replaying the old request, while retaining the
+quoted draft.
 
-Equal-ID draft isolation is separate from the history writer's ownership rejection tracked in
-[#1811](https://github.com/pyrycode/pyrycode-desktop/issues/1811). Its persistence regression remains
-skipped; active draft-isolation and ordinary saved/offline reply coverage do not establish equal-ID
-history persistence.
+Equal-ID draft isolation is separate from protected history persistence. The canonical
+`message-reply.spec.ts` regression polls actual `readThread` records for both hosts
+before reopening the first host offline, quotes that host's saved source with Send
+disabled, then checks both records remain independent. Drafts or visible content
+alone cannot establish persistence; see [reply coverage](conversation-shell-message-bubble-testing.md#canonical-reply-fixtures).
 
 ### 4. Connection-status gate — `composerAvailability` ([#31](../codebase/31.md))
 

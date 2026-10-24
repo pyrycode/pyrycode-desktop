@@ -50,6 +50,13 @@ Unrelated storage and fake-suite work remains under its existing owners.
 
 ## Exclusion rules
 
+The [combined send/queue acceptance](knowledge/features/development-verification-replay-validation-canonical-queue-settlement-validation.md#integrated-send-and-queue-acceptance)
+records #2211's exact candidate and counted Linux proof across all eight slices,
+reusing the child records below. It preserves historical failures and the reset
+fixme; canonical fixtures and captured replay establish no fresh provider/daemon,
+encryption-interoperability or physical-effect proof. The inventory's original
+live-only assertions remain required.
+
 The three mounted cases in `queued-backlog-interrupt.spec.ts` and
 `queued-send-now.spec.ts` now use authored canonical facts; see their
 [fixture contract](knowledge/features/e2e-harness.md#scripted-and-native-thread-fixtures)
@@ -131,6 +138,19 @@ Captured-client replay, canonical activation, captured history, protected storag
 native prerequisites and original live-only assertions/exclusions remain intact.
 No fresh provider, encryption or additional physical-effect proof is introduced;
 \#2212 retains combined acceptance, with #2153/#2191 separate repairs.
+
+All six mounted `message-reply.spec.ts` scenarios use independent canonical
+publishers on every host, including created-chat activation and saved/offline
+reopening. Their [fixture barriers](knowledge/features/conversation-shell-message-bubble-testing.md#canonical-reply-fixtures)
+retain actual preload receipt with held drains, exact rendered suffix/cursor
+settlement, trusted reply/copy input, draft/focus isolation and protected
+`readThread` polling for both equal-ID hosts before and after offline reopening.
+Their [counted Linux evidence](knowledge/features/development-verification-replay-validation-canonical-message-lifecycle-diagnostics-validation.md#canonical-reply-validation)
+records separate focused and complete-gate passes. Captured-client replay,
+canonical activation, captured history, protected-storage/native prerequisites
+and original live-only assertions/exclusions remain intact. No fresh provider,
+daemon or additional physical-effect proof is introduced; #2212 retains combined
+acceptance, #2273's failed native timing evidence and #2153/#2191 repairs stay separate.
 
 The mounted `message-lifecycle-diagnostics.spec.ts` uses explicit canonical facts
 and correlated replies in native mode to deliver repeated full acceptance items.

@@ -6,6 +6,12 @@ The scenario inventory, protected tickets and live-only proof boundaries are in 
 
 ## Replay contract
 
+The [integrated send/queue acceptance](knowledge/features/development-verification-replay-validation-canonical-queue-settlement-validation.md#integrated-send-and-queue-acceptance)
+records #2211's exact combined candidate, counted Linux gate and all eight child
+records. Its 24 canonical cohort cases and 29 active replays passed; native writer
+and protected-history checks passed separately within the same configured gate.
+Existing exclusions and live-only proof requirements below remain binding.
+
 Each `e2e/recordings/*.json` identifies its source Desktop commit, daemon source revision and binary checksum, Claude version, capture time and authenticated capabilities. Version 2 also records sequential authenticated connection lifetimes and explicit test-side causal checkpoints. Observed retryable transport closes carry their actual close code and message prefix; replay forwards every preceding frame before closing the local socket. Version 1 remains readable for older captures from PR #2036.
 
 Capture preserves raw close positions and each call's actual connection identity.
@@ -191,6 +197,18 @@ in the serial `clipboard` project with `native-writer`; replay cannot replace
 them. The matching complete Linux gate retains canonical activation, captured
 history, protected storage, captured-client replay and original live-only
 assertions/exclusions. No new live proof is required; #2212 owns combined acceptance.
+
+The [canonical reply validation](knowledge/features/development-verification-replay-validation-canonical-message-lifecycle-diagnostics-validation.md#canonical-reply-validation)
+records all six `message-reply.spec.ts` cases passing with per-host authored facts
+and correlated queries. Actual preload receipt stays separate from rendered
+suffix/cursor settlement; saved/offline reopening retains protected `readThread`
+polls for both equal-ID hosts and independent records afterward. Trusted input,
+OS clipboard and action geometry remain in the serial clipboard project with its
+native-writer prerequisite. The matching complete Linux gate retains captured-client
+replay, canonical activation, captured history, protected storage/native coverage
+and original live-only assertions/exclusions. No new live proof is required;
+\#2212 retains integrated acceptance and #2273's native timing failure remains
+separate from this migration's passes.
 
 On initial launch and every profile relaunch, the shared replay fixture probes
 `better-sqlite3` in Electron's main process before device binding and pairing. It

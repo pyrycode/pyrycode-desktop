@@ -305,13 +305,13 @@ reset without anyone remembering to add it.
 `userText` row, the same row while queued (only `.message-row--queued > .bubble` dims at 50%),
 and the retired `MessageBubble`'s user branch — so all three keep
 whitespace with no markup change and no unit-tier edit. An unmatched queued row's text is daemon-supplied
-(`QueuedItem.text` over `queue_state`, not a local echo), so this preserves whitespace a hostile daemon
+(`user_message` content in canonical thread facts), so this preserves whitespace a hostile daemon
 chose; two existing bounds already cover it — `pre-wrap` hangs a trailing run past the line's end rather
 than widening the box, and `.bubble`'s `max-width` caps it regardless.
 
-Proven in `e2e/user-whitespace.spec.ts`, a new sibling to `assistant-whitespace.spec.ts` rather than an
-extension of it (that file's harness is the assistant delta/turn-end frame builder, unneeded here, and
-the ticket demanded it stay unedited). Every whitespace claim is a computed style or a measured box
+Proven in `e2e/user-whitespace.spec.ts`, using canonical accepted user items and explicit queued items.
+The [mounted acceptance boundary](development-verification-layout-and-input.md#layout-and-input)
+keeps optimistic echoes from satisfying delivered-row proof. Every whitespace claim is a computed style or a measured box
 read through `locator.evaluate()`, never a `toHaveText`/`toContainText` expectation — both hardcode
 `normalizeWhiteSpace: true`, so a multi-line text expectation passes identically against the broken and
 the fixed build. Six fixtures (control, a long interior space run, three short lines, a blank line

@@ -44,3 +44,21 @@ No new failure mode. Canonical publisher rejects legacy content or invalid owner
 
 ## Open Questions
 None.
+
+## Linux validation — 2026-10-24
+Executed clean implementation revision `204a1b0c21d64565f322e38eab18b78052414043`, with main `d86f547c0a7787917ecb1355c0ae1c12fceffd38` merged. Build provenance records `profile: normal`, `sourceDirty: false`. This evidence-only addition does not change the tested spec.
+
+| Check | Executed / passed / failed / skipped |
+| --- | --- |
+| `pre-verify-check --test-file e2e/fixtures/canonicalThread.test.ts` | Five checks passed; fixture units 17 / 17 / 0 / 0 |
+| Owned Playwright spec, `--project=parallel --no-deps --retries=0 --reporter=json` | 2 / 2 / 0 / 0; zero flaky results |
+
+Both original cases executed: `clicking a link in an assistant reply opens it in the OS browser` and `clicking an Obsidian open link hands it to the OS, and other Obsidian actions stay text`; each passed on retry 0. Original assertions/timeouts remain, and shell handoffs stayed recorded in the main process.
+
+`npm run typecheck` (inside pre-verify and build), `npm run typecheck:client-tests`, `node node_modules/typescript/bin/tsc --noEmit -p /tmp/builder-2268/tsconfig.focused.json --listFiles`, and `npm run build` passed. The focused file list explicitly includes the owned spec, launcher, canonical publisher/unit and publisher selection. Native preparation passed for Node before units and Electron before mounted execution.
+
+Evidence: `/tmp/builder-2268/pre-verify.log`, `unit-evidence/`, `client-typecheck.log`, `focused-typecheck.log`, `build.log`, `native-electron.log`, `playwright.json`, `playwright.stderr` and `results/`. Playwright JSON SHA-256: `fd33f0ea9329d4565c4b0b85043b5f9fd01aa28a325900fd31496cfbab5e11e7`.
+
+The preceding red control at plan revision `384bcd4f92132c8ba878a63d410fd4d99c255726` plus the uncommitted canonical selection executed both cases: 2 / 0 / 2 / 0. Each rejected `assistant_delta` after the trusted send; buffer-encoded worker stderr retains that exact publisher error in `red-playwright.json`. Initial sandbox install/build attempts hit subprocess `EPERM`; approved reruns passed.
+
+Final scope remains one regression gate: 0 production files/new exports, 2 local consumers, 3 acceptance criteria, no new production reject branches, approximately 160 written lines. Dispatcher/verifier own the complete configured application gate, including captured replay and native prerequisites. No live/provider/encryption/physical-effect claim is added. macOS is outside scope.

@@ -190,6 +190,29 @@ publishing the later assistant processing marker. See the
 [receipt assertions](development-verification-evidence-that-cannot-pass-too-early.md#evidence-that-cannot-pass-too-early)
 and [counted Linux validation](development-verification-replay-validation.md#canonical-receipt-validation).
 
+[`message-lifecycle-diagnostics.spec.ts`](../../../e2e/message-lifecycle-diagnostics.spec.ts)
+uses the same native composition for exact duplicate acceptance. Require rendered
+opening content and the actual version-zero `thread_catch_up`. Keep idle and
+running sends at exactly `message-queued`, `message-sent` while an assistant fact
+renders; activity must not acknowledge either send. Accept the running send only
+with a queued full `user_message` matching the captured message ID and public
+device identity. A field-change update alone does not acknowledge a send.
+Repeat that identical item/revision/content at advancing delivery versions, then
+resynchronize retained items/version with `setConversation` before publishing the
+later assistant marker. Otherwise the marker can conflict with the directly
+delivered version instead of proving that repetition was processed.
+
+After the marker renders, require one connected authoritative queued row, its
+unchanged text and exactly one `message-acknowledged`. Click its real Drop button
+and check exactly one `dequeue_message` for the queue handle distinct from the
+item ID, followed by one local `message-dropped` with `user-cancel-request`.
+This records a cancellation request; it does not prove daemon removal. Preserve
+the sent connection UUID, four running-message records and two queued records
+before exercising unknown-conversation refusal through both typed IPC channels.
+That control yields only queued/dropped with `route-refused` and no third send.
+Both `TEXT_SECRET` log exclusions follow positive lifecycle observations,
+including refusal. See [counted Linux validation](development-verification-replay-validation.md#canonical-message-lifecycle-diagnostics-validation).
+
 [`queueSettlementThread.ts`](../../../e2e/fixtures/queueSettlementThread.ts)
 shares authored facts between `queued-own-settlement.spec.ts` and
 `queue-delivery-evidence.spec.ts`. The five settlement orders use the same native

@@ -1,66 +1,25 @@
 import type { Locator, Page } from '@playwright/test'
 import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
+import { createCanonicalThread } from './fixtures/canonicalThread'
 import { encodeEnvelope, decodeEnvelope } from '../src/main/transport/codec'
-import type { BackgroundTask, ConversationSummary, EnvelopeType } from '../src/shared/wire/types'
+import type { Envelope } from '../src/shared/wire/types'
+import type { ThreadItem, ThreadUpdate } from '../src/shared/wire/thread'
 
-// Scripted history is published as thread catch-up/pages by the shared fake daemon.
-test.use({ scriptedHistory: true })
-
-// #1561: the composer's task-count pill counts only the tasks claude has not reported finished. A
-// `background_task_updated` whose `status` is `completed` / `failed` / `stopped` takes a listed task out
-// of the COUNT at once, without waiting for an emptier roster that nothing guarantees will come, while
-// the panel still LISTS it until a roster omits it.
-//
-// The store's unit tests prove the arithmetic; this spec is the only proof that the pill in
-// `ComposerErrorSlotControl` reads `selectLiveTaskCountFor` rather than the roster's size, through the
-// real transport and the translator that now carries `status`.
-//
-// SECRET HYGIENE (the sibling specs' rule): every task field and `summary` below is a CLIENT-OWNED
-// SYNTHETIC LITERAL, so a failure diff discloses nothing. The helpers mirror
-// background-task-reconnect.spec.ts rather than importing from it, as the sibling specs do.
-
-const frame = (type: EnvelopeType, payload: unknown, in_reply_to?: number): Uint8Array =>
-  encodeEnvelope({ id: 1561, type, ts: '2026-09-23T09:00:00Z', payload, in_reply_to })
-
-const roster = (conversation_id: string, tasks: BackgroundTask[]): Uint8Array =>
-  frame('background_task_roster', { conversation_id, tasks, dropped_tasks: 0 })
-
-const task = (task_id: string, description: string): BackgroundTask => ({
-  task_id,
-  task_type: 'local_bash',
-  description,
-  truncated_fields: null
-})
-
-/** The terminal half of the family's update (the daemon's `background_task_updated_terminal.json`
- *  shape): `status` and `summary` set, `patch` empty. A mid-life update is the other half: `patch` set,
- *  `status: ''`. */
-const updated = (conversation_id: string, task_id: string, status: string, patch = ''): Uint8Array =>
-  frame('background_task_updated', {
-    conversation_id,
-    task_id,
-    patch,
-    status,
-    summary: status === '' ? '' : 'synthetic finished summary',
-    truncated_fields: null
-  })
+// Every authored field is synthetic. Membership, activity and outcomes are explicit daemon facts.
+const session = 'finished-count-session'
+const route = { conversation_id: SEEDED_ROW.id, epoch: 'finished-count-epoch' }
+const frame = (update: ThreadUpdate): Uint8Array =>
+  encodeEnvelope({ id: 1561, ts: '2026-09-23T09:00:00Z', ...update })
+const task = (id: number, task_id: string, description: string) => ({
+  id, order: id * 10, rev: 1, kind: 'tool_call', status: 'running', active: true, shown: true,
+  session, agent: 'claude', summary: description,
+  content: { name: 'Bash', tool_use_id: `call-${id}`, task_id, input_summary: description,
+    task_link: { task_id, tool_call_id: `call-${id}`, description } }
+} satisfies ThreadItem)
 
 // Mutually non-substring, because the panel assertions pair `toContainText` across both.
 const FIRST = 'first synthetic background task'
 const SECOND = 'second synthetic background job'
-
-/** Answers the list and history requests the drive provokes; an unanswered history request would put a
- *  failure in the composer status slot, which outranks the task pill (see the reconnect spec's `fake`). */
-function fake(rows: ConversationSummary[]) {
-  return (bytes: Uint8Array): Uint8Array[] => {
-    const env = decodeEnvelope(bytes)
-    if (env.type === 'list_conversations') return [frame('conversations', { conversations: rows })]
-    if (env.type === 'request_history') {
-      return [frame('history_page', { entries: [], cursor: '', at_start: true }, env.id)]
-    }
-    return []
-  }
-}
 
 const panelFor = (page: Page): Locator =>
   page.getByRole('dialog', { name: 'Background tasks', exact: true })
@@ -68,38 +27,69 @@ const panelFor = (page: Page): Locator =>
 test('a terminal status takes a listed task out of the pill count but not out of the panel', async ({
   launchPairedApp
 }) => {
-  const { page, daemon } = await launchPairedApp({ buildReplyFrames: fake([SEEDED_ROW]) })
+  const requests: Envelope[] = []
+  const first = task(1, 'task-first', FIRST), second = task(2, 'task-second', SECOND)
+  const thread = createCanonicalThread({ conversations: [{
+    summary: { ...SEEDED_ROW, current_session_id: session, agent: 'claude' },
+    epoch: route.epoch, version: 1, items: [first, second]
+  }] })
+  const { page, daemon } = await launchPairedApp({ threadMode: 'canonical', thread,
+    helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: bytes => {
+      requests.push(decodeEnvelope(bytes)); return []
+    }
+  })
   await page.setViewportSize({ width: 1280, height: 800 })
 
-  daemon.pushFrame(roster(SEEDED_ROW.id, [task('task-first', FIRST), task('task-second', SECOND)]))
+  // Canonical opening facts must already supply both tasks before any pushed update.
   const pill = page.locator('.composer-status__tasks')
   await expect(pill).toHaveText('2 tasks running')
+  await pill.click()
+  const panel = panelFor(page)
+  const firstRow = panel.locator('.background-task-panel__row').filter({ hasText: FIRST })
+  const secondRow = panel.locator('.background-task-panel__row').filter({ hasText: SECOND })
+  await expect(firstRow).toBeVisible()
+  await expect(secondRow).toBeVisible()
+  expect(requests.find(request => request.type === 'thread_catch_up')?.payload).toMatchObject({
+    conversation_id: SEEDED_ROW.id, version: 0
+  })
 
-  // AC1: two listed tasks plus a terminal status for one render "1 task running".
-  daemon.pushFrame(updated(SEEDED_ROW.id, 'task-first', 'completed'))
+  daemon.pushFrame(frame({ type: 'thread_item_changed', payload: { ...route, version: 2,
+    item_id: first.id, base_rev: 1, rev: 2, changes: { status: 'finished', active: false } } }))
+  await expect(firstRow.getByText('Completed', { exact: true })).toBeVisible()
   await expect(pill).toHaveText('1 task running')
 
-  // AC2: the `''` every patch-bearing frame carries removes nothing.
-  daemon.pushFrame(updated(SEEDED_ROW.id, 'task-second', '', '{"is_backgrounded":true}'))
-  // AC3: a later roster listing the finished task again does not return it to the count.
-  daemon.pushFrame(roster(SEEDED_ROW.id, [task('task-first', FIRST), task('task-second', SECOND)]))
+  // Positive rendered markers prove each intermediate revision applied before its unchanged count.
+  const patch = '{"is_backgrounded":true}'
+  daemon.pushFrame(frame({ type: 'thread_item_changed', payload: { ...route, version: 3,
+    item_id: second.id, base_rev: 1, rev: 2, changes: { status: 'running', active: true,
+      content: { ...second.content, task_update: { patch } } } } }))
+  await expect(secondRow).toContainText(patch)
+  await expect(pill).toHaveText('1 task running')
+  const refresh = 'synthetic settled task refreshed'
+  daemon.pushFrame(frame({ type: 'thread_item_changed', payload: { ...route, version: 4,
+    item_id: first.id, base_rev: 2, rev: 3, changes: { status: 'finished', active: false,
+      content: { ...first.content, task_report: { summary: refresh } } } } }))
+  await expect(firstRow).toContainText(refresh)
+  await expect(firstRow.getByText('Completed', { exact: true })).toBeVisible()
   await expect(pill).toHaveText('1 task running')
 
-  // AC1: the last live task finishing renders no pill. The frames ride one ordered channel, so this is
-  // also what proves the two above were APPLIED rather than merely not yet arrived: had the `''` update
-  // removed `task-second`, or the re-listing restored `task-first`, the pill would not end at nothing.
-  daemon.pushFrame(updated(SEEDED_ROW.id, 'task-second', 'stopped'))
+  // The final ordered barrier detects a refreshed first task wrongly returning to the running count.
+  daemon.pushFrame(frame({ type: 'thread_item_changed', payload: { ...route, version: 5,
+    item_id: second.id, base_rev: 2, rev: 3, changes: { status: 'stopped', active: false } } }))
+  await expect(secondRow.getByText('Stopped', { exact: true })).toBeVisible()
   await expect(pill).toHaveCount(0)
 
-  // The panel's list is unchanged: both finished tasks stay listed until a roster omits them.
+  // Retained shown facts remain reachable through the fixed opener after the pill disappears.
+  await panel.getByRole('button', { name: 'Close', exact: true }).click()
   await page.getByRole('button', { name: 'More actions', exact: true }).click()
   await page.getByRole('menuitem', { name: 'Background tasks', exact: true }).click()
-  const panel = panelFor(page)
   await expect(panel).toBeVisible()
   await expect(panel.locator('.background-task-panel__row')).toHaveCount(2)
-  // #1635: the container hands the store's finished ids to the view, so both rows sit in Finished.
   await expect(panel.locator('.background-task-panel__group-header')).toHaveText(['Finished · 2'])
   await expect(panel.locator('.background-task-panel__row--finished')).toHaveCount(2)
   await expect(panel).toContainText(FIRST)
   await expect(panel).toContainText(SECOND)
+  await expect(firstRow.getByText('Completed', { exact: true })).toBeVisible()
+  await expect(secondRow.getByText('Stopped', { exact: true })).toBeVisible()
+  expect(requests.some(request => request.type === 'request_history')).toBe(false)
 })

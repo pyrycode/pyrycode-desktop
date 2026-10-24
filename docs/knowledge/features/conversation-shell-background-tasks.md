@@ -113,6 +113,35 @@ regression pass without exercising the damaged case. Static markup cannot prove
 those effects or clicks; see
 [test boundaries](development-verification-what-each-test-tier-proves.md#what-each-test-tier-proves).
 
+The mounted [`background-task-finished-count.spec.ts`](../../../e2e/background-task-finished-count.spec.ts)
+uses canonical linked facts and correlated opening replies. Require the actual
+version-zero catch-up and both original descriptions before publishing revisions;
+the request observer supplies no content and must see no history alias. An
+unchanged one-task pill alone cannot prove that an intermediate revision applied:
+wait for the active second task's unique patch, then the settled first task's
+distinct report refresh before checking the count after each exact-base revision.
+The refreshed first fact stays inactive. After the second task stops, observe its
+Stopped label before the ordered zero-pill assertion, then reopen through More
+actions → Background tasks and require both original descriptions, Finished · 2,
+Completed and Stopped. This catches accidental reactivation without losing settled
+membership.
+
+Retained Linux x64 evidence for [the migration plan](../../specs/architecture/2271-canonical-task-finished-count.md#validation-evidence)
+records implementation/build revision `9c2aee7d8c19a1405c7616744c659a139967003c`
+with `sourceDirty: false`. The builder's zero-retry mounted run executed/passed 2,
+failed 0, skipped 0. The [accepted verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2281#issuecomment-6389879071)
+identifies reviewed candidate `8beefe6bbb3870b5fb055eb9a7632fb97a1995ef`, whose
+clean normal build matches the builder's bundle hashes. The supplied configured
+application gate 7 executed/passed 542, failed 0, skipped 4, retries zero. Both runs contain and pass
+`a terminal status takes a listed task out of the pill count but not out of the panel`
+and `finite protected writer backlog preserves native keyboard and both event loops`.
+The verdict also confirms all 29 captured-client replays passed, canonical
+activation/captured-history coverage passed, and protected-storage readiness was
+retained. These are recorded application results; another OS is outside this
+ticket's scope. The [recorded-test contract](../../recorded-tests.md) and
+[replay inventory](../../client-replay-migration.md) retain their existing live-only
+assertions; no fresh provider, encryption or physical-effect proof is claimed.
+
 <a id="list-redraw-1635"></a>
 
 **Drawer structure and empty input.** The non-modal 360px drawer stays over the

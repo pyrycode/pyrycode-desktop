@@ -190,6 +190,16 @@ and exclusions. No fresh provider, relay, encryption or physical-effect proof is
 introduced. #2212 owns complete acceptance and #1929 broader real hosted
 integration; #2153/#2191 repairs remain separate. macOS is outside scope.
 
+The mounted `background-task-finished-count.spec.ts` uses canonical linked facts
+and correlated opening replies, with no legacy task content or history aliases.
+Its [rendered barriers and counted Linux evidence](knowledge/features/conversation-shell-background-tasks.md)
+cover active nonterminal patches, inactive settled refreshes and both retained
+descriptions/outcomes after reopening through More actions → Background tasks.
+The complete configured gate retains captured-client replay, canonical activation,
+captured history, protected storage/native prerequisites and original live-only
+assertions. No fresh provider, encryption or physical-effect proof is introduced;
+macOS is outside scope, and #2213 retains integrated feature acceptance.
+
 Encryption interoperability, handshakes, reconnect transport, real process
 liveness, native platform integration, and daemon/tool filesystem effects cannot
 be established by application-message replay. Their live checks remain required.

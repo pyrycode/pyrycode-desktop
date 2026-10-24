@@ -53,3 +53,26 @@ None. Native selection with explicit publisher composition resolves exact-wire d
 
 ## Scope check
 One independently testable receipt outcome, four acceptance criteria, approximately 240 total written lines (about 160 spec and 80 plan/evidence), zero production files/exports/state-machine reject branches and one scenario consumer. All numeric ceilings hold.
+
+## Revisions
+2026-10-24: User bubbles contain message text and timestamp in the same container. Exact `getByText` cannot establish either pending text presence or conflict absence there. Keep the original assertions and additionally use row text for the pending/absence checks, after the corresponding positive assistant barrier. No production or shared-fixture change was needed.
+
+## Verification — Linux
+Executed implementation revision `b2aa72d17ca6831636ac73e188c6506fec8336dd` on Linux x86_64, 2026-10-24. Final merge of `origin/main` (`a653c019873c03288c96e721559a0b183a693be6`) was already current. Build provenance reports `profile: normal`, `sourceDirty: false`; later changes only record evidence in this plan.
+
+| Check | Executed / passed / failed / skipped |
+| --- | --- |
+| Pre-verify, all five checks green; `threadSendStore.test.ts` | 13 / 13 / 0 / 0 |
+| Canonical publisher and item-store units | 56 / 56 / 0 / 0 |
+| Final owned Playwright spec plus configured native writer prerequisite | 2 / 2 / 0 / 0 |
+| Owned receipt scenario alone, included in the preceding run | 1 / 1 / 0 / 0 |
+
+`npm install --no-audit --no-fund`, `npm run typecheck`, `npm run typecheck:client-tests`, focused `tsc --noEmit -p /tmp/builder-2249/tsconfig.focused.json` and `npm run build` pass. The focused config includes the owned spec, which the normal client-test include list does not cover. Node checks completed before restoring SQLite with `npm run rebuild:electron` for final application execution.
+
+Final mounted command: `npx playwright test e2e/live-user-receipts.spec.ts --retries 0 --reporter=json`. Both `live user envelopes draw with daemon time and preserve one optimistic echo` and `finite protected writer backlog preserves native keyboard and both event loops` executed/passed with retry 0. No global errors, skips, flaky results or teardown failures; all three setup attachments report first-attempt opened responders and valid matching upgrades. Screenshots remain at `/tmp/builder-2249/{received,echo}.png` (1280×800).
+
+Retained development failures: `legacy-authority-red.json` records 2 executed, 1 passed, 1 failed, 0 skipped: the strengthened authoritative-text oracle detects the legacy adapter substituting local text. `canonical-receipts.json` records the same counts for the exact-text selector issue, corrected without changing production. `canonical-receipts-fixed.json` records a precommit 2/2 passing run. All have zero retries; none replaces the final committed-run evidence.
+
+Fresh evidence is under `/tmp/builder-2249/`: `final-pre-verify.log`, `pre-verify-unit-evidence/`, `final-related-units.json`, final typecheck/build/install/native logs, `final-build-provenance.json` and `final-receipts.json` with stderr log. Final Playwright report SHA-256: `59e5ea5a88348bc653e32c18ac2cd13ef61cde43b2f689985613e761e9b0af5f`; related-unit report: `b5910b0798925847a64ee774a6953f16ad43f66a089dd485bb57aa197d078313`.
+
+Complete configured application/replay/native acceptance remains pending with the dispatcher/verifier, which must identify the owned receipt scenario as executed at the matching candidate. No duplicate complete-suite run was added. No fresh provider, encryption or physical-effect proof is claimed; macOS is outside this ticket's verification scope. Final scope remains one owned spec and this plan, below the admitted estimate and all numeric ceilings.

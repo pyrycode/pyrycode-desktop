@@ -1,8 +1,10 @@
 import type { Page, Locator } from '@playwright/test'
-import { test, expect, seedConversationsFrame, SEEDED_ROW } from './fixtures/launchPairedApp'
+import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
 import { bubbleTextExactly } from './fixtures/bubbleText'
+import { createCanonicalThread } from './fixtures/canonicalThread'
 import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
-import type { QueuedItem, QueueStatePayload } from '../src/shared/wire/types'
+import type { Envelope, QueuedItem, SendMessagePayload } from '../src/shared/wire/types'
+import type { ThreadItem, ThreadUpdate } from '../src/shared/wire/thread'
 
 // The user-bubble whitespace e2e (#1057) — the liveness proof for "a message draws the way it was typed".
 // It ships WITH the fix because it is the only tier that can prove it: vitest runs the `node` environment,
@@ -30,10 +32,9 @@ import type { QueuedItem, QueueStatePayload } from '../src/shared/wire/types'
 // pixel height, no expected width, no font metric — the only lengths named are read off the live elements
 // (`line-height`, the meta row's own box and margin, the parent row's width).
 //
-// EVERY PUSHED FRAME IS ONE A REAL DAEMON PRODUCES (the standing fake-tier rule): a `conversations` seed
-// and a `queue_state` snapshot. The delivered rows are planted through a REAL composer send — the fake
-// no-ops `send_message`, so the optimistic echo renders on its own and stays (the
-// queued-backlog-interrupt.spec.ts precedent).
+// Canonical daemon facts supply query replies and live user items. Each REAL composer send first
+// remains pending; explicit acceptance tied to its public device/message identity then replaces it.
+// Geometry is measured only after acceptance. Queued facts carry their own genuine queue handles.
 //
 // SECRET HYGIENE (carried from the siblings): every assertion reads computed style, geometry, counts or
 // normalized text; the message texts, conversation_id and queued ids are non-secret display & routing
@@ -48,6 +49,8 @@ const ROUNDTRIP_TIMEOUT_MS = 15_000
 // by envelope id, so one fixed id is reused across every pushed frame.
 const REPLY_ENVELOPE_ID = 1
 const FIXED_TS = '2026-07-07T12:00:00.000Z'
+const SESSION = 'whitespace-session'
+const ROUTE = { conversation_id: SEEDED_ROW.id, epoch: 'whitespace-epoch' }
 
 // A rendered box is a fractional CSS pixel; scrollWidth/clientWidth are rounded integers, so they can
 // disagree by 1 on a box that does not actually overflow. The same tolerance absorbs subpixel drift in the
@@ -99,8 +102,8 @@ const BLANK_LINE = 3
 const INDENT = 4
 const LONG_TOKEN = 5
 
-// --- The queued fixtures. The queued row's text is DAEMON-SUPPLIED (QueuedItem.text over `queue_state`,
-// not the local echo), so the trim caveat does not apply to it and `pre-wrap` here preserves whitespace a
+// --- The queued fixtures. The queued row's text is DAEMON-SUPPLIED in canonical user items,
+// so the trim caveat does not apply to it and `pre-wrap` here preserves whitespace a
 // hostile daemon chose. The third item is that case, and it is asserted as containment rather than
 // assumed. ---
 const QUEUED_CONTROL: QueuedItem = { queued_msg_id: 1, text: CONTROL_TEXT, ts: FIXED_TS }
@@ -115,33 +118,13 @@ const QUEUED_CONTROL_INDEX = 0
 const QUEUED_LINE_BREAKS_INDEX = 1
 const QUEUED_HOSTILE_INDEX = 2
 
-/**
- * A replacement-truth queue snapshot (queueStore's #293 contract), sealed through the production codec.
- * `conversation_id` MUST be SEEDED_ROW.id: ConversationScreen selects the backlog for the ACTIVE
- * conversation, and list-open records the clicked seeded row as active, so a snapshot under any other id
- * lands in the store and is selected by nothing — zero rows, silently. (Fact 1 of
- * queued-backlog-interrupt.spec.ts's header; fact 2 — push only AFTER launch resolves, since every
- * `connected` resets the reconnecting server's backlogs, which with one server is all of them (#1138)
- * — is observed in the drive below.)
- */
-function queueStateFrame(items: readonly QueuedItem[]): Uint8Array {
-  return encodeEnvelope({
-    id: REPLY_ENVELOPE_ID,
-    type: 'queue_state',
-    ts: FIXED_TS,
-    payload: { conversation_id: SEEDED_ROW.id, queued: [...items] } satisfies QueueStatePayload
-  })
-}
+const userItem = (id: number, status: 'delivered' | 'queued', content: unknown): ThreadItem => ({
+  id, order: id * 10, rev: 1, kind: 'user_message', status, active: status === 'queued',
+  shown: true, summary: '', session: SESSION, content
+})
 
-/**
- * `send_message` is answered with NOTHING, which is what leaves the optimistic echo standing as the
- * delivered row this spec measures. Every other inbound (the auto-fired `list_conversations`) gets the
- * shared one-row seed, since a scripted buildReplyFrames overrides the fixture's default arm.
- */
-const buildReplyFrames = (inbound: Uint8Array): Uint8Array[] => {
-  const envelope = decodeEnvelope(inbound)
-  return envelope.type === 'send_message' ? [] : [seedConversationsFrame()]
-}
+const updateFrame = (update: ThreadUpdate): Uint8Array =>
+  encodeEnvelope({ id: REPLY_ENVELOPE_ID, ts: FIXED_TS, ...update })
 
 const userBubble = (page: Page, index: number): Locator =>
   page.locator('[data-thread-role="user"]').nth(index)
@@ -249,7 +232,7 @@ const readStackMetrics = (bubble: Locator): Promise<StackMetrics> =>
     }
   })
 
-/** Plant one delivered row through a real composer send, waiting for the echo before the next. */
+/** Drive one trusted composer send and observe its local echo before the caller accepts it. */
 const send = async (page: Page, text: string, expectedCount: number): Promise<void> => {
   await page.getByPlaceholder('Message…').fill(text)
   await page.getByRole('button', { name: 'Send', exact: true }).click()
@@ -261,12 +244,53 @@ const send = async (page: Page, text: string, expectedCount: number): Promise<vo
 test('a user message draws the line breaks, blank lines, space runs and indents it was typed with', async ({
   launchPairedApp
 }) => {
-  const { page, daemon } = await launchPairedApp({ buildReplyFrames })
+  const requests: Envelope[] = []
+  const sends: SendMessagePayload[] = []
+  const thread = createCanonicalThread({ conversations: [{
+    summary: { ...SEEDED_ROW, current_session_id: SESSION }, epoch: ROUTE.epoch, version: 1, items: []
+  }] })
+  const { page, daemon } = await launchPairedApp({ threadMode: 'canonical', thread,
+    helloAck: { capabilities: ['interactive', 'thread'] },
+    buildReplyFrames: inbound => {
+      const request = decodeEnvelope(inbound)
+      requests.push(request)
+      if (request.type === 'send_message') sends.push(request.payload as SendMessagePayload)
+      // Command receipt never accepts a user message; acceptance is held by the mounted drive below.
+      return []
+    }
+  })
+  await expect.poll(() => requests.filter(r => r.type === 'thread_catch_up').length).toBe(1)
+  expect(requests.find(r => r.type === 'thread_catch_up')?.payload).toMatchObject({
+    conversation_id: SEEDED_ROW.id, version: 0
+  })
+  const identity = await page.evaluate(() => window.pyry.deviceIdentity())
+  expect(identity.ok).toBe(true)
+  if (!identity.ok) throw new Error('public own-device identity unavailable')
+  let version = 1
+  const add = (item: ThreadItem): void => daemon.pushFrame(updateFrame({
+    type: 'thread_item_added', payload: { ...ROUTE, version: ++version, item }
+  }))
 
   // --- Plant the six delivered rows. Sent one at a time and awaited, so their order in the thread — and
   // therefore every index above — is the order they are declared in. ---
   for (const [index, text] of DELIVERED_TEXTS.entries()) {
     await send(page, text, index + 1)
+    await expect.poll(() => sends.length).toBe(index + 1)
+    const outbound = sends[index]
+    expect(outbound).toMatchObject({ conversation_id: SEEDED_ROW.id, text })
+    expect(outbound.message_id.length).toBeGreaterThan(0)
+    expect(new Set(sends.map(value => value.message_id)).size).toBe(sends.length)
+    await expect(page.getByText('Sending…', { exact: true })).toBeVisible()
+    await expect(userBubble(page, index)).toHaveText(bubbleTextExactly(text))
+    // This absence follows the positive local-row/command barriers. No daemon acceptance exists yet.
+    await expect(page.locator(`[data-read-row="${index + 1}"]`)).toHaveCount(0)
+    add(userItem(index + 1, 'delivered', {
+      text, ts: FIXED_TS, device_id: identity.deviceId, message_id: outbound.message_id
+    }))
+    await expect(page.locator(`[data-read-row="${index + 1}"] [data-thread-role="user"]`))
+      .toHaveText(bubbleTextExactly(text))
+    await expect(page.locator('[data-thread-role="user"]')).toHaveCount(index + 1)
+    await expect(page.getByText('Sending…', { exact: true })).toHaveCount(0)
   }
 
   const control = await readBubbleMetrics(userBubble(page, CONTROL))
@@ -360,12 +384,21 @@ test('a user message draws the line breaks, blank lines, space runs and indents 
 
   // --- AC4, the queued row: the same treatment, reached by the same one declaration (.bubble--user is
   // worn by the queued row unchanged — #294 draws it as the user's own pending send, dimmed by
-  // .message-row--queued since #1214 folded the backlog into the thread). Pushed AFTER launch resolved, so
-  // it is past the `connected` backlog reset. ---
-  daemon.pushFrame(queueStateFrame(QUEUED_ITEMS))
+  // .message-row--queued since #1214 folded the backlog into the thread). Explicit canonical facts keep
+  // queue presentation distinct from the six accepted delivered rows. ---
+  for (const [index, queued] of QUEUED_ITEMS.entries()) {
+    add(userItem(DELIVERED_TEXTS.length + index + 1, 'queued', queued))
+  }
   await expect(page.locator('[data-thread-role="queued"]')).toHaveCount(QUEUED_ITEMS.length, {
     timeout: ROUNDTRIP_TIMEOUT_MS
   })
+  await expect(page.getByRole('button', { name: 'Drop queued message', exact: true }))
+    .toHaveCount(QUEUED_ITEMS.length)
+  for (const [index, queued] of QUEUED_ITEMS.entries()) {
+    await expect.poll(() => queuedBubble(page, index).evaluate(el => el.firstChild?.textContent))
+      .toBe(queued.text)
+  }
+  await expect(page.locator('[data-thread-role="user"]')).toHaveCount(DELIVERED_TEXTS.length)
 
   const queuedControl = await readBubbleMetrics(queuedBubble(page, QUEUED_CONTROL_INDEX))
   const queuedLineBreaks = await readBubbleMetrics(queuedBubble(page, QUEUED_LINE_BREAKS_INDEX))

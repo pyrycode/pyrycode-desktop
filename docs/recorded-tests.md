@@ -156,6 +156,14 @@ and original live-only assertions remain in place. These authored facts add no
 fresh provider, encryption or physical-effect proof. The configured application
 gate supplies complete-suite evidence once; #2211 retains combined acceptance.
 
+The [canonical local-send status validation](knowledge/features/development-verification-replay-validation.md#canonical-local-send-status-validation)
+records the mounted `status-icon-local-send.spec.ts` lifecycle on explicit facts:
+identity rejection, matching acceptance, delivery, scoped thinking/idle and failure.
+Its matching complete Linux gate retains canonical activation, captured history,
+protected storage/native prerequisites and all 29 captured-client exchanges.
+Original live-only assertions remain required; this synthetic migration adds no
+fresh provider, encryption or physical-effect proof. #2211 retains combined acceptance.
+
 On initial launch and every profile relaunch, the shared replay fixture probes
 `better-sqlite3` in Electron's main process before device binding and pairing. It
 resolves the installed SQLite package root, loads the genuine addon with

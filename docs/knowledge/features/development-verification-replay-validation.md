@@ -329,6 +329,77 @@ live-only assertions. Compatibility stays available to unmigrated siblings;
 \#2153 and #2191 remain separate repairs. This fixture migration adds no fresh
 provider, real-daemon, encryption or physical-effect proof and changes no visuals.
 
+## Canonical queue-settlement validation
+
+The [PR #2260](https://github.com/pyrycode/pyrycode-desktop/pull/2260) accepted
+verifier stage `735e2dacf0c39fb3cdca0861eaa17ff89183592575b27ee5f6200eefbf28e468`
+records PASS on Linux x86_64, 2026-10-24, at
+`e404b07f9a81f734688697a9f26168b470522fac`. Executed build provenance identifies
+that clean revision and the normal profile. Both owned specs and
+`queueSettlementThread.ts` are unchanged from builder executable revision
+`6fddaa5a14ec35406d3e1bef3afc3d4d806a82b0`. These are retained results;
+documentation runs only the docs guard. The
+[plan](../../specs/architecture/2254-queue-settlement-evidence.md#builder-validation--linux-2026-10-24)
+retains commands and earlier failures; the
+[harness contract](e2e-harness.md#scripted-and-native-thread-fixtures) describes
+explicit acceptance, native conflict probes and the installed completion oracle.
+
+| Retained Linux check | Executed / passed / failed / skipped |
+| --- | --- |
+| Builder seven owned cases plus native writer prerequisite, retries zero | 8 / 8 / 0 / 0 |
+| Builder queue-turn evidence units | 20 / 20 / 0 / 0 |
+| Builder canonical-publisher units | 17 / 17 / 0 / 0 |
+| Supplied dispatcher unit gate 4, JUnit counts | 10045 / 10045 / 0 / 3 |
+| Complete configured application gate 7, `npx playwright test --reporter=json` | 542 / 542 / 0 / 4 |
+
+Unit totals use the supplied counted report; verifier prose lists 10,144,
+so that larger aggregate is not used here. Each owned case is present and passed
+once in both the focused builder run and application gate 7:
+
+- `queued own rows settle in stream order: removal-first`
+- `queued own rows settle in stream order: receipt-first`
+- `queued own rows settle in stream order: sent-now`
+- `queued own rows settle in stream order: mixed-removal-first`
+- `queued own rows settle in stream order: mixed-receipt-first`
+- `queued and delivered treatments retain the message-area design`
+- `queue evidence follows a single user row through delivery in the built app`
+
+The native prerequisite
+`finite protected writer backlog preserves native keyboard and both event loops`
+also passed in both runs. The complete gate used four actual workers, with zero
+retries or flaky outcomes. Its captured-client subset records 29 executed/passed,
+0 failed, 1 skipped; all 29 exchanges completed with zero remaining requests.
+Canonical activation, captured history and protected-storage scenarios passed.
+This matching configured run supplies complete-suite proof once. Evidence is
+retained in dispatcher `logs/verifier-gate_#2254_7.log`,
+`build/dispatcher-tests/unit-3tdj_10q/` and the builder's
+`/tmp/builder-2254/final-mounted.json`.
+
+Builder pre-verify passed five checks; `npm run typecheck`,
+`npm run typecheck:client-tests`, focused TypeScript checking including both
+specs, the helper and declarations, and final build passed. Verifier install,
+docs guard, build/typecheck and Electron native preparation passed. Its
+`--no-suite` pre-verify passed three checks and intentionally skipped two suite
+checks supplied by subsequent gates.
+
+The retained inferred-acceptance negative control executed 2 tests: 1 passed
+native prerequisite, 1 intended failure, 0 skipped/retried. Assistant activity
+caused compatibility to invent an authoritative user row before explicit
+acceptance. The earlier request-only control passed 2/2, 0 failed/skipped, proving
+that an actual thread request alone cannot distinguish the adapter. Initial
+incomplete-install and SQLite ABI prerequisite failures remain retained in the
+plan; no owned case executed in those blocked runs. None becomes passing evidence.
+
+The four application skips are two macOS badge cases, macOS window reopen and the
+existing reset-system-prompt fixme; no skip counts as passed. macOS is outside
+this Linux ticket's verification scope. The [recorded-test contract](../../recorded-tests.md)
+and [migration inventory](../../client-replay-migration.md) preserve strict replay,
+causal validation, canonical activation, captured history, protected-storage and
+native prerequisites, and all original live-only assertions. Authored facts and
+historical captures add no fresh provider/daemon, encryption or physical-effect
+proof. Compatibility remains for unmigrated siblings;
+[#2211](https://github.com/pyrycode/pyrycode-desktop/issues/2211) retains combined acceptance.
+
 ## Counted Linux compatibility validation
 
 These are retained results accepted by the

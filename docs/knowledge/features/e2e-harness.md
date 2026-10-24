@@ -186,6 +186,30 @@ publishing the later assistant processing marker. See the
 [receipt assertions](development-verification-evidence-that-cannot-pass-too-early.md#evidence-that-cannot-pass-too-early)
 and [counted Linux validation](development-verification-replay-validation.md#canonical-receipt-validation).
 
+[`queueSettlementThread.ts`](../../../e2e/fixtures/queueSettlementThread.ts)
+shares authored facts between `queued-own-settlement.spec.ts` and
+`queue-delivery-evidence.spec.ts`. The five settlement orders use the same native
+composition for repeated/equal/older full-item controls; treatment and installed
+observer coverage select canonical mode. Removal-first changes the held user
+item to `written` before delivery; receipt-first probes a later full fact with an
+older revision. Neither changes the accepted item identity or authoritative text.
+Observe the continuing assistant append before checking duplicate absence, row
+counts, connected handles, transcript order and retained expanded tool results.
+
+An actual `thread_catch_up` request alone cannot establish that compatibility
+translation was bypassed: the scripted adapter also receives that request.
+Hold explicit user acceptance while assistant content renders, then require zero
+authoritative user rows before publishing the matching device/message fact.
+This detects the adapter's inferred acceptance from assistant activity.
+
+The mounted queue observer subscribes through `createQueueTurnEvidence` and stops
+in `finally`. Delivery removes the queued identity while preserving the connected
+row; its completion snapshot must still be false. Require two ordered turns,
+each with its own marker and exactly one normal `turn_end`. `SECOND_` plus `DONE`
+must accumulate into the second marker, but even that full text cannot complete
+the oracle before its terminal fact. Keep the shared real/replay oracle intact.
+See [counted Linux validation](development-verification-replay-validation.md#canonical-queue-settlement-validation).
+
 Compatibility remains available to unmigrated siblings; eventual fixture removal
 belongs to [#2246](https://github.com/pyrycode/pyrycode-desktop/issues/2246).
 The queue migration is one slice of

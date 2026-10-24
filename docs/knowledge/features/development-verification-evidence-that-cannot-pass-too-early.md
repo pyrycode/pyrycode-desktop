@@ -50,7 +50,7 @@ so acceptance cannot leave a local duplicate. Complete the assistant with an
 exact-base revision and require exact whole-bubble text plus cursor removal.
 Keep the wrong-conversation send guard and the default arm's lack of assistant
 facts: neither a misrouted send nor a command echo may satisfy the exact reply
-oracle. See the [counted Linux validation](development-verification-replay-validation.md#canonical-send-and-stream-validation).
+oracle. See the [counted Linux validation](development-verification-replay-validation-canonical-publisher-verification.md#canonical-send-and-stream-validation).
 
 The reset regression in
 [`composer-context-claude-reading.spec.ts`](../../../e2e/composer-context-claude-reading.spec.ts),
@@ -99,20 +99,31 @@ pass while a conflicting row is visible, and exact presence can miss a pending
 row. Inspect `.message-row--user` with `hasText`/`toContainText` after the positive
 barrier. Keep the original assertions as well. The
 [native fixture exception](e2e-harness.md#scripted-and-native-thread-fixtures)
-preserves the raw controls; the [validation record](development-verification-replay-validation.md#canonical-receipt-validation)
+preserves the raw controls; the [validation record](development-verification-replay-validation-canonical-publisher-verification.md#canonical-receipt-validation)
 retains the legacy adapter's failed authoritative-text oracle.
 
-Visible assistant text can also precede `turn_end` processing. A whole-row replay
+Visible assistant text can precede canonical completion. A whole-row replay
 snapshot taken then includes the streaming cursor, so normal settlement can look
 like a replay mutation. In
 [`disconnected-message-delivery.spec.ts`](../../../e2e/disconnected-message-delivery.spec.ts),
-observe each answer with its cursor before pushing its `turn_end`, then wait for
-that answer's cursor to disappear before reading the baseline. Requiring the
-cursor to appear first prevents an absence assertion from passing before the delta
-is rendered. Keep the later replay-processing barrier before comparing rows;
+observe each authored answer with `status: 'running', active: true` and a visible
+cursor before publishing an exact-base revision with `status: 'finished', active: false`.
+Then wait for that answer's cursor to disappear before reading the baseline.
+The presentation layer rejects unsupported statuses such as `streaming`, even
+when the retained fact contains text; positive text/cursor barriers expose that
+fixture error. Requiring the cursor first also prevents absence from passing
+before the active item renders.
+
+Publish accepted user facts with the observed outbound `message_id` and public
+device identity; neither the intercepted send nor subsequent assistant activity
+establishes acceptance. Advance the same queued item to delivered, then redeliver
+that accepted item through a higher revision. Keep the later rendered assistant
+replay barrier before comparing unchanged rows and one user row per message;
 settlement and replay processing are separate observations. The
-[delivery verification](daemon-connection-disconnected-delivery.md#delivery-verification) records
-the controlled reproduction and counted automatic, explicit and terminal evidence.
+[canonical offline validation](development-verification-replay-validation-canonical-queue-settlement-validation.md#canonical-offline-held-delivery-validation)
+records the current nine-scenario coverage and Linux evidence; the
+[delivery verification](daemon-connection-disconnected-delivery.md#delivery-verification)
+retains the earlier controlled reproduction.
 
 Bulk fixture feeds need a positive commit barrier too. Send completion and animation
 frames can finish while replies are still reaching the renderer; a tail-only deadline
@@ -363,7 +374,7 @@ distinct synthetic sentinels, plain-only formats, pointer/keyboard activation,
 focus and geometry assertions in the serial `clipboard` project behind
 `native-writer`. An optimistic user bubble or stale matching clipboard could
 otherwise satisfy a copy assertion without proving the intended source. See
-[counted Linux clipboard evidence](development-verification-replay-validation.md#canonical-clipboard-validation).
+[counted Linux clipboard evidence](development-verification-replay-validation-canonical-message-lifecycle-diagnostics-validation.md#canonical-clipboard-validation).
 
 ## Question-answer interpretation and freshness
 

@@ -84,7 +84,7 @@ The supplied dispatcher unit gate report records 10,045 executed/passed,
 10,144 prose total. The matching configured gate supplies complete-suite proof
 once; no duplicate run was ordered. Exact log/hash provenance and the completed
 documentation handoff are in the
-[canonical send/stream validation record](../../knowledge/features/development-verification-replay-validation.md#canonical-send-and-stream-validation).
+[canonical send/stream validation record](../../knowledge/features/development-verification-replay-validation-canonical-publisher-verification.md#canonical-send-and-stream-validation).
 Existing captured history, protected storage, native prerequisites and live-only
 assertions/exclusions remain in place. These are retained results; no fresh
 provider, real-daemon, encryption or physical-effect proof is claimed. macOS is

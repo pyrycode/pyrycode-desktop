@@ -94,7 +94,7 @@ None.
 Accepted verifier stage
 `858d96ba00a7b4c9a6506b0e82ac0c2fbfc6d149095bcd6cc7c6f67f347e98b1`
 records PASS for PR #2266 at `cd350ca7ca914295943e422557773d02d4357310`
-on Linux x64. The [counted verification record](../../knowledge/features/development-verification-replay-validation.md#canonical-clipboard-validation)
+on Linux x64. The [counted verification record](../../knowledge/features/development-verification-replay-validation-canonical-message-lifecycle-diagnostics-validation.md#canonical-clipboard-validation)
 retains the matching configured gate: 542 executed/passed, 0 failed, 4 skipped,
 both named owned cases and the native prerequisite present and passed, retries
 zero. The supplied unit-gate counts are 10045 executed/passed, 0 failed, 3 skipped.

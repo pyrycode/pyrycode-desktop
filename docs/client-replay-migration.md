@@ -53,7 +53,7 @@ Unrelated storage and fake-suite work remains under its existing owners.
 The three mounted cases in `queued-backlog-interrupt.spec.ts` and
 `queued-send-now.spec.ts` now use authored canonical facts; see their
 [fixture contract](knowledge/features/e2e-harness.md#scripted-and-native-thread-fixtures)
-and [counted Linux evidence](knowledge/features/development-verification-replay-validation.md#canonical-queue-action-validation).
+and [counted Linux evidence](knowledge/features/development-verification-replay-validation-canonical-publisher-verification.md#canonical-queue-action-validation).
 Their acceptance, queue revisions and scoped interrupt controls are synthetic
 client coverage. They leave canonical activation, captured-history and
 protected-storage coverage, native prerequisites and every original live-only
@@ -61,7 +61,7 @@ assertion in place. The live queue and interrupt scenarios in the inventory
 continue to own real child consumption/stopping and filesystem effects.
 
 The mounted `send-and-stream.spec.ts` also uses authored canonical facts. Its
-[counted Linux evidence](knowledge/features/development-verification-replay-validation.md#canonical-send-and-stream-validation)
+[counted Linux evidence](knowledge/features/development-verification-replay-validation-canonical-publisher-verification.md#canonical-send-and-stream-validation)
 covers explicit own-device/message acceptance and exact active/completed replies,
 alongside the complete configured application/replay gate. This synthetic client
 coverage preserves captured history, protected storage, native prerequisites and
@@ -69,7 +69,7 @@ the original live-only assertions; it adds no fresh provider or physical-effect 
 
 The mounted `live-user-receipts.spec.ts` uses canonical facts and correlated replies
 with the [native delivery exception](knowledge/features/e2e-harness.md#scripted-and-native-thread-fixtures)
-for raw duplicate/conflicting full items. Its [counted Linux evidence](knowledge/features/development-verification-replay-validation.md#canonical-receipt-validation)
+for raw duplicate/conflicting full items. Its [counted Linux evidence](knowledge/features/development-verification-replay-validation-canonical-publisher-verification.md#canonical-receipt-validation)
 proves device/message acceptance, authoritative text/time and one-row identity.
 The complete configured gate retains captured history, protected storage and native
 prerequisites. Live-only assertions are unchanged; #2211 owns combined acceptance.
@@ -78,7 +78,7 @@ The mounted `assistant-parent-text.spec.ts`, `assistant-whitespace.spec.ts` and
 `progressive-markdown.spec.ts` use authored canonical items, revisioned appends and
 explicit completion, preserving their attribution, layout and mounted reuse
 assertions and the deliberately active tail. Their
-[counted Linux evidence](knowledge/features/development-verification-replay-validation.md#canonical-streamed-text-validation)
+[counted Linux evidence](knowledge/features/development-verification-replay-validation-canonical-publisher-verification.md#canonical-streamed-text-validation)
 records all 20 owned cases and the matching complete configured gate passing.
 Captured-client replay, canonical activation, captured history, protected storage,
 native prerequisites and every original live-only assertion remain in place.
@@ -92,7 +92,7 @@ the treatment and installed-observer cases select canonical mode. The observer
 requires two ordered marker-bearing normal completions, including a split second
 marker; queue disappearance alone stays incomplete. Their
 [fixture contract](knowledge/features/e2e-harness.md#scripted-and-native-thread-fixtures)
-and [counted Linux evidence](knowledge/features/development-verification-replay-validation.md#canonical-queue-settlement-validation)
+and [counted Linux evidence](knowledge/features/development-verification-replay-validation-canonical-queue-settlement-validation.md#canonical-queue-settlement-validation)
 retain canonical activation, captured history, protected-storage/native coverage,
 strict replay and causal validation. Every original live-only assertion remains;
 this migration adds no fresh provider, encryption or physical-effect proof.
@@ -100,7 +100,7 @@ Compatibility remains for unmigrated siblings; #2211 owns combined acceptance.
 
 The mounted `status-icon-local-send.spec.ts` selects canonical mode with explicit
 device/message acceptance and lifecycle revisions. Its
-[counted Linux evidence](knowledge/features/development-verification-replay-validation.md#canonical-local-send-status-validation)
+[counted Linux evidence](knowledge/features/development-verification-replay-validation-canonical-queue-settlement-validation.md#canonical-local-send-status-validation)
 retains the ordered local feedback/icon controls and complete configured gate,
 including canonical activation, captured history and protected-storage/native
 coverage. Every original live-only assertion remains; authored facts add no fresh
@@ -111,7 +111,7 @@ and #2153/#2191 repairs separate.
 The mounted `message-copy.spec.ts` and `code-block-copy.spec.ts` use authored
 canonical facts and correlated queries; message copy explicitly accepts the
 submitted text with its actual device/message identity before settlement.
-Their [counted Linux evidence](knowledge/features/development-verification-replay-validation.md#canonical-clipboard-validation)
+Their [counted Linux evidence](knowledge/features/development-verification-replay-validation-canonical-message-lifecycle-diagnostics-validation.md#canonical-clipboard-validation)
 retains real OS clipboard writes/readback through Electron, keyboard/focus and
 geometry assertions in the serial `clipboard` project with `native-writer`.
 Replay cannot replace those interactions. Captured-client replay, canonical
@@ -124,7 +124,7 @@ including opening, queued users and standalone attachment offers. Their
 [fixture barriers](knowledge/features/conversation-shell-message-bubble-testing.md#testing)
 require supplied device/message identity, exact attached-reply completion and
 independent active partial text before trusted Copy and exact OS clipboard
-readback. The [counted Linux evidence](knowledge/features/development-verification-replay-validation.md#canonical-side-action-validation)
+readback. The [counted Linux evidence](knowledge/features/development-verification-replay-validation-canonical-message-lifecycle-diagnostics-validation.md#canonical-side-action-validation)
 retains layout/metadata/focus checks, queue handles, attachment identity and
 `stream-copy-readiness` in the serial clipboard/native-writer configuration.
 Captured-client replay, canonical activation, captured history, protected storage,
@@ -135,7 +135,7 @@ No fresh provider, encryption or additional physical-effect proof is introduced;
 The mounted `message-lifecycle-diagnostics.spec.ts` uses explicit canonical facts
 and correlated replies in native mode to deliver repeated full acceptance items.
 Its [fixture contract](knowledge/features/e2e-harness.md#scripted-and-native-thread-fixtures)
-and [counted Linux evidence](knowledge/features/development-verification-replay-validation.md#canonical-message-lifecycle-diagnostics-validation)
+and [counted Linux evidence](knowledge/features/development-verification-replay-validation-canonical-message-lifecycle-diagnostics-validation.md#canonical-message-lifecycle-diagnostics-validation)
 retain exact lifecycle counts, authoritative queue identity/handle, local Drop,
 route refusal and secret exclusion. The complete configured gate retains
 captured-client replay, canonical activation, captured history, protected storage

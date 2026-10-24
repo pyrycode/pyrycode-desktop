@@ -50,6 +50,16 @@ Unrelated storage and fake-suite work remains under its existing owners.
 
 ## Exclusion rules
 
+The three mounted cases in `queued-backlog-interrupt.spec.ts` and
+`queued-send-now.spec.ts` now use authored canonical facts; see their
+[fixture contract](knowledge/features/e2e-harness.md#scripted-and-native-thread-fixtures)
+and [counted Linux evidence](knowledge/features/development-verification-replay-validation.md#canonical-queue-action-validation).
+Their acceptance, queue revisions and scoped interrupt controls are synthetic
+client coverage. They leave canonical activation, captured-history and
+protected-storage coverage, native prerequisites and every original live-only
+assertion in place. The live queue and interrupt scenarios in the inventory
+continue to own real child consumption/stopping and filesystem effects.
+
 Encryption interoperability, handshakes, reconnect transport, real process
 liveness, native platform integration, and daemon/tool filesystem effects cannot
 be established by application-message replay. Their live checks remain required.

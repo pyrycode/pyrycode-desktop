@@ -3,14 +3,10 @@ import type { Page } from '@playwright/test'
 import { capturePairedApp } from './fixtures/capturePairedApp'
 import { MARKDOWN_OPEN_CHANNEL } from '../src/shared/ipc/markdownOpen'
 import { MARKDOWN_SAVE_CHANNEL } from '../src/shared/ipc/markdownSave'
-import { test, expect, seedConversationsFrame, SEEDED_ROW } from './fixtures/launchPairedApp'
-import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
-import type {
-  AssistantDeltaPayload,
-  AttachmentChunkPayload,
-  SendMessagePayload,
-  TurnEndPayload
-} from '../src/shared/wire/types'
+import { test, expect } from './fixtures/launchPairedApp'
+import { createReaderThread } from './fixtures/readerThread'
+import { encodeEnvelope } from '../src/main/transport/codec'
+import type { AttachmentChunkPayload, ReadWorkspaceFilePayload } from '../src/shared/wire/types'
 
 // #1630 — the markdown reader's menu, end to end: opening it, its order and disabled rows while the first
 // fetch is in flight, closing on Escape / outside click / a choice, each copy flavour read back from the
@@ -58,11 +54,12 @@ const plainText = (): string =>
     'End of note.'
   ].join('\n')
 
-function readReply(requestId: number): Uint8Array[] {
+function readReply(requestId: number, ask: ReadWorkspaceFilePayload): Uint8Array[] {
   if (serve === 'hold') return []
   if (serve === 'ok') version += 1
   const bytes = Buffer.from(noteText(), 'utf8')
   const payload: AttachmentChunkPayload = {
+    conversation_id: ask.conversation_id,
     attachment_id: '6b7c8d9e-0f1a-4b2c-8d3e-6f7a8b9c0d1e',
     index: 0,
     total_chunks: 1,
@@ -77,36 +74,13 @@ function readReply(requestId: number): Uint8Array[] {
   ]
 }
 
-const buildReplyFrames = (inbound: Uint8Array): Uint8Array[] => {
-  const envelope = decodeEnvelope(inbound)
-  switch (envelope.type) {
-    case 'read_workspace_file':
-      return readReply(envelope.id)
-    case 'send_message': {
-      const { conversation_id } = envelope.payload as SendMessagePayload
-      if (conversation_id !== SEEDED_ROW.id) return []
-      return [
-        encodeEnvelope({
-          id: 99,
-          type: 'assistant_delta',
-          ts: FIXED_TS,
-          payload: { conversation_id, turn_id: 'turn-1', seq: 0, text: REPLY } satisfies AssistantDeltaPayload
-        }),
-        encodeEnvelope({
-          id: 100,
-          type: 'turn_end',
-          ts: FIXED_TS,
-          payload: { conversation_id, turn_id: 'turn-1', stop_reason: 'end_turn' } satisfies TurnEndPayload
-        })
-      ]
-    }
-    default:
-      return [seedConversationsFrame()]
-  }
-}
-
 test('the reader menu copies the note three ways and refreshes it (#1630)', async ({ launchPairedApp }) => {
-  const { page, app } = await launchPairedApp({ buildReplyFrames })
+  serve = 'hold'
+  version = 0
+  longNote = false
+  const fixture = createReaderThread(REPLY, readReply)
+  const { page, app } = await launchPairedApp(fixture.options)
+  await fixture.ready(page)
   const readText = (): Promise<string> => app.evaluate(({ clipboard }) => clipboard.readText())
   const readHtml = (): Promise<string> => app.evaluate(({ clipboard }) => clipboard.readHTML())
   await app.evaluate(({ clipboard }) => clipboard.writeText('sentinel-before-any-copy'))
@@ -260,19 +234,14 @@ for (const size of [{ width: 1280, height: 800 }, { width: 800, height: 600 }]) 
     version = 0
     longNote = true
     const readRequests: { id: number; serve: string; version: number }[] = []
-    const { page, app } = await launchPairedApp({ buildReplyFrames: bytes => {
-      const env = decodeEnvelope(bytes)
-      if (env.type === 'read_workspace_file') readRequests.push({ id: env.id, serve, version })
-      if (env.type !== 'send_message') return buildReplyFrames(bytes)
-      const history = Array.from({ length: 12 }, (_, i) => [
-        encodeEnvelope({ id: 200 + i, type: 'assistant_delta', ts: FIXED_TS,
-          payload: { conversation_id: SEEDED_ROW.id, turn_id: `history-${i}`, seq: 0,
-            text: `Synthetic history ${i}.\n\nA second paragraph preserves a meaningful thread scroll position.` } }),
-        encodeEnvelope({ id: 300 + i, type: 'turn_end', ts: FIXED_TS,
-          payload: { conversation_id: SEEDED_ROW.id, turn_id: `history-${i}`, stop_reason: 'end_turn' } })
-      ]).flat()
-      return [...history, ...buildReplyFrames(bytes)]
-    } })
+    const history = Array.from({ length: 12 }, (_, i) =>
+      `Synthetic history ${i}.\n\nA second paragraph preserves a meaningful thread scroll position.`)
+    const fixture = createReaderThread(REPLY, (id, ask) => {
+      readRequests.push({ id, serve, version })
+      return readReply(id, ask)
+    }, history)
+    const { page, app } = await launchPairedApp(fixture.options)
+    await fixture.ready(page)
     const phases: unknown[] = []
     await page.evaluate(() => {
       const samples: unknown[] = []

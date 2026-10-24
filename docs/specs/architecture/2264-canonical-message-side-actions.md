@@ -74,6 +74,6 @@ system-prompt Reset fixme. None counts as passed.
 Dispatcher unit gate 4 records 10,045 executed/passed, 0 failed, 3 skipped in the
 supplied JUnit report; this counted total takes precedence over the verdict prose's
 10,144. Typechecks/build and native preparation passed. The
-[durable evidence record](../../knowledge/features/development-verification-replay-validation.md#canonical-side-action-validation)
+[durable evidence record](../../knowledge/features/development-verification-replay-validation-canonical-message-lifecycle-diagnostics-validation.md#canonical-side-action-validation)
 retains the full counts and barriers. This supersedes the earlier pending-gate
 handoff without rerunning tests. Combined family acceptance remains with #2212.

@@ -115,27 +115,27 @@ its catch-up cursor after a profile restart.
 
 Finish the Node unit gate before Electron ABI preparation, then keep native
 rebuilds out of mounted execution. The
-[canonical queue-action evidence](knowledge/features/development-verification-replay-validation.md#canonical-queue-action-validation)
+[canonical queue-action evidence](knowledge/features/development-verification-replay-validation-canonical-publisher-verification.md#canonical-queue-action-validation)
 retains an overlapping-rebuild prerequisite failure and the later sequential
 pass. Those authored cases exercise canonical activation and queue controls;
 captured history, protected storage, native prerequisites and the original
 live-only assertions retain their existing proof requirements.
 
-The [canonical send/stream validation](knowledge/features/development-verification-replay-validation.md#canonical-send-and-stream-validation)
+The [canonical send/stream validation](knowledge/features/development-verification-replay-validation-canonical-publisher-verification.md#canonical-send-and-stream-validation)
 records the authored pending-to-accepted user row and active/completed reply in
 `send-and-stream.spec.ts`. Its matching complete Linux application gate includes
 all 29 captured-client cases and the native writer prerequisite; that gate
 supplies complete-suite proof once. Authored fake facts add no fresh provider,
 encryption or physical-effect proof, and preserve the replay/live boundaries above.
 
-The [canonical receipt validation](knowledge/features/development-verification-replay-validation.md#canonical-receipt-validation)
+The [canonical receipt validation](knowledge/features/development-verification-replay-validation-canonical-publisher-verification.md#canonical-receipt-validation)
 records native exact-wire duplicate/conflict delivery with explicit canonical
 publisher replies in `live-user-receipts.spec.ts`. Its matching complete Linux
 gate includes the owned receipt case, all 29 captured-client scenarios and native
 prerequisites. This synthetic acceptance/text/time proof retains captured-history,
 protected-storage and live-only coverage; combined acceptance remains with #2211.
 
-The [canonical streamed-text validation](knowledge/features/development-verification-replay-validation.md#canonical-streamed-text-validation)
+The [canonical streamed-text validation](knowledge/features/development-verification-replay-validation-canonical-publisher-verification.md#canonical-streamed-text-validation)
 records all 20 attribution, whitespace and progressive-Markdown cases in
 `assistant-parent-text.spec.ts`, `assistant-whitespace.spec.ts` and
 `progressive-markdown.spec.ts` passing on authored facts with explicit completion
@@ -145,7 +145,7 @@ captured-client scenarios. Original live-only assertions and exclusions remain;
 these synthetic cases add no fresh provider, encryption or physical-effect proof.
 Compatibility remains for unmigrated siblings; #2153 and #2191 are separate repairs.
 
-The [canonical queue-settlement validation](knowledge/features/development-verification-replay-validation.md#canonical-queue-settlement-validation)
+The [canonical queue-settlement validation](knowledge/features/development-verification-replay-validation-canonical-queue-settlement-validation.md#canonical-queue-settlement-validation)
 records all seven cases in `queued-own-settlement.spec.ts` and
 `queue-delivery-evidence.spec.ts`: five settlement orders, queued/delivered
 treatment and the installed observer. Explicit device/message acceptance and
@@ -156,7 +156,7 @@ and original live-only assertions remain in place. These authored facts add no
 fresh provider, encryption or physical-effect proof. The configured application
 gate supplies complete-suite evidence once; #2211 retains combined acceptance.
 
-The [canonical local-send status validation](knowledge/features/development-verification-replay-validation.md#canonical-local-send-status-validation)
+The [canonical local-send status validation](knowledge/features/development-verification-replay-validation-canonical-queue-settlement-validation.md#canonical-local-send-status-validation)
 records the mounted `status-icon-local-send.spec.ts` lifecycle on explicit facts:
 identity rejection, matching acceptance, delivery, scoped thinking/idle and failure.
 Its matching complete Linux gate retains canonical activation, captured history,
@@ -164,7 +164,7 @@ protected storage/native prerequisites and all 29 captured-client exchanges.
 Original live-only assertions remain required; this synthetic migration adds no
 fresh provider, encryption or physical-effect proof. #2211 retains combined acceptance.
 
-The [canonical message lifecycle diagnostics validation](knowledge/features/development-verification-replay-validation.md#canonical-message-lifecycle-diagnostics-validation)
+The [canonical message lifecycle diagnostics validation](knowledge/features/development-verification-replay-validation-canonical-message-lifecycle-diagnostics-validation.md#canonical-message-lifecycle-diagnostics-validation)
 records native duplicate full-item delivery, one acknowledgment, the real local
 Drop request, route refusal and content-free logs in `message-lifecycle-diagnostics.spec.ts`.
 Its matching complete Linux gate passes the owned case and native prerequisite,
@@ -173,7 +173,7 @@ protected-storage coverage. Original live-only assertions remain required;
 authored facts add no fresh provider, encryption or physical-effect proof.
 Combined feature acceptance remains with #2211.
 
-The [canonical clipboard validation](knowledge/features/development-verification-replay-validation.md#canonical-clipboard-validation)
+The [canonical clipboard validation](knowledge/features/development-verification-replay-validation-canonical-message-lifecycle-diagnostics-validation.md#canonical-clipboard-validation)
 records `message-copy.spec.ts` and `code-block-copy.spec.ts` passing on authored
 facts with explicit message acceptance. Their real Electron OS clipboard
 writes/readback remain in the serial `clipboard` project with its `native-writer`
@@ -182,7 +182,7 @@ matching complete Linux gate retains captured-client replay, canonical activatio
 captured history, protected storage and original live-only assertions. No fresh
 provider, encryption or additional physical-effect proof is introduced.
 
-The [canonical side-action validation](knowledge/features/development-verification-replay-validation.md#canonical-side-action-validation)
+The [canonical side-action validation](knowledge/features/development-verification-replay-validation-canonical-message-lifecycle-diagnostics-validation.md#canonical-side-action-validation)
 records all three `message-side-actions.spec.ts` cases passing on authored facts
 and correlated opening/query replies. Exact supplied send identities and the
 finished attached reply precede the independent partial stream. Trusted Copy,

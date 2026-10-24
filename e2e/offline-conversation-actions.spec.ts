@@ -2,29 +2,36 @@ import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
 import { test, expect, FIRST_SERVER_ID, SEEDED_ROW, SECOND_SEEDED_ROW, type PairedApp } from './fixtures/launchPairedApp'
 import { DAEMON_EVENT_CHANNEL } from '../src/shared/ipc/events'
 import { ATTACHMENT_UPLOAD_EVENT_CHANNEL } from '../src/shared/ipc/attachmentUpload'
-import { conversationStateFake } from './fixtures/conversationStateFake'
+import { createCanonicalThread } from './fixtures/canonicalThread'
 import type { RendererCommand } from '../src/shared/ipc/commands'
+import type { ConversationSummary, SendMessagePayload } from '../src/shared/wire/types'
+import type { ThreadItem, ThreadUpdate } from '../src/shared/wire/thread'
+
+const SESSION = 'session'
+const EPOCH = 'offline-actions-epoch'
+const canonical = (row: ConversationSummary = SEEDED_ROW) => ({ threadMode: 'canonical' as const,
+  thread: createCanonicalThread({ conversations: [{ summary: { ...row, current_session_id: SESSION },
+    epoch: EPOCH, version: 1, items: [] }] }), buildReplyFrames: (bytes: Uint8Array) => {
+      expect(decodeEnvelope(bytes).type).not.toBe('request_history'); return []
+    } })
+const item = (id: number, kind: 'user_message' | 'assistant_message',
+  status: 'running' | 'queued' | 'delivered', content: unknown): ThreadItem => ({
+  id, order: id, rev: 1, kind, status, active: status === 'running' || status === 'queued',
+  shown: true, summary: '', session: SESSION, content
+})
+const frame = (update: ThreadUpdate) => encodeEnvelope({ id: 2, ts: '2026-10-15T00:00:00Z', ...update })
 
 async function settle(app: PairedApp) {
   await app.page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
 }
-async function event(app: PairedApp, value: object, channel = DAEMON_EVENT_CHANNEL) {
+async function event(app: PairedApp, value: object, channel: string = DAEMON_EVENT_CHANNEL) {
   const content = value as Record<string, any>
-  if (content.type === 'assistantDelta' || content.type === 'queueState') {
-    const daemon = app.servers.find(server => server.serverId === content.serverId)?.daemon
-    if (!daemon) throw new Error('Missing fixture host')
-    daemon.pushFrame(encodeEnvelope({ id: 1, ts: '2026-10-15T00:00:00Z',
-      type: content.type === 'assistantDelta' ? 'assistant_delta' : 'queue_state', payload: {
-        conversation_id: content.conversationId, ...(content.type === 'assistantDelta'
-          ? { turn_id: content.turnId, seq: content.seq, text: content.text } : { queued: content.queued }) } }))
-  } else {
-    const delivered = { envelopeSessionId: 'session', ...content,
-      ...(Array.isArray(content.conversations) ? { conversations: content.conversations.map(row =>
-        ({ current_session_id: 'session', ...row })) } : {}) }
-    await app.app.evaluate(({ BrowserWindow }, { channel, value }) => {
-      BrowserWindow.getAllWindows()[0].webContents.send(channel, value)
-    }, { channel, value: delivered })
-  }
+  const delivered = { envelopeSessionId: SESSION, ...content,
+    ...(Array.isArray(content.conversations) ? { conversations: content.conversations.map(row =>
+      ({ current_session_id: SESSION, ...row })) } : {}) }
+  await app.app.evaluate(({ BrowserWindow }, { channel, value }) => {
+    BrowserWindow.getAllWindows()[0].webContents.send(channel, value)
+  }, { channel, value: delivered })
   await settle(app)
 }
 async function connection(app: PairedApp, type: string) {
@@ -37,6 +44,7 @@ async function observe(app: PairedApp) {
   await app.page.evaluate(() => { (window as any).__offlineActions = { commands: [], attachments: [] } })
   for (const [method, slot] of [['sendCommand', 'commands'], ['requestAttachment', 'attachments']]) {
     const { result } = await cdp.send('Runtime.evaluate', { expression: `window.pyry.${method}` })
+    if (!result.objectId) throw new Error('Missing command observation target')
     // The app badge's main-local count is not daemon-bound, so it is not recorded.
     await cdp.send('Debugger.setBreakpointOnFunctionCall', { objectId: result.objectId,
       condition: `(arguments[0]?.type !== 'setBadgeCount' && globalThis.__offlineActions.${slot}.push(arguments[0]), false)` })
@@ -49,14 +57,14 @@ async function info(app: PairedApp) {
 }
 
 test('held reading, draft and queue survive offline actions, reopening and copying; another host and reconnect work', async ({ launchPairedApp }) => {
-  let sent: Record<string, any> = {}
-  const stateful = conversationStateFake({ conversations: [SEEDED_ROW] })
-  const app = await launchPairedApp({ buildReplyFrames: bytes => {
+  let sent: Partial<SendMessagePayload> = {}
+  const app = await launchPairedApp({ ...canonical(), buildReplyFrames: bytes => {
     const request = decodeEnvelope(bytes)
-    if (request.type === 'send_message') sent = request.payload
-    return stateful(bytes)
+    expect(request.type).not.toBe('request_history')
+    if (request.type === 'send_message') sent = request.payload as SendMessagePayload
+    return []
   } },
-    { secondServer: { buildReplyFrames: conversationStateFake({ conversations: [SECOND_SEEDED_ROW] }) } })
+    { secondServer: canonical(SECOND_SEEDED_ROW) })
   const { page } = app
   await page.setViewportSize({ width: 1280, height: 800 })
   await page.getByRole('button', { name: SEEDED_ROW.name!, exact: true }).click()
@@ -65,12 +73,21 @@ test('held reading, draft and queue survive offline actions, reopening and copyi
   await page.getByPlaceholder('Message…').fill('Held attachment message')
   await page.getByRole('button', { name: 'Send', exact: true }).click()
   await expect(page.locator('.bubble__file')).toBeEnabled()
-  app.daemon.pushFrame(encodeEnvelope({ id: 2, type: 'message', ts: '2026-10-15T00:00:00Z', payload: { ...sent, role: 'user',
-    attachments: [{ attachment_id: 'held-image', filename: 'held.png' }, { attachment_id: 'held-file', filename: 'held.pdf' }] } }))
-  await event(app, { type: 'assistantDelta', serverId: FIRST_SERVER_ID, conversationId: SEEDED_ROW.id,
-    turnId: 'held-turn', seq: 0, text: 'Held reply\n'.repeat(100) })
-  await event(app, { type: 'queueState', serverId: FIRST_SERVER_ID, conversationId: SEEDED_ROW.id,
-    queued: [{ queued_msg_id: 4, text: 'Held queued work', ts: '2026-09-13T00:00:00Z' }] })
+  await expect.poll(() => sent.message_id).toEqual(expect.any(String))
+  const identity = await page.evaluate(() => window.pyry.deviceIdentity())
+  if (!identity.ok) throw new Error('authenticated device identity unavailable')
+  const route = { conversation_id: SEEDED_ROW.id, epoch: EPOCH }
+  app.daemon.pushFrame(frame({ type: 'thread_item_added', payload: { ...route, version: 2,
+    item: item(10, 'user_message', 'delivered', { text: sent.text, message_id: sent.message_id,
+      device_id: identity.deviceId, attachments: [
+        { attachment_id: 'held-image', filename: 'held.png' }, { attachment_id: 'held-file', filename: 'held.pdf' }] }) } }))
+  app.daemon.pushFrame(frame({ type: 'thread_item_added', payload: { ...route, version: 3,
+    item: item(20, 'assistant_message', 'running', { text: 'Held reply\n'.repeat(100) }) } }))
+  app.daemon.pushFrame(frame({ type: 'thread_item_added', payload: { ...route, version: 4,
+    item: item(30, 'user_message', 'queued', { queued_msg_id: 4, text: 'Held queued work',
+      ts: '2026-09-13T00:00:00Z', device_id: 'another-device', message_id: 'held-queued' }) } }))
+  await expect(page.locator('[data-thread-role="assistant"]')).toContainText('Held reply')
+  await expect(page.locator('[data-thread-role="queued"]')).toHaveCount(1)
   await event(app, { type: 'turnState', serverId: FIRST_SERVER_ID, conversationId: SEEDED_ROW.id, state: 'thinking' })
   await page.getByPlaceholder('Message…').fill('Retained local draft')
   await info(app)
@@ -113,7 +130,7 @@ test('held reading, draft and queue survive offline actions, reopening and copyi
   await expect(page.locator('.bubble__file')).toBeDisabled()
   await page.locator('.bubble__file').dispatchEvent('click')
   await expect(page.locator('.composer__actions')).toHaveCount(0)
-  await page.screenshot({ path: '/tmp/builder-1382-offline.png', animations: 'disabled' })
+  await page.screenshot({ path: '/tmp/builder-2222/offline.png', animations: 'disabled' })
   await settle(app)
   expect(await read()).toEqual({ commands: [], attachments: [] })
 
@@ -143,7 +160,7 @@ test('held reading, draft and queue survive offline actions, reopening and copyi
 })
 
 test('pre-opened action menu and missing, connecting, failed or ambiguous ownership cannot submit', async ({ launchPairedApp }) => {
-  const app = await launchPairedApp({ buildReplyFrames: conversationStateFake() })
+  const app = await launchPairedApp(canonical())
   const { page } = app
   const read = await observe(app)
   await page.locator('.composer__actions').click()
@@ -173,11 +190,14 @@ test('pre-opened action menu and missing, connecting, failed or ambiguous owners
 
 
 test('offline opening does not consume first-history eligibility', async ({ launchPairedApp }) => {
-  const app = await launchPairedApp({ buildReplyFrames: conversationStateFake() })
+  const options = canonical()
+  const app = await launchPairedApp(options)
   const held = { ...SEEDED_ROW, id: 'not-yet-opened', name: 'Held unread chat' }
+  options.thread.setConversation({ summary: { ...held, current_session_id: SESSION }, epoch: EPOCH,
+    version: 1, items: [] })
   await event(app, { type: 'conversationsReceived', serverId: FIRST_SERVER_ID, conversations: [SEEDED_ROW, held] })
-  await event(app, { type: 'assistantDelta', serverId: FIRST_SERVER_ID, conversationId: held.id,
-    turnId: 'unopened-turn', seq: 0, text: 'Received before opening' })
+  app.daemon.pushFrame(frame({ type: 'thread_item_added', payload: { conversation_id: held.id,
+    epoch: EPOCH, version: 2, item: item(10, 'assistant_message', 'running', { text: 'Received before opening' }) } }))
   await connection(app, 'disconnected')
   const read = await observe(app)
   await app.page.getByRole('button', { name: held.name, exact: true }).click()
@@ -189,6 +209,7 @@ test('offline opening does not consume first-history eligibility', async ({ laun
   // The fake's reconnect list can replace the injected row. Restore its stamped ownership.
   await event(app, { type: 'conversationsReceived', serverId: FIRST_SERVER_ID, conversations: [SEEDED_ROW, held] })
   await settle(app)
+  await expect(app.page.getByText('Received before opening', { exact: true })).toBeVisible()
   expect((await read()).commands.filter(c => c.type === 'queryThread' && c.query.payload.conversation_id === held.id)).toHaveLength(1)
   await app.page.locator('.conversation__thread').focus()
   await app.page.keyboard.press('Home')

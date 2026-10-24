@@ -52,3 +52,18 @@ None. Keep compatibility for unmigrated siblings; no shared helper edits are nee
 
 ## Scope check
 One mounted behaviour, four acceptance criteria, approximately 240 written lines including plan/evidence, no production files, new exported types, consumer migrations or production error branches. The written plan remains below every ceiling.
+
+## Validation evidence
+Linux x64, 2026-10-24. Implementation revision `ecb1e40d901c11c5754f88d9df63b4ce2a3306c9`, containing final main `a040d524f5ba`. Normal clean build provenance records that implementation revision and `sourceDirty: false`. This evidence-only addition changes no executable input.
+
+- Red control: the new opening-fact assertion failed with the legacy fixture at `Canonical status thread ready`; 2 executed, 1 passed (native prerequisite), 1 failed (owned case), 0 skipped/retries. `/tmp/builder-2255/red.{log,json}` preserves the expected failure.
+- Migrated owned run: 2 executed/passed, 0 failed/skipped/retries, including the named local-send case and configured native-writer prerequisite. `/tmp/builder-2255/owned.{log,json}`.
+- Final clean candidate run: `npx playwright test e2e/status-icon-local-send.spec.ts --retries=0 --reporter=list,json`; 2 executed/passed, 0 failed/skipped/retries. The owned `the status row reads Sending, then Waiting for Claude, then Thinking, with the icon turning throughout` case executed and passed. `/tmp/builder-2255/owned-final.{log,json}`.
+- Pre-verify: all 5 checks passed; canonical publisher units 17 executed/passed, 0 failed/skipped. `/tmp/builder-2255/pre-verify-final.log`, structured evidence under `/tmp/builder-2255/unit-final/unit-vblxfctt/`.
+- Send-store units: 13 executed/passed, 0 failed/skipped; `/tmp/builder-2255/send-unit.{log,json}`. Combined applicable unit total: 30 executed/passed.
+- `npm run typecheck` (pre-verify/build), `npm run typecheck:client-tests`, focused `npx tsc --noEmit --strict --skipLibCheck --esModuleInterop --module ESNext --moduleResolution Bundler --target ES2023 --lib ES2023,DOM,DOM.Iterable --jsx react-jsx e2e/status-icon-local-send.spec.ts src/preload/index.d.ts src/main/transport/noise-c.wasm.d.ts`, and `npm run build` passed. Logs: `/tmp/builder-2255/{pre-verify-final,client-types-final,focused-types,build}.log`.
+- Initial redundant manual Node preparation overlapped pre-verify's own preparation, causing build-directory collisions before any unit executed. Failed logs remain at `/tmp/builder-2255/{node-native,pre-verify}.log`. Sequential pre-verify preparation succeeded; send-store units followed it, then Electron preparation succeeded before final mounted execution. No native preparation overlapped the final mounted run.
+
+Dispatcher/verifier owns the normal complete configured application gate, including captured clients, canonical activation, captured history, protected storage and native prerequisites. Retain its matching candidate counts alongside this builder evidence; do not substitute this focused run or duplicate the complete suite. No fresh provider, encryption or physical-effect acceptance is claimed. Original replay/live boundaries remain unchanged; macOS is outside this ticket's verification scope.
+
+Final scope: 113 written lines before evidence, plus this evidence section; comfortably below the admitted estimate and all ceilings. No implementation deviation or unresolved question.

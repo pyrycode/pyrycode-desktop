@@ -61,6 +61,18 @@ wrong-kind body read. Admitted full messages retain existing Markdown and attach
 rendering. Child summaries, full roots and rendered body replies are separate
 authorities.
 
+Compact `user_message` roots carry full content, including daemon-owned
+`content.attachments` records with `attachment_id` and `filename`. Daemon
+[#3693](https://github.com/pyrycode/pyrycode/issues/3693) records accepted attachment
+facts and [#3694](https://github.com/pyrycode/pyrycode/issues/3694) preserves them
+through delivery. `attachment_ids` alone cannot supply a filename. Scoped send
+settlement retires the local row using host/conversation/device/message identity;
+it does not copy optimistic attachment metadata into the accepted root. Equal text
+or another scope's matching IDs supplies no authority. Missing daemon attachment
+facts remain missing, without resend or hidden tool-body reads. See
+[attachment rendering](conversation-shell-message-bubble-attachments.md#accepted-thread-attachment-facts)
+and the [full-root comparison](attachment-upload-testing.md#compact-attachment-acceptance-and-reopening).
+
 Full roots share `fullItem`'s optional-order contract in both live updates and
 query data. Queued, dropped or lost sends can omit `order` before delivery; retain
 that absence and sort it as zero without inventing a wire field. Any supplied
@@ -209,6 +221,18 @@ new scope. Source IDs and the existing scroll-pin/layout notifications preserve
 the reader's agent and position as details change.
 
 ## Validation evidence
+
+### Accepted attachment continuity
+
+The repaired daemon supplies the facts existing Desktop rendering needs; no Desktop
+production patch was required for #2164. The
+[retained Linux acceptance](attachment-upload-testing.md#retained-linux-attachment-evidence)
+proves queued acceptance, delivered replacement, navigation and fresh online restart
+with actual daemon retrieval. Reopening requires attachment-bearing data and a later
+successful final from the same newly dispatched owning compact request before checking
+the visible row. A retained row plus an empty completed query cannot prove fresh
+delivery. The fresh-process query starts at version zero and complete persisted
+history remains `missing`: these full roots retain session-only compact authority.
 
 ### Post-send history and current-daemon acceptance
 

@@ -249,6 +249,16 @@ scope releases image shares/listeners through effect cleanup and cannot reuse an
 scope's thumbnail URL merely because attachment ids match. Remounting rows alone would
 not fix action ownership if their dependencies still read the global active chat.
 
+Accepted user attachments come only from full `content.attachments` records with
+`attachment_id` and `filename`, including on the compact route. Send settlement
+uses owning host/conversation/device/message identity and removes the optimistic
+row without lending its attachment metadata to the daemon row. An ID-only echo
+can therefore settle a send while drawing no attachment. The repaired daemon
+preserves those full facts through replacement and fresh online reopening; compact
+facts still supply no complete-history persistence authority. See
+[accepted attachment facts](conversation-shell-message-bubble-attachments.md#accepted-thread-attachment-facts)
+and [request-correlated acceptance](attachment-upload-testing.md#compact-attachment-acceptance-and-reopening).
+
 [Scoped attachment retrieval](attachment-retrieval.md#5-the-composition-root--srcmainindexts)
 now resolves explicit paired hosts independently of the conversation index, including unlisted
 snapshots and equal conversation IDs across hosts. Coalescing owns resolved host/conversation/attachment;

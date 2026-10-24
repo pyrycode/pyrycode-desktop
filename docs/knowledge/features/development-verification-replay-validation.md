@@ -141,6 +141,60 @@ protected-storage/native prerequisites and original live-only assertions.
 This authored-fact migration adds no fresh provider, daemon, encryption or
 physical-effect proof, and no visual implementation change.
 
+## Canonical send-and-stream validation
+
+The [PR #2252 verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2252#issuecomment-6387177626),
+accepted stage `0da73ad5d7b445b6a485b90feeb59311864705db419474eac9414aba6eed0ea2`,
+records PASS on Linux x86_64, 2026-10-24, at
+`0c417eacde1ea4cb13345553750f9dad406719ac`. Normal-profile build provenance
+records that exact revision and `sourceDirty: false`. Builder implementation/build
+revision `133abc4cc7262e212389d3b1b01faceda4edc522` differs only by plan evidence.
+These are retained results, not documentation-stage test executions. The
+[plan](../../specs/architecture/2248-send-and-stream.md#builder-verification--linux)
+retains focused commands, artifacts and hashes; the
+[mounted example](development-verification-evidence-that-cannot-pass-too-early.md#evidence-that-cannot-pass-too-early)
+explains the pending/accepted wrapper and active-reply barrier.
+
+| Retained Linux check | Executed / passed / failed / skipped |
+| --- | --- |
+| Builder owned spec plus native prerequisite, `--retries 0` | 2 / 2 / 0 / 0 |
+| Builder canonical publisher/selection units | 17 / 17 / 0 / 0 |
+| Builder send-settlement units | 13 / 13 / 0 / 0 |
+| Supplied dispatcher unit gate 4, JUnit counts | 10045 / 10045 / 0 / 3 |
+| Complete configured application gate 7, `npx playwright test --reporter=json` | 542 / 542 / 0 / 4 |
+
+Unit totals use the supplied counted gate report; verifier prose lists 10,144,
+so that larger total is not used here. Both named tests were present and passed
+in the focused builder run and once each in application gate 7:
+
+- `send a message and see the streamed daemon reply render in the thread`
+- `finite protected writer backlog preserves native keyboard and both event loops`
+
+The application gate used four workers, with zero retries, flaky results or global
+errors. All 29 captured-client replay cases executed/passed within that gate:
+773 matched requests, 3,216 emitted frames, zero remaining and zero mismatches.
+The matching configured run supplies complete-suite proof once. Its retained log
+is `/work/Projects/pyrycode-desktop-agents/logs/verifier-gate_#2248_7.log`, SHA-256
+`ba6dc4b5a046bb7b6d46b36c1cbe7a243f51f00a780587ea137d439c746957b4`.
+
+Builder pre-verify passed 5/5 checks; `npm run typecheck`,
+`npm run typecheck:client-tests`, focused TypeScript checking including the owned
+spec/imported fixtures, and `npm run build` passed. The focused check matters
+because the default client-test configuration does not include this fake spec.
+Verifier install, docs guard, application typecheck/build and Electron native
+preparation passed. Its pre-verify used `--no-suite` (3 checks passed, 2 intentionally
+skipped); separate unit/build gates supplied those checks. The test-first legacy
+failure remains failed evidence: 2 executed, 1 passed native prerequisite,
+1 failed owned opening assertion, 0 skipped, retries zero.
+
+The four application skips are two macOS badge cases, macOS window reopen and the
+existing saved-system-prompt Reset-session fixme; skips are not passes. macOS is
+outside this Linux ticket's verification scope. The [recorded-test contract](../../recorded-tests.md)
+and [migration inventory/exclusions](../../client-replay-migration.md) retain captured
+history, protected-storage coverage, native prerequisites and original live-only
+assertions. This test-only migration establishes no fresh provider, real-daemon,
+encryption or physical-effect proof and introduces no visual change.
+
 ## Counted Linux compatibility validation
 
 These are retained results accepted by the

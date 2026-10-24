@@ -446,6 +446,38 @@ subtree, don't unmount it, unless every child's state is already lifted to a sto
 return is the natural first instinct and reads as correct in review until the specific
 mount-local state it drops is traced.
 
+## Canonical interaction fixtures
+
+Both reader specs use `e2e/fixtures/readerThread.ts`'s `createReaderThread` with
+`threadMode: 'canonical'`. Content and query replies come from authored
+`ThreadItem` facts through `createCanonicalThread`, bypassing `createScriptedThread`
+and legacy history aliases, including reconnect. Each launch owns its summaries,
+current-session bindings, epoch, unique orders and advancing versions. Readiness
+observes the actual version-zero `thread_catch_up` and binds the public device
+identity before the existing composer send. The responder explicitly authors a
+delivered user fact with that device and outbound message ID, followed by finished
+assistant facts; receiving a send or an assistant reply does not imply acceptance.
+The visible plan link remains the positive rendered-content barrier. The scroll
+cases retain twelve ordered prior assistant replies before the link reply, so
+scroll preservation cannot pass against an effectively empty thread.
+
+Canonical query scopes include both conversations, but pairing initially lists
+only the original row: the launcher requires exactly one listed conversation to
+open. The existing conversation-switch drive announces the second row later.
+Listing both immediately fails setup before any reader assertion executes.
+
+File controls stay local to each spec. The publisher passes `attachment_chunk`
+bytes unchanged, including `conversation_id`, digest and `in_reply_to`; it neither
+repairs bad digests nor manufactures withheld responses. The real main-process
+attachment verifier still handles successful and deliberately corrupt file reads.
+The publisher unit regression checks unchanged bytes across distinct request IDs,
+withheld replies, unchanged thread facts and continued retired-content rejection.
+Draft/attachment survival, refetch/refresh, failure clearing, typography, geometry,
+scroll, focus, resize and trusted-input assertions remain mounted. Menu copy still
+writes and reads the native clipboard in the serial `clipboard` project with its
+`native-writer` prerequisite. See [counted Linux results and retained failures](development-verification-replay-validation-canonical-message-lifecycle-diagnostics-validation.md#canonical-reader-validation)
+and [fixture preparation limits](e2e-harness-limitations.md#edge-cases-and-limitations).
+
 ## Body typography verification
 
 [`e2e/markdown-reader.spec.ts`](../../../e2e/markdown-reader.spec.ts)'s existing

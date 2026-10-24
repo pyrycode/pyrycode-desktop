@@ -143,6 +143,20 @@ and native prerequisites. Every original live-only assertion remains; this
 migration adds no fresh provider, encryption or physical-effect proof. #2211 owns
 combined acceptance; #2153/#2191 repairs and #2169 recovery remain separate.
 
+All five mounted cases in `markdown-reader.spec.ts` and
+`markdown-reader-menu.spec.ts` use authored canonical content and correlated
+queries, with explicit own-device/message acceptance and ordered scroll history.
+Their [reader fixture contract](knowledge/features/conversation-shell-markdown-reader.md#canonical-interaction-fixtures)
+and [counted Linux evidence](knowledge/features/development-verification-replay-validation-canonical-message-lifecycle-diagnostics-validation.md#canonical-reader-validation)
+retain real file digest verification, exact request correlation, held/corrupt
+replies and retired-content rejection. Native clipboard/input, typography,
+geometry, focus, scroll, resize, refetch and draft/attachment survival remain
+mounted; the clipboard project stays serial with `native-writer`. Captured-client
+replay, canonical activation, captured history, protected storage, native
+prerequisites and every original live-only assertion remain in scope. No fresh
+provider, encryption or additional physical-effect proof is introduced; #2212
+retains complete feature acceptance, with #2153/#2191 separate repairs.
+
 Encryption interoperability, handshakes, reconnect transport, real process
 liveness, native platform integration, and daemon/tool filesystem effects cannot
 be established by application-message replay. Their live checks remain required.

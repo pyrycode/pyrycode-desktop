@@ -4,6 +4,19 @@ Fixture typechecking, platform requirements and test-tier boundaries. See the [h
 
 ## Edge cases and limitations
 
+- **Canonical query scopes and the pairing list are separate.** The reader fixture
+  authors two conversations for later navigation, but `launchPairedApp` requires
+  exactly one initially listed row to open after pairing. Announce only that row
+  initially, then list the second in the existing navigation drive. Listing every
+  authored scope at startup prevents the reader cases from reaching their assertions.
+  See [canonical reader fixtures](conversation-shell-markdown-reader.md#canonical-interaction-fixtures).
+- **Node preparation and Electron execution share a native addon.** Pre-verify
+  rebuilds SQLite for Node. Finish Node checks, then prepare Electron's native
+  addon before mounted execution in the same worktree; overlapping preparation
+  can fail `native-writer` and leave all dependent reader cases unexecuted. Keep
+  the prerequisite and count it separately rather than bypassing it. The final
+  serialized Linux run and earlier failures are retained in
+  [reader validation](development-verification-replay-validation-canonical-message-lifecycle-diagnostics-validation.md#canonical-reader-validation).
 - **Application and client-test typechecks have different scopes.** `npm run typecheck`
   and `npm run build` use the app projects (`tsconfig.node.json` /
   `tsconfig.web.json`), which exclude `e2e/`. The supplementary

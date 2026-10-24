@@ -192,6 +192,17 @@ them. The matching complete Linux gate retains canonical activation, captured
 history, protected storage, captured-client replay and original live-only
 assertions/exclusions. No new live proof is required; #2212 owns combined acceptance.
 
+The [canonical reader validation](knowledge/features/development-verification-replay-validation-canonical-message-lifecycle-diagnostics-validation.md#canonical-reader-validation)
+records all five `markdown-reader.spec.ts` / `markdown-reader-menu.spec.ts` cases
+passing on authored facts and correlated queries. File chunks pass unchanged to
+the real digest verifier, retaining held/corrupt replies and exact request
+correlation. Native clipboard, scroll, resize, focus and input assertions remain
+mounted; the clipboard project stays serial with `native-writer`. The matching
+complete Linux gate retains captured-client replay, canonical activation,
+captured history and protected storage. Original live-only assertions remain
+required; no fresh provider, encryption or additional physical-effect proof is
+introduced. #2212 retains complete feature acceptance.
+
 On initial launch and every profile relaunch, the shared replay fixture probes
 `better-sqlite3` in Electron's main process before device binding and pairing. It
 resolves the installed SQLite package root, loads the genuine addon with

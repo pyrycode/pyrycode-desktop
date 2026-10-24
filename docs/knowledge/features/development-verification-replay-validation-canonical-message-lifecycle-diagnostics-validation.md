@@ -189,6 +189,81 @@ proof is required or claimed; native clipboard proof remains distinct from repla
 \#2212 retains combined acceptance; compatibility remains for unmigrated siblings,
 with #2153/#2191 separate repairs.
 
+## Canonical reader validation
+
+The [PR #2276 verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2276#issuecomment-6389289463),
+accepted stage `b3c9224c6e26144ead75afae3db93d9741faf41f40c1b96f866c62d9b5ab26ed`,
+records PASS on Linux x64, 2026-10-24, at
+`a7dd5835b68f7159bde720fff11ad051a35b3281`. Normal build provenance identifies
+that exact revision with `sourceDirty: false`. All five changed test/fixture
+files are byte-identical to builder source/build revision
+`d4f714509747e385af304d4881a6585b91c879d4`. These are retained results;
+documentation runs only the docs guard. The
+[plan](../../specs/architecture/2267-canonical-reader-interactions.md#validation-evidence)
+keeps commands and artifact references; the
+[reader fixture contract](conversation-shell-markdown-reader.md#canonical-interaction-fixtures)
+describes explicit acceptance, ordered history and unchanged attachment handling.
+
+| Retained Linux check | Executed / passed / failed / skipped |
+| --- | --- |
+| Builder five owned reader/menu cases, retries zero | 5 / 5 / 0 / 0 |
+| Builder native-writer prerequisite, separately | 1 / 1 / 0 / 0 |
+| Builder canonical-publisher units, within five passed pre-verify checks | 18 / 18 / 0 / 0 |
+| Supplied dispatcher unit gate 4, JUnit counts | 10046 / 10046 / 0 / 3 |
+| Complete configured application gate 7, `npx playwright test --reporter=json` | 542 / 542 / 0 / 4 |
+
+Unit totals use the supplied counted gate report; the verdict's larger 10,145
+aggregate is not used. The verdict confirms all 18 canonical-publisher units
+present and passed, including `passes correlated file chunks unchanged without
+accepting retired content`. All five owned mounted cases were present and passed
+at retry zero in both the builder run and matching configured application gate:
+
+- `reader headings share the scale, spacing and first-block clearance (#2100)`
+- `a markdown link in a reply opens the note in the reader, refetched on every open, and back returns (#1627)`
+- `the reader menu copies the note three ways and refreshes it (#1630)`
+- `reader scrolls under sharp chrome with dynamic clearance and input at 1280`
+- `reader scrolls under sharp chrome with dynamic clearance and input at 800`
+
+The separate `finite protected writer backlog preserves native keyboard and both
+event loops` prerequisite passed at retry zero in both runs; the final builder
+run used `gnome_libsecret`. The clipboard project remains serial and depends on
+`native-writer`. The complete application gate reported zero flaky results,
+29 passed captured-client cases with the existing reset fixme skipped, passed
+canonical activation/captured history and all seven replay-native-storage cases.
+The matching configured gate supplies complete-suite evidence once. References
+are dispatcher `logs/verifier-gate_#2267_{1..7}.*` and
+`/tmp/builder-2267/playwright-serial.{json,log}`. Final builder launch-fate
+attachments report clean exits and no teardown failures or top-level report errors.
+
+Builder application/client-test typechecks, focused TypeScript checking including
+both specs, `readerThread.ts`, publisher unit inputs and imported publisher, and
+post-pre-verify build passed. Verifier pre-verify, install, docs guard, application
+typecheck/build and Electron native preparation passed. Focused compilation caught
+the existing file responders' missing required `conversation_id`: they now echo
+the requesting conversation without changing chunk bytes, digest or request IDs.
+
+Earlier failures remain failures: the intentional red attachment regression had
+18 executed, 17 passed, 1 failed, 0 skipped before passthrough. The initial
+`playwright.log` and overlapping-preparation `playwright-accepted.json` each
+failed the native prerequisite with all five owned cases unexecuted.
+`playwright-final.json` passed the prerequisite but failed all five owned cases
+at the two-row pairing setup. The final passing run followed the single-row
+pairing repair and serialized Node preparation, Electron preparation and execution.
+All reports remain referenced under `/tmp/builder-2267/`; none of those earlier
+runs is acceptance evidence. The builder's AST comparison retained all original
+expect expressions in order (reader 84/84, menu 89/89), with no timeout changes.
+
+The four application skips are two platform badge cases, window reopen convergence
+and the existing system-prompt reset fixme; three live units were skipped. Skips
+are not passes. macOS is outside this Linux ticket's verification scope. The
+[recorded-test contract](../../recorded-tests.md) and
+[migration inventory](../../client-replay-migration.md) retain captured replay,
+canonical activation, captured history, protected storage, native prerequisites
+and every original live-only assertion. Native clipboard/input assertions ran;
+no fresh provider, live relay/encryption or additional physical-effect proof was
+required or performed. Compatibility remains for unmigrated siblings; #2212
+retains complete feature acceptance and #2153/#2191 remain separate repairs.
+
 ## Counted Linux compatibility validation
 
 These are retained results accepted by the

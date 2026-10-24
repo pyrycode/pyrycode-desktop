@@ -147,6 +147,15 @@ certificates; it does not infer acceptance from composer sends or assistant acti
 Correlated session-settings replies retain `mid_turn_input`, context reading and
 explicit session provenance; live turn controls name the owning conversation.
 
+The five mounted [reader/menu cases](conversation-shell-markdown-reader.md#canonical-interaction-fixtures)
+share `createReaderThread`. Its authored acceptance and ordered history retain
+the original composer drive and real file-verification path. `attachment_chunk`
+is a narrow test-publisher control passthrough: bytes, digest and request ownership
+are unchanged, including withheld replies and intentionally bad digests. This
+does not admit retired content frames. Pairing lists one initial conversation
+even when additional canonical query scopes already exist; see
+[fixture limitations](e2e-harness-limitations.md#edge-cases-and-limitations).
+
 [`message-side-actions.spec.ts`](../../../e2e/message-side-actions.spec.ts) keeps
 its single-consumer fixture local and creates it afresh for each of three cases.
 It supplies an empty opening window, summary/current session, epoch, ordered

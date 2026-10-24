@@ -3,7 +3,7 @@ import { decodeEnvelope, encodeEnvelope } from '../../src/main/transport/codec'
 import type { Envelope, ReadWorkspaceFilePayload, SendMessagePayload } from '../../src/shared/wire/types'
 import type { ThreadItem, ThreadUpdate } from '../../src/shared/wire/thread'
 import { createCanonicalThread } from './canonicalThread'
-import { expect, SEEDED_ROW, SECOND_SEEDED_ROW } from './launchPairedApp'
+import { expect, seedConversationsFrame, SEEDED_ROW, SECOND_SEEDED_ROW } from './launchPairedApp'
 
 /** Authored reader facts; file bytes still travel through the real attachment verifier. */
 export function createReaderThread(reply: string,
@@ -30,6 +30,10 @@ export function createReaderThread(reply: string,
       buildReplyFrames: (inbound: Uint8Array): Uint8Array[] => {
         const request = decodeEnvelope(inbound)
         requests.push(request)
+        // Pairing opens the only listed row. The second scope is queried only after the
+        // reader scenario explicitly announces it, preserving that original drive order.
+        if (request.type === 'list_conversations')
+          return [seedConversationsFrame({ ...SEEDED_ROW, current_session_id: session })]
         if (request.type === 'read_workspace_file') {
           const ask = request.payload as ReadWorkspaceFilePayload
           expect(ask.conversation_id).toBe(SEEDED_ROW.id)

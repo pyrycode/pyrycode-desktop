@@ -1,32 +1,23 @@
 import type { Locator, Page } from '@playwright/test'
 import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
+import { createCanonicalThread } from './fixtures/canonicalThread'
 import { encodeEnvelope, decodeEnvelope } from '../src/main/transport/codec'
-import type { BackgroundTask, ConversationSummary, EnvelopeType } from '../src/shared/wire/types'
-
-// Scripted history is published as thread catch-up/pages by the shared fake daemon.
-test.use({ scriptedHistory: true })
+import type { ConversationSummary, Envelope, EnvelopeType } from '../src/shared/wire/types'
+import type { ThreadItem } from '../src/shared/wire/thread'
 
 // #1640: a running background task shows what it is doing and how far it has got. The store and panel
 // unit tests prove the join, the formatting and the escaping; this spec is the proof that a
 // `background_task_progress` frame survives the whole path — the real transport's decode (#1638), the
-// fourth translator, the store record and the container's read — into the open panel's running row.
+// session-scoped live reading and the canonical task join — into the open panel's running row.
 //
 // SECRET HYGIENE (the sibling specs' rule): every task field below is a CLIENT-OWNED SYNTHETIC LITERAL,
-// so a failure diff discloses nothing. The helpers mirror background-task-status-summary.spec.ts rather
-// than importing from it, as the sibling specs do.
+// so a failure diff discloses nothing.
 
-const frame = (type: EnvelopeType, payload: unknown, in_reply_to?: number): Uint8Array =>
-  encodeEnvelope({ id: 1640, type, ts: '2026-09-25T10:00:00Z', payload, in_reply_to })
+const frame = (type: EnvelopeType, payload: unknown, in_reply_to?: number, session_id?: string): Uint8Array =>
+  encodeEnvelope({ id: 1640, type, ts: '2026-09-25T10:00:00Z', payload, in_reply_to, session_id })
 
-const roster = (conversation_id: string, tasks: BackgroundTask[]): Uint8Array =>
-  frame('background_task_roster', { conversation_id, tasks, dropped_tasks: 0 })
-
-const task = (task_id: string, description: string): BackgroundTask => ({
-  task_id,
-  task_type: 'local_bash',
-  description,
-  truncated_fields: null
-})
+const SESSION = 'progress-seeded-session'
+const ROW: ConversationSummary = { ...SEEDED_ROW, current_session_id: SESSION }
 
 /** The progress frame in wire shape: `description` is the task's CURRENT ACTIVITY on this frame. */
 const progress = (
@@ -42,20 +33,18 @@ const progress = (
     subagent_type: '',
     ...counters,
     truncated_fields: null
-  })
+  }, undefined, SESSION)
 
 const BUILD = 'synthetic build command'
 const FIRST_ACTIVITY = 'synthetic activity reading alpha'
 const LATER_ACTIVITY = 'synthetic activity writing beta'
 
-/** Answers the list and history requests the drive provokes (the sibling spec's `fake`). */
-function fake(rows: ConversationSummary[]) {
+/** Observe actual requests; the canonical publisher supplies content and query certificates. */
+function capturingFake(captured: Envelope[]) {
   return (bytes: Uint8Array): Uint8Array[] => {
     const env = decodeEnvelope(bytes)
-    if (env.type === 'list_conversations') return [frame('conversations', { conversations: rows })]
-    if (env.type === 'request_history') {
-      return [frame('history_page', { entries: [], cursor: '', at_start: true }, env.id)]
-    }
+    captured.push(env)
+    if (env.type === 'list_conversations') return [frame('conversations', { conversations: [ROW] }, env.id)]
     return []
   }
 }
@@ -66,10 +55,20 @@ const panelFor = (page: Page): Locator =>
 test('a progress frame for a listed running task draws its activity and meta line in the open panel', async ({
   launchPairedApp
 }) => {
-  const { page, daemon } = await launchPairedApp({ buildReplyFrames: fake([SEEDED_ROW]) })
+  const captured: Envelope[] = []
+  const task: ThreadItem = {
+    id: 1, order: 10, rev: 1, kind: 'tool_call', status: 'running', active: true, shown: true,
+    summary: BUILD, session: SESSION, agent: 'claude',
+    content: { name: 'Bash', task_id: 'task-build', tool_use_id: 'call-task-build',
+      task_link: { task_id: 'task-build', tool_call_id: 'call-task-build', description: BUILD } }
+  }
+  const thread = createCanonicalThread({ conversations: [
+    { summary: ROW, epoch: 'progress-seeded-epoch', version: 1, items: [task] }
+  ] })
+  const { page, daemon } = await launchPairedApp({ threadMode: 'canonical', thread,
+    helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: capturingFake(captured) })
   await page.setViewportSize({ width: 1280, height: 800 })
 
-  daemon.pushFrame(roster(SEEDED_ROW.id, [task('task-build', BUILD)]))
   await expect(page.locator('.composer-status__tasks')).toHaveText('1 task running')
 
   await page.getByRole('button', { name: 'More actions', exact: true }).click()
@@ -78,6 +77,9 @@ test('a progress frame for a listed running task draws its activity and meta lin
   await expect(panel).toBeVisible()
   const row = panel.locator('.background-task-panel__row', { hasText: BUILD })
   await expect(row).toBeVisible()
+  expect(captured).toContainEqual(expect.objectContaining({ type: 'thread_catch_up',
+    payload: expect.objectContaining({ conversation_id: SEEDED_ROW.id, version: 0 }) }))
+  expect(captured.filter(env => env.type === 'request_history')).toHaveLength(0)
   await expect(row.locator('.background-task-panel__progress')).toHaveCount(0)
 
   // The open panel re-renders from the store as the report lands.

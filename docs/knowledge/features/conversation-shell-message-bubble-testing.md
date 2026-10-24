@@ -74,6 +74,33 @@ and queue handle; it does not establish daemon removal. See the
 [fixture contract](e2e-harness.md#scripted-and-native-thread-fixtures) and
 [counted Linux migration evidence](development-verification-replay-validation-canonical-message-lifecycle-diagnostics-validation.md#canonical-side-action-validation).
 
+### Canonical reply fixtures
+
+All six `e2e/message-reply.spec.ts` scenarios use per-host canonical facts and
+correlated thread replies for opening and created-chat activation; offline
+reopening reads saved canonical items. The local fixture binds delivered user
+content to the actual outbound message ID and public device identity. Equal IDs on two hosts
+must retain separate publishers and saved records; see the
+[harness contract](e2e-harness.md#scripted-and-native-thread-fixtures).
+
+The held-suffix control observes actual preload receipt of the canonical update
+while both frame and timer drains remain held. Reply against the visible
+container still quotes only the partial source; the exact code-fence suffix barrier
+stays pending until release. Require that suffix and cursor disappearance before activating
+the retained Reply control. Keep publication running while renderer application
+is held. `quote` and `expectDraftEnd` retain exact draft text, focus and collapsed
+end selection through pointer/keyboard activation, repeated append and edited send.
+
+Inline permission display/dismissal must preserve immediate reply focus without
+replaying it later; chat switches retain independent drafts and focus. Saved/offline
+coverage polls actual protected `readThread` content before reopening, keeps Send
+disabled and preserves the other-chat draft. The equal-ID case polls both hosts'
+records before reopening the first offline, quotes its own source and rechecks
+both independent records afterward. Visible quotes and draft isolation alone
+would miss a persistence regression. Copy, action geometry and trusted Electron
+input remain in the serial clipboard project with its native prerequisite.
+See [counted Linux validation](development-verification-replay-validation-canonical-message-lifecycle-diagnostics-validation.md#canonical-reply-validation).
+
 ### Streaming copy input readiness
 
 Visible streaming text and a cursor do not prove that Copy received an activation.

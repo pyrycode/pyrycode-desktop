@@ -192,6 +192,18 @@ them. The matching complete Linux gate retains canonical activation, captured
 history, protected storage, captured-client replay and original live-only
 assertions/exclusions. No new live proof is required; #2212 owns combined acceptance.
 
+The [canonical reply validation](knowledge/features/development-verification-replay-validation-canonical-message-lifecycle-diagnostics-validation.md#canonical-reply-validation)
+records all six `message-reply.spec.ts` cases passing with per-host authored facts
+and correlated queries. Actual preload receipt stays separate from rendered
+suffix/cursor settlement; saved/offline reopening retains protected `readThread`
+polls for both equal-ID hosts and independent records afterward. Trusted input,
+OS clipboard and action geometry remain in the serial clipboard project with its
+native-writer prerequisite. The matching complete Linux gate retains captured-client
+replay, canonical activation, captured history, protected storage/native coverage
+and original live-only assertions/exclusions. No new live proof is required;
+\#2212 retains integrated acceptance and #2273's native timing failure remains
+separate from this migration's passes.
+
 On initial launch and every profile relaunch, the shared replay fixture probes
 `better-sqlite3` in Electron's main process before device binding and pairing. It
 resolves the installed SQLite package root, loads the genuine addon with

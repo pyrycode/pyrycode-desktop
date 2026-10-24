@@ -6,6 +6,7 @@ import type { ThreadItem } from '../../src/shared/wire/thread'
 // the real daemon now sends. It never uses the retired renderer reducer or changes native thread
 // fixtures. Each instance belongs to one daemon; conversations retain independent epochs/versions.
 type Fields = Record<string, any>
+type ScriptEnvelope = Envelope & { payload: Fields }
 type Scope = { session: string; version: number; next: number; items: Map<string, ThreadItem>;
   deltas: Set<string>; streams: Map<string, string>; lastStream?: string; compacting: boolean; pendingCompact?: string;
   cursor: string; history: Set<number>; phase: string; live: Map<string, Uint8Array> }
@@ -17,10 +18,10 @@ const stamp = '2026-10-15T00:00:00Z'
 
 export function createScriptedThread(options: { history?: boolean } = {}) {
   const scopes = new Map<string, Scope>(), summaries = new Map<string, Fields>()
-  const requests = new Map<number, Envelope>()
-  let context: Envelope | undefined
+  const requests = new Map<number, ScriptEnvelope>()
+  let context: ScriptEnvelope | undefined
   let deviceId: string | undefined
-  const pending = new Map<string, Envelope[]>()
+  const pending = new Map<string, ScriptEnvelope[]>()
   const sentMessages = new Map<string, Fields>()
   const queueActions = new Map<string, string>()
   const messageReceipts = new Set<string>()
@@ -298,7 +299,7 @@ export function createScriptedThread(options: { history?: boolean } = {}) {
       }
       if (e.type === 'question_shown') for (const [key, previous] of s.live) {
         if (!key.startsWith('question_shown:') || key === `question_shown:${p.question_batch_id}`) continue
-        const old = decodeEnvelope(previous).payload
+        const old = decodeEnvelope(previous).payload as Fields
         out.push(encodeEnvelope({ id: e.id, type: 'question_dismissed', ts: e.ts, session_id: s.session,
           payload: { question_batch_id: old.question_batch_id, outcome: 'unanswered', source: 'no_answer' } }))
         s.live.delete(key)
@@ -312,7 +313,7 @@ export function createScriptedThread(options: { history?: boolean } = {}) {
     }
     return [bytes]
   }
-  function windowReply(request: Envelope, older = false): Uint8Array[] {
+  function windowReply(request: ScriptEnvelope, older = false): Uint8Array[] {
     const p = request.payload, chat = String(p.conversation_id), s = scope(chat)
     const all = [...s.items.values()]
     const items = all.filter(item => request.type !== 'thread_page' || (item.order ?? 0) < Number(p.before_order))
@@ -338,7 +339,7 @@ export function createScriptedThread(options: { history?: boolean } = {}) {
           continuation: lower, older_exists: older }) }, source)]
   }
   function reply(bytes: Uint8Array, frames: Uint8Array[]): Uint8Array[] {
-    const request = decodeEnvelope(bytes)
+    const request = decodeEnvelope(bytes) as ScriptEnvelope
     requests.set(request.id, request)
     if (request.type === 'send_message') {
       const chat = String(request.payload.conversation_id)
@@ -356,7 +357,7 @@ export function createScriptedThread(options: { history?: boolean } = {}) {
     } finally { context = undefined }
   }
   function historyRequest(bytes: Uint8Array): Uint8Array | null {
-    const request = decodeEnvelope(bytes)
+    const request = decodeEnvelope(bytes) as ScriptEnvelope
     if (!options.history || !['thread_catch_up', 'thread_page'].includes(request.type)) return null
     return encodeEnvelope({ ...request, type: 'request_history', payload: { conversation_id: request.payload.conversation_id,
       cursor: request.type === 'thread_page' ? scope(String(request.payload.conversation_id)).cursor : '', limit: 200 } })

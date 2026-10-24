@@ -11,6 +11,7 @@ Check current code before applying an observation about a particular implementat
 | [Layout and input](development-verification-layout-and-input.md#layout-and-input) | Measured layout, native input, focus and capture verification. |
 | [Live-test diagnosis](development-verification-live-test-diagnosis.md#live-test-diagnosis) | Executable identity, credential ownership and counted live evidence. |
 | [Replay native storage and inspection](development-verification-replay-native-storage.md) | Boolean prerequisites, synchronous inspection, saved-profile controls and counted replay evidence. |
+| [Replay validation](development-verification-replay-validation.md) | Canonical publisher and compatibility-profile counted evidence, candidate provenance and preserved exclusions. |
 
 ## Source and contract checks
 
@@ -29,6 +30,35 @@ list. Read the individual dispatch arms before generalising a phrase across them
 On the client, trace the actual inbound parser rather than trusting an old symbol name.
 A shared model-row lookup can govern behaviour as well as display text.
 Read all callers before broadening what an empty identifier means.
+
+For authored canonical thread scenarios, construct one
+[`createCanonicalThread`](../../../e2e/fixtures/canonicalThread.ts) per fake host
+and pass `{ threadMode: 'canonical', thread }` to `launchPairedApp`; choose the
+second host independently through `control.secondServer`. Separate publishers
+isolate colliding conversation/item IDs. Each conversation seed supplies its
+summary, epoch, version and complete shared-wire `ThreadItem` facts. Seeds and
+replacement facts are copied; `setConversation` explicitly replaces that scope.
+
+`publish` retains authored `thread_item_added`, `thread_item_changed` and
+`thread_text_append` updates while emitting the original bytes. Conversation,
+epoch, advancing version, item identity and base revision must agree with retained
+facts. One immediately following suffix companion may share a field change's
+version/revision; it is consumed once and cleared by an intervening item update.
+This exception must not admit duplicate appends.
+
+Supply summaries, `current_session_id`, item sessions and supported scoped
+live/control frames explicitly. Allowed controls pass through without updating
+retained summaries or inferring content/session transitions. Neither `send_message`
+nor later assistant activity creates user acceptance. Raw-message, legacy
+assistant/tool/queue/agent and history-page scripts are rejected as publisher input.
+
+[`selectThreadPublisher`](../../../e2e/fixtures/threadPublisher.ts) routes canonical
+replies, pushed updates and reconnect frames without constructing `createScriptedThread`
+or consulting its history alias. Omitted mode remains scripted; `threadMode: 'native'`
+preserves exact-wire scripts, including unanswered/malformed queries and compact
+controls. The throwing-factory unit proves adapter bypass; the mounted scenarios
+observe actual requests and positive rendered content. Reusing adapter storage
+would reintroduce inferred receipts/session state into this authored contract.
 
 ## Replay build policy and provenance
 
@@ -54,70 +84,42 @@ query dispatched: wait for its positive content visibility barrier or poll the
 matched count before asserting it. The accepted review retains a nonblocking
 timing finding where the compatibility control checks that count too early.
 
-### Counted Linux compatibility validation
+Canonical opening/page replies use the latest ordered window, bounded by the
+requested limit, configured `windowSize` and hard cap of 200. Pages contain only
+orders strictly below `before_order`; retained facts determine continuation and
+older availability. Data frames precede a separate empty final certificate, all
+correlated by the owning request's `in_reply_to`, conversation, epoch and version.
+Each query constructs its own response, including empty threads/exhausted pages.
+Same-epoch positive-checkpoint catch-up returns facts changed after that version
+and certifies `from_version`; an already-current checkpoint returns only the empty
+final certificate.
 
-These are retained results accepted by the
-[PR #2151 verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2151#issuecomment-6275916553),
-not documentation-stage runs. Builder profile runs compiled clean source
-`fc64084e9df76dfd11481b18571c7313ee7e28bc`; reviewed head
-`12a162e1281b1362e7549726a59ae213ab53b168` differs only in the plan. The
-[recovery evidence](../../specs/architecture/2149-complete-thread-replay.md#retained-input-recovery-and-final-linux-evidence--2026-10-19)
-retains commands, report hashes, all bundle hashes and historical failures under
-`/tmp/builder-2149/`. The builder browser runs in the table used retries 0 and
-reported zero forbidden launches.
+A different epoch at a positive checkpoint returns only a correlated `thread_reset`
+with current ownership. The client then asks for version zero in that epoch to
+receive the replacement opening. Returning new-epoch items directly to the old
+checkpoint is rejected by the actual client, even if a decoded-reply unit looks
+correct. The mounted regression checks old-content removal, reused identity at a
+lower revision and a subsequent append.
 
-| Check | Executed / passed / failed / skipped |
-| --- | --- |
-| Profile, guard and strict-exchange units | 22 / 22 / 0 / 0 |
-| Normal compact-demand and profile controls | 6 / 6 / 0 / 0 |
-| Compatibility controls and committed-input shared question | 3 / 3 / 0 / 0 |
-| Complete guarded normal committed-recording suite | 29 / 29 / 0 / 1 |
-| Exact retained question, default profile | 1 / 0 / 1 / 0 |
-| Exact retained question, complete-thread profile | 1 / 0 / 1 / 0 |
-| Supplied dispatcher unit gate 4 | 9810 / 9810 / 0 / 3 |
-| Supplied dispatcher application gate 7 | 517 / 517 / 0 / 5 |
+Authored orders must be explicit, unique within the conversation, nonnegative safe
+integers below `Number.MAX_SAFE_INTEGER`, leaving a safe exclusive upper bound.
+With tied or missing orders, a bounded window can omit a fact that strict
+`before_order` can never retrieve. Validation precedes mutation for seeds,
+replacements, additions and changes; rejection preserves retained facts/checkpoints.
+Boundary controls cover order zero, the maximum supported order, repositioning and
+one-item backward traversal without omissions or duplicates.
 
-The named control `complete-thread profile selects complete on opening, creation
-and reconnect; normal rejects strictly` was present and passed in application
-gate 7 and both builder profiles. Compatibility matched 3 complete queries, emitted
-8 frames and left zero requests across initial opening, creation and same-ID
-reconnect. Normal selection asserted `projection: 'compact-v1'` and sticky strict
-rejection. Changed projection, version and envelope-field controls also passed.
-Both successful and failed compatibility runs restored normal output.
+The [canonical publisher verification record](development-verification-replay-validation.md#canonical-publisher-verification)
+retains named regressions and provenance: configured Linux application gate
+542 executed/passed, 0 failed, 4 skipped; retained macOS candidate run 544
+executed/passed, 0 failed, 2 skipped, both with zero retries. Default captured replay,
+native prerequisites and live-only assertions retain the boundaries in
+[recorded tests](../../recorded-tests.md) and the
+[migration inventory](../../client-replay-migration.md). These results add no fresh
+provider, encryption or physical-effect acceptance; no second-OS run is required.
 
-`real claude changes model during a question and resumes with the original answer`
-was present and passed in gate 7 and the builder's committed-input compatibility
-run (29 matched requests, 136 emitted frames, zero remaining). That committed input
-has SHA-256 `6de35feed0dcf02764da0765a4af03234314ff691a29cc975bf82c3e8d498d6b`,
-capture Desktop `5788a683ab580647008eaf2b292631607c407ab8`, daemon
-`58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`. The complete committed suite completed
-29 exchanges, 773 requests and 3,216 frames, zero remaining. Its one skip,
-`real claude picks up a saved channel system prompt at Reset session`, was also
-explicitly skipped in gate 7 and remains a fixme.
-
-The separate retained input's checksum is
-`24bbe5dff65241a77dda96cbd262c9185925d88f6168439a1679b576b984dac1`,
-capture Desktop `ef097bfc29324437d067d65360558b8e77be8f40`, daemon
-`664305939d73e5a146457503081d8232fcca5407`. Default preserves the strict step-4
-mismatch before close, followed by worker exit 7; no completion attachment exists,
-so remaining requests are unknown. Compatibility accepts the original complete
-`thread_catch_up` at index 22 and records 9 matched requests, 38 emitted frames,
-29 remaining. The observed reconnect and unchanged close-forwarding invariant
-(39 successful server writes including Noise before close 4413) establish prefix
-socket forwarding through index 47, without renderer acknowledgement. Subsequent
-connection mismatch and the original visibility assertion fail. Both historical
-full retained scenarios remain failed. The subsequent
-[combined retained-input acceptance](#captured-close-client-tails) resolves the
-hold using the compatibility profile together with the close-scheduler repair.
-
-Earlier attempts remain failed: each of two invalid combined data/final fixtures
-recorded 2 executed / 1 passed / 1 failed / 0 skipped; the missing-Electron launch
-executed zero tests. An overly broad control invocation recorded 1 executed /
-0 passed / 1 failed / 6 skipped and a nonzero forbidden-launch count when it selected
-an unrelated native-writer dependency. It is excluded from the corrected focused
-evidence above, which used `--project parallel --no-deps` under the same guard.
-No fresh provider, live encryption or physical transport proof is claimed. macOS
-is outside this Linux ticket's verification scope.
+See [counted Linux compatibility validation](development-verification-replay-validation.md#counted-linux-compatibility-validation)
+for profile controls, retained failures and successful committed-input replay.
 
 ## Captured-close client tails
 

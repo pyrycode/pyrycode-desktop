@@ -1,15 +1,13 @@
 import { createHash } from 'node:crypto'
-import { test, expect, seedConversationsFrame, SEEDED_ROW, SECOND_SEEDED_ROW } from './fixtures/launchPairedApp'
+import { test, expect, SEEDED_ROW, SECOND_SEEDED_ROW } from './fixtures/launchPairedApp'
+import { createReaderThread } from './fixtures/readerThread'
 import { capturePairedApp } from './fixtures/capturePairedApp'
-import { decodeEnvelope, encodeEnvelope } from '../src/main/transport/codec'
+import { encodeEnvelope } from '../src/main/transport/codec'
 import type {
-  AssistantDeltaPayload,
   AttachmentChunkPayload,
   ConversationsPayload,
   RateLimitedPayload,
-  ReadWorkspaceFilePayload,
-  SendMessagePayload,
-  TurnEndPayload
+  ReadWorkspaceFilePayload
 } from '../src/shared/wire/types'
 import { ATTACHMENT_UPLOAD_EVENT_CHANNEL } from '../src/shared/ipc/attachmentUpload'
 import type { AttachmentUploadEvent } from '../src/shared/ipc/attachmentUpload'
@@ -44,6 +42,7 @@ function readReply(requestId: number, ask: ReadWorkspaceFilePayload, text?: stri
   if (text === undefined) reads += 1
   const bytes = Buffer.from(text ?? noteText(), 'utf8')
   const payload: AttachmentChunkPayload = {
+    conversation_id: ask.conversation_id,
     attachment_id: '5a6b7c8d-9e0f-4a1b-8c9d-5e6f7a8b9c0d',
     index: 0,
     total_chunks: 1,
@@ -63,34 +62,6 @@ function readReply(requestId: number, ask: ReadWorkspaceFilePayload, text?: stri
   ]
 }
 
-const buildReplyFrames = (inbound: Uint8Array): Uint8Array[] => {
-  const envelope = decodeEnvelope(inbound)
-  switch (envelope.type) {
-    case 'read_workspace_file':
-      return readReply(envelope.id, envelope.payload as ReadWorkspaceFilePayload)
-    case 'send_message': {
-      const { conversation_id } = envelope.payload as SendMessagePayload
-      if (conversation_id !== SEEDED_ROW.id) return []
-      return [
-        encodeEnvelope({
-          id: 99,
-          type: 'assistant_delta',
-          ts: FIXED_TS,
-          payload: { conversation_id, turn_id: 'turn-1', seq: 0, text: REPLY } satisfies AssistantDeltaPayload
-        }),
-        encodeEnvelope({
-          id: 100,
-          type: 'turn_end',
-          ts: FIXED_TS,
-          payload: { conversation_id, turn_id: 'turn-1', stop_reason: 'end_turn' } satisfies TurnEndPayload
-        })
-      ]
-    }
-    default:
-      return [seedConversationsFrame()]
-  }
-}
-
 test('reader headings share the scale, spacing and first-block clearance (#2100)', async ({ launchPairedApp }) => {
   const levels = [1, 2, 3, 4, 5, 6]
   const note = [
@@ -100,12 +71,9 @@ test('reader headings share the scale, spacing and first-block clearance (#2100)
     ...levels.map(level => `${'#'.repeat(level)} Adjacent ${level}`)
   ].join('\n\n')
   let servedText = note
-  const { page, app } = await launchPairedApp({ buildReplyFrames: inbound => {
-    const frame = decodeEnvelope(inbound)
-    return frame.type === 'read_workspace_file'
-      ? readReply(frame.id, frame.payload as ReadWorkspaceFilePayload, servedText)
-      : buildReplyFrames(inbound)
-  } })
+  const fixture = createReaderThread(REPLY, (id, ask) => readReply(id, ask, servedText))
+  const { page, app } = await launchPairedApp(fixture.options)
+  await fixture.ready(page)
   await page.getByPlaceholder('Message…').fill('show the heading note')
   await page.getByRole('button', { name: 'Send' }).click()
   const link = page.locator('[data-thread-role="assistant"]').getByRole('button', { name: 'the plan' })
@@ -191,7 +159,10 @@ test('reader headings share the scale, spacing and first-block clearance (#2100)
 test('a markdown link in a reply opens the note in the reader, refetched on every open, and back returns (#1627)', async ({
   launchPairedApp
 }) => {
-  const { page, app, daemon } = await launchPairedApp({ buildReplyFrames })
+  reads = 0
+  const fixture = createReaderThread(REPLY, readReply)
+  const { page, app, daemon } = await launchPairedApp(fixture.options)
+  await fixture.ready(page)
   // A completed upload, pushed on the channel main sends its terminals on (composer-attach.spec.ts's seam:
   // a real attach opens a native file dialog no locator can dismiss).
   const pushUpload = (event: AttachmentUploadEvent): Promise<void> =>
@@ -336,7 +307,7 @@ test('a markdown link in a reply opens the note in the reader, refetched on ever
   expect(noticeText).not.toContain('verification')
 
   // The failure coexists with a usage pill, floats above the thread, and fits the minimum window.
-  daemon.pushFrame(encodeEnvelope({ id: 1100, type: 'rate_limited', ts: FIXED_TS,
+  daemon.pushFrame(encodeEnvelope({ id: 1100, type: 'rate_limited', ts: FIXED_TS, session_id: fixture.session,
     payload: { conversation_id: SEEDED_ROW.id, status: 'allowed_warning', limit_type: 'seven_day',
       resets_at: 4_102_444_800, truncated_fields: null } satisfies RateLimitedPayload }))
   await expect(overlay.locator('.top-overlay-pill')).toHaveCount(2)
@@ -366,7 +337,8 @@ test('a markdown link in a reply opens the note in the reader, refetched on ever
   await assistant.getByRole('button', { name: 'the other' }).click()
   await expect(notice).toBeVisible({ timeout: TIMEOUT_MS })
   daemon.pushFrame(encodeEnvelope({ id: 1101, type: 'conversations', ts: FIXED_TS,
-    payload: { conversations: [SEEDED_ROW, SECOND_SEEDED_ROW] } satisfies ConversationsPayload }))
+    payload: { conversations: [SEEDED_ROW, SECOND_SEEDED_ROW].map(row =>
+      ({ ...row, current_session_id: fixture.session })) } satisfies ConversationsPayload }))
   await page.getByText(SECOND_SEEDED_ROW.name!, { exact: true }).first().click()
   await expect(page.locator('.conversation__thread')).toBeVisible()
   await expect(page.locator('.conversation__overflow-title')).toHaveText(SECOND_SEEDED_ROW.name!)

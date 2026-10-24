@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import { decodeEnvelope, encodeEnvelope } from '../../src/main/transport/codec'
 import type { ThreadItem } from '../../src/shared/wire/thread'
-import type { Envelope } from '../../src/shared/wire/types'
+import type { AttachmentChunkPayload, Envelope } from '../../src/shared/wire/types'
 import { createCanonicalThread } from './canonicalThread'
 import { selectThreadPublisher } from './threadPublisher'
 
@@ -19,6 +20,28 @@ const rows = (replies: ReturnType<typeof query>) => replies.flatMap(r => r.paylo
 const update = (type: string, payload: unknown) => frame(type, { conversation_id: 'a', epoch: 'epoch-a', ...payload as object })
 
 describe('canonical fake thread publisher', () => {
+  it('passes correlated file chunks unchanged without accepting retired content', () => {
+    const thread = createCanonicalThread({ conversations: [seed()] })
+    const before = query(thread)
+    for (const requestId of [44, 45]) {
+      const request = frame('read_workspace_file', { conversation_id: 'a', path: 'notes/Plan.md' }, { id: requestId })
+      // Withheld replies stay withheld. Digests, including a deliberately broken one, belong
+      // to the real attachment verifier rather than to this content publisher.
+      expect(thread.reply(request, [])).toEqual([])
+      const payload: AttachmentChunkPayload = { conversation_id: 'a', attachment_id: 'reader-file', index: 0,
+        total_chunks: 1, filename: 'Plan.md', mime_type: 'text/markdown', size: 5,
+        sha256: requestId === 44 ? createHash('sha256').update('# Hi\n').digest('hex') : '0'.repeat(64),
+        data: 'IyBIaQo=' }
+      const chunk = frame('attachment_chunk', payload, { id: 900 + requestId, in_reply_to: requestId })
+      expect(thread.publish(chunk)[0]).toBe(chunk)
+      expect(thread.reply(request, [chunk])[0]).toBe(chunk)
+      expect(decodeEnvelope(thread.reply(request, [chunk])[0])).toEqual(decodeEnvelope(chunk))
+    }
+    expect(query(thread)).toEqual(before)
+    for (const type of ['assistant_delta', 'message', 'history_page', 'turn_end'])
+      expect(() => thread.publish(frame(type, {}))).toThrow(/unsupported/)
+  })
+
   it('certifies bounded ordered windows and empty threads', () => {
     const thread = createCanonicalThread({ conversations: [seed()], windowSize: 2 })
     const opening = query(thread)

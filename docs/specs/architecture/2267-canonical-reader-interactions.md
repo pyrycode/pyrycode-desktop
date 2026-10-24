@@ -43,3 +43,6 @@ No new production failure mode. Reject retired content inputs as before. The can
 
 ## Open Questions
 None. A shared reader fixture is the smallest way to keep the two content setups consistent while leaving file-serving controls local.
+
+## Revisions
+- 2026-10-24: Focused compilation exposed missing required `AttachmentChunkPayload.conversation_id` in both existing file responders. Echo the requesting conversation explicitly; chunk bytes, digest and request identity remain unchanged. Tag the rate-limit reading and repeated summaries with the authored current session binding.

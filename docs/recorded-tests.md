@@ -145,6 +145,17 @@ captured-client scenarios. Original live-only assertions and exclusions remain;
 these synthetic cases add no fresh provider, encryption or physical-effect proof.
 Compatibility remains for unmigrated siblings; #2153 and #2191 are separate repairs.
 
+The [canonical queue-settlement validation](knowledge/features/development-verification-replay-validation.md#canonical-queue-settlement-validation)
+records all seven cases in `queued-own-settlement.spec.ts` and
+`queue-delivery-evidence.spec.ts`: five settlement orders, queued/delivered
+treatment and the installed observer. Explicit device/message acceptance and
+same-item revisions retain duplicate/conflict controls; queue disappearance and
+marker text alone cannot satisfy ordered normal turn completion. Canonical
+activation, captured history, protected-storage coverage, native prerequisites
+and original live-only assertions remain in place. These authored facts add no
+fresh provider, encryption or physical-effect proof. The configured application
+gate supplies complete-suite evidence once; #2211 retains combined acceptance.
+
 On initial launch and every profile relaunch, the shared replay fixture probes
 `better-sqlite3` in Electron's main process before device binding and pairing. It
 resolves the installed SQLite package root, loads the genuine addon with

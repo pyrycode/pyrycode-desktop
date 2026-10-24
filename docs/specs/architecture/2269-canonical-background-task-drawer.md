@@ -51,3 +51,6 @@ None. All contracts are supplied by merged helpers; preserve compatibility for u
 
 ## Scope check
 One independently useful mounted behaviour, three acceptance criteria, approximately 210 written lines including plan/evidence, zero production files, zero new exports, one migrated consumer and zero new production rejection branches. Both sketch and written-plan counts fit every ceiling. The analogous #2255 implementation added 59 and deleted 32 scenario lines; its plan/evidence added 69.
+
+## Revisions
+2026-10-24: Source inspection confirmed the legacy adapter captures the actual opening query before asking its history alias. The red oracle therefore combines the planned real-query assertion with zero observed `request_history` aliases. The legacy scenario failed with one alias after positively rendering its task; the canonical migration must retain the real query and eliminate that alias. No product contract changes.

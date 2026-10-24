@@ -3,6 +3,105 @@
 Retained evidence from [replay validation](development-verification-replay-validation.md).
 Each record keeps its execution OS, candidate and proof boundaries.
 
+## Integrated send and queue acceptance
+
+The [PR #2278](https://github.com/pyrycode/pyrycode-desktop/pull/2278) verifier
+stage `e9e2a6139811bc2983ddaf7d62a7bc0ce1cc132bc312594ead26af7a576f14f4`
+was accepted with PASS for #2211 on Linux x86_64, 2026-10-24. Reviewed and built
+candidate `eff1c2f8d6fc5c1eae3aedc0e90f1022d63e900a` has normal-profile provenance
+with `sourceDirty: false`. Ancestry includes canonical prerequisite #2210
+(`928f28fe`) and all eight implementation merges below. These are retained
+executions; documentation runs only the docs guard. The
+[integration plan](../../specs/architecture/2211-send-queue-integration.md)
+retains the builder checks and original evidence handoff.
+
+| Retained Linux check | Executed / passed / failed / skipped |
+| --- | --- |
+| Complete unit gate, individual JSON/JUnit executions | 10144 / 10144 / 0 / 3 |
+| Same unit gate, distinct file/title identities in dispatcher summary | 10045 / 10045 / 0 / 3 |
+| Complete configured application gate | 542 / 542 / 0 / 4 |
+| All 12 cohort specs, subset of application gate | 24 / 24 / 0 / 0 |
+| Captured-client replay, subset of application gate | 29 / 29 / 0 / 1 |
+
+The unit report contains 99 additional parameterized executions sharing titles;
+the two unit rows describe the same run and must not be added. The accepted
+verdict reconciles both counts against the individual results.
+Unit retries/audit errors, browser retries/flaky results
+and Playwright global errors are zero; every browser result has retry index 0.
+Application gate 7 ran `npx playwright test --reporter=json`, the complete
+configured equivalent of `npm run e2e`, with four actual workers and the unchanged
+native-writer, clipboard and parallel projects, without selection/shard filters.
+This exact candidate's normal gate supplies combined acceptance once; child
+focused checks alone do not. No gate was repeated to produce this record.
+
+All 24 cohort scenarios listed in these retained child records are present and
+passed once in that application gate. Spec paths below are under `e2e/`.
+
+| Slice / merge | Cohort specs (passed cases) | Retained child evidence |
+| --- | --- | --- |
+| #2248 / `b7c343eb` | `send-and-stream.spec.ts` (1) | [Send and stream](development-verification-replay-validation-canonical-publisher-verification.md#canonical-send-and-stream-validation) |
+| #2249 / `257fbda1` | `live-user-receipts.spec.ts` (1) | [Receipts](development-verification-replay-validation-canonical-publisher-verification.md#canonical-receipt-validation) |
+| #2250 / `c5d12375` | `user-whitespace.spec.ts` (1) | [User whitespace](#canonical-user-whitespace-validation) |
+| #2254 / `a040d524` | `queue-delivery-evidence.spec.ts` (1), `queued-own-settlement.spec.ts` (6) | [Queue settlement](#canonical-queue-settlement-validation) |
+| #2255 / `f25c78cc` | `status-icon-local-send.spec.ts` (1) | [Local send status](#canonical-local-send-status-validation) |
+| #2256 / `eafa6ce9` | `message-lifecycle-diagnostics.spec.ts` (1) | [Lifecycle diagnostics](development-verification-replay-validation-canonical-message-lifecycle-diagnostics-validation.md#canonical-message-lifecycle-diagnostics-validation) |
+| #2221 / `d192a094` | `queued-send-now.spec.ts` (2), `queued-backlog-interrupt.spec.ts` (1) | [Queue actions](development-verification-replay-validation-canonical-publisher-verification.md#canonical-queue-action-validation) |
+| #2222 / `d86f547c` | `disconnected-message-delivery.spec.ts` (3), `offline-conversation-actions.spec.ts` (3), `offline-held-responses.spec.ts` (3) | [Offline held delivery](#canonical-offline-held-delivery-validation) |
+
+Canonical facts and correlated queries supply content independently per host,
+including reconnect and older pages; legacy content/history aliases do not.
+Explicit own-device/message acceptance remains distinct from transport write
+and assistant activity. Queue order/status, drafts, send-now/drop/interrupt,
+positive processing barriers and no-duplicate delivery assertions remain intact.
+Native exact-wire duplicate/revision probes intentionally bypass
+`createScriptedThread` and strict publisher mutation. Shared real/replay
+`queueTurnEvidence` still requires canonical `turn_end`, exactly one normal
+completion per turn and marker/turn ordering. A query alone cannot prove adapter
+bypass: retain the child inferred-acceptance failure control.
+
+All 29 active replay exchanges retain source provenance and finish with zero
+remaining requests; permission replay also reports no mismatch. The 28 shared-spec
+replays record completed native readiness for all 33 opened processes, including
+saved-profile relaunches. Both `finite protected writer backlog preserves native keyboard and both event loops`
+and `packaged protected history commits and reopens with production encryption`
+are present and passed in the 542/542 gate. Writer evidence records genuine Linux
+`gnome_libsecret`, 8333 persisted items, committed keyboard input `xyz` and no
+writer errors. These native checks are separate from application-message replay.
+
+Install, docs guard, application typecheck/build, client-test typecheck and
+Electron-native preparation passed. Pre-verify passed three enabled checks under
+`--no-suite`; subsequent gates supplied units/typecheck. Builder focused TypeScript
+proof covers all 12 specs, helpers, publisher/queue units and preload/wasm
+declarations at `6403d3d194705caed8e8dcf8665d6ab9a5450540`; those inputs are
+unchanged in the accepted candidate. Node-native units finished before Electron
+preparation. No assertion, timeout, skip, fixture or production change ships here.
+
+Evidence references: agents-repository `logs/verifier-gate_#2211_{1..7}.log`
+and matching stderr, `build/dispatcher-tests/unit-uz4rhwj6/{0.json,0.audit.json,dispatcher.xml,invocation.json}`,
+`build/dispatcher-tests/native-preparation.json` and `out/main/build-provenance.json`.
+Review extractions remain in `/tmp/verifier-2278/`, including `acceptance.json`,
+`application-identities.json`, `replay-completion.json`, `native-storage-input.json`
+and `integration-source.json`. All 44 output hashes are in `build-SHA256SUMS`,
+manifest SHA-256 `f3679bcd4a6801159b58ac47bfe10083b4b4f854b414f31d9616fa692acd391c`.
+Full application report SHA-256:
+`439ed972a8edaf46c426339efb456ac02e59c5a8aff783c3f01fca5c3f5807b6`.
+The accepted stage bundle was retrieved into `/tmp/documentation-2211-accepted/`;
+all 19 checksum entries passed. Its pointers retain full gate-log hashes where
+the bundle contains tails. The authoritative stage record confirms acceptance.
+
+Three unit skips require operator-owned live relay credentials. Four application
+skips are two macOS badge cases, macOS last-window reopen and the existing
+reset-system-prompt fixme (the replay subset's one skip). None counts as passed;
+macOS is outside this Linux ticket's verification scope. All child historical
+failures, including #2222's #2265 replay failure, remain failed evidence. The
+[recorded-test contract](../../recorded-tests.md) and
+[migration inventory/exclusions](../../client-replay-migration.md) retain original
+live-only assertions and strict replay/protected-storage boundaries. This
+migration adds no fresh provider/daemon, encryption-interoperability or physical-effect
+claim and requires no new live capture. Compatibility remains for other cohorts;
+the legacy-removal work can consume this combined acceptance. #2153/#2191 and
+\#2169 remain separately owned. No API or wire-reference change is required.
+
 ## Canonical queue-settlement validation
 
 The [PR #2260](https://github.com/pyrycode/pyrycode-desktop/pull/2260) accepted

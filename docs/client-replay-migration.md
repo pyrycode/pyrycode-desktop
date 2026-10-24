@@ -50,6 +50,13 @@ Unrelated storage and fake-suite work remains under its existing owners.
 
 ## Exclusion rules
 
+The [combined send/queue acceptance](knowledge/features/development-verification-replay-validation-canonical-queue-settlement-validation.md#integrated-send-and-queue-acceptance)
+records #2211's exact candidate and counted Linux proof across all eight slices,
+reusing the child records below. It preserves historical failures and the reset
+fixme; canonical fixtures and captured replay establish no fresh provider/daemon,
+encryption-interoperability or physical-effect proof. The inventory's original
+live-only assertions remain required.
+
 The three mounted cases in `queued-backlog-interrupt.spec.ts` and
 `queued-send-now.spec.ts` now use authored canonical facts; see their
 [fixture contract](knowledge/features/e2e-harness.md#scripted-and-native-thread-fixtures)

@@ -108,6 +108,17 @@ provider, encryption or physical-effect proof. Compatibility remains for unmigra
 siblings; #2211 owns combined acceptance, with #2169's missing-acceptance recovery
 and #2153/#2191 repairs separate.
 
+The mounted `message-copy.spec.ts` and `code-block-copy.spec.ts` use authored
+canonical facts and correlated queries; message copy explicitly accepts the
+submitted text with its actual device/message identity before settlement.
+Their [counted Linux evidence](knowledge/features/development-verification-replay-validation.md#canonical-clipboard-validation)
+retains real OS clipboard writes/readback through Electron, keyboard/focus and
+geometry assertions in the serial `clipboard` project with `native-writer`.
+Replay cannot replace those interactions. Captured-client replay, canonical
+activation, captured history, protected storage and every original live-only
+assertion remain in scope. No fresh provider, encryption or additional
+physical-effect proof is introduced; #2212/#2209 retain combined acceptance.
+
 The mounted `message-lifecycle-diagnostics.spec.ts` uses explicit canonical facts
 and correlated replies in native mode to deliver repeated full acceptance items.
 Its [fixture contract](knowledge/features/e2e-harness.md#scripted-and-native-thread-fixtures)

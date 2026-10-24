@@ -85,6 +85,18 @@ None.
 - Retained test-first run: canonical launch with legacy reply frames, prerequisite
   1 passed, owned cases 2 executed/failed with worker exit 7; reports remain at
   `/tmp/builder-2224/red-report.json` and `red-results`. No failed evidence replaced.
-- Complete configured application/replay gate remains dispatcher-owned, pending
-  its counted candidate evidence. Reuse that gate; no duplicate full suite ran here.
+- At builder handoff the complete configured application/replay gate was pending
+  with the dispatcher. No duplicate full suite ran here; see the accepted result below.
   No fresh provider/encryption proof is claimed; macOS is outside this ticket's scope.
+
+## Verifier acceptance — 2026-10-24
+
+Accepted verifier stage
+`858d96ba00a7b4c9a6506b0e82ac0c2fbfc6d149095bcd6cc7c6f67f347e98b1`
+records PASS for PR #2266 at `cd350ca7ca914295943e422557773d02d4357310`
+on Linux x64. The [counted verification record](../../knowledge/features/development-verification-replay-validation.md#canonical-clipboard-validation)
+retains the matching configured gate: 542 executed/passed, 0 failed, 4 skipped,
+both named owned cases and the native prerequisite present and passed, retries
+zero. The supplied unit-gate counts are 10045 executed/passed, 0 failed, 3 skipped.
+The [fixture guidance](../../knowledge/features/development-verification-evidence-that-cannot-pass-too-early.md#canonical-clipboard-fixtures)
+records the verifier's documentation handoff for explicit acceptance and barriers.

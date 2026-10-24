@@ -173,6 +173,15 @@ protected-storage coverage. Original live-only assertions remain required;
 authored facts add no fresh provider, encryption or physical-effect proof.
 Combined feature acceptance remains with #2211.
 
+The [canonical clipboard validation](knowledge/features/development-verification-replay-validation.md#canonical-clipboard-validation)
+records `message-copy.spec.ts` and `code-block-copy.spec.ts` passing on authored
+facts with explicit message acceptance. Their real Electron OS clipboard
+writes/readback remain in the serial `clipboard` project with its `native-writer`
+prerequisite; captured replay cannot replace these native interactions. The
+matching complete Linux gate retains captured-client replay, canonical activation,
+captured history, protected storage and original live-only assertions. No fresh
+provider, encryption or additional physical-effect proof is introduced.
+
 On initial launch and every profile relaunch, the shared replay fixture probes
 `better-sqlite3` in Electron's main process before device binding and pairing. It
 resolves the installed SQLite package root, loads the genuine addon with

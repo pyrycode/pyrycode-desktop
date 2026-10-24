@@ -578,6 +578,71 @@ unmigrated siblings; #2211 retains combined acceptance, #2153/#2191 remain separ
 repairs and #2169 owns missing-acceptance recovery. No production or visual change
 ships in this migration.
 
+## Canonical clipboard validation
+
+The accepted [PR #2266](https://github.com/pyrycode/pyrycode-desktop/pull/2266)
+verifier stage `858d96ba00a7b4c9a6506b0e82ac0c2fbfc6d149095bcd6cc7c6f67f347e98b1`
+records PASS on Linux x64, 2026-10-24, at
+`cd350ca7ca914295943e422557773d02d4357310`. Normal-profile build provenance
+identifies that revision with `sourceDirty: false`; both owned specs are unchanged
+from builder candidate `364f68544dfcabd686163b8d7338f895e4f26476`. These are
+retained results, not documentation-stage test runs. The
+[plan](../../specs/architecture/2224-canonical-clipboard-facts.md#builder-verification--2026-10-24)
+retains commands, focused TypeScript inputs and report hashes; the
+[fixture contract](development-verification-evidence-that-cannot-pass-too-early.md#canonical-clipboard-fixtures)
+explains explicit acceptance and rendered processing barriers.
+
+| Retained Linux check | Executed / passed / failed / skipped |
+| --- | --- |
+| Builder owned clipboard cases, `--project=clipboard --retries=0` | 2 / 2 / 0 / 0 |
+| Builder native-writer prerequisite, separately | 1 / 1 / 0 / 0 |
+| Builder affected canonical-publisher units | 17 / 17 / 0 / 0 |
+| Supplied dispatcher unit gate 4, JUnit counts | 10045 / 10045 / 0 / 3 |
+| Complete configured application gate 7, `npx playwright test --reporter=json` | 542 / 542 / 0 / 4 |
+
+Unit totals use the supplied counted gate report; verifier prose lists 10,144,
+so that larger aggregate is not used here. Both owned tests are present and passed
+in the builder run and matching complete application gate, in `clipboard`:
+
+- `copies only the activated block, preserving literal text and whitespace`
+- `copies a message to the OS clipboard by pointer and by keyboard, and draws the redrawn bubble`
+
+The prerequisite `finite protected writer backlog preserves native keyboard and both event loops`
+is present and passed in `native-writer` in both runs. All retry indices are zero;
+the complete gate reports zero flaky outcomes and three actual workers. Setup and
+launch-fate attachments show successful launches, exit 0 and no teardown failures.
+The cases retain real Electron OS clipboard writes/readback, synthetic sentinels,
+whole-message Markdown/user-source copy, notification denial and bubble/meta
+geometry. Code copy retains literal whitespace, headed/headerless/long/empty
+blocks, plain-only formats, Tab/Enter/Space, visible focus and containment/non-overlap
+at 1280 and 800 pixels. No production or visual behavior changed.
+
+All 29 captured-client cases passed, with 29 completed exchanges and zero remaining
+requests. Canonical activation, captured history, replay-native-storage controls
+and native/protected-storage prerequisites passed. This matching configured gate
+supplies complete-suite acceptance once; no duplicate full run was needed.
+Application report `logs/verifier-gate_#2224_7.log` has SHA-256
+`3cf47e9eb1c2d1bd8afd1389e65ef8e3f4eef70fb7c1d11cc4f0a3b2a1a29cf3`.
+
+Builder application/client-test typechecks, focused TypeScript checking of both
+specs and imported helpers, and build passed. Verifier install, docs guard,
+typechecks/build and sequential Electron-native preparation passed. Its pre-verify
+ran three checks under `--no-suite`; later unit/build gates supplied the omitted
+checks. The test-first canonical launch with legacy replies remains failed:
+2 owned executed/failed, 0 passed/skipped; separately 1 prerequisite
+executed/passed, 0 failed/skipped. Reports remain under `/tmp/builder-2224/`.
+
+The four application skips are two macOS badge cases, macOS window reopen and the
+existing system-prompt reset fixme; three units were skipped. Skips are not passes.
+macOS is outside this Linux ticket's verification scope. The
+[recorded-test contract](../../recorded-tests.md) and
+[migration inventory](../../client-replay-migration.md) retain strict replay,
+captured history, protected storage, native prerequisites and original live-only
+assertions. The owned native clipboard checks ran on Linux; no fresh provider,
+encryption or additional physical-effect proof was introduced. Compatibility
+remains for unmigrated siblings; #2212/#2209 retain combined feature acceptance,
+and #2153/#2191 remain separate repairs.
+
 ## Counted Linux compatibility validation
 
 These are retained results accepted by the

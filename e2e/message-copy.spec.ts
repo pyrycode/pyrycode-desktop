@@ -1,10 +1,8 @@
-import { test, expect, seedConversationsFrame, SEEDED_ROW } from './fixtures/launchPairedApp'
+import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
+import { createCanonicalThread } from './fixtures/canonicalThread'
 import { encodeEnvelope, decodeEnvelope } from '../src/main/transport/codec'
-import type {
-  AssistantDeltaPayload,
-  SendMessagePayload,
-  TurnEndPayload
-} from '../src/shared/wire/types'
+import type { Envelope, SendMessagePayload } from '../src/shared/wire/types'
+import type { ThreadItem, ThreadUpdate } from '../src/shared/wire/thread'
 
 // #969 — the message bubble's meta row and its copy control, proved in the one tier that can. Renderer
 // tests are static server renders under `environment: 'node'` with no DOM, no stylesheet and no click
@@ -56,61 +54,69 @@ const TYPED_TEXT = 'hello from the composer'
 const CLIPBOARD_SENTINEL = 'sentinel-before-any-copy'
 
 const FIXED_TS = '2026-07-07T12:00:00.000Z'
-const TURN_ID = 'turn-1'
-
-// The [assistant_delta, turn_end] pair send-and-stream.spec.ts uses: every pushed frame is one a real
-// daemon produces, and turn_end SETTLES the bubble so it renders through the markdown path — the branch
-// whose copy source differs from its rendered text.
-const buildReplyFrames = (inbound: Uint8Array): Uint8Array[] => {
-  const envelope = decodeEnvelope(inbound)
-  switch (envelope.type) {
-    case 'send_message': {
-      const payload = envelope.payload as SendMessagePayload
-      if (payload.conversation_id !== SEEDED_ROW.id) return []
-      return [
-        encodeEnvelope({
-          id: 99,
-          type: 'assistant_delta',
-          ts: FIXED_TS,
-          payload: {
-            conversation_id: SEEDED_ROW.id,
-            turn_id: TURN_ID,
-            seq: 0,
-            text: REPLY_SOURCE
-          } satisfies AssistantDeltaPayload
-        }),
-        encodeEnvelope({
-          id: 100,
-          type: 'turn_end',
-          ts: FIXED_TS,
-          payload: {
-            conversation_id: SEEDED_ROW.id,
-            turn_id: TURN_ID,
-            stop_reason: 'end_turn'
-          } satisfies TurnEndPayload
-        })
-      ]
-    }
-    default:
-      return [seedConversationsFrame()]
-  }
-}
+const SESSION_ID = 'message-copy-session'
+const route = { conversation_id: SEEDED_ROW.id, epoch: 'message-copy-epoch' }
+const fact = (id: number, kind: string, text: string, active = false): ThreadItem => ({
+  id, order: id * 10, rev: 1, kind, status: active ? 'running' : 'finished', active,
+  shown: true, summary: '', session: SESSION_ID, content: { text, ts: FIXED_TS }
+})
+const frame = (update: ThreadUpdate): Uint8Array =>
+  encodeEnvelope({ id: 100 + update.payload.version, ts: FIXED_TS, ...update })
 
 test('copies a message to the OS clipboard by pointer and by keyboard, and draws the redrawn bubble', async ({
   launchPairedApp
 }) => {
-  const { page, app } = await launchPairedApp({ buildReplyFrames })
+  const requests: Envelope[] = []
+  const sends: SendMessagePayload[] = []
+  const thread = createCanonicalThread({ conversations: [{
+    summary: { ...SEEDED_ROW, current_session_id: SESSION_ID },
+    epoch: route.epoch, version: 1, items: []
+  }] })
+  const { page, app, daemon } = await launchPairedApp({ threadMode: 'canonical', thread,
+    helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: inbound => {
+      const envelope = decodeEnvelope(inbound)
+      requests.push(envelope)
+      if (envelope.type === 'send_message') sends.push(envelope.payload as SendMessagePayload)
+      return []
+    } })
+  const identity = await page.evaluate(() => window.pyry.deviceIdentity())
+  if (!identity.ok) throw new Error('Public device identity unavailable')
 
   // Seed a known value so a no-op control cannot pass by leaving something plausible behind.
   await app.evaluate(({ clipboard }, seed) => clipboard.writeText(seed), CLIPBOARD_SENTINEL)
 
   await page.getByPlaceholder('Message…').fill(TYPED_TEXT)
   await page.getByRole('button', { name: 'Send' }).click()
+  await expect.poll(() => sends.length).toBe(1)
+  const sent = sends[0]
+  expect(sent).toMatchObject({ conversation_id: SEEDED_ROW.id, text: TYPED_TEXT })
+  expect(sent.message_id).toMatch(/\S+/)
 
   const assistantBubble = page.locator('[data-thread-role="assistant"]')
   const userBubble = page.locator('[data-thread-role="user"]')
+  daemon.pushFrame(frame({ type: 'thread_item_added', payload: { ...route, version: 2,
+    item: fact(2, 'assistant_message', REPLY_SOURCE, true)
+  } }))
   await expect(assistantBubble.locator('.bubble__markdown')).toBeVisible({
     timeout: ROUND_TRIP_TIMEOUT_MS
+  })
+  await expect(assistantBubble.locator('.bubble__cursor')).toHaveCount(1)
+  // Rendered assistant activity cannot accept the local submission.
+  await expect(page.locator('[data-read-row] [data-thread-role="user"]')).toHaveCount(0)
+  daemon.pushFrame(frame({ type: 'thread_item_added', payload: { ...route, version: 3,
+    item: { ...fact(1, 'user_message', sent.text), status: 'delivered', content: {
+      text: sent.text, ts: FIXED_TS, device_id: identity.deviceId, message_id: sent.message_id
+    } }
+  } }))
+  await expect(page.locator('[data-read-row="1"] [data-thread-role="user"]')).toBeVisible()
+  await expect(userBubble).toHaveCount(1)
+  daemon.pushFrame(frame({ type: 'thread_item_changed', payload: { ...route, version: 4,
+    item_id: 2, base_rev: 1, rev: 2, changes: { active: false, status: 'finished' }
+  } }))
+  await expect(assistantBubble.locator('.bubble__cursor')).toHaveCount(0)
+  await expect(assistantBubble.getByRole('heading', { name: 'Heading', exact: true })).toBeVisible()
+  expect(requests.find(request => request.type === 'thread_catch_up')).toMatchObject({
+    payload: { conversation_id: SEEDED_ROW.id, version: 0 }
   })
 
   // --- 1. The measurement + the pointer path (AC3). If the blanket permission denial reaches
@@ -184,4 +190,6 @@ test('copies a message to the OS clipboard by pointer and by keyboard, and draws
     return meta.getBoundingClientRect().top >= content.getBoundingClientRect().bottom
   })
   expect(laidOutAtFoot).toBe(true)
+  expect(requests.map(request => request.type)).not.toContain('request_history')
+  expect(requests.map(request => request.type)).not.toContain('history_page')
 })

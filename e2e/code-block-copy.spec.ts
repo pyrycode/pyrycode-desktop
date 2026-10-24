@@ -1,5 +1,8 @@
-import { test, expect, seedConversationsFrame, SEEDED_ROW } from './fixtures/launchPairedApp'
+import { test, expect, SEEDED_ROW } from './fixtures/launchPairedApp'
+import { createCanonicalThread } from './fixtures/canonicalThread'
 import { encodeEnvelope, decodeEnvelope } from '../src/main/transport/codec'
+import type { Envelope, SendMessagePayload } from '../src/shared/wire/types'
+import type { ThreadUpdate } from '../src/shared/wire/thread'
 
 const HEADED_CODE = 'function example() {\n  const literal = "<b>&amp;</b>"\n\n\treturn `literal ${value} \\\\ path`\n}\n'
 const SIMPLE_CODE = '  plain <script> & "quotes"\n\nlast line\n\n'
@@ -11,32 +14,41 @@ const SOURCE = [
   '```text', LONG_CODE + '```', '', '```text', '```', '', 'After the blocks.'
 ].join('\n')
 
-function buildReplyFrames(inbound: Uint8Array): Uint8Array[] {
-  const envelope = decodeEnvelope(inbound)
-  if (envelope.type !== 'send_message') return [seedConversationsFrame()]
-  const common = { conversation_id: SEEDED_ROW.id, turn_id: 'code-copy-turn' }
-  return [
-    encodeEnvelope({
-      id: 99, type: 'assistant_delta', ts: '2026-09-19T12:00:00.000Z',
-      payload: { ...common, seq: 0, text: SOURCE }
-    }),
-    encodeEnvelope({
-      id: 100, type: 'turn_end', ts: '2026-09-19T12:00:00.000Z',
-      payload: { ...common, stop_reason: 'end_turn' }
-    })
-  ]
-}
-
 test('copies only the activated block, preserving literal text and whitespace', async ({ launchPairedApp }) => {
-  const { page, app } = await launchPairedApp({ buildReplyFrames })
+  const requests: Envelope[] = []
+  const sends: SendMessagePayload[] = []
+  const thread = createCanonicalThread({ conversations: [{
+    summary: { ...SEEDED_ROW, current_session_id: 'code-copy-session' },
+    epoch: 'code-copy-epoch', version: 1, items: []
+  }] })
+  const { page, app, daemon } = await launchPairedApp({ threadMode: 'canonical', thread,
+    helloAck: { capabilities: ['interactive', 'thread'] }, buildReplyFrames: inbound => {
+      const envelope = decodeEnvelope(inbound)
+      requests.push(envelope)
+      if (envelope.type === 'send_message') sends.push(envelope.payload as SendMessagePayload)
+      return []
+    } })
   await page.getByPlaceholder('Message…').fill('Show code')
   await page.getByRole('button', { name: 'Send', exact: true }).click()
+  await expect.poll(() => sends.length).toBe(1)
+  expect(sends[0]).toMatchObject({ conversation_id: SEEDED_ROW.id, text: 'Show code' })
+  daemon.pushFrame(encodeEnvelope({ id: 99, ts: '2026-09-19T12:00:00.000Z',
+    ...{ type: 'thread_item_added', payload: {
+      conversation_id: SEEDED_ROW.id, epoch: 'code-copy-epoch', version: 2,
+      item: { id: 1, order: 10, rev: 1, kind: 'assistant_message', status: 'finished',
+        active: false, shown: true, summary: '', session: 'code-copy-session',
+        content: { text: SOURCE, ts: '2026-09-19T12:00:00.000Z' } }
+    } } satisfies ThreadUpdate
+  }))
   const blocks = page.locator('.bubble__markdown .code-block')
   await expect(blocks).toHaveCount(4)
   await expect(blocks.nth(0).locator('.code-block__header')).toHaveText('typescript')
   await expect(blocks.nth(1).locator('.code-block__header')).toHaveCount(0)
   const copies = page.getByRole('button', { name: 'Copy code', exact: true })
   await expect(copies).toHaveCount(4)
+  expect(requests.find(request => request.type === 'thread_catch_up')).toMatchObject({
+    payload: { conversation_id: SEEDED_ROW.id, version: 0 }
+  })
 
   // Read only synthetic values we have written, never the clipboard's prior contents.
   const seed = async (): Promise<void> => {
@@ -110,4 +122,6 @@ test('copies only the activated block, preserving literal text and whitespace', 
     await blocks.nth(1).scrollIntoViewIfNeeded()
     await page.screenshot({ path: `/tmp/builder-1540-code-copy-${width}.png`, animations: 'disabled' })
   }
+  expect(requests.map(request => request.type)).not.toContain('request_history')
+  expect(requests.map(request => request.type)).not.toContain('history_page')
 })

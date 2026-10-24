@@ -65,3 +65,26 @@ assertions remain the failure controls; publisher ownership/revision checks rema
 
 ## Open Questions
 None.
+
+## Builder verification — 2026-10-24
+- Linux x64 candidate `364f68544dfcabd686163b8d7338f895e4f26476`, containing
+  main `f25c78ccba4d`; normal build provenance records `sourceDirty: false`.
+- Full pre-verify passed 5/5 checks after merging main; affected publisher units:
+  17 executed/passed, 0 failed/skipped. Final committed branch checks passed 3/3
+  with unchanged unit/typecheck portions deliberately omitted on that repeat.
+- `npm run build`, `npm run typecheck:client-tests` and focused
+  `tsc --noEmit -p /tmp/builder-2224/tsconfig.clipboard.json` passed. The retained
+  `/tmp/builder-2224/typecheck-inputs.txt` confirms both specs and imported helpers.
+- `npx playwright test e2e/code-block-copy.spec.ts e2e/message-copy.spec.ts
+  --project=clipboard --retries=0 --reporter=json
+  --output=/tmp/builder-2224/green-results` passed: owned clipboard cases
+  2 executed / 2 passed / 0 failed / 0 skipped; native-writer prerequisite
+  separately 1 executed / 1 passed / 0 failed / 0 skipped. Every retry index is 0.
+  Report: `/tmp/builder-2224/green-report.json`, SHA-256
+  `eca63aa431578c99174d0c577ba87de9b4450c14ded79eccc71d997ff62506b5`.
+- Retained test-first run: canonical launch with legacy reply frames, prerequisite
+  1 passed, owned cases 2 executed/failed with worker exit 7; reports remain at
+  `/tmp/builder-2224/red-report.json` and `red-results`. No failed evidence replaced.
+- Complete configured application/replay gate remains dispatcher-owned, pending
+  its counted candidate evidence. Reuse that gate; no duplicate full suite ran here.
+  No fresh provider/encryption proof is claimed; macOS is outside this ticket's scope.

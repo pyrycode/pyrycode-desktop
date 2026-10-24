@@ -235,6 +235,15 @@ no fresh provider, relay, encryption or physical-effect proof. #2212 retains
 complete acceptance and #1929 owns broader real hosted integration; macOS is
 outside this Linux ticket's scope.
 
+The [canonical finished-count validation](knowledge/features/conversation-shell-background-tasks.md)
+records `background-task-finished-count.spec.ts` using linked facts, correlated
+opening replies and positive patch/settled-refresh barriers before unchanged-count
+assertions. Its counted Linux evidence includes retained Completed/Stopped rows,
+the native-writer prerequisite and the complete configured application gate.
+Captured-client replay, canonical activation, captured history, protected storage
+and existing live-only assertions remain required. This migration adds no fresh
+provider, encryption or physical-effect proof; macOS is outside scope.
+
 On initial launch and every profile relaunch, the shared replay fixture probes
 `better-sqlite3` in Electron's main process before device binding and pairing. It
 resolves the installed SQLite package root, loads the genuine addon with

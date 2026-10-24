@@ -189,6 +189,16 @@ asserting the first task's absence. Keep the single mounted interaction sequence
 Session-bound thinking/idle controls arbitrate composer Escape without changing
 task membership; a captured send alone does not accept a user item.
 
+[`background-task-status-summary.spec.ts`](../../../e2e/background-task-status-summary.spec.ts)
+uses the same canonical route for linked running tasks, exact-base terminal
+revisions and distinct saved reports. Replacing a task's content to refresh its
+linked description must retain its report and terminal facts. Wait for the new
+description before checking unchanged outcomes/summaries and the absent running
+pill. A later `shown: false` revision removes the relay task; Finished · 1 must
+render before its row-absence check. Roster omission cannot establish removal.
+See [task-outcome barriers and counted Linux validation](conversation-shell-background-tasks.md#canonical-task-outcome-testing),
+including the distinct failed native prerequisite tracked in #2273.
+
 [`message-side-actions.spec.ts`](../../../e2e/message-side-actions.spec.ts) keeps
 its single-consumer fixture local and creates it afresh for each of three cases.
 It supplies an empty opening window, summary/current session, epoch, ordered

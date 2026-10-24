@@ -200,6 +200,19 @@ captured history, protected storage/native prerequisites and original live-only
 assertions. No fresh provider, encryption or physical-effect proof is introduced;
 macOS is outside scope, and #2213 retains integrated feature acceptance.
 
+The mounted `background-task-status-summary.spec.ts` uses canonical linked facts
+and correlated queries for Completed/Failed outcomes, distinct saved summaries
+and a same-identity description refresh. Its
+[processing barriers and counted Linux evidence](knowledge/features/conversation-shell-background-tasks.md#canonical-task-outcome-testing)
+require the refreshed description before retention checks and Finished · 1 before
+asserting removal by `shown: false`; legacy roster omission supplies no membership
+proof. The complete configured gate retains captured-client replay, canonical
+activation, captured history, protected storage/native prerequisites and original
+live-only assertions/exclusions. The separate failed native prerequisite remains
+tracked in #2273; subsequent passes establish no native reliability repair or fresh
+provider, encryption or physical-effect proof. macOS is outside this Linux ticket's
+scope; #2213 retains integrated feature acceptance.
+
 Encryption interoperability, handshakes, reconnect transport, real process
 liveness, native platform integration, and daemon/tool filesystem effects cannot
 be established by application-message replay. Their live checks remain required.

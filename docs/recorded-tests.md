@@ -244,6 +244,16 @@ Captured-client replay, canonical activation, captured history, protected storag
 and existing live-only assertions remain required. This migration adds no fresh
 provider, encryption or physical-effect proof; macOS is outside scope.
 
+The [canonical task-outcome validation](knowledge/features/conversation-shell-background-tasks.md#canonical-task-outcome-testing)
+records `background-task-status-summary.spec.ts` using linked facts, distinct saved
+reports through description refresh and explicit `shown: false` membership with
+positive rendered barriers. Its counted Linux focused and complete-gate passes
+retain canonical activation, captured-client replay, captured history, protected
+storage/native prerequisites and original live-only assertions/exclusions. The
+earlier native-writer timeout remains failed evidence under #2273; later passes
+claim no native reliability repair or fresh provider, encryption or physical-effect
+proof. macOS is outside scope; #2213 retains integrated feature acceptance.
+
 On initial launch and every profile relaunch, the shared replay fixture probes
 `better-sqlite3` in Electron's main process before device binding and pairing. It
 resolves the installed SQLite package root, loads the genuine addon with

@@ -282,6 +282,67 @@ Some view fixtures inject an arbitrary `outcomeLabel` to test escaping; they do 
 establish that production displays raw unknown status words. Model-influenced text
 remains escaped React children, never markup, attributes or logs.
 
+### Canonical task-outcome testing
+
+[`background-task-status-summary.spec.ts`](../../../e2e/background-task-status-summary.spec.ts)
+uses `createCanonicalThread` with `{ threadMode: 'canonical', thread }`, explicit
+summary/current session, item sessions/agent, epoch and unique orders. The request
+observer supplies no content. Require the actual version-zero `thread_catch_up`,
+both task descriptions, Running · 2, two Running tags and no summaries before
+publishing terminal revisions; no `request_history` alias may appear.
+
+Exact-base revisions keep the same item/task/tool identities and set each task
+inactive, with `finished` for the build and `failed` for the relay. Finished · 2
+must retain Completed/Failed and each task's distinct saved `task_report.summary`.
+Refreshing the build's linked description replaces its `content`, so explicitly
+carry its saved report forward alongside the link and retain terminal status and
+inactivity. Wait for `RELISTED` before checking two rows, both outcomes, distinct
+summaries and the absent running pill: unchanged tags alone could pass before
+the refresh reaches React.
+
+Membership removal needs its own newer exact-base `shown: false` relay revision.
+Wait for the positive Finished · 1 header before asserting relay-row absence,
+then require the build's refreshed description, Completed tag and saved summary.
+Legacy roster omission cannot prove authoritative removal. The trusted More
+actions → Background tasks interaction and synthetic literals remain in this
+single mounted lifecycle; compatibility remains available to unmigrated siblings.
+
+Retained Linux x64 evidence, 2026-10-24, is in the
+[plan](../../specs/architecture/2272-canonical-task-outcomes.md#validation-evidence)
+and [accepted verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2286#issuecomment-6390236943).
+Implementation `78dca8b3` was built/tested at
+`588dcf964fb11c6260ba69f0a93606ae1a41aaa2`; the reviewed complete-gate candidate
+is `69331ddc216f8b172165ee06fa4491dbdf85ca50`. Both builds have normal profile,
+clean source and matching main/preload/renderer hashes recorded in the plan.
+
+| Run | Executed | Passed | Failed | Skipped | Retries |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Builder opening-content red control | 2 | 1 | 1 | 0 | 0 |
+| Builder first final-candidate invocation | 1 | 0 | 1 | 1 dependent case not run | 0 |
+| Builder separate unchanged final-candidate invocation | 2 | 2 | 0 | 0 | 0 |
+| Dispatcher configured application gate 7 | 542 | 542 | 0 | 4 | 0 |
+
+The named `a completed and a failed task move to Finished with their own tags and
+summaries` case and `finite protected writer backlog preserves native keyboard and
+both event loops` are present and passed in the final focused run and complete
+gate. The red control failed the owned opening oracle while the native prerequisite
+passed. The first final-candidate invocation instead timed out in that unchanged
+native prerequisite after 7,564/8,333 persisted facts; the owned case did not run.
+Its `/tmp/builder-2272/owned-final.{log,json}` and `failed-final-results/` artifacts
+remain separate failed evidence under [#2273](https://github.com/pyrycode/pyrycode-desktop/issues/2273).
+Later passes establish no native reliability repair.
+
+The builder's 17 canonical-publisher units executed/passed, 0 failed/skipped.
+App/client/focused TypeScript checks and build passed before Electron preparation.
+The accepted verdict confirms canonical activation, captured-client replay,
+captured history and protected-storage/native prerequisites in the complete gate.
+Its four exclusions remain the three macOS-only cases and system-prompt Reset
+fixme. These are recorded application results; macOS is outside this Linux ticket's
+scope. [Recorded tests](../../recorded-tests.md) and the
+[replay inventory](../../client-replay-migration.md) retain original live-only
+assertions. No fresh provider, encryption or physical-effect proof is introduced;
+\#2213 retains integrated feature acceptance and #2153/#2191 remain separate repairs.
+
 ## Progress block (#1640)
 
 `TaskRow` draws `TaskProgress` between any summary and the Latest update block when

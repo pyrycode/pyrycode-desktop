@@ -80,3 +80,13 @@ No new I/O or IPC contracts. Existing typed upload/retrieval outcomes remain aut
 
 **Reviewer:** builder (self-review per `builder/security-review.md`)
 **Date:** 2026-10-24
+
+## Revisions
+
+2026-10-24: No Desktop production defect remains with supplied full-root attachment facts. Added the comparison beside the existing main/preload/runtime integration cases in `e2e/threadBodies.test.ts`, and isolated current-daemon acceptance in `e2e/real-compact-attachment.spec.ts` rather than changing the older shared color scenario. That older scenario's original provider assertion passed unchanged against the repaired daemon. The new live scenario also passes acceptance, navigation, online restart, decoded image retrieval and missing complete persisted history. Both Open Questions are resolved: no production patch, and the approved launcher has live access.
+
+The historical retained input is `e2e/recordings/claude-attachment.json`, SHA-256 `6d54b1aa7ae9bf9a0967e30279439dab8cfe6dd12c574b78594da8e51b56aaba`, captured from Desktop `00ec821f9380b00cf2dfc0dd4817ee15584106a5` / daemon `58f46aa56962f75ff4e3d77c0f8ffb0cad00ebbf`. Its queued user root carries one `attachment_ids` entry and no `attachments`; subsequent changed content also lacks attachment facts. The new comparison preserves this absence instead of inventing a failing Desktop patch. The current daemon returns the same attachment ID/filename across queued acceptance, delivered replacement and fresh compact query data.
+
+Exploratory evidence stays under `/tmp/builder-2164/`: `live-baseline.log` failed at Electron launch because the build had not completed; `live-baseline-built.log` passed the unchanged color case (1/1/0/0 executed/passed/failed/skipped). `live-compact-first.log` and `live-compact-barriers.log` failed because the test captured the old sidebar title before new-chat activation; the observer showed real queued/delivered facts and retrieval. `live-compact-navigation.log` reached fresh delivery but failed its storage reading before Electron's SQLite native dependency was prepared. `npm run rebuild:electron` fixed that setup; `live-compact-native.log` passed (1/1/0/0). None of those earlier failed attempts is claimed as a pass. Navigation now waits for the new row and the other conversation's completed query. Reopening explicitly correlates each owning query with its successful final marker; restart requires version zero and full authoritative roots. The final run will identify a clean committed normal build separately.
+
+Final size forecast: about 340 written lines, zero production changes/exports/consumer migrations or added reject branches. One behavior and its regression remain together.

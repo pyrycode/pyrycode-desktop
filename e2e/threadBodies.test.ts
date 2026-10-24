@@ -10,6 +10,7 @@ import type { NoiseRelayDriverConfig } from '../src/main/transport/noiseRelayDri
 import type { PyryApi } from '../src/preload'
 import { createThreadRuntime } from '../src/renderer/src/store/threadRuntime'
 import { beginChatHistoryRemoval } from '../src/renderer/src/store/chatHistoryRemoval'
+import { threadItemPresentation } from '../src/renderer/src/screens/conversation/threadItemPresentation'
 const electron = vi.hoisted(() => ({ expose: vi.fn(), listeners: new Set<Function>(), send: vi.fn() }))
 vi.mock('electron', () => ({ contextBridge: { exposeInMainWorld: electron.expose }, webUtils: {}, ipcRenderer: {
   send: electron.send, on: (_: string, listener: Function) => electron.listeners.add(listener),
@@ -92,6 +93,46 @@ async function compactRuntime() {
   return { ...h, r, read, requests, last, data, done, update, snapshot: () => r.compact.snapshot('a', 'c'),
     close() { r.dispose(); off(); h.connection.stop() } }
 }
+it.each([false, true])('compact full-root attachment authority through main, repaired facts=%s', async repaired => {
+  const h = await compactRuntime()
+  try {
+    h.data(); h.done()
+    h.r.sends.getState().retain('a', 'c', 'device', { type: 'userText', text: 'same text', messageId: 'message',
+      attachments: [{ attachmentId: 'optimistic-only', filename: 'local.png' }] })
+    const facts = { text: 'same text', device_id: 'device', message_id: 'message', attachment_ids: ['stored'],
+      ...(repaired ? { attachments: [{ attachment_id: 'stored', filename: 'daemon.png' }] } : {}) }
+    const accepted = { id: 3, rev: 1, kind: 'user_message', status: 'queued', active: true, shown: false, summary: '', content: facts }
+    const update = (value: typeof accepted, version: number) => h.emit(frame('thread_compact_update', {
+      ...compactScope, from_version: version - 1, version, progress: false, item: value }, 0))
+    // Equal text and message identity from another device cannot retire the local send.
+    update({ ...accepted, content: { ...facts, device_id: 'peer-device' } }, 9)
+    expect(h.r.sends.getState().select('a', 'c').pending).toHaveLength(1)
+    update({ ...accepted, rev: 2 }, 10)
+    expect(h.r.sends.getState().select('a', 'c').pending).toHaveLength(0)
+    const delivered = { ...accepted, order: 9, rev: 3, status: 'delivered', active: false, shown: true }
+    update(delivered, 11)
+    const check = () => {
+      const rows = h.snapshot()!.rows.filter(r => r.kind === 'user_message')
+      expect(rows).toHaveLength(1)
+      const view = threadItemPresentation(rows[0], true)
+      expect(view?.kind).toBe('userText')
+      if (view?.kind !== 'userText') throw Error('Expected accepted user message')
+      expect(view.attachments).toEqual(repaired ? [{ attachmentId: 'stored', filename: 'daemon.png' }] : undefined)
+      expect(h.r.sends.getState().select('a', 'c').pending).toHaveLength(0)
+      expect(h.r.items.getState().snapshot('a', 'c')).toBeNull()
+      expect(h.read).not.toHaveBeenCalled()
+    }
+    check()
+    update({ ...delivered, rev: 4 }, 12); check()
+    // Force genuine catch-up, delivering full roots and the separate successful final marker.
+    h.update(15, undefined, 14)
+    await vi.waitFor(() => expect(h.requests().at(-1)?.type).toBe('thread_catch_up'))
+    h.emit(frame('thread_items', { ...compactScope, version: 15, items: [{ ...delivered, rev: 5 }], final: false }, h.last()))
+    h.emit(frame('thread_items', { ...compactScope, version: 15, items: [], final: true, from_version: 8 }, h.last()))
+    expect(h.snapshot()?.checkpoint).toBe(15); check()
+    expect(h.requests().some(e => ['send_message', 'thread_read_tool_body', 'thread_read_children'].includes(e.type))).toBe(false)
+  } finally { h.close() }
+})
 it('text send through main keeps contiguous compact history and Older usable', async () => {
   const h = await compactRuntime()
   try {

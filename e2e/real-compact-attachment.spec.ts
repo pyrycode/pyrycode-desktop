@@ -7,6 +7,7 @@ import type { Page } from '@playwright/test'
 import { test, expect, encodePairingPayload, withIsolatedElectronApp } from './fixtures/realDaemon'
 import { pairFromUnpairedLaunch } from './fixtures/pairingArrival'
 import { confirmCreateChat } from './fixtures/confirmCreateChat'
+import { completedAttachmentDelivery } from './fixtures/compactAttachmentEvidence'
 import { COMPOSER_ATTACH_LABEL } from '../src/renderer/src/screens/conversation/ComposerAttach'
 import { ATTACHMENT_OPEN_CHANNEL } from '../src/shared/ipc/attachmentOpen'
 
@@ -17,7 +18,8 @@ const picture = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAS0l
   '8OJg6Ln3AAAAAElFTkSuQmCC', 'base64')
 type Evidence = { host: string; chat: string; message: string; device: string; owningHost: boolean | null; grants: Record<string, boolean>;
   queries: { id: string; chat: string; projection?: string; version?: number }[];
-  finals: string[]; roots: { id: number; rev: number; status: string; attachment: string; filename: string; live: boolean }[];
+  finals: { requestId: string; sequence: number }[];
+  roots: { id: number; rev: number; status: string; attachment: string; filename: string; live: boolean; requestId: string | null; sequence: number }[];
   replies: { chat: string; projection?: string; final: boolean }[]; retrievals: number; sends: number; bodyReads: number }
 type ObservedWindow = Window & { attachmentEvidence: Evidence; attachmentCommand: (command: any) => void }
 
@@ -28,6 +30,7 @@ async function observe(page: Page, host: string, chat = '', message = '') {
     if (!identity.ok) throw Error('Device identity unavailable')
     const evidence: Evidence = { host, chat, message, device: identity.deviceId, owningHost: null, grants: {}, queries: [], finals: [], roots: [], replies: [],
       retrievals: 0, sends: 0, bodyReads: 0 }
+    let sequence = 0
     const target = window as unknown as ObservedWindow
     target.attachmentEvidence = evidence
     target.attachmentCommand = command => {
@@ -45,6 +48,7 @@ async function observe(page: Page, host: string, chat = '', message = '') {
     })
     window.pyry.onDaemonEvent(event => {
       if (event.serverId !== host) return
+      sequence++
       if (event.type === 'connected') {
         evidence.owningHost = event.ack.server_id === host
         for (const grant of ['interactive', 'thread', 'thread_expansion', 'thread_compact'])
@@ -56,14 +60,15 @@ async function observe(page: Page, host: string, chat = '', message = '') {
         chat: event.reply.payload.conversation_id, projection: event.reply.payload.projection, final: event.reply.payload.final })
       if (!payload || payload.conversation_id !== evidence.chat || payload.projection !== 'compact-v1') return
       if (event.type === 'threadReply' && event.reply.type === 'thread_items' && event.reply.payload.final)
-        evidence.finals.push(event.requestId)
+        evidence.finals.push({ requestId: event.requestId, sequence })
       const items = 'item' in payload ? payload.item ? [payload.item] : [] : 'items' in payload ? payload.items : []
       for (const item of items) {
         const content = item.content as { message_id?: string; device_id?: string; attachments?: { attachment_id: string; filename: string }[] }
         if (item.kind !== 'user_message' || content?.message_id !== evidence.message || content.device_id !== evidence.device) continue
         const attachment = content.attachments?.find(a => a.filename === filename)
         if (attachment) evidence.roots.push({ id: item.id, rev: item.rev, status: item.status,
-          attachment: attachment.attachment_id, filename: attachment.filename, live: event.type === 'threadCompactUpdate' })
+          attachment: attachment.attachment_id, filename: attachment.filename, live: event.type === 'threadCompactUpdate',
+          requestId: event.type === 'threadReply' ? event.requestId : null, sequence })
       }
     })
   }, { host, chat, message, filename })
@@ -76,6 +81,16 @@ async function observe(page: Page, host: string, chat = '', message = '') {
   return cdp
 }
 const evidence = (page: Page) => page.evaluate(() => (window as unknown as ObservedWindow).attachmentEvidence)
+async function deliveredQuery(page: Page, chat: string, after: number, root: Evidence['roots'][number]) {
+  await expect.poll(async () => (await evidence(page)).queries.slice(after).some(q => q.chat === chat)).toBe(true)
+  const query = (await evidence(page)).queries.slice(after).find(q => q.chat === chat)
+  if (!query) throw Error('New owning compact query unavailable')
+  expect(query.projection).toBe('compact-v1')
+  // Only attachment-bearing data from this newly dispatched request, followed by its own final,
+  // can certify delivery. Retained rows and send-time/live observations cannot satisfy this barrier.
+  await expect.poll(async () => completedAttachmentDelivery(await evidence(page), query.id, root), { timeout: 45_000 }).toBe(true)
+  return query
+}
 async function acceptedImage(page: Page) {
   const rows = page.locator('[data-thread-role="user"]')
   await expect(rows).toHaveCount(1)
@@ -136,17 +151,15 @@ test('compact attachment survives owning echo, replacements, navigation and fres
         await (await acceptedImage(page)).click()
         await expect.poll(() => app.evaluate(() => (globalThis as any).attachmentOpened)).toBe(1)
         expect(accepted.sends).toBe(1); expect(accepted.bodyReads).toBe(0)
-        const before = accepted.finals.length
         await page.getByRole('button', { name: seedName, exact: true }).click()
         await expect(page.getByRole('button', { name: seedName, exact: true })).toHaveAttribute('aria-current', 'true')
         await expect.poll(async () => (await evidence(page)).replies.some(r => r.chat !== accepted.chat && r.final)).toBe(true)
+        const beforeNavigation = (await evidence(page)).queries.length
         await page.getByRole('button', { name: ownName, exact: true }).click()
-        await expect.poll(async () => (await evidence(page)).finals.length).toBeGreaterThan(before)
+        await deliveredQuery(page, accepted.chat, beforeNavigation, accepted.roots[0])
         await acceptedImage(page)
         const reopened = await evidence(page)
-        const catchUp = reopened.queries.filter(q => q.chat === accepted.chat).at(-1)
-        expect(catchUp).toMatchObject({ projection: 'compact-v1' })
-        expect(reopened.finals).toContain(catchUp?.id)
+        expect(reopened.sends).toBe(1); expect(reopened.bodyReads).toBe(0)
         await info.attach('accepted-and-reopened', { body: JSON.stringify(await evidence(page)), contentType: 'application/json' })
         await cdp.detach()
         const restarted = await initial.relaunch()
@@ -157,14 +170,12 @@ test('compact attachment survives owning echo, replacements, navigation and fres
         await page.getByRole('button', { name: seedName, exact: true }).click()
         await expect(page.getByRole('button', { name: seedName, exact: true })).toHaveAttribute('aria-current', 'true')
         await expect.poll(async () => (await evidence(page)).replies.some(r => r.chat !== accepted.chat && r.final)).toBe(true)
+        const beforeRestartNavigation = (await evidence(page)).queries.length
         await page.getByRole('button', { name: ownName, exact: true }).click()
-        await expect.poll(async () => (await evidence(page)).roots.some(r => !r.live && r.status === 'delivered'), { timeout: 45_000 }).toBe(true)
-        await expect.poll(async () => (await evidence(page)).finals.length).toBeGreaterThan(0)
+        const freshQuery = await deliveredQuery(page, accepted.chat, beforeRestartNavigation, accepted.roots[0])
+        expect(freshQuery.version).toBe(0)
         await acceptedImage(page)
         const fresh = await evidence(page)
-        const freshQuery = fresh.queries.find(q => q.chat === accepted.chat)
-        expect(freshQuery).toMatchObject({ projection: 'compact-v1', version: 0 })
-        expect(fresh.finals).toContain(freshQuery?.id)
         expect(fresh.roots.every(r => r.attachment === accepted.roots[0].attachment)).toBe(true)
         expect(fresh.sends).toBe(0); expect(fresh.bodyReads).toBe(0)
         await expect.poll(async () => (await evidence(page)).retrievals).toBeGreaterThan(0)

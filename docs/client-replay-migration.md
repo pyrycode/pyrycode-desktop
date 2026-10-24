@@ -108,6 +108,17 @@ provider, encryption or physical-effect proof. Compatibility remains for unmigra
 siblings; #2211 owns combined acceptance, with #2169's missing-acceptance recovery
 and #2153/#2191 repairs separate.
 
+The mounted `message-lifecycle-diagnostics.spec.ts` uses explicit canonical facts
+and correlated replies in native mode to deliver repeated full acceptance items.
+Its [fixture contract](knowledge/features/e2e-harness.md#scripted-and-native-thread-fixtures)
+and [counted Linux evidence](knowledge/features/development-verification-replay-validation.md#canonical-message-lifecycle-diagnostics-validation)
+retain exact lifecycle counts, authoritative queue identity/handle, local Drop,
+route refusal and secret exclusion. The complete configured gate retains
+captured-client replay, canonical activation, captured history, protected storage
+and native prerequisites. Every original live-only assertion remains; this
+migration adds no fresh provider, encryption or physical-effect proof. #2211 owns
+combined acceptance; #2153/#2191 repairs and #2169 recovery remain separate.
+
 Encryption interoperability, handshakes, reconnect transport, real process
 liveness, native platform integration, and daemon/tool filesystem effects cannot
 be established by application-message replay. Their live checks remain required.

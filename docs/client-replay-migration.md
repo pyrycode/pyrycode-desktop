@@ -176,6 +176,20 @@ live-only assertions/exclusions remain required. No fresh provider, encryption
 or physical-effect proof is added; #2212 owns complete acceptance, while
 \#2153/#2191 remain separate repairs. macOS is outside this Linux ticket's scope.
 
+All four mounted `hosted-app-links.spec.ts` scenarios use independent canonical
+publishers for both hosts and reconnect, explicit session ownership and correlated
+thread replies. Their [fixture contract](knowledge/features/e2e-harness.md#scripted-and-native-thread-fixtures)
+and [counted Linux evidence](knowledge/features/development-verification-replay-validation-canonical-publisher-verification.md#canonical-hosted-link-validation)
+retain streaming/settled activation, drafts, native views, pairing, delayed-host
+replies, discovery recovery and zero external handoff. The six hosted frame
+allowances preserve bytes and leave thread facts unchanged; withheld discovery
+stays withheld and retired content remains rejected. The complete configured
+gate retains captured-client replay, canonical activation, captured history,
+protected storage/native prerequisites and all original live-only assertions
+and exclusions. No fresh provider, relay, encryption or physical-effect proof is
+introduced. #2212 owns complete acceptance and #1929 broader real hosted
+integration; #2153/#2191 repairs remain separate. macOS is outside scope.
+
 Encryption interoperability, handshakes, reconnect transport, real process
 liveness, native platform integration, and daemon/tool filesystem effects cannot
 be established by application-message replay. Their live checks remain required.

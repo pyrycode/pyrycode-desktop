@@ -253,6 +253,82 @@ fresh provider/daemon, encryption or physical-effect proof. The
 protected storage, native prerequisites and original live-only assertions.
 [#2211](https://github.com/pyrycode/pyrycode-desktop/issues/2211) retains combined acceptance.
 
+## Canonical streamed-text validation
+
+The [PR #2259 verifier verdict](https://github.com/pyrycode/pyrycode-desktop/pull/2259#issuecomment-6387622967),
+accepted stage `3a7afb9450073b835f4153f744e994338c3a8716e29d742f43eadf62fbc36b13`,
+records PASS on Linux x86_64, 2026-10-24, at
+`59199eeec71cf7490a2727c999a4e21ab07e35d1`. Normal-profile build provenance
+identifies that revision with `sourceDirty: false`. Builder execution used
+`ed07ff8a0f8c076d630ea67f5f9058e0c05d6034`; subsequent ticket edits record evidence.
+These are retained results, not documentation-stage test executions. The
+[plan](../../specs/architecture/2223-canonical-streamed-text.md#builder-verification--linux)
+retains commands, hashes and earlier failures; the
+[Markdown verification topic](assistant-markdown-renderer-verification.md#canonical-streamed-text-fixtures)
+describes the authored fixture pattern and preserved assertions.
+
+| Retained Linux check | Executed / passed / failed / skipped |
+| --- | --- |
+| Builder three owned specs plus native writer prerequisite, retries zero | 21 / 21 / 0 / 0 |
+| Verifier same focused cohort at reviewed head, retries zero | 21 / 21 / 0 / 0 |
+| Builder canonical-publisher units | 17 / 17 / 0 / 0 |
+| Supplied dispatcher unit gate 4, JUnit counts | 10045 / 10045 / 0 / 3 |
+| Complete configured application gate 7, `npx playwright test --reporter=json` | 542 / 542 / 0 / 4 |
+
+Unit totals use the supplied counted gate report; verifier prose lists 10,144,
+so that larger aggregate is not used here. The verdict confirms all 17
+canonical-publisher units passed. All 20 owned cases (2 attribution, 16 whitespace,
+2 progressive Markdown) are present and passed in both focused runs and the
+configured application gate. They include
+`markdown owns whitespace on the in-progress tail and settled bubble`,
+`streamed assistant text folds under its owner and follows expansion without inflating tool counts`,
+`attributed text follows its owner when an enclosing tool run collapses`,
+`indented pending headers and heading closers preserve streaming presentation`
+and `progressive presentation, parser/render reuse and raw-source settlement`.
+The native prerequisite
+`finite protected writer backlog preserves native keyboard and both event loops`
+also passed in each run. Browser retries, flaky outcomes and global errors are zero.
+
+The configured gate passes all three canonical activation cases, captured history
+and protected-storage/native prerequisites. All 29 captured-client scenarios
+completed strict exchanges: 773 matched requests, 3,216 emitted frames, zero
+remaining. Its 589 setup attachments show successful first attempts; the verifier
+focused run's 22 attachments do too. The matching configured gate supplies complete
+acceptance once, without a duplicate complete-suite execution. Application report
+SHA-256 is `e36f725254495db3e2a3965e471e6964e8c8b7abc25163dc132d5dd774068d19`
+at `/work/Projects/pyrycode-desktop-agents/logs/verifier-gate_#2223_7.log`.
+Verifier focused report `/tmp/verifier-2259/focused.json` has SHA-256
+`e6926b92c3358887465e1d63aae91ef6e4eb610401ca4feaa1de2aaec79d6082`.
+
+Builder pre-verify passed 5/5 checks; application/client-test typechecks, focused
+TypeScript checking and build passed. Verifier focused compiler inventory confirms
+all three changed specs and imported canonical/publisher/launch helpers were checked;
+client-test typecheck passed separately. Its first scratch compiler configuration
+lacked an absolute Node type root; correcting that scratch project needed no
+repository change. Verifier pre-verify passed three enabled checks under `--no-suite`,
+with unit/typecheck intentionally skipped and supplied by later gates. Install,
+docs guard, build and Electron native preparation passed.
+
+Earlier builder runs remain failed as reported in the plan: withholding explicit
+completion executed 2 tests (1 passed native prerequisite, 1 failed original
+raw-source settlement assertion, 0 skipped); tool arrival had positively rendered
+while text stayed streaming. The first full focused run executed 21 (9 passed,
+12 failed at the unchanged timestamp barrier, 0 skipped). Both used retries zero.
+The verifier could not independently reconstruct those raw reports from the
+truncated builder bundle; its fresh focused/compiler checks establish the final
+pass independently. Missing item `content.ts` was repaired without changing
+assertions or timeouts; the earlier failures are not converted into passes.
+
+The four application skips remain two macOS badge cases, macOS last-window reopen
+and the saved-system-prompt Reset fixme. The three unit skips require operator
+live-relay credentials. None counts as passed; macOS is outside this Linux ticket's
+verification scope. The [recorded-test contract](../../recorded-tests.md) and
+[migration exclusions](../../client-replay-migration.md) preserve captured-client
+replay, captured history, protected storage, native prerequisites and original
+live-only assertions. Compatibility stays available to unmigrated siblings;
+\#2153 and #2191 remain separate repairs. This fixture migration adds no fresh
+provider, real-daemon, encryption or physical-effect proof and changes no visuals.
+
 ## Counted Linux compatibility validation
 
 These are retained results accepted by the

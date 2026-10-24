@@ -164,6 +164,15 @@ protected storage/native prerequisites and all 29 captured-client exchanges.
 Original live-only assertions remain required; this synthetic migration adds no
 fresh provider, encryption or physical-effect proof. #2211 retains combined acceptance.
 
+The [canonical message lifecycle diagnostics validation](knowledge/features/development-verification-replay-validation.md#canonical-message-lifecycle-diagnostics-validation)
+records native duplicate full-item delivery, one acknowledgment, the real local
+Drop request, route refusal and content-free logs in `message-lifecycle-diagnostics.spec.ts`.
+Its matching complete Linux gate passes the owned case and native prerequisite,
+retaining captured-client replay, canonical activation, captured history and
+protected-storage coverage. Original live-only assertions remain required;
+authored facts add no fresh provider, encryption or physical-effect proof.
+Combined feature acceptance remains with #2211.
+
 On initial launch and every profile relaunch, the shared replay fixture probes
 `better-sqlite3` in Electron's main process before device binding and pairing. It
 resolves the installed SQLite package root, loads the genuine addon with
